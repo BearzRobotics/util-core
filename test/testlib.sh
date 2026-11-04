@@ -107,6 +107,30 @@ run_test_file() {
     fi
 }
 
+# run_cmp DESCRIPTION ARG...
+# Compares stdout, stderr and exit status separately. Stdin comes from the file
+# named by $CMP_STDIN (default /dev/null). GNU runs with LC_ALL=C so its quotes
+# are ASCII; the "Try '<program> --help'" program path is normalised because GNU
+# prints the path it was invoked with.
+norm_err() { sed -e "s#^[^ ]*/\\([a-z0-9]*\\): #\\1: #" -e "s#Try '[^']*'#Try 'PROG'#"; }
+run_cmp() {
+    description="$1"
+    shift
+    in="${CMP_STDIN:-/dev/null}"
+    LC_ALL=C gnu "$@" < "$in" > "$TMPDIR_CMP.go" 2> "$TMPDIR_CMP.ge"; gx=$?
+    ours "$@" < "$in" > "$TMPDIR_CMP.oo" 2> "$TMPDIR_CMP.oe"; ox=$?
+    norm_err < "$TMPDIR_CMP.ge" > "$TMPDIR_CMP.ge2"; norm_err < "$TMPDIR_CMP.oe" > "$TMPDIR_CMP.oe2"
+    if cmp -s "$TMPDIR_CMP.go" "$TMPDIR_CMP.oo" && cmp -s "$TMPDIR_CMP.ge2" "$TMPDIR_CMP.oe2" && [ "$gx" = "$ox" ]; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s\n" "$description"
+        printf "     GNU  (rc=%s) out: %s err: %s\n" "$gx" "$(cat -A "$TMPDIR_CMP.go")" "$(cat -A "$TMPDIR_CMP.ge2")"
+        printf "     OURS (rc=%s) out: %s err: %s\n" "$ox" "$(cat -A "$TMPDIR_CMP.oo")" "$(cat -A "$TMPDIR_CMP.oe2")"
+    fi
+}
+TMPDIR_CMP="$(mktemp -d)/cmp"
+trap 'rm -rf "$(dirname "$TMPDIR_CMP")"' EXIT
+
 skip_test() {
     SKIP=$((SKIP + 1))
     if [ "$USE_COLOR" -eq 1 ]; then

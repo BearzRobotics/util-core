@@ -88,7 +88,7 @@ pinned hash. Zig-native API first; any C FFI is later and optional.
   otherwise). Differential checks show agreement with one GNU build; they are
   not by themselves conformance evidence, so each command's compatibility record
   also cites the GNU manual and POSIX.1-2024 pages it was checked against.
-- echo, basename, dirname, cat, wc, true, false, yes and dircolors pass
+- echo, basename, dirname, cat, wc, true, false, yes, dircolors, pwd, printenv, sleep and tee pass
   against GNU coreutils 9.7, plus manual `cat`/`wc` comparisons on a binary
   file (`-A -n -b -s -T -e`, `-l -w -m -c -L`).
 - Tests are not yet run for both dispatch modes (SPEC §11).

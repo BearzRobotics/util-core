@@ -85,6 +85,36 @@ pub fn soleArg(args: []const [:0]const u8, flag: []const u8) bool {
     return args.len == 1 and std.mem.eql(u8, args[0], flag);
 }
 
+/// Result of matching a "--name" against a command's long options, following
+/// getopt_long: an exact match wins, otherwise a unique prefix is accepted.
+pub const LongMatch = union(enum) { found: usize, none, ambiguous };
+
+/// `name` is the option text after "--" and before any "=value".
+pub fn matchLong(name: []const u8, names: []const []const u8) LongMatch {
+    var found: ?usize = null;
+    for (names, 0..) |n, i| {
+        if (std.mem.eql(u8, n, name)) return .{ .found = i };
+        if (name.len > 0 and std.mem.startsWith(u8, n, name)) {
+            if (found != null) return .ambiguous;
+            found = i;
+        }
+    }
+    return if (found) |i| .{ .found = i } else .none;
+}
+
+/// Print the standard "invalid option" diagnostic for a short option.
+pub fn invalidShort(ctx: Context, c: u8) void {
+    warn(ctx, "invalid option -- '{c}'\nTry '{s} --help' for more information.", .{ c, ctx.name });
+}
+
+/// Print the standard diagnostic for an unknown or ambiguous long option.
+pub fn badLong(ctx: Context, arg: []const u8, m: LongMatch) void {
+    switch (m) {
+        .ambiguous => warn(ctx, "option '{s}' is ambiguous\nTry '{s} --help' for more information.", .{ arg, ctx.name }),
+        else => warn(ctx, "unrecognized option '{s}'\nTry '{s} --help' for more information.", .{ arg, ctx.name }),
+    }
+}
+
 /// Write `text` to stdout. Returns false on write failure (e.g. closed pipe);
 /// callers decide the exit status.
 pub fn writeStdout(io: Io, text: []const u8) bool {
