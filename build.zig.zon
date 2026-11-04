@@ -1,0 +1,10 @@
+.{
+    .name = .core_utils,
+    .fingerprint = 0x28e7a0b1be6f48c,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .regex = .{ .path = "../regex-zig" },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}
