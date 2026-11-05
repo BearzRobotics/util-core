@@ -7,7 +7,7 @@ const std = @import("std");
 const cli = @import("cli.zig");
 
 /// Every command this source tree knows about.
-pub const all = [_][]const u8{ "true", "false", "yes", "echo", "basename", "dirname", "cat", "wc", "dircolors", "pwd", "printenv", "sleep", "tee" };
+pub const all = [_][]const u8{ "true", "false", "yes", "echo", "basename", "dirname", "cat", "wc", "dircolors", "pwd", "printenv", "sleep", "tee", "head", "tac", "tail", "seq", "mkdir", "rmdir" };
 
 /// Command source files, keyed by command name. @import needs a string
 /// literal, so each command is listed here explicitly. Importing a file only
@@ -27,6 +27,12 @@ pub const modules = .{
     .printenv = @import("commands/printenv.zig"),
     .sleep = @import("commands/sleep.zig"),
     .tee = @import("commands/tee.zig"),
+    .head = @import("commands/head.zig"),
+    .tac = @import("commands/tac.zig"),
+    .tail = @import("commands/tail.zig"),
+    .seq = @import("commands/seq.zig"),
+    .mkdir = @import("commands/mkdir.zig"),
+    .rmdir = @import("commands/rmdir.zig"),
 };
 
 /// Frontend for a command known at comptime.

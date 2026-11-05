@@ -1,6 +1,9 @@
 #!/bin/sh
 # testlib.sh - Shared helpers for all util test scripts
 
+# Safety net: no test may write more than ~100 MB to any one file.
+ulimit -f 200000 2>/dev/null
+
 PASS=0
 FAIL=0
 SKIP=0
@@ -130,6 +133,26 @@ run_cmp() {
 }
 TMPDIR_CMP="$(mktemp -d)/cmp"
 trap 'rm -rf "$(dirname "$TMPDIR_CMP")"' EXIT
+
+# run_tree DESC SETUP_CMD ARGS...
+# For commands that change the file system. SETUP_CMD (a shell snippet) runs in
+# two fresh directories, then GNU and ours run the same arguments, one in each.
+# Compared: stdout, normalised stderr, exit status, and the resulting tree
+# (path, type, octal mode). Set TREE_UMASK to run both under a given umask.
+run_tree() {
+    description="$1"; setup="$2"; shift 2
+    base="$(dirname "$TMPDIR_CMP")/tree"; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
+    for x in g o; do (cd "$base/$x" && eval "$setup"); done
+    (umask "${TREE_UMASK:-022}"; cd "$base/g" && LC_ALL=C gnu "$@" < /dev/null > "$base/g.out" 2> "$base/g.err"; echo $? > "$base/g.rc")
+    (umask "${TREE_UMASK:-022}"; cd "$base/o" && ours "$@" < /dev/null > "$base/o.out" 2> "$base/o.err"; echo $? > "$base/o.rc")
+    for x in g o; do (cd "$base/$x" && find . -printf '%p %y %m\n' | sort > "$base/$x.tree"); norm_err < "$base/$x.err" > "$base/$x.err2"; norm_err < "$base/$x.out" > "$base/$x.out2"; done
+    if cmp -s "$base/g.out2" "$base/o.out2" && cmp -s "$base/g.err2" "$base/o.err2" && cmp -s "$base/g.rc" "$base/o.rc" && cmp -s "$base/g.tree" "$base/o.tree"; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s\n     GNU  rc=%s err=%s\n     OURS rc=%s err=%s\n" "$description" "$(cat "$base/g.rc")" "$(cat -A "$base/g.err2")" "$(cat "$base/o.rc")" "$(cat -A "$base/o.err2")"
+        diff "$base/g.tree" "$base/o.tree" | head -6
+    fi
+}
 
 skip_test() {
     SKIP=$((SKIP + 1))

@@ -115,6 +115,39 @@ pub fn badLong(ctx: Context, arg: []const u8, m: LongMatch) void {
     }
 }
 
+/// Set the disposition of `sig` to ignore (handler == SIG.IGN) or default
+/// (SIG.DFL). No-op where signals do not exist.
+pub fn setSignal(sig: std.posix.SIG, handler: ?std.posix.Sigaction.handler_fn) void {
+    if (comptime @import("builtin").os.tag == .windows or @import("builtin").os.tag == .wasi) return;
+    const act: std.posix.Sigaction = .{
+        .handler = .{ .handler = handler },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(sig, &act, null);
+}
+
+/// Zig's runtime ignores SIGPIPE, which would turn `cmd | head` into a write
+/// error message. The conventional (GNU) behaviour is to die silently, so
+/// every entry point restores the default action; commands that need to see
+/// EPIPE (tee --output-error) set it back to ignore.
+pub fn restoreSigpipe() void {
+    setSignal(.PIPE, std.posix.SIG.DFL);
+}
+
+/// The process file-mode creation mask. Linux reads it with umask(2) (set and
+/// restore, because the call has no pure query form); other systems fall back
+/// to the conventional 022.
+pub fn getUmask() u16 {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .linux) {
+        const old = std.os.linux.syscall1(.umask, 0);
+        _ = std.os.linux.syscall1(.umask, old);
+        return @intCast(old & 0o7777);
+    }
+    return 0o022;
+}
+
 /// Write `text` to stdout. Returns false on write failure (e.g. closed pipe);
 /// callers decide the exit status.
 pub fn writeStdout(io: Io, text: []const u8) bool {
@@ -136,6 +169,14 @@ pub fn warn(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
 
+/// Print an informational line `<name>: <message>\n` to stdout (used by the
+/// -v/--verbose options of mkdir, rmdir, ...). Best effort.
+pub fn say(ctx: Context, comptime fmt: []const u8, args: anytype) void {
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
+    _ = writeStdout(ctx.io, msg);
+}
+
 /// Human-readable text for common file errors, matching strerror() wording
 /// that GNU tools print. Falls back to the Zig error name.
 pub fn errText(err: anyerror) []const u8 {
@@ -147,6 +188,14 @@ pub fn errText(err: anyerror) []const u8 {
         error.BrokenPipe => "Broken pipe",
         error.NameTooLong => "File name too long",
         error.SymLinkLoop => "Too many levels of symbolic links",
+        error.PathAlreadyExists => "File exists",
+        error.DirNotEmpty => "Directory not empty",
+        error.ReadOnlyFileSystem => "Read-only file system",
+        error.NoSpaceLeft => "No space left on device",
+        error.DiskQuota => "Disk quota exceeded",
+        error.FileBusy => "Device or resource busy",
+        error.LinkQuotaExceeded => "Too many links",
+        error.SystemResources => "Cannot allocate memory",
         else => @errorName(err),
     };
 }
@@ -207,6 +256,17 @@ pub fn openInput(io: Io, path: []const u8) !Io.File {
 
 pub fn closeInput(io: Io, file: Io.File) void {
     if (file.handle != Io.File.stdin().handle) file.close(io);
+}
+
+/// POSIX 1.4 (utility description defaults): a utility that stops reading a
+/// seekable input before end of file must leave the file offset just past the
+/// last byte it processed. Call with the number of bytes read but not
+/// consumed; a no-op (and no error) for pipes and terminals.
+pub fn giveBack(io: Io, file: Io.File, unread: u64) void {
+    if (unread == 0) return;
+    const st = file.stat(io) catch return;
+    if (st.kind != .file) return;
+    io.vtable.fileSeekBy(io.userdata, file, -@as(i64, @intCast(@min(unread, std.math.maxInt(i63))))) catch {};
 }
 
 /// Read up to `buf.len` bytes; returns 0 at end of input.

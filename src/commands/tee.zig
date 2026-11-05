@@ -73,12 +73,10 @@ pub fn main(ctx: cli.Context) u8 {
     }
     const paths = ctx.args[i..];
 
-    if (comptime builtin.os.tag != .windows and builtin.os.tag != .wasi) {
-        if (ignore_int) setSignal(.INT, std.posix.SIG.IGN);
-        // Zig's runtime ignores SIGPIPE; GNU tee lets it kill the process
-        // unless --output-error was given.
-        if (mode == .default) setSignal(.PIPE, std.posix.SIG.DFL);
-    }
+    if (ignore_int) cli.setSignal(.INT, std.posix.SIG.IGN);
+    // The entry point restored SIGPIPE's default action (as GNU tee has it);
+    // --output-error wants to see EPIPE as an ordinary write error instead.
+    if (mode != .default) cli.setSignal(.PIPE, std.posix.SIG.IGN);
 
     var outs: std.ArrayList(Output) = .empty;
     defer outs.deinit(ctx.gpa);
@@ -144,15 +142,6 @@ fn openOutput(io: Io, path: []const u8, append: bool) !Io.File {
         return .{ .handle = fd, .flags = .{ .nonblocking = false } };
     }
     return Io.Dir.cwd().createFile(io, path, .{});
-}
-
-fn setSignal(sig: std.posix.SIG, handler: ?std.posix.Sigaction.handler_fn) void {
-    const act: std.posix.Sigaction = .{
-        .handler = .{ .handler = handler },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(sig, &act, null);
 }
 
 fn oom(ctx: cli.Context) u8 {

@@ -7,6 +7,7 @@ const cli = @import("cli.zig");
 const commands = @import("commands.zig");
 
 pub fn main(init: std.process.Init) !u8 {
+    cli.restoreSigpipe();
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     return commands.get(options.command)(.{
         .name = options.command,

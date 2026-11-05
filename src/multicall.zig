@@ -13,6 +13,7 @@ const commands = @import("commands.zig");
 const enabled = options.commands;
 
 pub fn main(init: std.process.Init) !u8 {
+    cli.restoreSigpipe();
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     var ctx: cli.Context = .{
         .name = "",

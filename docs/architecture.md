@@ -18,6 +18,12 @@ src/
   cli.zig            Context, --help/--version helpers, diagnostics, Out
                      (sticky-error buffered stdout), openInput/readChunk
                      ("-" = stdin), errText (strerror-style wording)
+                     matchLong/badLong/invalidShort (getopt-style long
+                     option matching and GNU diagnostics), setSignal/
+                     restoreSigpipe, getUmask, giveBack (POSIX 1.4 offset)
+  count_arg.zig      [+|-]NUM[suffix] parsing for head/tail (GNU "Block size")
+  fmt_float.zig      exact C printf %e/%f/%g for doubles (seq; later printf)
+  mode.zig           chmod/mkdir -m mode parsing (octal and symbolic)
   commands.zig       registry: `all` (names) + `modules` (imports) + get/find
   commands/<name>.zig  one frontend per command: pub fn main(ctx) u8
   exe.zig            entry point of an individual executable
@@ -83,12 +89,15 @@ pinned hash. Zig-native API first; any C FFI is later and optional.
 ## Testing
 
 - `zig build test` runs unit tests from `src/test_all.zig`.
+- `test/testlib.sh` also provides `run_cmp` (stdout, stderr and exit status
+  compared separately) and `run_tree` (also compares the resulting file tree,
+  for mkdir/rmdir-style commands) and caps file sizes with `ulimit -f`.
 - `sh test/test_<cmd>.sh` compares our binary in `zig-out/bin/` against
   `/usr/bin/<cmd>`, which must be GNU coreutils (`testlib.sh` refuses to run
   otherwise). Differential checks show agreement with one GNU build; they are
   not by themselves conformance evidence, so each command's compatibility record
   also cites the GNU manual and POSIX.1-2024 pages it was checked against.
-- echo, basename, dirname, cat, wc, true, false, yes, dircolors, pwd, printenv, sleep and tee pass
+- echo, basename, dirname, cat, wc, true, false, yes, dircolors, pwd, printenv, sleep, tee, head, tac, tail, seq, mkdir and rmdir pass
   against GNU coreutils 9.7, plus manual `cat`/`wc` comparisons on a binary
   file (`-A -n -b -s -T -e`, `-l -w -m -c -L`).
 - Tests are not yet run for both dispatch modes (SPEC §11).

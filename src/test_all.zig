@@ -3,6 +3,9 @@ const std = @import("std");
 const commands = @import("commands.zig");
 
 test {
+    _ = @import("count_arg.zig");
+    _ = @import("fmt_float.zig");
+    _ = @import("mode.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));
