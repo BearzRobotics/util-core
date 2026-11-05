@@ -6,6 +6,7 @@ test {
     _ = @import("count_arg.zig");
     _ = @import("fmt_float.zig");
     _ = @import("mode.zig");
+    _ = @import("lines.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));

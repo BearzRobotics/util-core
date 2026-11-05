@@ -21,6 +21,8 @@ src/
                      matchLong/badLong/invalidShort (getopt-style long
                      option matching and GNU diagnostics), setSignal/
                      restoreSigpipe, getUmask, giveBack (POSIX 1.4 offset)
+  lines.zig          LineReader: arbitrarily long delimiter-terminated lines
+                     (cut, paste, uniq, fold-style filters, nl)
   count_arg.zig      [+|-]NUM[suffix] parsing for head/tail (GNU "Block size")
   fmt_float.zig      exact C printf %e/%f/%g for doubles (seq; later printf)
   mode.zig           chmod/mkdir -m mode parsing (octal and symbolic)
@@ -97,7 +99,7 @@ pinned hash. Zig-native API first; any C FFI is later and optional.
   otherwise). Differential checks show agreement with one GNU build; they are
   not by themselves conformance evidence, so each command's compatibility record
   also cites the GNU manual and POSIX.1-2024 pages it was checked against.
-- echo, basename, dirname, cat, wc, true, false, yes, dircolors, pwd, printenv, sleep, tee, head, tac, tail, seq, mkdir and rmdir pass
+- echo, basename, dirname, cat, wc, true, false, yes, dircolors, pwd, printenv, sleep, tee, head, tac, tail, seq, mkdir, rmdir, cut, paste, uniq, fold, nl and tr pass
   against GNU coreutils 9.7, plus manual `cat`/`wc` comparisons on a binary
   file (`-A -n -b -s -T -e`, `-l -w -m -c -L`).
 - Tests are not yet run for both dispatch modes (SPEC §11).

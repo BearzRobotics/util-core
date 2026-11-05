@@ -208,9 +208,24 @@ pub const Out = struct {
     buf: [8192]u8 = undefined,
     len: usize = 0,
     failed: bool = false,
+    /// Destination; standard output when null.
+    file: ?Io.File = null,
 
     pub fn init(io: Io) Out {
         return .{ .io = io };
+    }
+
+    /// An Out that writes to `file` instead of standard output.
+    pub fn initFile(io: Io, file: Io.File) Out {
+        return .{ .io = io, .file = file };
+    }
+
+    fn sink(o: *Out, bytes: []const u8) bool {
+        if (o.file) |f| {
+            f.writeStreamingAll(o.io, bytes) catch return false;
+            return true;
+        }
+        return writeStdout(o.io, bytes);
     }
 
     pub fn write(o: *Out, bytes: []const u8) void {
@@ -219,7 +234,7 @@ pub const Out = struct {
             o.flush();
             if (o.failed) return;
             if (bytes.len >= o.buf.len) {
-                if (!writeStdout(o.io, bytes)) o.failed = true;
+                if (!o.sink(bytes)) o.failed = true;
                 return;
             }
         }
@@ -242,7 +257,7 @@ pub const Out = struct {
 
     pub fn flush(o: *Out) void {
         if (o.failed or o.len == 0) return;
-        if (!writeStdout(o.io, o.buf[0..o.len])) o.failed = true;
+        if (!o.sink(o.buf[0..o.len])) o.failed = true;
         o.len = 0;
     }
 };
