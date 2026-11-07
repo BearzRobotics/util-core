@@ -159,7 +159,7 @@ run_tree() {
     # Trees are compared with symlink targets (%l); the two working directories
     # differ only in their last component, which is masked in the output.
     for x in g o; do
-        (cd "$base/$x" && { [ -n "$TREE_TIMES" ] && find . -type f -printf '%p %A@ %T@\n' | sort; find . -type l -printf '%p %T@\n' | sort; find . -printf '%p %y %m %l\n' | sort; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; true; } > "$base/$x.tree")
+        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; true; } 2>/dev/null > "$base/$x.tree")
         rel="${base#/}"
         norm_err < "$base/$x.err" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.err2"
         norm_err < "$base/$x.out" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.out2"

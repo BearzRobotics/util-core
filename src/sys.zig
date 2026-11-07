@@ -577,6 +577,17 @@ pub fn setTimes(path: ?[]const u8, fd: i32, times: ?[2]TimeSpec, nofollow: bool)
     return errOf(LX.utimensat(fd, null, tp, 0));
 }
 
+/// fchownat(2) on `path` (cwd-relative); uid or gid == maxInt(u32) leaves
+/// that id unchanged. `nofollow` changes a symbolic link itself.
+pub fn chownAt(path: []const u8, uid: u32, gid: u32, nofollow: bool) ?LX.E {
+    var buf: [4097]u8 = undefined;
+    if (path.len >= 4096) return .NAMETOOLONG;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    const flags: u32 = if (nofollow) LX.AT.SYMLINK_NOFOLLOW else 0;
+    return errOf(LX.fchownat(LX.AT.FDCWD, @ptrCast(&buf), uid, gid, flags));
+}
+
 // ------------------------------------------------ file systems and xattrs
 
 pub const StatFs = struct {

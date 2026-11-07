@@ -6,17 +6,17 @@ Updated 2026-11-07. Every implemented command has a differential test suite
 against GNU coreutils 9.7 (`test/test_<cmd>.sh`), a compatibility record
 (`docs/compatibility/<cmd>.md`) and a manual page (`docs/manpages/<cmd>.md`).
 
-## Implemented (90)
+## Implemented (92)
 
 true false yes echo basename dirname cat wc dircolors pwd printenv sleep tee
 head tac tail seq mkdir rmdir cut paste uniq fold nl tr expand unexpand comm
 tsort sort md5sum sha1sum sha224sum sha256sum sha384sum sha512sum b2sum cksum
 sum base64 base32 basenc factor join uname arch nproc whoami logname hostid id
-groups tty users unlink link readlink realpath truncate ln chmod rm test [ printf expr env nice nohup timeout sync stdbuf chroot pathchk mkfifo mknod mktemp split od fmt shuf numfmt pr ptx csplit date touch stat ls dir vdir
+groups tty users unlink link readlink realpath truncate ln chmod rm test [ printf expr env nice nohup timeout sync stdbuf chroot pathchk mkfifo mknod mktemp split od fmt shuf numfmt pr ptx csplit date touch stat ls dir vdir chown chgrp
 
 ## Not yet implemented
 
-- **Files:** cp, mv, dd, install, shred, chown, chgrp,
+- **Files:** cp, mv, dd, install, shred,
   df, du, chcon, runcon.
 - **Processes and environment:** kill, stty, who, pinky.
 - **Absorbed utilities (not in GNU coreutils):** find, grep, sed, xargs, locate,

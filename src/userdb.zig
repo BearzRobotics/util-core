@@ -76,6 +76,12 @@ pub const Db = struct {
         return null;
     }
 
+    pub fn groupByName(d: *const Db, name: []const u8) ?Group {
+        var lines = std.mem.splitScalar(u8, d.group, '\n');
+        while (lines.next()) |l| if (parseGroup(l)) |g| if (std.mem.eql(u8, g.name, name)) return g;
+        return null;
+    }
+
     /// Group ids `user` belongs to: `primary` first, then every group whose
     /// member list names the user, in file order (what getgrouplist returns).
     pub fn groupsOf(d: *const Db, gpa: std.mem.Allocator, user: []const u8, primary: u32) ![]u32 {
