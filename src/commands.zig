@@ -7,7 +7,7 @@ const std = @import("std");
 const cli = @import("cli.zig");
 
 /// Every command this source tree knows about.
-pub const all = [_][]const u8{ "true", "false", "yes", "echo", "basename", "dirname", "cat", "wc", "dircolors", "pwd", "printenv", "sleep", "tee", "head", "tac", "tail", "seq", "mkdir", "rmdir", "cut", "paste", "uniq", "fold", "nl", "tr", "expand", "unexpand", "comm", "tsort", "sort", "cksum", "md5sum", "sha1sum", "sha224sum", "sha256sum", "sha384sum", "sha512sum", "b2sum", "sum", "base64", "base32", "basenc", "factor", "join", "uname", "arch", "nproc", "whoami", "logname", "hostid", "id", "groups", "tty", "users", "unlink", "link", "readlink", "realpath", "truncate", "ln", "chmod", "rm", "test", "[", "printf", "expr", "env", "nice", "nohup", "timeout", "sync", "chroot", "stdbuf", "pathchk", "mkfifo", "mknod", "mktemp", "split" };
+pub const all = [_][]const u8{ "true", "false", "yes", "echo", "basename", "dirname", "cat", "wc", "dircolors", "pwd", "printenv", "sleep", "tee", "head", "tac", "tail", "seq", "mkdir", "rmdir", "cut", "paste", "uniq", "fold", "nl", "tr", "expand", "unexpand", "comm", "tsort", "sort", "cksum", "md5sum", "sha1sum", "sha224sum", "sha256sum", "sha384sum", "sha512sum", "b2sum", "sum", "base64", "base32", "basenc", "factor", "join", "uname", "arch", "nproc", "whoami", "logname", "hostid", "id", "groups", "tty", "users", "unlink", "link", "readlink", "realpath", "truncate", "ln", "chmod", "rm", "test", "[", "printf", "expr", "env", "nice", "nohup", "timeout", "sync", "chroot", "stdbuf", "pathchk", "mkfifo", "mknod", "mktemp", "split", "od" };
 
 /// Command source files, keyed by command name. @import needs a string
 /// literal, so each command is listed here explicitly. Importing a file only
@@ -92,6 +92,7 @@ pub const modules = .{
     .mknod = @import("commands/mknod.zig"),
     .mktemp = @import("commands/mktemp.zig"),
     .split = @import("commands/split.zig"),
+    .od = @import("commands/od.zig"),
 };
 
 /// Frontend for a command known at comptime.

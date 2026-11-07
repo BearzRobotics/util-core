@@ -17,7 +17,7 @@ groups tty users unlink link readlink realpath truncate ln chmod rm test [ print
 ## Not yet implemented
 
 - **Text:** fmt, pr, ptx, od, numfmt, shuf, csplit.
-- **Files:** cp, mv, touch, mktemp, dd, install, shred, chown, chgrp, 
+- **Files:** cp, mv, touch, dd, install, shred, chown, chgrp,
   stat, df, du, ls, dir, vdir, chcon, runcon.
 - **Processes and environment:** kill, stty, date, who, pinky.
 - **Absorbed utilities (not in GNU coreutils):** find, grep, sed, xargs, locate,
