@@ -158,7 +158,7 @@ pub fn printVersion(ctx: Context) bool {
 
 /// Print a diagnostic `<name>: <message>\n` to stderr. Best effort.
 pub fn warn(ctx: Context, comptime fmt: []const u8, args: anytype) void {
-    var buf: [512]u8 = undefined;
+    var buf: [8192]u8 = undefined; // room for two PATH_MAX-long names
     const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
