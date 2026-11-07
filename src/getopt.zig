@@ -29,6 +29,8 @@ pub const Long = struct {
 pub const Opt = struct {
     id: u32,
     arg: ?[]const u8 = null,
+    /// True when the option was written in its long form (`--name`).
+    is_long: bool = false,
 };
 
 pub const Item = union(enum) {
@@ -210,7 +212,7 @@ pub const Parser = struct {
             },
             .optional => {},
         }
-        return .{ .opt = .{ .id = l.id, .arg = value } };
+        return .{ .opt = .{ .id = l.id, .arg = value, .is_long = true } };
     }
 };
 
