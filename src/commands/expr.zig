@@ -229,7 +229,7 @@ const Parser = struct {
         if (p.skip > 0) return "0";
         const gpa = p.alloc();
         var c = posixre.compileMode(gpa, pattern, false, false, true) catch |e| switch (e) {
-            error.BadPattern => return p.fatal("{s}", .{breError(pattern)}),
+            error.BadPattern => return p.fatal("{s}", .{posixre.diagnose(pattern)}),
             else => return error.Fatal,
         };
         var searcher = c.re.searcher(gpa) catch return error.Fatal;
@@ -244,45 +244,6 @@ const Parser = struct {
         return std.fmt.allocPrint(gpa, "{d}", .{m.end() - m.start()}) catch error.Fatal;
     }
 };
-
-/// glibc's wording for the common malformed basic regular expressions;
-/// posixre only reports that the pattern is bad.
-fn breError(pat: []const u8) []const u8 {
-    var depth: i32 = 0;
-    var i: usize = 0;
-    while (i < pat.len) : (i += 1) {
-        switch (pat[i]) {
-            '\\' => {
-                if (i + 1 >= pat.len) return "Trailing backslash";
-                i += 1;
-                switch (pat[i]) {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if (depth < 0) return "Unmatched ) or \\)";
-                    },
-                    '{' => {
-                        const close = std.mem.indexOfPos(u8, pat, i, "\\}") orelse return "Unmatched \\{";
-                        _ = close;
-                        return "Invalid content of \\{\\}";
-                    },
-                    else => {},
-                }
-            },
-            '[' => {
-                var j = i + 1;
-                if (j < pat.len and pat[j] == '^') j += 1;
-                if (j < pat.len and pat[j] == ']') j += 1;
-                while (j < pat.len and pat[j] != ']') j += 1;
-                if (j >= pat.len) return "Unmatched [, [^, [:, [., or [=";
-                i = j;
-            },
-            else => {},
-        }
-    }
-    if (depth > 0) return "Unmatched ( or \\(";
-    return "Invalid regular expression";
-}
 
 fn substr(gpa: std.mem.Allocator, s: []const u8, pos: i128, len: i128) ![]const u8 {
     if (pos <= 0 or len <= 0 or pos > s.len) return "";

@@ -289,3 +289,60 @@ test "translate basic forms" {
         try t.expectEqualStrings(c[2], got);
     }
 }
+
+/// glibc's wording for the common malformed basic regular expressions;
+/// posixre only reports that the pattern is bad.
+pub fn diagnose(pat: []const u8) []const u8 {
+    // glibc reports a lone '[' with the generic message.
+    if (std.mem.eql(u8, pat, "[")) return "Invalid regular expression";
+    var depth: i32 = 0;
+    var i: usize = 0;
+    while (i < pat.len) : (i += 1) {
+        switch (pat[i]) {
+            '\\' => {
+                if (i + 1 >= pat.len) return "Trailing backslash";
+                i += 1;
+                switch (pat[i]) {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if (depth < 0) return "Unmatched ) or \\)";
+                    },
+                    '{' => {
+                        const close = std.mem.indexOfPos(u8, pat, i, "\\}") orelse return "Unmatched \\{";
+                        _ = close;
+                        return "Invalid content of \\{\\}";
+                    },
+                    else => {},
+                }
+            },
+            '[' => {
+                var j = i + 1;
+                if (j < pat.len and pat[j] == '^') j += 1;
+                if (j < pat.len and pat[j] == ']') j += 1;
+                while (j < pat.len and pat[j] != ']') j += 1;
+                if (j >= pat.len) return "Unmatched [, [^, [:, [., or [=";
+                // Unknown character class names, e.g. [[:foo:]].
+                var q = i + 1;
+                while (q + 1 < j) : (q += 1) {
+                    if (pat[q] == '[' and pat[q + 1] == ':') {
+                        const e = std.mem.indexOfPos(u8, pat, q + 2, ":]") orelse break;
+                        const name = pat[q + 2 .. e];
+                        const known = [_][]const u8{ "alpha", "digit", "alnum", "upper", "lower", "space", "blank", "punct", "print", "graph", "cntrl", "xdigit" };
+                        var ok = false;
+                        for (known) |k| if (std.mem.eql(u8, k, name)) {
+                            ok = true;
+                        };
+                        if (!ok) return "Invalid character class name";
+                        q = e + 1;
+                    }
+                }
+                i = j;
+            },
+            else => {},
+        }
+    }
+    if (depth > 0) return "Unmatched ( or \\(";
+    return "Invalid regular expression";
+}
+
