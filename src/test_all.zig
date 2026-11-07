@@ -21,6 +21,7 @@ test {
     _ = @import("exec.zig");
     _ = @import("tz.zig");
     _ = @import("strftime.zig");
+    _ = @import("datetime.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));

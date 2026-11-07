@@ -175,27 +175,66 @@ pub fn timegm(year: i64, mon: i64, mday: i64, hour: i64, min: i64, sec: i64) i64
     return (daysFromCivil(y, m, 1) + (mday - 1)) * 86400 + hour * 3600 + min * 60 + sec;
 }
 
-/// mktime: the epoch whose local time in `zone` has the given civil fields
-/// (fields may be out of range and are normalised). For a skipped local time
-/// the result is the instant `gap` seconds later as glibc mktime does with
-/// tm_isdst = -1; for a repeated local time the earlier instant (DST) wins.
+/// mktime(3) with tm_isdst: the epoch whose local time in `zone` has the given
+/// civil fields (zero-based month; fields may be out of range and are normalised). `isdst` is
+/// -1 (unknown), 0 or 1 as in struct tm. A skipped local time moves forward
+/// across the gap (using the offset before it); a repeated one takes the
+/// earlier instant. When `isdst` names a kind of time that does not apply, the
+/// offset of the nearest zone type of that kind is used, as glibc does.
 pub fn mktime(zone: *const Zone, year: i64, mon: i64, mday: i64, hour: i64, min: i64, sec: i64) i64 {
-    const guess = timegm(year, mon, mday, hour, min, sec);
-    // Candidate offsets: those in force within a day either side.
-    var offs: [3]i32 = undefined;
-    offs[0] = zone.at(guess - 86400).utoff;
-    offs[1] = zone.at(guess).utoff;
-    offs[2] = zone.at(guess + 86400).utoff;
+    return mktimeIsdst(zone, year, mon, mday, hour, min, sec, -1);
+}
+
+pub fn mktimeIsdst(zone: *const Zone, year: i64, mon: i64, mday: i64, hour: i64, min: i64, sec: i64, isdst: i8) i64 {
+    // `mon` is zero-based like struct tm; fields may be out of range.
+    const guess = timegm(year, mon + 1, mday, hour, min, sec);
+    var offs: [9]i32 = undefined;
+    var n: usize = 0;
+    var k: i64 = -4;
+    while (k <= 4) : (k += 1) {
+        const o = zone.at(guess + k * 43200).utoff;
+        var seen = false;
+        for (offs[0..n]) |x| if (x == o) {
+            seen = true;
+        };
+        if (!seen) {
+            offs[n] = o;
+            n += 1;
+        }
+    }
     var best: ?i64 = null;
-    for (offs) |o| {
+    var best_any: ?i64 = null;
+    for (offs[0..n]) |o| {
         const t = guess - o;
-        if (zone.at(t).utoff == o) {
+        const ty = zone.at(t);
+        if (ty.utoff != o) continue;
+        if (best_any == null or t < best_any.?) best_any = t;
+        if (isdst < 0 or ty.isdst == (isdst > 0)) {
             if (best == null or t < best.?) best = t;
         }
     }
     if (best) |b| return b;
+    if (isdst >= 0) {
+        // Use the offset of a zone type of the requested kind.
+        var found: ?i32 = null;
+        var i = zone.types.len;
+        while (i > 0) {
+            i -= 1;
+            if (zone.types[i].isdst == (isdst > 0)) {
+                found = zone.types[i].utoff;
+                break;
+            }
+        }
+        if (found == null) if (zone.rule) |r| {
+            if (isdst > 0) {
+                if (r.dst) |d| found = d.utoff;
+            } else found = r.std.utoff;
+        };
+        if (found) |o| return guess - o;
+    }
+    if (best_any) |b| return b;
     // Skipped local time: use the offset before the gap (moves the time forward).
-    return guess - offs[0];
+    return guess - zone.at(guess - 86400).utoff;
 }
 
 // -------------------------------------------------------------- rules

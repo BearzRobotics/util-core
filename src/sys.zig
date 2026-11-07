@@ -518,3 +518,41 @@ pub const Watcher = struct {
         _ = LX.close(w.sigfd);
     }
 };
+
+// ------------------------------------------------------------- the clock
+
+/// clock_settime(CLOCK_REALTIME); needs CAP_SYS_TIME.
+pub fn setRealtime(sec: i64, nsec: u32) ?LX.E {
+    const ts: LX.timespec = .{ .sec = sec, .nsec = nsec };
+    return errOf(LX.clock_settime(.REALTIME, &ts));
+}
+
+// ------------------------------------------------------------ file times
+
+pub const TimeSpec = struct {
+    sec: i64 = 0,
+    nsec: i64 = 0,
+    /// UTIME_NOW / UTIME_OMIT are encoded in nsec as in utimensat(2).
+    pub const now_ns: i64 = (1 << 30) - 1;
+    pub const omit_ns: i64 = (1 << 30) - 2;
+};
+
+/// utimensat(2) on `path` (cwd-relative), or futimens on `fd` when path is
+/// null. `times` null means "now" for both. Returns the errno on failure.
+pub fn setTimes(path: ?[]const u8, fd: i32, times: ?[2]TimeSpec, nofollow: bool) ?LX.E {
+    var ts: [2]LX.timespec = undefined;
+    var tp: ?*[2]LX.timespec = null;
+    if (times) |t| {
+        for (0..2) |i| ts[i] = .{ .sec = t[i].sec, .nsec = t[i].nsec };
+        tp = &ts;
+    }
+    var buf: [4097]u8 = undefined;
+    if (path) |p| {
+        if (p.len >= 4096) return .NAMETOOLONG;
+        @memcpy(buf[0..p.len], p);
+        buf[p.len] = 0;
+        const flags: u32 = if (nofollow) LX.AT.SYMLINK_NOFOLLOW else 0;
+        return errOf(LX.utimensat(LX.AT.FDCWD, @ptrCast(&buf), tp, flags));
+    }
+    return errOf(LX.utimensat(fd, null, tp, 0));
+}

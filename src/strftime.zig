@@ -69,6 +69,26 @@ fn number(out: *std.ArrayList(u8), gpa: std.mem.Allocator, value: i64, digits: u
     }
 }
 
+fn padLiteral(out: *std.ArrayList(u8), gpa: std.mem.Allocator, text: []const u8, width: ?usize, pad: Pad) !void {
+    if (pad == .none) return out.appendSlice(gpa, text);
+    try writePadded(out, gpa, text, width orelse 0, if (pad == .zero) '0' else ' ');
+}
+
+/// Year-like conversions: at least `base` digits, '+' flag adds a sign when
+/// the field is wider than `base` digits.
+fn yearish(out: *std.ArrayList(u8), gpa: std.mem.Allocator, value: i64, base: usize, pad: Pad, plus: bool, width: ?usize) !void {
+    var buf: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "{d}", .{@abs(value)}) catch unreachable;
+    const w = width orelse base;
+    if (plus and value >= 0 and (w > base or s.len > base) and pad != .none and pad != .space) {
+        try out.append(gpa, '+');
+        if (s.len + 1 < w) try out.appendNTimes(gpa, '0', w - 1 - s.len);
+        try out.appendSlice(gpa, s);
+        return;
+    }
+    try number(out, gpa, value, base, pad, '0', width);
+}
+
 fn caseText(out: *std.ArrayList(u8), gpa: std.mem.Allocator, text: []const u8, upper: bool, lower: bool, width: ?usize, pad: Pad) !void {
     var tmp: [64]u8 = undefined;
     const n = @min(text.len, tmp.len);
@@ -93,6 +113,7 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
         var pad: Pad = .default;
         var upper = false;
         var swap = false;
+        var plus = false;
         var colons: usize = 0;
         while (i < fmt.len) : (i += 1) {
             switch (fmt[i]) {
@@ -101,7 +122,7 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
                 '0' => pad = .zero,
                 '^' => upper = true,
                 '#' => swap = true,
-                '+' => {},
+                '+' => plus = true,
                 else => break,
             }
         }
@@ -110,7 +131,7 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
         while (i < fmt.len and fmt[i] == ':') : (i += 1) colons += 1;
         if (i < fmt.len and (fmt[i] == 'E' or fmt[i] == 'O')) i += 1;
         if (i >= fmt.len) {
-            try out.appendSlice(gpa, fmt[start..]);
+            try padLiteral(out, gpa, fmt[start..], width, pad);
             break;
         }
         const conv = fmt[i];
@@ -138,15 +159,17 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
                 };
                 var tmp: std.ArrayList(u8) = .empty;
                 defer tmp.deinit(gpa);
-                if (conv == 'F' and tm.year >= 0 and tm.year < 1000) {
-                    try tmp.print(gpa, "{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u64, @intCast(tm.year)), tm.mon, tm.mday });
+                if (conv == 'F') {
+                    // "%+4Y-%m-%d"; the - and _ flags drop the year padding.
+                    try yearish(&tmp, gpa, tm.year, 4, if (pad == .none or pad == .space) .none else .default, true, null);
+                    try tmp.print(gpa, "-{d:0>2}-{d:0>2}", .{ tm.mon, tm.mday });
                 } else try format(&tmp, gpa, sub, tm, epoch, nsec);
                 if (upper) for (tmp.items) |*ch| {
                     ch.* = std.ascii.toUpper(ch.*);
                 };
                 try writePadded(out, gpa, tmp.items, width orelse 0, if (pad == .zero) '0' else ' ');
             },
-            'C' => try number(out, gpa, @divFloor(tm.year, 100), 2, pad, '0', width),
+            'C' => try yearish(out, gpa, @divFloor(tm.year, 100), 2, pad, plus, width),
             'd' => try number(out, gpa, tm.mday, 2, pad, '0', width),
             'e' => try number(out, gpa, tm.mday, 2, pad, ' ', width),
             'H' => try number(out, gpa, tm.hour, 2, pad, '0', width),
@@ -163,10 +186,11 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
             'U' => try number(out, gpa, @divFloor(@as(i64, tm.yday) + 7 - tm.wday, 7), 2, pad, '0', width),
             'W' => try number(out, gpa, @divFloor(@as(i64, tm.yday) + 7 - @mod(@as(i64, tm.wday) + 6, 7), 7), 2, pad, '0', width),
             'V' => try number(out, gpa, isoWeek(tm).week, 2, pad, '0', width),
-            'G' => try number(out, gpa, isoWeek(tm).year, 1, pad, '0', width),
+            'G' => try yearish(out, gpa, isoWeek(tm).year, 4, pad, plus, width),
             'g' => try number(out, gpa, @mod(isoWeek(tm).year, 100), 2, pad, '0', width),
             'y' => try number(out, gpa, @mod(tm.year, 100), 2, pad, '0', width),
-            'Y' => try number(out, gpa, tm.year, 1, pad, '0', width),
+            'Y' => try yearish(out, gpa, tm.year, 4, pad, plus, width),
+            'q' => try number(out, gpa, @divFloor(@as(i64, tm.mon) - 1, 3) + 1, 1, pad, '0', width),
             'N' => {
                 var buf: [9]u8 = undefined;
                 _ = std.fmt.bufPrint(&buf, "{d:0>9}", .{nsec}) catch unreachable;
@@ -181,20 +205,22 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
                 const hh = a / 3600;
                 const mm = (a % 3600) / 60;
                 const ss = a % 60;
-                var tmp: [32]u8 = undefined;
+                var tmp: [40]u8 = undefined;
+                // The - and _ flags drop the zero that pads the hours.
+                const hs: []const u8 = if (pad == .none or pad == .space) std.fmt.bufPrint(tmp[32..], "{d}", .{hh}) catch unreachable else std.fmt.bufPrint(tmp[32..], "{d:0>2}", .{hh}) catch unreachable;
                 const s = switch (colons) {
-                    0 => std.fmt.bufPrint(&tmp, "{c}{d:0>2}{d:0>2}", .{ sign, hh, mm }),
-                    1 => std.fmt.bufPrint(&tmp, "{c}{d:0>2}:{d:0>2}", .{ sign, hh, mm }),
-                    2 => std.fmt.bufPrint(&tmp, "{c}{d:0>2}:{d:0>2}:{d:0>2}", .{ sign, hh, mm, ss }),
+                    0 => std.fmt.bufPrint(&tmp, "{c}{s}{d:0>2}", .{ sign, hs, mm }),
+                    1 => std.fmt.bufPrint(&tmp, "{c}{s}:{d:0>2}", .{ sign, hs, mm }),
+                    2 => std.fmt.bufPrint(&tmp, "{c}{s}:{d:0>2}:{d:0>2}", .{ sign, hs, mm, ss }),
                     else => if (ss != 0)
-                        std.fmt.bufPrint(&tmp, "{c}{d:0>2}:{d:0>2}:{d:0>2}", .{ sign, hh, mm, ss })
+                        std.fmt.bufPrint(&tmp, "{c}{s}:{d:0>2}:{d:0>2}", .{ sign, hs, mm, ss })
                     else if (mm != 0)
-                        std.fmt.bufPrint(&tmp, "{c}{d:0>2}:{d:0>2}", .{ sign, hh, mm })
+                        std.fmt.bufPrint(&tmp, "{c}{s}:{d:0>2}", .{ sign, hs, mm })
                     else
-                        std.fmt.bufPrint(&tmp, "{c}{d:0>2}", .{ sign, hh }),
+                        std.fmt.bufPrint(&tmp, "{c}{s}", .{ sign, hs }),
                 } catch unreachable;
                 const w = width orelse 0;
-                if (s.len < w) {
+                if (s.len < w and pad != .none) {
                     if (pad == .space) {
                         try out.appendNTimes(gpa, ' ', w - s.len);
                         try out.appendSlice(gpa, s);
@@ -205,7 +231,7 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
                     }
                 } else try out.appendSlice(gpa, s);
             },
-            else => try out.appendSlice(gpa, fmt[start..i]),
+            else => try padLiteral(out, gpa, fmt[start..i], width, pad),
         }
     }
 }
