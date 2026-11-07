@@ -12,6 +12,7 @@ mkfifo fifo; ln file hard; printf x > "we ird"; printf x > "q'uote"; printf x > 
 line"
 chmod 4755 big; chmod 2755 dir; chmod 1777 empty; chmod 000 hard 2>/dev/null; chmod 600 "we ird"
 touch -d @1234567890.123456789 file; touch -d @-100.5 empty; touch -d @4102444800 big; touch -h -d @1000000000.25 lnk
+readlink lnk dangling dlnk >/dev/null; sleep 0.02; readlink lnk dangling dlnk >/dev/null
 python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('sock')" 2>/dev/null || true
 FILES="file empty big dir lnk dangling dlnk fifo hard /dev/null /dev/zero /dev/tty /proc /proc/self /sys /tmp ."
 export TZ=UTC
