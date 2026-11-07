@@ -19,7 +19,9 @@ BIN_DIR="$(cd "$(dirname "$0")/../zig-out/bin" 2>/dev/null && pwd)"
 
 # The reference must be GNU: a different implementation (e.g. uutils) would make
 # every differential comparison below meaningless.
-if ! "/usr/bin/$UTIL" --version 2>/dev/null | head -n 1 | grep -q 'GNU'; then
+# `test --version` is just the test "--version" (no output); `[` has the banner.
+GNU_PROBE="$UTIL"; [ "$UTIL" = test ] && GNU_PROBE='['
+if ! "/usr/bin/$GNU_PROBE" --version 2>/dev/null | head -n 1 | grep -q 'GNU'; then
     echo "FATAL: /usr/bin/$UTIL is not a GNU implementation; refusing to run." >&2
     exit 2
 fi
@@ -115,7 +117,10 @@ run_test_file() {
 # named by $CMP_STDIN (default /dev/null). GNU runs with LC_ALL=C so its quotes
 # are ASCII; the "Try '<program> --help'" program path is normalised because GNU
 # prints the path it was invoked with.
-norm_err() { sed -e "s#^[^ ]*/\\([a-z0-9]*\\): #\\1: #" -e "s# [^ ]*/$UTIL: # $UTIL: #g" -e "s#Try '[^']*'#Try 'PROG'#"; }
+norm_err() {
+    u=$(printf '%s' "$UTIL" | sed 's/[][\.*^$/#]/\\&/g')
+    sed -e "s#^[^ ]*/\([a-z0-9]*\): #\1: #" -e "s# [^ ]*/$u: # $UTIL: #g" -e "s#Try '[^']*'#Try 'PROG'#"
+}
 run_cmp() {
     description="$1"
     shift

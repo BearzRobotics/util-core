@@ -35,6 +35,7 @@ WASI.
 | `identity`, `supplementaryGroups` | `id`, `groups`, `whoami` | `getuid`/`geteuid`/`getgid`/`getegid`, `getgroups` | no process-identity API |
 | `uname` | `uname`, `arch`, `hostid` | the `uname(2)` system call | no host-information API |
 | `affinityCpus` | `nproc` | `sched_getaffinity` | no CPU-set API |
+| `fileStat`, `errnoText` | `test` (and later `stat`, `ls`, `du`, `find`, `chown`) | `statx(2)` for owner, group, device, block count and nanosecond times | `Io.File.Stat` has no uid, gid, device number or block count |
 
 One related use stays outside `sys.zig`: `cli.giveBack` calls
 `io.vtable.fileSeekBy`. That is part of the `Io` interface itself, but it

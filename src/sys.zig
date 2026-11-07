@@ -149,3 +149,114 @@ pub fn affinityCpus() ?usize {
     for (set) |w| n += @popCount(w);
     return n;
 }
+
+// ------------------------------------------------------------------- statx
+// std.Io.File.Stat has no owner, device, block count or device numbers, which
+// test, stat, ls, du, find and chown need. This is the Linux statx(2) result.
+
+pub const FileStat = struct {
+    mode: u32, // file type bits and permissions
+    uid: u32,
+    gid: u32,
+    nlink: u32,
+    ino: u64,
+    size: u64,
+    blocks: u64, // 512-byte units
+    blksize: u32,
+    dev_major: u32,
+    dev_minor: u32,
+    rdev_major: u32,
+    rdev_minor: u32,
+    atime_s: i64,
+    atime_ns: u32,
+    mtime_s: i64,
+    mtime_ns: u32,
+    ctime_s: i64,
+    ctime_ns: u32,
+    btime_s: i64,
+    btime_ns: u32,
+    has_btime: bool,
+
+    pub fn isDir(s: FileStat) bool {
+        return s.mode & 0o170000 == 0o040000;
+    }
+    pub fn isReg(s: FileStat) bool {
+        return s.mode & 0o170000 == 0o100000;
+    }
+    pub fn isLink(s: FileStat) bool {
+        return s.mode & 0o170000 == 0o120000;
+    }
+};
+
+/// stat (follow = true) or lstat of `path`; null if the call fails. `err`
+/// receives the error.
+pub fn fileStat(path: []const u8, follow: bool, err: *std.os.linux.E) ?FileStat {
+    if (comptime builtin.os.tag != .linux) return null;
+    var buf: [4097]u8 = undefined;
+    if (path.len >= 4096) {
+        err.* = .NAMETOOLONG;
+        return null;
+    }
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    const L = std.os.linux;
+    var sx: L.Statx = undefined;
+    var flags: u32 = L.AT.NO_AUTOMOUNT;
+    if (!follow) flags |= L.AT.SYMLINK_NOFOLLOW;
+    const rc = L.statx(L.AT.FDCWD, @ptrCast(&buf), flags, .{ .TYPE = true, .MODE = true, .NLINK = true, .UID = true, .GID = true, .ATIME = true, .MTIME = true, .CTIME = true, .INO = true, .SIZE = true, .BLOCKS = true, .BTIME = true }, &sx);
+    const e = L.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return .{
+        .mode = sx.mode,
+        .uid = sx.uid,
+        .gid = sx.gid,
+        .nlink = sx.nlink,
+        .ino = sx.ino,
+        .size = sx.size,
+        .blocks = sx.blocks,
+        .blksize = sx.blksize,
+        .dev_major = sx.dev_major,
+        .dev_minor = sx.dev_minor,
+        .rdev_major = sx.rdev_major,
+        .rdev_minor = sx.rdev_minor,
+        .atime_s = sx.atime.sec,
+        .atime_ns = sx.atime.nsec,
+        .mtime_s = sx.mtime.sec,
+        .mtime_ns = sx.mtime.nsec,
+        .ctime_s = sx.ctime.sec,
+        .ctime_ns = sx.ctime.nsec,
+        .btime_s = sx.btime.sec,
+        .btime_ns = sx.btime.nsec,
+        .has_btime = sx.mask.BTIME,
+    };
+}
+
+/// strerror-style text for a Linux errno.
+pub fn errnoText(e: std.os.linux.E) []const u8 {
+    return switch (e) {
+        .NOENT => "No such file or directory",
+        .ACCES => "Permission denied",
+        .PERM => "Operation not permitted",
+        .NOTDIR => "Not a directory",
+        .LOOP => "Too many levels of symbolic links",
+        .NAMETOOLONG => "File name too long",
+        .ISDIR => "Is a directory",
+        .NOMEM => "Cannot allocate memory",
+        .IO => "Input/output error",
+        .INVAL => "Invalid argument",
+        .EXIST => "File exists",
+        .NOTEMPTY => "Directory not empty",
+        .XDEV => "Invalid cross-device link",
+        .ROFS => "Read-only file system",
+        .NOSPC => "No space left on device",
+        .BUSY => "Device or resource busy",
+        .MLINK => "Too many links",
+        .FBIG => "File too large",
+        .TXTBSY => "Text file busy",
+        .OVERFLOW => "Value too large for defined data type",
+        else => @tagName(e),
+    };
+}
