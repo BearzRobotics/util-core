@@ -4,7 +4,10 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.17.1",
     .dependencies = .{
-        .regex = .{ .path = "../regex-zig" },
+        .regex = .{
+            .url = "git+https://github.com/BearzRobotics/regex-zig#d5a8c4b10a84549f5403aa4ad9afcacc9a5bfab9",
+            .hash = "regex-0.0.0-bWvIn4QIAQDLngzt940mRx47iJYcfkX0bWIPjScNXlAb",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },
 }
