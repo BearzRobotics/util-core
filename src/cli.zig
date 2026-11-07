@@ -222,6 +222,35 @@ pub fn quote(name: []const u8) Quoted {
     return .{ .name = name };
 }
 
+/// A string as GNU `quote()` prints it in messages such as "'abc' is not a
+/// valid number": single-quoted with C escapes (\\ for a backslash, \' for a
+/// quote, \a \b \t \n \v \f \r, and three-digit octal for other control
+/// and non-ASCII bytes). Use with `{f}`.
+pub const QuotedC = struct {
+    text: []const u8,
+
+    pub fn format(q: QuotedC, w: *Io.Writer) Io.Writer.Error!void {
+        try w.writeByte('\'');
+        for (q.text) |c| switch (c) {
+            '\\' => try w.writeAll("\\\\"),
+            '\'' => try w.writeAll("\\'"),
+            7 => try w.writeAll("\\a"),
+            8 => try w.writeAll("\\b"),
+            9 => try w.writeAll("\\t"),
+            10 => try w.writeAll("\\n"),
+            11 => try w.writeAll("\\v"),
+            12 => try w.writeAll("\\f"),
+            13 => try w.writeAll("\\r"),
+            else => if (c < 0x20 or c >= 0x7f) try w.print("\\{o:0>3}", .{c}) else try w.writeByte(c),
+        };
+        try w.writeByte('\'');
+    }
+};
+
+pub fn quoteC(text: []const u8) QuotedC {
+    return .{ .text = text };
+}
+
 /// Human-readable text for common file errors, matching strerror() wording
 /// that GNU tools print. Falls back to the Zig error name.
 pub fn errText(err: anyerror) []const u8 {
