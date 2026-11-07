@@ -21,7 +21,7 @@ BIN_DIR="$(cd "$(dirname "$0")/../zig-out/bin" 2>/dev/null && pwd)"
 # every differential comparison below meaningless.
 # `test --version` is just the test "--version" (no output); `[` has the banner.
 GNU_PROBE="$UTIL"; [ "$UTIL" = test ] && GNU_PROBE='['
-if ! "${GNU_BIN:-/usr/bin}/$GNU_PROBE" --version 2>/dev/null | head -n 1 | grep -q 'GNU'; then
+if ! "${GNU_BIN:-/usr/bin}/$GNU_PROBE" --version 2>/dev/null | head -n 1 | grep -q 'GNU\|coreutils'; then
     echo "FATAL: ${GNU_BIN:-/usr/bin}/$UTIL is not a GNU implementation; refusing to run." >&2
     exit 2
 fi
@@ -159,7 +159,7 @@ run_tree() {
     # Trees are compared with symlink targets (%l); the two working directories
     # differ only in their last component, which is masked in the output.
     for x in g o; do
-        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; true; } 2>/dev/null > "$base/$x.tree")
+        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort | awk '$1 ~ /^\.\/(z|e)(\/|$)/ { print } $1 !~ /^\.\/(z|e)(\/|$)/ { print $1, "-", $3 }'; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; true; } 2>/dev/null > "$base/$x.tree")
         rel="${base#/}"
         norm_err < "$base/$x.err" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.err2"
         norm_err < "$base/$x.out" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.out2"

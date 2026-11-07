@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATE = "2026-11-07"
 
 def gen(cmd, summary, synopsis, opts, behaviour, deviations, tests, status=None,
-        posix=True, section="", exit_rows=None, notes=None, ref_extra=""):
+        posix=True, section="", exit_rows=None, notes=None, ref_extra="", ref_text=None):
     """opts: list of (flags, text). exit_rows: list of (status, meaning)."""
     nodes = section or cmd
     posix_ref = (f"; POSIX.1-2024 (IEEE Std 1003.1-2024), {cmd}, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/{cmd}.html"
@@ -18,6 +18,8 @@ def gen(cmd, summary, synopsis, opts, behaviour, deviations, tests, status=None,
            f"Consulted {DATE}: the GNU manual node \"{nodes} invocation\" (`info '(coreutils) {nodes} invocation'`, "
            f"https://www.gnu.org/software/coreutils/manual/html_node/{nodes}-invocation.html){posix_ref}. {ref_extra}"
            f"Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_{cmd}.sh`).")
+    if ref_text:
+        ref = ref_text
     st = status or f"implemented with the gaps listed below; differential tests pass against GNU {cmd} 9.7 in the C locale."
     bl = "\n".join(f"- `{o}`: {t}" for o, t in opts)
     beh = "\n".join(f"- {b}" for b in behaviour)

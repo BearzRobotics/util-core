@@ -9,15 +9,17 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
 (engineering rules), then `docs/status.md`, `docs/architecture.md`,
 `docs/decisions/0002-std-io-exceptions.md`.
 
-## State (last commit before this note: `92f6184` plus the commit that adds this file)
-- 64 commands are implemented, tested and documented; `expr` is **committed
-  but untested** (it builds; no `test/test_expr.sh`, no docs yet).
-- The list of what is done and what remains is in `docs/status.md`
-  (update it whenever a command lands). Remaining: fmt pr ptx od numfmt shuf
-  split csplit cp mv touch mktemp dd install shred chown chgrp mkfifo mknod
-  stat df du sync pathchk ls dir vdir chcon runcon chroot env timeout nice
-  nohup kill stdbuf stty date who pinky find grep sed xargs locate updatedb
-  tree. After that: the stress-testing pass the owner asked for.
+## State
+- 93 commands are implemented, tested and documented. `docs/status.md` is
+  the authority on what is done and what remains; update it whenever a
+  command lands.
+- Remaining: the absorbed utilities find, grep, sed, locate, updatedb, tree.
+  (Oracles on the dev machine: find is bfs, grep is ugrep; locate and
+  updatedb are not installed.) After that: the stress-testing pass the owner
+  asked for.
+- Unix-only utilities belong in util-unix and are not to be added here:
+  chmod, id, groups, tty, uname, chown, chgrp, chcon, runcon, kill, stty,
+  who, pinky, hostname, uptime.
 
 ## Workflow that works (follow it)
 1. Probe GNU: `--help`, then the exact error texts and edge cases

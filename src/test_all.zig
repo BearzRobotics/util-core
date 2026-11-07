@@ -27,6 +27,8 @@ test {
     _ = @import("filevercmp.zig");
     _ = @import("fnmatch.zig");
     _ = @import("argmatch.zig");
+    _ = @import("copy.zig");
+    _ = @import("backup.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));

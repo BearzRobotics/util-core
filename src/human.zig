@@ -209,12 +209,17 @@ pub const Parsed = struct {
 
 /// xstrtoumax(s, &p, 0, &val, valid_suffixes) with GNU's suffix handling.
 pub fn strtoumax(s: []const u8, valid_suffixes: []const u8) Parsed {
+    return strtoumaxBase(s, valid_suffixes, false);
+}
+
+/// Like strtoumax; `decimal` forces base 10 (no 0x / leading-zero octal).
+pub fn strtoumaxBase(s: []const u8, valid_suffixes: []const u8, decimal: bool) Parsed {
     var i: usize = 0;
     while (i < s.len and (s[i] == ' ' or (s[i] >= '\t' and s[i] <= '\r'))) i += 1;
     if (i < s.len and s[i] == '-') return .{ .err = .invalid };
     if (i < s.len and s[i] == '+') i += 1;
     var base: u64 = 10;
-    if (i < s.len and s[i] == '0') {
+    if (!decimal and i < s.len and s[i] == '0') {
         if (i + 2 < s.len and (s[i + 1] == 'x' or s[i + 1] == 'X') and std.ascii.isHex(s[i + 2])) {
             base = 16;
             i += 2;

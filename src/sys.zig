@@ -209,6 +209,10 @@ pub fn fileStat(path: []const u8, follow: bool, err: *std.os.linux.E) ?FileStat 
         err.* = e;
         return null;
     }
+    return statxToFileStat(sx);
+}
+
+fn statxToFileStat(sx: std.os.linux.Statx) FileStat {
     return .{
         .mode = sx.mode,
         .uid = sx.uid,
@@ -644,4 +648,210 @@ pub fn getXattr(path: []const u8, name: [:0]const u8, follow: bool, buf: []u8, e
         return null;
     }
     return rc;
+}
+
+// ------------------------------------------------ errno-faithful file calls
+// cp, mv and install must report the exact strerror text of the failing call
+// (and use O_EXCL, O_NOFOLLOW, renameat2 and similar flags), which the error
+// sets of std.Io.Dir do not preserve. These wrappers return the errno.
+
+/// NUL-terminated copy of `path` in `buf`.
+fn cstr(buf: *[4097]u8, path: []const u8) ?[*:0]const u8 {
+    if (path.len >= 4096) return null;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    return @ptrCast(buf);
+}
+
+pub const O = struct {
+    pub const RDONLY: u32 = 0;
+    pub const WRONLY: u32 = 1;
+    pub const RDWR: u32 = 2;
+    pub const CREAT: u32 = 0o100;
+    pub const EXCL: u32 = 0o200;
+    pub const NOCTTY: u32 = 0o400;
+    pub const TRUNC: u32 = 0o1000;
+    pub const NONBLOCK: u32 = 0o4000;
+    pub const DIRECTORY: u32 = 0o200000;
+    pub const NOFOLLOW: u32 = 0o400000;
+    pub const CLOEXEC: u32 = 0o2000000;
+};
+
+/// openat(AT_FDCWD, path, flags | O_CLOEXEC, mode).
+pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?i32 {
+    var b: [4097]u8 = undefined;
+    const p = cstr(&b, path) orelse {
+        err.* = .NAMETOOLONG;
+        return null;
+    };
+    const rc = LX.syscall4(.openat, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), flags | O.CLOEXEC, mode);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return @intCast(rc);
+}
+
+pub fn closeFd(fd: i32) ?LX.E {
+    return errOf(LX.close(fd));
+}
+
+/// read(2); returns the byte count (0 at end of file).
+pub fn readFd(fd: i32, buf: []u8, err: *LX.E) ?usize {
+    while (true) {
+        const rc = LX.read(fd, buf.ptr, buf.len);
+        const e = LX.errno(rc);
+        if (e == .INTR) continue;
+        if (e != .SUCCESS) {
+            err.* = e;
+            return null;
+        }
+        return rc;
+    }
+}
+
+/// Write all of `bytes`.
+pub fn writeAllFd(fd: i32, bytes: []const u8) ?LX.E {
+    var off: usize = 0;
+    while (off < bytes.len) {
+        const rc = LX.write(fd, bytes.ptr + off, bytes.len - off);
+        const e = LX.errno(rc);
+        if (e == .INTR) continue;
+        if (e != .SUCCESS) return e;
+        off += rc;
+    }
+    return null;
+}
+
+pub fn mkdirPath(path: []const u8, mode: u32) ?LX.E {
+    var b: [4097]u8 = undefined;
+    const p = cstr(&b, path) orelse return .NAMETOOLONG;
+    return errOf(LX.mkdirat(LX.AT.FDCWD, p, mode));
+}
+
+/// unlinkat(AT_FDCWD, path, removedir ? AT_REMOVEDIR : 0).
+pub fn unlinkPath(path: []const u8, removedir: bool) ?LX.E {
+    var b: [4097]u8 = undefined;
+    const p = cstr(&b, path) orelse return .NAMETOOLONG;
+    return errOf(LX.unlinkat(LX.AT.FDCWD, p, if (removedir) LX.AT.REMOVEDIR else 0));
+}
+
+pub const RENAME_NOREPLACE: u32 = 1;
+pub const RENAME_EXCHANGE: u32 = 2;
+
+pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?LX.E {
+    var b1: [4097]u8 = undefined;
+    var b2: [4097]u8 = undefined;
+    const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
+    const p2 = cstr(&b2, new) orelse return .NAMETOOLONG;
+    return errOf(LX.syscall5(.renameat2, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p1), @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p2), flags));
+}
+
+/// linkat(2); `follow` makes a hard link to the target of a symlink.
+pub fn linkPath(old: []const u8, new: []const u8, follow: bool) ?LX.E {
+    var b1: [4097]u8 = undefined;
+    var b2: [4097]u8 = undefined;
+    const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
+    const p2 = cstr(&b2, new) orelse return .NAMETOOLONG;
+    return errOf(LX.linkat(LX.AT.FDCWD, p1, LX.AT.FDCWD, p2, if (follow) LX.AT.SYMLINK_FOLLOW else 0));
+}
+
+pub fn symlinkPath(target: []const u8, path: []const u8) ?LX.E {
+    var b1: [4097]u8 = undefined;
+    var b2: [4097]u8 = undefined;
+    const p1 = cstr(&b1, target) orelse return .NAMETOOLONG;
+    const p2 = cstr(&b2, path) orelse return .NAMETOOLONG;
+    return errOf(LX.symlinkat(p1, LX.AT.FDCWD, p2));
+}
+
+pub fn readlinkPath(path: []const u8, buf: []u8, err: *LX.E) ?usize {
+    var b: [4097]u8 = undefined;
+    const p = cstr(&b, path) orelse {
+        err.* = .NAMETOOLONG;
+        return null;
+    };
+    const rc = LX.readlinkat(LX.AT.FDCWD, p, buf.ptr, buf.len);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return rc;
+}
+
+/// fchmodat(2); `nofollow` is honoured by retrying through /proc where the
+/// kernel lacks AT_SYMLINK_NOFOLLOW support (symlinks are then left alone).
+pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?LX.E {
+    var b: [4097]u8 = undefined;
+    const p = cstr(&b, path) orelse return .NAMETOOLONG;
+    if (nofollow) {
+        // Symbolic links have no permission bits on Linux.
+        var e: LX.E = .SUCCESS;
+        if (fileStat(path, false, &e)) |st| {
+            if (st.isLink()) return .OPNOTSUPP;
+        } else return e;
+    }
+    return errOf(LX.syscall4(.fchmodat, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), mode, 0));
+}
+
+pub fn fchmodFd(fd: i32, mode: u32) ?LX.E {
+    return errOf(LX.fchmod(fd, mode));
+}
+
+pub fn fchownFd(fd: i32, uid: u32, gid: u32) ?LX.E {
+    return errOf(LX.fchown(fd, uid, gid));
+}
+
+pub fn ftruncateFd(fd: i32, len: u64) ?LX.E {
+    return errOf(LX.ftruncate(fd, @intCast(len)));
+}
+
+pub fn accessPath(path: []const u8, mode: u32) ?LX.E {
+    var b: [4097]u8 = undefined;
+    const p = cstr(&b, path) orelse return .NAMETOOLONG;
+    return errOf(LX.syscall4(.faccessat2, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), mode, 0x200));
+}
+
+/// lseek(2): whence 0/1/2 or SEEK_DATA 3 / SEEK_HOLE 4.
+pub fn seekFd(fd: i32, off: i64, whence: u32, err: *LX.E) ?i64 {
+    const rc = LX.syscall3(.lseek, @bitCast(@as(isize, fd)), @bitCast(off), whence);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return @bitCast(rc);
+}
+
+/// statx(2) on an open descriptor.
+pub fn fstatFd(fd: i32, err: *LX.E) ?FileStat {
+    var sx: LX.Statx = undefined;
+    const rc = LX.statx(fd, "", LX.AT.EMPTY_PATH, .{ .TYPE = true, .MODE = true, .NLINK = true, .UID = true, .GID = true, .ATIME = true, .MTIME = true, .CTIME = true, .INO = true, .SIZE = true, .BLOCKS = true, .BTIME = true }, &sx);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return statxToFileStat(sx);
+}
+
+/// Current umask (read without changing it).
+pub fn currentUmask() u32 {
+    return umask();
+}
+
+/// glibc makedev().
+pub fn makedev(major: u64, minor: u64) u64 {
+    return ((major & 0xfff) << 8) | (minor & 0xff) | ((minor & ~@as(u64, 0xff)) << 12) | ((major & ~@as(u64, 0xfff)) << 32);
+}
+
+/// umask(2): set the mask and return the previous one.
+pub fn setUmask(mask: u32) u32 {
+    return @intCast(std.os.linux.syscall1(.umask, mask) & 0o7777);
+}
+
+/// Parent process id.
+pub fn parentPid() i32 {
+    return @intCast(std.os.linux.getppid());
 }

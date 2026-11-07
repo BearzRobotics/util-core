@@ -170,6 +170,13 @@ pub fn writeStderr(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
 
+/// Write to stderr exactly as formatted, without a trailing newline.
+pub fn writeStderrNoNl(ctx: Context, comptime fmt: []const u8, args: anytype) void {
+    var buf: [1024]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
+}
+
 /// Print an informational line `<name>: <message>\n` to stdout (used by the
 /// -v/--verbose options of mkdir, rmdir, ...). Best effort.
 pub fn say(ctx: Context, comptime fmt: []const u8, args: anytype) void {
