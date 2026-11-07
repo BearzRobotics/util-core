@@ -115,7 +115,7 @@ run_test_file() {
 # named by $CMP_STDIN (default /dev/null). GNU runs with LC_ALL=C so its quotes
 # are ASCII; the "Try '<program> --help'" program path is normalised because GNU
 # prints the path it was invoked with.
-norm_err() { sed -e "s#^[^ ]*/\\([a-z0-9]*\\): #\\1: #" -e "s#Try '[^']*'#Try 'PROG'#"; }
+norm_err() { sed -e "s#^[^ ]*/\\([a-z0-9]*\\): #\\1: #" -e "s# [^ ]*/$UTIL: # $UTIL: #g" -e "s#Try '[^']*'#Try 'PROG'#"; }
 run_cmp() {
     description="$1"
     shift
@@ -149,8 +149,8 @@ run_tree() {
     description="$1"; setup="$2"; shift 2
     base="$(dirname "$TMPDIR_CMP")/tree"; chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
     for x in g o; do (cd "$base/$x" && eval "$setup"); done
-    (umask "${TREE_UMASK:-022}"; cd "$base/g" && LC_ALL=C gnu "$@" < /dev/null > "$base/g.out" 2> "$base/g.err"; echo $? > "$base/g.rc")
-    (umask "${TREE_UMASK:-022}"; cd "$base/o" && ours "$@" < /dev/null > "$base/o.out" 2> "$base/o.err"; echo $? > "$base/o.rc")
+    (umask "${TREE_UMASK:-022}"; cd "$base/g" && LC_ALL=C gnu "$@" < "${TREE_STDIN:-/dev/null}" > "$base/g.out" 2> "$base/g.err"; echo $? > "$base/g.rc")
+    (umask "${TREE_UMASK:-022}"; cd "$base/o" && ours "$@" < "${TREE_STDIN:-/dev/null}" > "$base/o.out" 2> "$base/o.err"; echo $? > "$base/o.rc")
     # Trees are compared with symlink targets (%l); the two working directories
     # differ only in their last component, which is masked in the output.
     for x in g o; do
