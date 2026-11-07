@@ -19,6 +19,8 @@ test {
     _ = @import("posixre.zig");
     _ = @import("getopt.zig");
     _ = @import("exec.zig");
+    _ = @import("tz.zig");
+    _ = @import("strftime.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));

@@ -12,6 +12,9 @@ const cli = @import("cli.zig");
 
 pub const help_id: u32 = 1000;
 pub const version_id: u32 = 1001;
+/// Reported for each non-option argument when the spec starts with '-'
+/// (getopt's RETURN_IN_ORDER mode); `Opt.arg` holds the argument.
+pub const operand_id: u32 = 1002;
 
 pub const Arg = enum { none, required, optional };
 
@@ -46,17 +49,22 @@ pub const Parser = struct {
     /// Offset inside a bundle of short options (0 = not inside one).
     sub: usize = 0,
     stop_at_operand: bool,
+    in_order: bool = false,
     ended: bool = false,
     operands: std.ArrayList([]const u8) = .empty,
 
     pub fn init(ctx: cli.Context, short: []const u8, longs: []const Long) Parser {
         var stop = cli.getenv(ctx, "POSIXLY_CORRECT") != null;
         var spec = short;
+        var order = false;
         if (spec.len > 0 and spec[0] == '+') {
             stop = true;
             spec = spec[1..];
+        } else if (spec.len > 0 and spec[0] == '-') {
+            order = true;
+            spec = spec[1..];
         }
-        return .{ .ctx = ctx, .short = spec, .longs = longs, .stop_at_operand = stop };
+        return .{ .ctx = ctx, .short = spec, .longs = longs, .stop_at_operand = stop, .in_order = order };
     }
 
     pub fn deinit(p: *Parser) void {
@@ -84,6 +92,10 @@ pub const Parser = struct {
                 if (p.index >= args.len) return .done;
                 const a: []const u8 = args[p.index];
                 if (p.ended or a.len < 2 or a[0] != '-') {
+                    if (p.in_order) {
+                        p.index += 1;
+                        return .{ .opt = .{ .id = operand_id, .arg = a } };
+                    }
                     if (p.stop_at_operand and !p.ended) {
                         p.ended = true;
                         continue;
