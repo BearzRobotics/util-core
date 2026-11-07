@@ -6,20 +6,20 @@ Updated 2026-11-07. Every implemented command has a differential test suite
 against GNU coreutils 9.7 (`test/test_<cmd>.sh`), a compatibility record
 (`docs/compatibility/<cmd>.md`) and a manual page (`docs/manpages/<cmd>.md`).
 
-## Implemented (93)
+## Implemented (94)
 
 true false yes echo basename dirname cat wc dircolors pwd printenv sleep tee
 head tac tail seq mkdir rmdir cut paste uniq fold nl tr expand unexpand comm
 tsort sort md5sum sha1sum sha224sum sha256sum sha384sum sha512sum b2sum cksum
 sum base64 base32 basenc factor join arch nproc whoami logname hostid
-users unlink link readlink realpath truncate ln rm test [ printf expr env nice nohup timeout sync stdbuf chroot pathchk mkfifo mknod mktemp split od fmt shuf numfmt pr ptx csplit date touch stat ls dir vdir du df cp mv install dd shred xargs
+users unlink link readlink realpath truncate ln rm test [ printf expr env nice nohup timeout sync stdbuf chroot pathchk mkfifo mknod mktemp split od fmt shuf numfmt pr ptx csplit date touch stat ls dir vdir du df cp mv install dd shred xargs sed
 
 ## Not yet implemented
 
 - **Moved to util-unix (removed from this project):** chmod, id, groups, tty, uname, chown, chgrp,
   chcon, runcon, kill, stty, who, pinky, hostname, uptime.
-- **Absorbed utilities (not in GNU coreutils):** find, grep, sed, locate,
-  updatedb, tree.
+- **Absorbed utilities (not in GNU coreutils):** find, grep, locate,
+  updatedb, tree (sed is done).
 
 `test/` still contains stub suites for most of the unimplemented commands;
 `sh test/run_all_tests.sh` reports them as failing until the command exists.

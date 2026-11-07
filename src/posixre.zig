@@ -45,6 +45,7 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
                 // interval up to \}
                 const close = std.mem.indexOfPos(u8, pat, i, "\\}") orelse return error.BadPattern;
                 try out.append(gpa, '{');
+                if (close > i and pat[i] == ',') try out.append(gpa, '0');
                 try out.appendSlice(gpa, pat[i..close]);
                 try out.append(gpa, '}');
                 i = close + 2;
@@ -105,9 +106,11 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
                 if (at_start and !ere) {
                     try out.appendSlice(gpa, "\\*");
                 } else if (at_start and ere) {
-                    // ERE: a leading * is undefined; treat as literal like GNU.
-                    try out.appendSlice(gpa, "\\*");
-                } else try out.append(gpa, '*');
+                    return error.BadPattern;
+                } else {
+                    if (!ere and out.items.len > 0 and out.items[out.items.len - 1] == '*' and (out.items.len < 2 or out.items[out.items.len - 2] != '\\')) return error.BadPattern;
+                    try out.append(gpa, '*');
+                }
                 at_start = false;
             },
             '^' => {
@@ -150,6 +153,7 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
                 }
             },
             '+', '?' => {
+                if (ere and at_start) return error.BadPattern;
                 if (ere and !at_start) try out.append(gpa, c) else {
                     try out.append(gpa, '\\');
                     try out.append(gpa, c);
@@ -160,9 +164,12 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
                 if (ere and !at_start) {
                     const close = std.mem.indexOfScalarPos(u8, pat, i, '}') orelse return error.BadPattern;
                     try out.append(gpa, '{');
+                    if (close > i and pat[i] == ',') try out.append(gpa, '0');
                     try out.appendSlice(gpa, pat[i..close]);
                     try out.append(gpa, '}');
                     i = close + 1;
+                } else if (ere) {
+                    return error.BadPattern;
                 } else try out.appendSlice(gpa, "\\{");
                 at_start = false;
             },
@@ -177,6 +184,87 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
         }
     }
     if (depth != 0) return error.BadPattern;
+    defer out.deinit(gpa);
+    return wrapStacked(gpa, out.items);
+}
+
+/// Perl treats `a*?` as lazy and `a*+` as possessive, whereas POSIX stacks
+/// the quantifiers; wrap the quantified atom so that the stack is explicit.
+fn wrapStacked(gpa: std.mem.Allocator, src: []const u8) Error![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    var groups: std.ArrayList(usize) = .empty;
+    defer groups.deinit(gpa);
+    var atom: ?usize = null;
+    var quant = false;
+    var i: usize = 0;
+    while (i < src.len) {
+        const c = src[i];
+        switch (c) {
+            '\\' => {
+                atom = out.items.len;
+                quant = false;
+                var n: usize = 2;
+                if (i + 1 < src.len and src[i + 1] == 'x') n = 4;
+                const e = @min(i + n, src.len);
+                try out.appendSlice(gpa, src[i..e]);
+                i = e;
+            },
+            '[' => {
+                atom = out.items.len;
+                quant = false;
+                var j = i + 1;
+                if (j < src.len and src[j] == '^') j += 1;
+                if (j < src.len and src[j] == ']') j += 1;
+                while (j < src.len and src[j] != ']') : (j += 1) {
+                    if (src[j] == '[' and j + 1 < src.len and src[j + 1] == ':') {
+                        j = std.mem.indexOfPos(u8, src, j + 2, ":]") orelse src.len - 1;
+                        j += 1;
+                    } else if (src[j] == '\\') j += 1;
+                }
+                const e = @min(j + 1, src.len);
+                try out.appendSlice(gpa, src[i..e]);
+                i = e;
+            },
+            '(' => {
+                try groups.append(gpa, out.items.len);
+                try out.append(gpa, '(');
+                atom = null;
+                quant = false;
+                i += 1;
+            },
+            ')' => {
+                const st = groups.pop() orelse return error.BadPattern;
+                try out.append(gpa, ')');
+                atom = st;
+                quant = false;
+                i += 1;
+            },
+            '|' => {
+                try out.append(gpa, '|');
+                atom = null;
+                quant = false;
+                i += 1;
+            },
+            '*', '+', '?', '{' => {
+                var e = i + 1;
+                if (c == '{') e = (std.mem.indexOfScalarPos(u8, src, i, '}') orelse src.len - 1) + 1;
+                if (quant) if (atom) |a| {
+                    try out.insertSlice(gpa, a, "(?:");
+                    try out.append(gpa, ')');
+                };
+                try out.appendSlice(gpa, src[i..e]);
+                quant = true;
+                i = e;
+            },
+            else => {
+                atom = out.items.len;
+                quant = false;
+                try out.append(gpa, c);
+                i += 1;
+            },
+        }
+    }
     return out.toOwnedSlice(gpa);
 }
 
@@ -293,6 +381,56 @@ test "translate basic forms" {
 /// glibc's wording for the common malformed basic regular expressions;
 /// posixre only reports that the pattern is bad.
 pub fn diagnose(pat: []const u8) []const u8 {
+    return diagnoseMode(pat, false);
+}
+
+pub fn diagnoseMode(pat: []const u8, ere: bool) []const u8 {
+    if (ere) {
+        var at_start = true;
+        var depth: i32 = 0;
+        var i: usize = 0;
+        while (i < pat.len) : (i += 1) {
+            switch (pat[i]) {
+                '\\' => {
+                    if (i + 1 >= pat.len) return "Trailing backslash";
+                    i += 1;
+                    at_start = false;
+                },
+                '[' => {
+                    var j = i + 1;
+                    if (j < pat.len and pat[j] == '^') j += 1;
+                    if (j < pat.len and pat[j] == ']') j += 1;
+                    while (j < pat.len and pat[j] != ']') j += 1;
+                    if (j >= pat.len) return "Unmatched [, [^, [:, [., or [=";
+                    i = j;
+                    at_start = false;
+                },
+                '(' => {
+                    depth += 1;
+                    at_start = true;
+                },
+                ')' => {
+                    depth -= 1;
+                    if (depth < 0) return "Unmatched ) or \\)";
+                    at_start = false;
+                },
+                '|' => at_start = true,
+                '^' => {},
+                '*', '+', '?' => {
+                    if (at_start) return "Invalid preceding regular expression";
+                },
+                '{' => {
+                    if (at_start) return "Invalid preceding regular expression";
+                    const close = std.mem.indexOfScalarPos(u8, pat, i, '}') orelse return "Unmatched { or \\{";
+                    _ = close;
+                    return "Invalid content of \\{\\}";
+                },
+                else => at_start = false,
+            }
+        }
+        if (depth > 0) return "Unmatched ( or \\(";
+        return "Invalid regular expression";
+    }
     // glibc reports a lone '[' with the generic message.
     if (std.mem.eql(u8, pat, "[")) return "Invalid regular expression";
     var depth: i32 = 0;

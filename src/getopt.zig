@@ -53,6 +53,8 @@ pub const Parser = struct {
     stop_at_operand: bool,
     in_order: bool = false,
     ended: bool = false,
+    /// Omit the "Try '--help'" line (sed prints its whole usage instead).
+    no_try: bool = false,
     operands: std.ArrayList([]const u8) = .empty,
 
     pub fn init(ctx: cli.Context, short: []const u8, longs: []const Long) Parser {
@@ -71,6 +73,10 @@ pub const Parser = struct {
 
     pub fn deinit(p: *Parser) void {
         p.operands.deinit(p.ctx.gpa);
+    }
+
+    fn warnTry(p: *const Parser, comptime fmt: []const u8, args: anytype) void {
+        if (p.no_try) cli.warn(p.ctx, fmt, args) else cli.warn(p.ctx, fmt ++ "\nTry '{s} --help' for more information.", args ++ .{p.ctx.name});
     }
 
     fn pushOperand(p: *Parser, s: []const u8) void {
@@ -119,7 +125,7 @@ pub const Parser = struct {
             p.sub += 1;
             const at_end = p.sub >= a.len;
             const kind = p.shortKind(c) orelse {
-                cli.invalidShort(p.ctx, c);
+                p.warnTry("invalid option -- '{c}'", .{c});
                 return .bad;
             };
             var value: ?[]const u8 = null;
@@ -136,7 +142,7 @@ pub const Parser = struct {
                         p.index += 1;
                         value = args[p.index];
                     } else {
-                        cli.warn(p.ctx, "option requires an argument -- '{c}'\nTry '{s} --help' for more information.", .{ c, p.ctx.name });
+                        p.warnTry("option requires an argument -- '{c}'", .{ c });
                         p.index += 1;
                         p.sub = 0;
                         return .bad;
@@ -188,17 +194,17 @@ pub const Parser = struct {
                     n += piece.len;
                 }
             };
-            cli.warn(p.ctx, "option '{s}' is ambiguous; possibilities:{s}\nTry '{s} --help' for more information.", .{ a, buf[0..n], p.ctx.name });
+            p.warnTry("option '{s}' is ambiguous; possibilities:{s}", .{ a, buf[0..n] });
             return .bad;
         }
         const l = found orelse {
-            cli.warn(p.ctx, "unrecognized option '{s}'\nTry '{s} --help' for more information.", .{ a, p.ctx.name });
+            p.warnTry("unrecognized option '{s}'", .{ a });
             return .bad;
         };
         var value: ?[]const u8 = if (eq) |e| a[e + 1 ..] else null;
         switch (l.arg) {
             .none => if (value != null) {
-                cli.warn(p.ctx, "option '--{s}' doesn't allow an argument\nTry '{s} --help' for more information.", .{ l.name, p.ctx.name });
+                p.warnTry("option '--{s}' doesn't allow an argument", .{ l.name });
                 return .bad;
             },
             .required => if (value == null) {
@@ -206,7 +212,7 @@ pub const Parser = struct {
                     value = args[p.index];
                     p.index += 1;
                 } else {
-                    cli.warn(p.ctx, "option '--{s}' requires an argument\nTry '{s} --help' for more information.", .{ l.name, p.ctx.name });
+                    p.warnTry("option '--{s}' requires an argument", .{ l.name });
                     return .bad;
                 }
             },

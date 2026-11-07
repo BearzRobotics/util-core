@@ -119,7 +119,7 @@ run_test_file() {
 # prints the path it was invoked with.
 norm_err() {
     u=$(printf '%s' "$UTIL" | sed 's/[][\.*^$/#]/\\&/g')
-    sed -e "s#^[^ ]*/\([a-z0-9]*\): #\1: #" -e "s# [^ ]*/$u: # $UTIL: #g" -e "s#Try '[^']*'#Try 'PROG'#"
+    sed -e "s#^[^ ]*/\([a-z0-9]*\): #\1: #" -e "s# [^ ]*/$u: # $UTIL: #g" -e "s#Try '[^']*'#Try 'PROG'#" -e "s#^Usage: [^ ]*/$u #Usage: $UTIL #"
 }
 run_cmp() {
     description="$1"
