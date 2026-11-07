@@ -328,9 +328,89 @@ fn bracketLiteral(gpa: std.mem.Allocator, out: *std.ArrayList(u8), c: u8) !void 
 pub const Compiled = struct {
     re: regex.Regex,
     groups: u32,
+    /// `(?:body)\z` for patterns with alternation: used to look for a longer
+    /// match ending at a given offset (POSIX leftmost-longest).
+    longest: ?regex.Regex = null,
 
     pub fn deinit(c: *Compiled, gpa: std.mem.Allocator) void {
         c.re.deinit(gpa);
+        if (c.longest) |*l| l.deinit(gpa);
+    }
+};
+
+/// Source of the "must end here" companion regex when `body` (Perl dialect,
+/// as produced by `translate`) has an alternation and nothing that looks at
+/// the text to the right of the match (`$`, `\b`, `\B`, `\z`, `\Z`).
+pub fn longestSource(gpa: std.mem.Allocator, body: []const u8, prefix: []const u8) Error!?[]u8 {
+    var alt = false;
+    var i: usize = 0;
+    var in_br = false;
+    while (i < body.len) : (i += 1) {
+        const c = body[i];
+        if (c == '\\') {
+            if (i + 1 < body.len and !in_br) {
+                switch (body[i + 1]) {
+                    'b', 'B', 'z', 'Z' => return null,
+                    else => {},
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if (in_br) {
+            if (c == ']') in_br = false;
+            continue;
+        }
+        switch (c) {
+            '[' => {
+                in_br = true;
+                if (i + 1 < body.len and body[i + 1] == '^') i += 1;
+                if (i + 1 < body.len and body[i + 1] == ']') i += 1;
+            },
+            '$' => return null,
+            '|' => alt = true,
+            else => {},
+        }
+    }
+    if (!alt) return null;
+    return try std.fmt.allocPrint(gpa, "{s}(?:{s})\\z", .{ prefix, body });
+}
+
+/// Finds POSIX leftmost-longest matches on top of the leftmost-first engine.
+pub const Finder = struct {
+    sr: regex.Searcher,
+    sr2: ?regex.Searcher,
+
+    pub fn init(gpa: std.mem.Allocator, c: *const Compiled) !Finder {
+        return initParts(gpa, &c.re, if (c.longest) |*l| l else null);
+    }
+
+    pub fn initParts(gpa: std.mem.Allocator, re: *const regex.Regex, longest: ?*const regex.Regex) !Finder {
+        var sr = try re.searcher(gpa);
+        errdefer sr.deinit();
+        var sr2: ?regex.Searcher = null;
+        if (longest) |l| sr2 = try l.searcher(gpa);
+        return .{ .sr = sr, .sr2 = sr2 };
+    }
+
+    pub fn deinit(f: *Finder) void {
+        f.sr.deinit();
+        if (f.sr2) |*x| x.deinit();
+    }
+
+    pub fn find(f: *Finder, hay: []const u8, from: usize) regex.MatchError!?regex.Match {
+        const m = (try f.sr.find(hay, from)) orelse return null;
+        const sr2 = if (f.sr2) |*x| x else return m;
+        const s0 = m.start();
+        const e0 = m.end();
+        if (hay.len - e0 > 4096) return m;
+        var e = hay.len;
+        while (e > e0) : (e -= 1) {
+            if (try sr2.find(hay[0..e], s0)) |m2| {
+                if (m2.start() == s0) return m2;
+            }
+        }
+        return m;
     }
 };
 
@@ -344,11 +424,17 @@ pub fn compileMode(gpa: std.mem.Allocator, pat: []const u8, ere: bool, ignore_ca
     defer gpa.free(body);
     const src = if (anchored) try std.fmt.allocPrint(gpa, "^(?:{s})", .{body}) else try gpa.dupe(u8, body);
     defer gpa.free(src);
-    const re = regex.Regex.compile(gpa, src, .{ .dialect = .perl, .ignore_case = ignore_case }, null) catch |e| switch (e) {
+    var re = regex.Regex.compile(gpa, src, .{ .dialect = .perl, .ignore_case = ignore_case }, null) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.BadPattern,
     };
-    return .{ .re = re, .groups = re.groupCount() };
+    errdefer re.deinit(gpa);
+    var longest: ?regex.Regex = null;
+    if (try longestSource(gpa, body, "")) |ls| {
+        defer gpa.free(ls);
+        longest = regex.Regex.compile(gpa, ls, .{ .dialect = .perl, .ignore_case = ignore_case }, null) catch null;
+    }
+    return .{ .re = re, .groups = re.groupCount(), .longest = longest };
 }
 
 test "translate basic forms" {

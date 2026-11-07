@@ -485,6 +485,82 @@ run_tree_t 'r then w' "$SET" -e 'r g' -e 'w new' f
 run_tree_t 'W' "$SET" -n 'N;W new' f
 run_tree_t 'w no name' "$SET" 'w' f
 
+# ---- --debug (program listing and execution trace)
+printf 'a/b\n' > dab; printf 'tab\there\\x\001\n' > dweird; printf 'zz\n' > rf.txt
+DBGCASES='p
+-n p
+1,2p
+2!p
+$!N
+N;P;D
+$!N;P;D
+1h;2G;3x
+s/o/0/
+s/o/0/g
+s/q/0/
+s/o/0/2p
+s,a/,[&],
+s/\(o\)\(n\)/\2\1/
+-E s/(o)|(t)/[\1\2]/
+y/ot/OT/
+2{p;s/t/T/;}
+2!{p}
+/o/{/e/p}
+/two/I,/zz/Mp
+0,/o/p
+1~2p
+2,~2p
+2,+1p
+$p
+l
+l 5
+=
+F
+d
+2d
+D
+G
+g
+h
+H
+x
+z
+n
+N
+q
+2q
+2q3
+Q
+a foo
+i bar
+c baz
+2c baz
+1,2c baz
+r rf.txt
+R rf.txt
+w /dev/null
+W /dev/null
+b
+bx;p;:x
+s/o/0/;t;p
+s/o/0/;T;p
+:a;N;$!ba;s/\n/,/g
+$!{N;P;D}
+1!G;h;$!d
+y/o/0/;2!d'
+printf '%s\n' "$DBGCASES" > dbgcases
+while IFS= read -r line; do
+    opts=""; sc="$line"
+    case "$line" in -n\ *) opts="-n"; sc="${line#-n }";; -E\ *) opts="-E"; sc="${line#-E }";; esac
+    for f in nums dab dweird nonl3; do
+        sd "--debug $line ($f)" $f --debug $opts "$sc"
+    done
+done < dbgcases
+sd '--debug -s two files' nums --debug -s -n '$p' f1 f2
+sd '--debug stdin file' nums --debug p -
+sd '--debug -z' nulld --debug -z p
+sd '--debug missing file' nums --debug p nosuch
+
 help_text_cmp() {
     exp=$(PATH="/usr/bin" LC_ALL=C sed --help | sed 's#/usr/bin/sed#sed#')
     act=$(ours --help | sed 's#^Usage: [^ ]*#Usage: sed#')

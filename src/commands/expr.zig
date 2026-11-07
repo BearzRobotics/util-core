@@ -232,7 +232,7 @@ const Parser = struct {
             error.BadPattern => return p.fatal("{s}", .{posixre.diagnose(pattern)}),
             else => return error.Fatal,
         };
-        var searcher = c.re.searcher(gpa) catch return error.Fatal;
+        var searcher = posixre.Finder.init(gpa, &c) catch return error.Fatal;
         defer searcher.deinit();
         const m = (searcher.find(subject, 0) catch return p.fatal("Regular expression too big", .{})) orelse {
             return if (c.groups > 0) "" else "0";

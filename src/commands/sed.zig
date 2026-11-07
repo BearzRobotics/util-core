@@ -16,7 +16,7 @@ const LX = std.os.linux;
 
 const help_text = @embedFile("../help/sed.txt");
 
-const Re = struct { re: regex.Regex, groups: u32, multiline: bool };
+const Re = struct { re: regex.Regex, groups: u32, multiline: bool, longest: ?regex.Regex = null, src: []const u8 = "", icase: bool = false };
 
 const AddrKind = enum { none, line, step, last, re, zero, plus, mult };
 const Addr = struct {
@@ -41,6 +41,10 @@ const Subst = struct {
     number: u64 = 1,
     wfile: ?usize = null,
     max_group: u32 = 0,
+    num_set: bool = false,
+    icase: bool = false,
+    mline: bool = false,
+    pat_src: []const u8 = "",
 };
 
 const Cmd = struct {
@@ -57,6 +61,9 @@ const Cmd = struct {
     out: usize = 0,
     sub: ?*Subst = null,
     ytab: ?*[256]u8 = null,
+    ysrc: []const u8 = "",
+    ydst: []const u8 = "",
+    depth: u16 = 0,
 };
 
 const Output = struct {
@@ -268,7 +275,10 @@ const Parser = struct {
             return p.fail("{s}", .{posixre.diagnoseMode(conv, s.opts.ere)});
         };
         const r = try s.arena.create(Re);
-        r.* = .{ .re = re, .groups = re.groupCount(), .multiline = mline };
+        r.* = .{ .re = re, .groups = re.groupCount(), .multiline = mline, .src = pat, .icase = icase };
+        if (posixre.longestSource(s.arena, body, if (mline) "(?sm)" else "(?s)") catch null) |ls| {
+            r.longest = regex.Regex.compile(s.arena, ls, .{ .dialect = .perl, .ignore_case = icase }, null) catch null;
+        }
         return r;
     }
 
@@ -496,6 +506,7 @@ const Parser = struct {
                     const n = p.readNumber(f);
                     if (n == 0) return p.fail("number option to `s' command may not be zero", .{});
                     seen_num = true;
+                    sub.num_set = true;
                     sub.number = n;
                 },
                 '}', '#' => {
@@ -508,6 +519,9 @@ const Parser = struct {
             }
         }
         if (pat.len == 0 and (icase or mline)) return p.fail("cannot specify modifiers on empty regexp", .{});
+        sub.icase = icase;
+        sub.mline = mline;
+        sub.pat_src = pat;
         sub.re = try p.compileRe(pat, icase, mline);
         if (sub.re) |r| s.last_re = r;
         sub.parts = try p.parseReplacement(rep, sub);
@@ -607,6 +621,8 @@ const Parser = struct {
             t[src[i]] = dst[i];
         }
         cmd.ytab = t;
+        cmd.ysrc = src;
+        cmd.ydst = dst;
         try p.endOfCmd();
     }
 
@@ -670,6 +686,7 @@ const Parser = struct {
                 }
             }
             cmd.c = c;
+            cmd.depth = @intCast(s.blocks.items.len);
             switch (c) {
                 '#' => {
                     if (cmd.a1.kind != .none) return p.fail("comments don't accept any addresses", .{});
@@ -692,6 +709,7 @@ const Parser = struct {
                     if (cmd.a1.kind != .none) return p.fail("}} doesn't want any addresses", .{});
                     const open = s.blocks.pop() orelse return p.fail("unexpected `}}'", .{});
                     s.cmds.items[open].jump = s.cmds.items.len;
+                    cmd.depth = @intCast(s.blocks.items.len);
                     try s.cmds.append(s.arena, cmd);
                     try p.endOfCmd();
                     continue;
@@ -903,8 +921,9 @@ const Exec = struct {
     in_place_target: []const u8 = "",
     stdout_o: *Output,
     last_re: ?*Re = null,
+    dbg_level: usize = 0,
     r_files: std.ArrayList(struct { name: []const u8, data: []const u8, pos: usize }) = .empty,
-    searcher_cache: ?struct { re: *Re, sr: regex.Searcher } = null,
+    searcher_cache: ?struct { re: *Re, sr: posixre.Finder } = null,
 
     fn flushOut(e: *Exec, o: *Output) void {
         if (o.buf.items.len == 0) return;
@@ -1212,13 +1231,13 @@ const Exec = struct {
 
     // ---- matching
 
-    fn getSearcher(e: *Exec, re: *Re) *regex.Searcher {
+    fn getSearcher(e: *Exec, re: *Re) *posixre.Finder {
         if (e.searcher_cache) |*c| {
             if (c.re == re) return &c.sr;
             c.sr.deinit();
             e.searcher_cache = null;
         }
-        const sr = re.re.searcher(e.gpa) catch oom(e.s.ctx);
+        const sr = posixre.Finder.initParts(e.gpa, &re.re, if (re.longest) |*l| l else null) catch oom(e.s.ctx);
         e.searcher_cache = .{ .re = re, .sr = sr };
         return &e.searcher_cache.?.sr;
     }
@@ -1303,6 +1322,176 @@ const Exec = struct {
         return true;
     }
 
+    // ---- --debug
+
+    fn dbgOut(e: *Exec, comptime fmt: []const u8, args: anytype) void {
+        const text = std.fmt.allocPrint(e.gpa, fmt, args) catch oom(e.s.ctx);
+        defer e.gpa.free(text);
+        e.emit(e.stdout_o, text);
+    }
+
+    fn dbgEscaped(e: *Exec, out: *std.ArrayList(u8), text: []const u8, slash: bool) void {
+        for (text) |ch| {
+            switch (ch) {
+                '\\' => out.appendSlice(e.gpa, "\\\\") catch oom(e.s.ctx),
+                '\n' => out.appendSlice(e.gpa, "\\n") catch oom(e.s.ctx),
+                '\t' => out.appendSlice(e.gpa, "\\t") catch oom(e.s.ctx),
+                7 => out.appendSlice(e.gpa, "\\a") catch oom(e.s.ctx),
+                12 => out.appendSlice(e.gpa, "\\f") catch oom(e.s.ctx),
+                '\r' => out.appendSlice(e.gpa, "\\r") catch oom(e.s.ctx),
+                11 => out.appendSlice(e.gpa, "\\v") catch oom(e.s.ctx),
+                '/' => if (slash) out.appendSlice(e.gpa, "\\/") catch oom(e.s.ctx) else out.append(e.gpa, ch) catch oom(e.s.ctx),
+                else => if (ch < 0x20 or ch >= 0x7f) {
+                    var b: [8]u8 = undefined;
+                    out.appendSlice(e.gpa, std.fmt.bufPrint(&b, "\\o{o:0>3}", .{ch}) catch unreachable) catch oom(e.s.ctx);
+                } else out.append(e.gpa, ch) catch oom(e.s.ctx),
+            }
+        }
+    }
+
+    fn dbgPattern(e: *Exec) void {
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(e.gpa);
+        out.appendSlice(e.gpa, "PATTERN: ") catch oom(e.s.ctx);
+        e.dbgEscaped(&out, e.ps.items, false);
+        out.append(e.gpa, '\n') catch oom(e.s.ctx);
+        e.emit(e.stdout_o, out.items);
+    }
+
+    fn dbgHold(e: *Exec) void {
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(e.gpa);
+        out.appendSlice(e.gpa, "HOLD:    ") catch oom(e.s.ctx);
+        e.dbgEscaped(&out, e.hs.items, false);
+        out.append(e.gpa, '\n') catch oom(e.s.ctx);
+        e.emit(e.stdout_o, out.items);
+    }
+
+    fn dbgAddr(e: *Exec, out: *std.ArrayList(u8), a: Addr) void {
+        switch (a.kind) {
+            .none => {},
+            .line => out.print(e.gpa, "{d}", .{a.n}) catch oom(e.s.ctx),
+            .step => if (a.step == 0) out.print(e.gpa, "{d}", .{a.n}) catch oom(e.s.ctx) else out.print(e.gpa, "{d}~{d}", .{ a.n, a.step }) catch oom(e.s.ctx),
+            .last => out.append(e.gpa, '$') catch oom(e.s.ctx),
+            .zero => out.append(e.gpa, '0') catch oom(e.s.ctx),
+            .plus => out.print(e.gpa, "+{d}", .{a.n}) catch oom(e.s.ctx),
+            .mult => out.print(e.gpa, "~{d}", .{a.n}) catch oom(e.s.ctx),
+            .re => {
+                out.append(e.gpa, '/') catch oom(e.s.ctx);
+                if (a.re) |r| {
+                    e.dbgEscaped(out, r.src, true);
+                }
+                out.append(e.gpa, '/') catch oom(e.s.ctx);
+                if (a.re) |r| {
+                    if (r.icase) out.append(e.gpa, 'I') catch oom(e.s.ctx);
+                    if (r.multiline) out.append(e.gpa, 'M') catch oom(e.s.ctx);
+                }
+            },
+        }
+    }
+
+    fn dbgCmdText(e: *Exec, out: *std.ArrayList(u8), c: *const Cmd) void {
+        const gpa = e.gpa;
+        const has_addr = c.a1.kind != .none;
+        e.dbgAddr(out, c.a1);
+        if (c.a2.kind != .none) {
+            out.append(gpa, ',') catch oom(e.s.ctx);
+            e.dbgAddr(out, c.a2);
+        }
+        if (c.negate) out.append(gpa, '!') catch oom(e.s.ctx);
+        if (has_addr or c.negate) out.append(gpa, ' ') catch oom(e.s.ctx);
+        switch (c.c) {
+            ':' => out.print(gpa, ":{s}", .{c.text}) catch oom(e.s.ctx),
+            'b', 't', 'T' => {
+                out.append(gpa, c.c) catch oom(e.s.ctx);
+                if (c.text.len > 0) out.print(gpa, " {s}", .{c.text}) catch oom(e.s.ctx);
+            },
+            'a', 'i', 'c' => out.print(gpa, "{c}\\{s}", .{ c.c, c.text }) catch oom(e.s.ctx),
+            'r', 'R' => out.print(gpa, "{c} {s}", .{ c.c, c.text }) catch oom(e.s.ctx),
+            'w', 'W' => out.print(gpa, "{c}{s}", .{ c.c, c.text }) catch oom(e.s.ctx),
+            'e' => {
+                out.print(gpa, "e {s}", .{c.text}) catch oom(e.s.ctx);
+                if (c.text.len > 0) out.append(gpa, '\n') catch oom(e.s.ctx);
+            },
+            'l', 'q', 'Q' => {
+                out.append(gpa, c.c) catch oom(e.s.ctx);
+                if (c.int >= 0) out.print(gpa, " {d}", .{c.int}) catch oom(e.s.ctx);
+            },
+            'y' => out.print(gpa, "y/{s}/{s}/", .{ c.ysrc, c.ydst }) catch oom(e.s.ctx),
+            's' => {
+                const sub = c.sub.?;
+                out.append(gpa, 's') catch oom(e.s.ctx);
+                out.append(gpa, '/') catch oom(e.s.ctx);
+                e.dbgEscaped(out, sub.pat_src, true);
+                out.append(gpa, '/') catch oom(e.s.ctx);
+                for (sub.parts) |part| {
+                    if (part.case_op != 0) {
+                        out.append(gpa, '\\') catch oom(e.s.ctx);
+                        out.append(gpa, part.case_op) catch oom(e.s.ctx);
+                    }
+                    out.appendSlice(gpa, part.lit) catch oom(e.s.ctx);
+                    if (part.group == 0) out.append(gpa, '&') catch oom(e.s.ctx) else if (part.group > 0) out.print(gpa, "\\{d}", .{part.group}) catch oom(e.s.ctx);
+                }
+                out.append(gpa, '/') catch oom(e.s.ctx);
+                if (sub.icase) out.append(gpa, 'i') catch oom(e.s.ctx);
+                if (sub.mline) out.append(gpa, 'm') catch oom(e.s.ctx);
+                if (sub.global) out.append(gpa, 'g') catch oom(e.s.ctx);
+                if (sub.eval) out.append(gpa, 'e') catch oom(e.s.ctx);
+                if (sub.print > 0) out.append(gpa, 'p') catch oom(e.s.ctx);
+                if (sub.num_set) out.print(gpa, "{d}", .{sub.number}) catch oom(e.s.ctx);
+                if (sub.wfile) |w| out.print(gpa, "w{s}", .{e.s.outs.items[w].path}) catch oom(e.s.ctx);
+            },
+            else => out.append(gpa, c.c) catch oom(e.s.ctx),
+        }
+    }
+
+    /// Pattern source as `s` prints it: only the slash is escaped.
+    fn dbgEscaped2(e: *Exec, out: *std.ArrayList(u8), text: []const u8) void {
+        for (text) |ch| {
+            if (ch == '/') out.appendSlice(e.gpa, "\\/") catch oom(e.s.ctx) else if (ch == '\n') out.appendSlice(e.gpa, "\\n") catch oom(e.s.ctx) else out.append(e.gpa, ch) catch oom(e.s.ctx);
+        }
+    }
+
+    fn dbgProgram(e: *Exec) void {
+        e.emit(e.stdout_o, "SED PROGRAM:\n");
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(e.gpa);
+        for (e.s.cmds.items) |*c| {
+            out.clearRetainingCapacity();
+            if (c.c == '}' and e.dbg_level > 0) e.dbg_level -= 1;
+            out.appendNTimes(e.gpa, ' ', 2 + 2 * e.dbg_level) catch oom(e.s.ctx);
+            if (c.c == '{') e.dbg_level += 1;
+            e.dbgCmdText(&out, c);
+            out.append(e.gpa, '\n') catch oom(e.s.ctx);
+            e.emit(e.stdout_o, out.items);
+        }
+    }
+
+    fn dbgCommand(e: *Exec, c: *const Cmd) void {
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(e.gpa);
+        out.appendSlice(e.gpa, "COMMAND: ") catch oom(e.s.ctx);
+        if (c.c == '}' and e.dbg_level > 0) e.dbg_level -= 1;
+        out.appendNTimes(e.gpa, ' ', 2 * e.dbg_level) catch oom(e.s.ctx);
+        if (c.c == '{') e.dbg_level += 1;
+        e.dbgCmdText(&out, c);
+        out.append(e.gpa, '\n') catch oom(e.s.ctx);
+        e.emit(e.stdout_o, out.items);
+    }
+
+    fn dbgRegisters(e: *Exec, m: regex.Match, subj: []const u8, groups: u32) void {
+        e.emit(e.stdout_o, "MATCHED REGEX REGISTERS\n");
+        var i: u32 = 0;
+        while (i <= groups) : (i += 1) {
+            const g = m.group(i) orelse break;
+            e.dbgOut("  regex[{d}] = {d}-{d} '{s}'\n", .{ i, g[0], g[1], subj[g[0]..g[1]] });
+        }
+    }
+
+    fn dbgEnd(e: *Exec) void {
+        if (e.s.opts.debug) e.emit(e.stdout_o, "END-OF-CYCLE:\n");
+    }
+
     // ---- commands
 
     fn autoprint(e: *Exec) void {
@@ -1367,6 +1556,7 @@ const Exec = struct {
         var prev_end: ?usize = null;
         while (start <= subj.len) {
             const m = e.reMatch(sub.re, subj, start) orelse break;
+            if (e.s.opts.debug and start == 0 and count == 0 and prev_end == null) e.dbgRegisters(m, subj, if (sub.re) |r| r.groups else if (e.last_re) |r| r.groups else 0);
             const ms = m.start();
             const me = m.end();
             if (me == ms and prev_end != null and prev_end.? == ms) {
@@ -1453,9 +1643,10 @@ const Exec = struct {
         _ = &replaced_flag;
         while (pc < cmds.len) {
             const c = &cmds[pc];
+            if (e.s.opts.debug) e.dbgCommand(c);
             const matched = e.matchCmd(c) != c.negate;
             if (!matched) {
-                if (c.c == '{') pc = c.jump + 1 else pc += 1;
+                if (c.c == '{') pc = c.jump else pc += 1;
                 continue;
             }
             pc += 1;
@@ -1480,10 +1671,12 @@ const Exec = struct {
                     if (c.a2.kind != .none and c.range_active and !c.negate) {
                         // delete without printing; text comes at range end
                     }
+                    e.dbgEnd();
                     e.ps.clearRetainingCapacity();
                     return false;
                 },
                 'd' => {
+                    e.dbgEnd();
                     e.ps.clearRetainingCapacity();
                     return false;
                 },
@@ -1536,6 +1729,7 @@ const Exec = struct {
                 'n' => {
                     if (e.atEof()) {
                         e.autoprint();
+                        e.dbgEnd();
                         e.quit = true;
                         return true;
                     }
@@ -1544,6 +1738,7 @@ const Exec = struct {
                 },
                 'N' => {
                     if (e.atEof()) {
+                        e.dbgEnd();
                         if (!e.s.opts.posix) e.autoprint();
                         e.quit = true;
                         return true;
@@ -1640,7 +1835,17 @@ const Exec = struct {
                 'z' => e.ps.clearRetainingCapacity(),
                 else => {},
             }
+            if (e.s.opts.debug) switch (c.c) {
+                's', 'y', 'G', 'z', 'n', 'N' => e.dbgPattern(),
+                'g', 'h', 'H' => e.dbgHold(),
+                'x' => {
+                    e.dbgPattern();
+                    e.dbgHold();
+                },
+                else => {},
+            };
         }
+        e.dbgEnd();
         e.autoprint();
         return false;
     }
@@ -1831,11 +2036,19 @@ pub fn main(ctx: cli.Context) u8 {
         if (o.fd == 1) o.sink = stdout_o;
     }
 
+    if (st.opts.debug) ex.dbgProgram();
     while (true) {
         if (ex.skip_read) {
             ex.skip_read = false;
             ex.dumpAppend();
-        } else if (!ex.readPatternSpace()) break;
+            if (st.opts.debug) ex.dbgPattern();
+        } else {
+            if (!ex.readPatternSpace()) break;
+            if (st.opts.debug) {
+                ex.dbgOut("INPUT:   '{s}' line {d}\n", .{ if (std.mem.eql(u8, ex.in.name, "-")) "STDIN" else ex.in.name, ex.in.line_no });
+                ex.dbgPattern();
+            }
+        }
         const quit = ex.execute();
         if (quit) {
             ex.dumpAppend();

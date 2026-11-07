@@ -34,8 +34,7 @@ GNU sed 4.9 (`/usr/bin/sed --version` on the development machine). Consulted 202
 
 ## Known deviations and gaps
 
-- Regular expressions use the Perl-dialect engine of regex-zig through src/posixre.zig: alternation is leftmost-first, POSIX and GNU use leftmost-longest, so `s/a|ab/X/` differs on "ab".
-- `--debug` is accepted but prints nothing extra (GNU prints the program and a trace).
+- Leftmost-longest alternation is emulated on top of the leftmost-first engine (src/posixre.zig `Finder`): after the engine finds the leftmost match, longer matches ending at later offsets are tried. This is skipped for patterns containing `$`, `\b`, `\B` or lines with more than 4096 bytes after the match, where the leftmost-first match is used. Submatch positions follow the Perl rule, not POSIX's.
 - C locale only: no multibyte characters.
 - `e` and `s///e` run the command through `/bin/sh` and a temporary file in /tmp.
 - `--version` prints an abbreviated banner.
