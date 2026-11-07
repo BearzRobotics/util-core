@@ -1,5 +1,5 @@
-% BASE32(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% BASE32(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-07
 
 NAME
@@ -41,7 +41,7 @@ Reference: GNU coreutils 9.7 (`/usr/bin/base32 --version` on the development mac
 See docs/compatibility/base32.md for details.
 
 LIMITATIONS
-- `--version` prints `base32 (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `base32 (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 
 SEE ALSO
 docs/compatibility/base32.md, docs/architecture.md

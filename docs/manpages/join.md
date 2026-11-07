@@ -1,5 +1,5 @@
-% JOIN(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% JOIN(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-07
 
 NAME
@@ -60,7 +60,7 @@ See docs/compatibility/join.md for details.
 
 LIMITATIONS
 - Comparison is bytewise (C locale; -i folds ASCII only).
-- `--version` prints `join (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `join (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 
 SEE ALSO
 docs/compatibility/join.md, docs/architecture.md

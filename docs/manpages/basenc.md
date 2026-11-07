@@ -1,5 +1,5 @@
-% BASENC(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% BASENC(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-07
 
 NAME
@@ -44,7 +44,7 @@ Reference: GNU coreutils 9.7 (`/usr/bin/basenc --version` on the development mac
 See docs/compatibility/basenc.md for details.
 
 LIMITATIONS
-- `--version` prints `basenc (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `basenc (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 - Block sizes for partial output on malformed large inputs follow what was observed on GNU 9.7 for small inputs; inputs much larger than 64 KiB with errors in the middle are not tested.
 
 SEE ALSO

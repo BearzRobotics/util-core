@@ -4,7 +4,7 @@
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
 POOP=${POOP:-$root/../poop/zig-out/bin/poop}
-WORK=${WORK:-${TMPDIR:-/tmp}/core-utils-bench}
+WORK=${WORK:-${TMPDIR:-/tmp}/util-core-bench}
 DURATION=${DURATION:-1000}
 OPT=${OPT:-ReleaseFast}
 export LC_ALL=C

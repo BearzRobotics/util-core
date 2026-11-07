@@ -20,7 +20,7 @@ GNU coreutils 9.7 (`/usr/bin/factor --version` on the development machine, insta
 ## Known deviations and gaps
 
 - **Hard numbers:** GNU also uses elliptic-curve factoring; this implementation does not. A number whose smallest unresolved factors are both large (for example two primes of 57 bits needs about 10 seconds; two of 64 bits or 2^128+1 is out of reach) is reported on standard error as `too hard to factor` after 2^29 rho steps, exit status 1, instead of being factored. Numbers beyond 128 bits whose remaining part is composite are limited to a few thousand big-integer rho steps.
-- `--version` prints `factor (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `factor (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 
 ## Tests
 

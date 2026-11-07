@@ -1,4 +1,4 @@
-# Default color database for dircolors (core-utils).
+# Default color database for dircolors (util-core).
 #
 # Each line is "KEYWORD VALUE". VALUE is a list of terminal SGR codes
 # separated by ';' (for example 01;34 is bold blue). A '#' ends the line's

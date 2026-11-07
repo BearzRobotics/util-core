@@ -39,7 +39,7 @@ GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, install
 - The traditional `+POS1 -POS2` key syntax is not recognised (those arguments are file names).
 - An ambiguous long option prints `option '--s' is ambiguous` without GNU's `; possibilities:` list (shared `cli.badLong`).
 - A write failure reports `write failed: 'standard output'` without the strerror text.
-- `--version` prints `sort (core-utils) 0.0.0-dev`; `--help` lists only the implemented options.
+- `--version` prints `sort (util-core) 0.0.0-dev`; `--help` lists only the implemented options.
 
 ## Tests
 

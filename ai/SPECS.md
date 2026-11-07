@@ -1,10 +1,10 @@
-Core Utils — Specification
+Util Core — Specification
 Status: Draft 0.1
 Implementation language: Zig
 Engineering policy: AGENTS.md
 Scope: Portable command-line utilities and reusable supporting libraries
 1. Purpose
-Core Utils is a clean, independently usable implementation of a collection of portable command-line utilities in Zig. It aims for strong GNU command-line compatibility where applicable, while deliberately organizing commands according to portability and utility rather than reproducing GNU package boundaries.
+Util Core is a clean, independently usable implementation of a collection of portable command-line utilities in Zig. It aims for strong GNU command-line compatibility where applicable, while deliberately organizing commands according to portability and utility rather than reproducing GNU package boundaries.
 
 The project is not a distribution-specific component. It must remain usable independently of DKBuilder, DKDE, and any particular Linux distribution.
 2. Goals
@@ -19,19 +19,19 @@ The project is not a distribution-specific component. It must remain usable inde
 3. Non-goals
 - Reproducing GNU coreutils' exact package composition.
 - Implementing commands that fundamentally require a Unix/POSIX environment; those belong in the independent util-unix project.
-- Reimplementing an entire shell as part of Core Utils. sh is excluded pending a separate shell specification.
+- Reimplementing an entire shell as part of Util Core. sh is excluded pending a separate shell specification.
 - Guaranteeing identical behavior across operating systems where filesystem, permission, process, terminal, or locale semantics differ.
 - Maintaining undocumented compatibility with GNU bugs.
 - Treating optional rich output as the default for pipelines or scripts.
 4. Project boundaries
-4.1 Core Utils versus util-unix
-A command belongs in Core Utils when its primary purpose can be expressed portably across the supported systems, even if some options need platform-specific handling. A command belongs in util-unix when its essential operation depends on Unix-specific kernel, account, device, mount, terminal, or process facilities.
+4.1 Util Core versus util-unix
+A command belongs in Util Core when its primary purpose can be expressed portably across the supported systems, even if some options need platform-specific handling. A command belongs in util-unix when its essential operation depends on Unix-specific kernel, account, device, mount, terminal, or process facilities.
 
 Package provenance is not a classification rule. Commands historically distributed by GNU findutils, grep, sed, diffutils, or other projects may be included here.
 
 Some commands need a classification decision before implementation; see §14.
 4.2 Independent projects
-- Core Utils and util-unix MUST build and release independently.
+- Util Core and util-unix MUST build and release independently.
 - Neither project MUST depend on the other.
 - Shared functionality MAY be extracted into a separately specified Zig library if reuse demonstrably justifies it.
 - Do not create a generic shared framework merely to eliminate small amounts of duplication.
@@ -91,7 +91,7 @@ Shared CLI facilities MAY cover common argument conventions, terminal detection,
 The build MUST support these modes where technically feasible:
 1. Individual executables (default): one independently runnable executable per selected command.
 2. Multicall via invocation name: one executable dispatches by its basename (argv[0]), with symlinks, hardlinks, or copies installed under command names as supported by the platform.
-3. Multicall via explicit subcommand: a single executable accepts core-utils <command> [arguments...] (final binary name configurable).
+3. Multicall via explicit subcommand: a single executable accepts util-core <command> [arguments...] (final binary name configurable).
 Requirements:
 - Dispatch MUST have deterministic behavior, including unknown-command errors and help.
 - The same command implementation and tests MUST back all applicable modes.

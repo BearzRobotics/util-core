@@ -24,7 +24,7 @@ GNU coreutils 9.7 (`/usr/bin/test --version` on the development machine, install
 ## Known deviations and gaps
 
 - `-v` and `-R` (bash extensions) are not GNU test operators and are rejected as GNU does.
-- `[ --version` prints a core-utils banner instead of GNU's.
+- `[ --version` prints a util-core banner instead of GNU's.
 
 ## Tests
 

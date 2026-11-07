@@ -58,8 +58,8 @@ Status: {st} Date: {DATE}
     exs = "\n".join(f"{a}\t{b}" for a, b in ex)
     lim = "\n".join(f"- {d}" for d in deviations) if deviations else "- None known."
     with open(f"{ROOT}/docs/manpages/{cmd}.md", "w") as f:
-        f.write(f"""% {cmd.upper()}(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+        f.write(f"""% {cmd.upper()}(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % {DATE}
 
 NAME

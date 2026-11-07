@@ -149,10 +149,10 @@ pub fn writeStdout(io: Io, text: []const u8) bool {
     return true;
 }
 
-/// Print `<name> (core-utils) <version>` to stdout.
+/// Print `<name> (util-core) <version>` to stdout.
 pub fn printVersion(ctx: Context) bool {
     var buf: [128]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{s} (core-utils) {s}\n", .{ ctx.name, version }) catch unreachable;
+    const line = std.fmt.bufPrint(&buf, "{s} (util-core) {s}\n", .{ ctx.name, version }) catch unreachable;
     return writeStdout(ctx.io, line);
 }
 

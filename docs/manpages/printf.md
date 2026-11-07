@@ -1,5 +1,5 @@
-% PRINTF(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% PRINTF(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-07
 
 NAME
@@ -34,7 +34,7 @@ Reference: GNU coreutils 9.7 (`/usr/bin/printf --version` on the development mac
 See docs/compatibility/printf.md for details.
 
 LIMITATIONS
-- `--help`/`--version` print core-utils text (GNU prints its argv[0] path).
+- `--help`/`--version` print util-core text (GNU prints its argv[0] path).
 - Multibyte characters are bytes (C locale).
 - `1e400` and other values beyond x87 range are `inf` only past f80, as in GNU.
 

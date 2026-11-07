@@ -1,5 +1,5 @@
-% CUT(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% CUT(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-04
 
 NAME

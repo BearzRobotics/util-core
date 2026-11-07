@@ -1,5 +1,5 @@
-% TEST(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% TEST(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-07
 
 NAME
@@ -49,7 +49,7 @@ See docs/compatibility/test.md for details.
 
 LIMITATIONS
 - `-v` and `-R` (bash extensions) are not GNU test operators and are rejected as GNU does.
-- `[ --version` prints a core-utils banner instead of GNU's.
+- `[ --version` prints a util-core banner instead of GNU's.
 
 SEE ALSO
 docs/compatibility/test.md, docs/architecture.md

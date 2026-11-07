@@ -1,5 +1,5 @@
-% SORT(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% SORT(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-07
 
 NAME
@@ -75,7 +75,7 @@ LIMITATIONS
 - The traditional `+POS1 -POS2` key syntax is not recognised (those arguments are file names).
 - An ambiguous long option prints `option '--s' is ambiguous` without GNU's `; possibilities:` list (shared `cli.badLong`).
 - A write failure reports `write failed: 'standard output'` without the strerror text.
-- `--version` prints `sort (core-utils) 0.0.0-dev`; `--help` lists only the implemented options.
+- `--version` prints `sort (util-core) 0.0.0-dev`; `--help` lists only the implemented options.
 
 SEE ALSO
 docs/compatibility/sort.md, docs/architecture.md

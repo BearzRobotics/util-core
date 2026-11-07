@@ -21,7 +21,7 @@ GNU coreutils 9.7 (`/usr/bin/base64 --version` on the development machine, insta
 
 ## Known deviations and gaps
 
-- `--version` prints `base64 (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `base64 (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 - A directory operand prints `read error: Is a directory` as GNU does.
 
 ## Tests

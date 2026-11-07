@@ -1,5 +1,5 @@
-% CKSUM(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% CKSUM(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-07
 
 NAME
@@ -57,7 +57,7 @@ See docs/compatibility/cksum.md for details.
 
 LIMITATIONS
 - `--debug` is accepted and prints nothing (GNU reports which CPU-accelerated implementation it chose).
-- `--version` prints `cksum (core-utils) 0.0.0-dev`.
+- `--version` prints `cksum (util-core) 0.0.0-dev`.
 
 SEE ALSO
 docs/compatibility/cksum.md, docs/architecture.md

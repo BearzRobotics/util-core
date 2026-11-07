@@ -1,6 +1,6 @@
 .{
-    .name = .core_utils,
-    .fingerprint = 0x28e7a0b1be6f48c,
+    .name = .util_core,
+    .fingerprint = 0xe5b5c900044091c9,
     .version = "0.0.0",
     .minimum_zig_version = "0.17.1",
     .dependencies = .{

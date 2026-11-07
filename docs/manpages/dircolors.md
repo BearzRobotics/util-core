@@ -1,5 +1,5 @@
-% DIRCOLORS(1) Version 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% DIRCOLORS(1) Version 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-04
 
 NAME

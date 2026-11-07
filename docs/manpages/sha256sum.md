@@ -1,5 +1,5 @@
-% SHA256SUM(1) core-utils 0.0.0-dev | Core Utils Manual
-% Core Utils contributors
+% SHA256SUM(1) util-core 0.0.0-dev | Util Core Manual
+% Util Core contributors
 % 2026-11-07
 
 NAME
@@ -50,7 +50,7 @@ Reference: GNU coreutils 9.7 (`/usr/bin/sha256sum --version` on the development 
 See docs/compatibility/sha256sum.md for details.
 
 LIMITATIONS
-- `--version` prints `NAME (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's and names the tool as invoked.
+- `--version` prints `NAME (util-core) 0.0.0-dev`; `--help` is shorter than GNU's and names the tool as invoked.
 - Digest hex is compared case-insensitively; GNU also accepts upper-case hex.
 
 SEE ALSO

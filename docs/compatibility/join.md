@@ -28,7 +28,7 @@ GNU coreutils 9.7 (`/usr/bin/join --version` on the development machine, install
 ## Known deviations and gaps
 
 - Comparison is bytewise (C locale; -i folds ASCII only).
-- `--version` prints `join (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `join (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 
 ## Tests
 

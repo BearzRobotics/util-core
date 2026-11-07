@@ -22,7 +22,7 @@ GNU coreutils 9.7 (`/usr/bin/base32 --version` on the development machine, insta
 
 ## Known deviations and gaps
 
-- `--version` prints `base32 (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `base32 (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 
 ## Tests
 

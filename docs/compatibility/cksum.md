@@ -27,7 +27,7 @@ GNU coreutils 9.7 (`/usr/bin/cksum --version` on the development machine, instal
 ## Known deviations and gaps
 
 - `--debug` is accepted and prints nothing (GNU reports which CPU-accelerated implementation it chose).
-- `--version` prints `cksum (core-utils) 0.0.0-dev`.
+- `--version` prints `cksum (util-core) 0.0.0-dev`.
 
 ## Tests
 

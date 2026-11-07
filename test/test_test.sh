@@ -36,7 +36,7 @@ done
 
 printf "\n[ Program name in messages ]\n"
 UTIL="["; run_cmp "[ --help alone"       --help
-# "[ --version" prints GNU's banner; ours names core-utils instead (by design).
+# "[ --version" prints GNU's banner; ours names util-core instead (by design).
 run_cmp "[ no close"           x
 run_cmp "[ no close 2"                    -f f
 run_cmp "[ ] only"                        ]

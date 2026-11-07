@@ -21,7 +21,7 @@ GNU coreutils 9.7 (`/usr/bin/printf --version` on the development machine, insta
 
 ## Known deviations and gaps
 
-- `--help`/`--version` print core-utils text (GNU prints its argv[0] path).
+- `--help`/`--version` print util-core text (GNU prints its argv[0] path).
 - Multibyte characters are bytes (C locale).
 - `1e400` and other values beyond x87 range are `inf` only past f80, as in GNU.
 

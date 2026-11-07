@@ -24,7 +24,7 @@ GNU coreutils 9.7 (`/usr/bin/b2sum --version` on the development machine, instal
 
 ## Known deviations and gaps
 
-- `--version` prints `NAME (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's and names the tool as invoked.
+- `--version` prints `NAME (util-core) 0.0.0-dev`; `--help` is shorter than GNU's and names the tool as invoked.
 - Digest hex is compared case-insensitively; GNU also accepts upper-case hex.
 - Keyed hashing and the other BLAKE2 parameters are not offered (neither does GNU b2sum).
 

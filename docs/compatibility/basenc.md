@@ -23,7 +23,7 @@ GNU coreutils 9.7 (`/usr/bin/basenc --version` on the development machine, insta
 
 ## Known deviations and gaps
 
-- `--version` prints `basenc (core-utils) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `basenc (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 - Block sizes for partial output on malformed large inputs follow what was observed on GNU 9.7 for small inputs; inputs much larger than 64 KiB with errors in the middle are not tested.
 
 ## Tests

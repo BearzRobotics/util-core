@@ -1,4 +1,4 @@
-//! Core Utils build script. See SPEC.md §7 for the packaging modes.
+//! Util Core build script. See SPEC.md §7 for the packaging modes.
 //!
 //! Options:
 //!   -Dcommands=a,b,c   build only these commands (default: all)
