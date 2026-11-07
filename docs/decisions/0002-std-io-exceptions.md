@@ -1,6 +1,6 @@
 # 0002: Exceptions to the std.Io rule (src/sys.zig)
 
-Status: accepted by the maintainer. Date: 2026-11-07
+Status: accepted by the maintainer; rows added as new commands need them (last: 2026-11-07, system-information tools). Date: 2026-11-07
 
 ## Context
 
@@ -32,6 +32,9 @@ WASI.
 | `terminalColumns` | `cat` (bat-style view) | `ioctl(TIOCGWINSZ)` on standard output | `Io.File.isTty` only answers yes or no |
 | `processAlive` | `tail --pid` | `kill(pid, 0)`; EPERM counts as alive | no signal or process-probe API |
 | `openAppend` | `tee -a` | `openat` with `O_APPEND` | `Io.Dir.createFile` has no append mode; a seek to the end is not atomic with concurrent writers |
+| `identity`, `supplementaryGroups` | `id`, `groups`, `whoami` | `getuid`/`geteuid`/`getgid`/`getegid`, `getgroups` | no process-identity API |
+| `uname` | `uname`, `arch`, `hostid` | the `uname(2)` system call | no host-information API |
+| `affinityCpus` | `nproc` | `sched_getaffinity` | no CPU-set API |
 
 One related use stays outside `sys.zig`: `cli.giveBack` calls
 `io.vtable.fileSeekBy`. That is part of the `Io` interface itself, but it

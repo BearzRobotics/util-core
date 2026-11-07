@@ -92,15 +92,31 @@ pub const LongMatch = union(enum) { found: usize, none, ambiguous };
 /// `name` is the option text after "--" and before any "=value".
 pub fn matchLong(name: []const u8, names: []const []const u8) LongMatch {
     var found: ?usize = null;
+    var ambiguous = false;
     for (names, 0..) |n, i| {
         if (std.mem.eql(u8, n, name)) return .{ .found = i };
         if (name.len > 0 and std.mem.startsWith(u8, n, name)) {
-            if (found != null) return .ambiguous;
+            if (found != null) ambiguous = true;
             found = i;
         }
     }
+    if (ambiguous) {
+        // Remember the candidates for badLong's "possibilities:" list. A
+        // command parses its options on one thread, so a plain global is safe.
+        ambiguous_count = 0;
+        for (names) |n| {
+            if (std.mem.startsWith(u8, n, name) and ambiguous_count < ambiguous_names.len) {
+                ambiguous_names[ambiguous_count] = n;
+                ambiguous_count += 1;
+            }
+        }
+        return .ambiguous;
+    }
     return if (found) |i| .{ .found = i } else .none;
 }
+
+var ambiguous_names: [32][]const u8 = undefined;
+var ambiguous_count: usize = 0;
 
 /// Print the standard "invalid option" diagnostic for a short option.
 pub fn invalidShort(ctx: Context, c: u8) void {
@@ -110,7 +126,18 @@ pub fn invalidShort(ctx: Context, c: u8) void {
 /// Print the standard diagnostic for an unknown or ambiguous long option.
 pub fn badLong(ctx: Context, arg: []const u8, m: LongMatch) void {
     switch (m) {
-        .ambiguous => warn(ctx, "option '{s}' is ambiguous\nTry '{s} --help' for more information.", .{ arg, ctx.name }),
+        .ambiguous => {
+            // glibc getopt: option '--k' is ambiguous; possibilities: '--a' '--b'
+            var buf: [512]u8 = undefined;
+            var n: usize = 0;
+            const eq = std.mem.indexOfScalar(u8, arg, '=');
+            _ = eq;
+            for (ambiguous_names[0..ambiguous_count]) |cand| {
+                const piece = std.fmt.bufPrint(buf[n..], " '--{s}'", .{cand}) catch break;
+                n += piece.len;
+            }
+            warn(ctx, "option '{s}' is ambiguous; possibilities:{s}\nTry '{s} --help' for more information.", .{ arg, buf[0..n], ctx.name });
+        },
         else => warn(ctx, "unrecognized option '{s}'\nTry '{s} --help' for more information.", .{ arg, ctx.name }),
     }
 }

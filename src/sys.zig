@@ -94,3 +94,58 @@ pub fn openAppend(path: []const u8) !Io.File {
     }, 0o666);
     return .{ .handle = fd, .flags = .{ .nonblocking = false } };
 }
+
+// ------------------------------------------------- process and host identity
+// No std.Io API exists for these (identity, host name, CPU affinity, group
+// list). Linux only; other systems report "unknown"/zero values.
+
+pub const Identity = struct { uid: u32, euid: u32, gid: u32, egid: u32 };
+
+pub fn identity() Identity {
+    if (comptime builtin.os.tag != .linux) return .{ .uid = 0, .euid = 0, .gid = 0, .egid = 0 };
+    return .{
+        .uid = std.os.linux.getuid(),
+        .euid = std.os.linux.geteuid(),
+        .gid = std.os.linux.getgid(),
+        .egid = std.os.linux.getegid(),
+    };
+}
+
+/// Supplementary group ids of the calling process, in kernel order.
+pub fn supplementaryGroups(buf: []u32) []u32 {
+    if (comptime builtin.os.tag != .linux) return buf[0..0];
+    const n = std.os.linux.getgroups(buf.len, @ptrCast(buf.ptr));
+    if (@as(isize, @bitCast(n)) < 0) return buf[0..0];
+    return buf[0..n];
+}
+
+pub const Uname = struct {
+    sysname: []const u8,
+    nodename: []const u8,
+    release: []const u8,
+    version: []const u8,
+    machine: []const u8,
+    // Backing storage for the slices above.
+    raw: if (builtin.os.tag == .linux) std.os.linux.utsname else void,
+};
+
+pub fn uname() Uname {
+    if (comptime builtin.os.tag != .linux) return .{ .sysname = "unknown", .nodename = "unknown", .release = "unknown", .version = "unknown", .machine = "unknown", .raw = {} };
+    var u: Uname = undefined;
+    _ = std.os.linux.uname(&u.raw);
+    u.sysname = std.mem.sliceTo(&u.raw.sysname, 0);
+    u.nodename = std.mem.sliceTo(&u.raw.nodename, 0);
+    u.release = std.mem.sliceTo(&u.raw.release, 0);
+    u.version = std.mem.sliceTo(&u.raw.version, 0);
+    u.machine = std.mem.sliceTo(&u.raw.machine, 0);
+    return u;
+}
+
+/// Number of CPUs the process may run on (sched_getaffinity), or null.
+pub fn affinityCpus() ?usize {
+    if (comptime builtin.os.tag != .linux) return null;
+    const set = std.posix.sched_getaffinity(0) catch return null;
+    var n: usize = 0;
+    for (set) |w| n += @popCount(w);
+    return n;
+}

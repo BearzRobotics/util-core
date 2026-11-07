@@ -13,6 +13,7 @@ test {
     _ = @import("hash.zig");
     _ = @import("hashsum.zig");
     _ = @import("baseenc.zig");
+    _ = @import("userdb.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));
