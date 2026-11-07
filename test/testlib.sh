@@ -131,8 +131,13 @@ run_cmp() {
         printf "     OURS (rc=%s) out: %s err: %s\n" "$ox" "$(cat -A "$TMPDIR_CMP.oo")" "$(cat -A "$TMPDIR_CMP.oe2")"
     fi
 }
-TMPDIR_CMP="$(mktemp -d)/cmp"
-trap 'rm -rf "$(dirname "$TMPDIR_CMP")"' EXIT
+# Every temporary file or directory a test makes (mktemp -d in the scripts
+# included) lives under one directory that is removed when the script ends,
+# so repeated runs do not fill /tmp.
+TEST_TMP="$(mktemp -d)"
+TMPDIR="$TEST_TMP"; export TMPDIR
+TMPDIR_CMP="$TEST_TMP/cmp"
+trap 'rm -rf "$TEST_TMP"' EXIT
 
 # run_tree DESC SETUP_CMD ARGS...
 # For commands that change the file system. SETUP_CMD (a shell snippet) runs in

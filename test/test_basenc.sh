@@ -1,21 +1,14 @@
 #!/bin/sh
+# basenc: differential tests against GNU basenc 9.7, once per encoding; see basetests.sh.
 UTIL="basenc"
-. "$(dirname "$0")/testlib.sh"
-
-echo "hello world" > /tmp/test_basenc.txt
-
-printf "\n[ Encoding formats ]\n"
-run_test_file "--base64"         /tmp/test_basenc.txt --base64
-run_test_file "--base64url"      /tmp/test_basenc.txt --base64url
-run_test_file "--base32"         /tmp/test_basenc.txt --base32
-run_test_file "--base32hex"      /tmp/test_basenc.txt --base32hex
-run_test_file "--base16"         /tmp/test_basenc.txt --base16
-run_test_file "--base2msbf"      /tmp/test_basenc.txt --base2msbf
-run_test_file "--base2lsbf"      /tmp/test_basenc.txt --base2lsbf
-run_test_file "--z85"            /tmp/test_basenc.txt --z85
-
-printf "\n[ Flags ]\n"
-run_test "--base64 -w 0"         --base64 -w 0 /tmp/test_basenc.txt
-
-rm -f /tmp/test_basenc.txt
+TD="$(cd "$(dirname "$0")" && pwd)"
+. "$TD/testlib.sh"
+for ENC_OPT in --base64 --base64url --base32 --base32hex --base16 --base2msbf --base2lsbf --z85; do
+    printf "\n##### basenc %s #####\n" "$ENC_OPT"
+    . "$TD/basetests.sh"
+done
+printf "\n[ basenc option errors ]\n"
+run_cmp "no encoding"          /dev/null
+run_cmp "no encoding -d"       -d /dev/null
+run_cmp "two encodings"        --base64 --base32 /dev/null
 print_summary
