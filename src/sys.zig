@@ -257,6 +257,26 @@ pub fn errnoText(e: std.os.linux.E) []const u8 {
         .FBIG => "File too large",
         .TXTBSY => "Text file busy",
         .OVERFLOW => "Value too large for defined data type",
+        .NODATA => "No data available",
+        .BADF => "Bad file descriptor",
+        .FAULT => "Bad address",
+        .PIPE => "Broken pipe",
+        .RANGE => "Numerical result out of range",
+        .DOM => "Numerical argument out of domain",
+        .AGAIN => "Resource temporarily unavailable",
+        .INTR => "Interrupted system call",
+        .NOSYS => "Function not implemented",
+        .NXIO => "No such device or address",
+        .NODEV => "No such device",
+        .NOTTY => "Inappropriate ioctl for device",
+        .SRCH => "No such process",
+        .CHILD => "No child processes",
+        .NFILE => "Too many open files in system",
+        .MFILE => "Too many open files",
+        .SPIPE => "Illegal seek",
+        .DQUOT => "Disk quota exceeded",
+        .STALE => "Stale file handle",
+        .OPNOTSUPP => "Operation not supported",
         else => @tagName(e),
     };
 }
@@ -555,4 +575,62 @@ pub fn setTimes(path: ?[]const u8, fd: i32, times: ?[2]TimeSpec, nofollow: bool)
         return errOf(LX.utimensat(LX.AT.FDCWD, @ptrCast(&buf), tp, flags));
     }
     return errOf(LX.utimensat(fd, null, tp, 0));
+}
+
+// ------------------------------------------------ file systems and xattrs
+
+pub const StatFs = struct {
+    type: u64,
+    bsize: u64,
+    blocks: u64,
+    bfree: u64,
+    bavail: u64,
+    files: u64,
+    ffree: u64,
+    fsid: u64,
+    namelen: u64,
+    frsize: u64,
+};
+
+/// statfs(2) of `path`; `err` receives the errno on failure.
+pub fn statfs(path: []const u8, err: *LX.E) ?StatFs {
+    var buf: [4097]u8 = undefined;
+    if (path.len >= 4096) {
+        err.* = .NAMETOOLONG;
+        return null;
+    }
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    var raw: [15]u64 = undefined;
+    const rc = LX.syscall2(.statfs, @intFromPtr(&buf), @intFromPtr(&raw));
+    if (LX.errno(rc) != .SUCCESS) {
+        err.* = LX.errno(rc);
+        return null;
+    }
+    // struct statfs on x86_64: f_type f_bsize f_blocks f_bfree f_bavail f_files
+    // f_ffree f_fsid[2] f_namelen f_frsize f_flags f_spare[4]
+    const fsid_lo: u64 = raw[7] & 0xffffffff;
+    const fsid_hi: u64 = raw[7] >> 32;
+    return .{
+        .type = raw[0], .bsize = raw[1], .blocks = raw[2], .bfree = raw[3], .bavail = raw[4],
+        .files = raw[5], .ffree = raw[6], .fsid = (fsid_lo << 32) | fsid_hi,
+        .namelen = raw[8], .frsize = raw[9],
+    };
+}
+
+/// getxattr(2)/lgetxattr(2) into `buf`; returns the value length.
+pub fn getXattr(path: []const u8, name: [:0]const u8, follow: bool, buf: []u8, err: *LX.E) ?usize {
+    var pbuf: [4097]u8 = undefined;
+    if (path.len >= 4096) {
+        err.* = .NAMETOOLONG;
+        return null;
+    }
+    @memcpy(pbuf[0..path.len], path);
+    pbuf[path.len] = 0;
+    const rc = LX.syscall4(if (follow) .getxattr else .lgetxattr, @intFromPtr(&pbuf), @intFromPtr(name.ptr), @intFromPtr(buf.ptr), buf.len);
+    if (LX.errno(rc) != .SUCCESS) {
+        err.* = LX.errno(rc);
+        return null;
+    }
+    return rc;
 }
