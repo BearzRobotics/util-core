@@ -7,7 +7,7 @@ const std = @import("std");
 const cli = @import("cli.zig");
 
 /// Every command this source tree knows about.
-pub const all = [_][]const u8{ "true", "false", "yes", "echo", "basename", "dirname", "cat", "wc", "dircolors", "pwd", "printenv", "sleep", "tee", "head", "tac", "tail", "seq", "mkdir", "rmdir", "cut", "paste", "uniq", "fold", "nl", "tr", "expand", "unexpand", "comm", "tsort", "sort" };
+pub const all = [_][]const u8{ "true", "false", "yes", "echo", "basename", "dirname", "cat", "wc", "dircolors", "pwd", "printenv", "sleep", "tee", "head", "tac", "tail", "seq", "mkdir", "rmdir", "cut", "paste", "uniq", "fold", "nl", "tr", "expand", "unexpand", "comm", "tsort", "sort", "cksum", "md5sum", "sha1sum", "sha224sum", "sha256sum", "sha384sum", "sha512sum", "b2sum", "sum" };
 
 /// Command source files, keyed by command name. @import needs a string
 /// literal, so each command is listed here explicitly. Importing a file only
@@ -44,6 +44,15 @@ pub const modules = .{
     .comm = @import("commands/comm.zig"),
     .tsort = @import("commands/tsort.zig"),
     .sort = @import("commands/sort.zig"),
+    .cksum = @import("commands/cksum.zig"),
+    .md5sum = @import("commands/md5sum.zig"),
+    .sha1sum = @import("commands/sha1sum.zig"),
+    .sha224sum = @import("commands/sha224sum.zig"),
+    .sha256sum = @import("commands/sha256sum.zig"),
+    .sha384sum = @import("commands/sha384sum.zig"),
+    .sha512sum = @import("commands/sha512sum.zig"),
+    .b2sum = @import("commands/b2sum.zig"),
+    .sum = @import("commands/sum.zig"),
 };
 
 /// Frontend for a command known at comptime.

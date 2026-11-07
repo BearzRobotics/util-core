@@ -6,6 +6,14 @@ with every structural change.
 - Toolchain: Zig 0.17.1 (`zig version`). APIs were checked against the
   standard-library source shipped with that toolchain
   (`~/.zvm/0.17.1/lib/std`).
+- Binary size: the floor is std's `Io` runtime (`std.process.Init` starts
+  `Io.Threaded`, about 75 KB of code, plus the allocator and start-up code),
+  which the project deliberately keeps using (decision 0002, ai/AGENTS.md §13);
+  it should shrink as std.Io matures. Release builds drop stack-trace support
+  and the segfault handler (`std_options`/`panic` in exe.zig and multicall.zig),
+  worth about 3 KB per binary. Stripped `true` is 233 KB in ReleaseFast and
+  149 KB in ReleaseSmall (GNU's dynamically linked 35 KB excludes libc); the
+  multicall `main` holds all commands in 513 KB (ReleaseSmall).
 - Build: release modes strip command executables by default (`-Dstrip=false`
   keeps debug info); Debug builds are never stripped by default.
 - Commands implemented: `true`, `false`, `yes`, `echo`, `basename`, `dirname`,

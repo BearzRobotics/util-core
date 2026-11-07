@@ -10,6 +10,8 @@ test {
     _ = @import("tabs.zig");
     _ = @import("sys.zig");
     _ = @import("bytes.zig");
+    _ = @import("hash.zig");
+    _ = @import("hashsum.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));
