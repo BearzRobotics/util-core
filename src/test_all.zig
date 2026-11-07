@@ -22,6 +22,11 @@ test {
     _ = @import("tz.zig");
     _ = @import("strftime.zig");
     _ = @import("datetime.zig");
+    _ = @import("quotearg.zig");
+    _ = @import("human.zig");
+    _ = @import("filevercmp.zig");
+    _ = @import("fnmatch.zig");
+    _ = @import("argmatch.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));

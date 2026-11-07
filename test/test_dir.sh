@@ -1,18 +1,15 @@
 #!/bin/sh
+# dir: shares its implementation with ls; test/test_ls.sh holds the extensive
+# comparison. This suite checks the dir entry point against GNU dir.
 UTIL="dir"
 . "$(dirname "$0")/testlib.sh"
-
-mkdir -p /tmp/test_dir_d
-touch /tmp/test_dir_d/file1.txt /tmp/test_dir_d/file2.sh
-
-printf "\n[ Basic listing ]\n"
-run_test "list directory"            /tmp/test_dir_d
-run_test "-l long format"            -l /tmp/test_dir_d
-run_test "-a show hidden"            -a /tmp/test_dir_d
-run_test "-1 one per line"           -1 /tmp/test_dir_d
-run_test "-r reverse order"          -r /tmp/test_dir_d
-run_test "-S sort by size"           -S /tmp/test_dir_d
-run_test "--color=never no color"    --color=never /tmp/test_dir_d
-
-rm -rf /tmp/test_dir_d
+help_cmp
+W="$(mktemp -d)"; cd "$W"
+export TZ=UTC
+mkdir -p t/sub; printf x > t/a; printf x > "t/b c"; printf x > t/.h; ln -s a t/l; mkfifo t/f; touch -d '2001-02-03 04:05:06' t/a t/sub
+for o in "" -a -A -l -1 -C -x -m -R -F -s -i -b -Q -N -r -t -S -X -d -h --si --color=always --quoting-style=shell --format=commas -w 30 -T 4 --time-style=long-iso --full-time -n -g -o -G; do
+    run_cmp "dir $o" $o t
+done
+run_cmp "missing" nosuch
+run_cmp "bad option" -z
 print_summary
