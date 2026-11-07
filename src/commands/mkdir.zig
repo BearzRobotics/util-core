@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
+const sys = @import("../sys.zig");
 const mode_mod = @import("../mode.zig");
 const Io = std.Io;
 
@@ -91,7 +92,7 @@ pub fn main(ctx: cli.Context) u8 {
         };
     }
 
-    const umask = cli.getUmask();
+    const umask = sys.umask();
     var final_mode: ?u16 = null;
     if (mode_text) |t| {
         final_mode = mode_mod.apply(t, 0o777, true, umask) orelse {

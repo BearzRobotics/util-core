@@ -485,7 +485,7 @@ fn longOption(name: []const u8) ?u8 {
 fn guessShell(ctx: cli.Context) Shell {
     const shell = cli.getenv(ctx, "SHELL") orelse return .unknown;
     if (shell.len == 0) return .unknown;
-    const base = std.fs.path.basename(shell);
+    const base = std.Io.Dir.path.basename(shell);
     if (std.mem.eql(u8, base, "csh") or std.mem.eql(u8, base, "tcsh")) return .c;
     return .bourne;
 }

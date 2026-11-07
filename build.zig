@@ -2,6 +2,7 @@
 //!
 //! Options:
 //!   -Dcommands=a,b,c   build only these commands (default: all)
+//!   -Dstrip=bool       strip debug info (default: on unless -Doptimize=Debug)
 //!
 //! Outputs (zig-out/bin):
 //!   <command>  one executable per selected command   (individual mode)
@@ -17,6 +18,10 @@ const commands = @import("src/commands.zig");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Release builds are stripped by default so sizes compare fairly with
+    // distribution binaries (GNU coreutils ships stripped); -Dstrip=false
+    // keeps debug info for profiling.
+    const strip = b.option(bool, "strip", "Strip debug info from command executables (default: on unless Debug)") orelse (optimize != .debug);
 
     const selected = selectCommands(b);
     const regex_mod = b.dependency("regex", .{ .target = target, .optimize = optimize }).module("regex");
@@ -33,6 +38,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/exe.zig"),
                 .target = target,
                 .optimize = optimize,
+                .strip = strip,
             }),
         });
         exe.root_module.addOptions("build_options", opts);
@@ -50,6 +56,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/multicall.zig"),
                 .target = target,
                 .optimize = optimize,
+                .strip = strip,
             }),
         });
         exe.root_module.addOptions("build_options", opts);

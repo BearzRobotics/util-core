@@ -52,7 +52,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
     if (operands > 0) cli.warn(ctx, "ignoring non-option arguments", .{});
 
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const n = std.process.currentPath(ctx.io, &buf) catch |e| {
         cli.warn(ctx, "cannot get current directory: {s}", .{cli.errText(e)});
         return 1;
@@ -74,7 +74,7 @@ pub fn main(ctx: cli.Context) u8 {
 /// resolves to the same directory as `physical`.
 fn pwdIsValid(io: Io, candidate: []const u8, physical: []const u8) bool {
     if (!hasNoDotComponents(candidate)) return false;
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const n = Io.Dir.realPathFileAbsolute(io, candidate, &buf) catch return false;
     return std.mem.eql(u8, buf[0..n], physical);
 }

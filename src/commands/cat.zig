@@ -15,9 +15,9 @@
 //! persists across files, because GNU cat treats the inputs as one stream.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const Io = std.Io;
 const cli = @import("../cli.zig");
+const sys = @import("../sys.zig");
 const syntax = @import("../syntax/root.zig");
 
 const Options = struct {
@@ -445,10 +445,7 @@ fn humanSize(buf: []u8, n: u64) []const u8 {
 
 /// Terminal width in columns, or 80 when it cannot be determined.
 fn terminalWidth() usize {
-    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return 80;
-    var ws: std.posix.winsize = undefined;
-    const rc = std.posix.system.ioctl(1, std.posix.T.IOCGWINSZ, @intFromPtr(&ws));
-    return if (rc == 0 and ws.col > 0) ws.col else 80;
+    return sys.terminalColumns() orelse 80;
 }
 
 pub fn main(ctx: cli.Context) u8 {
@@ -637,9 +634,9 @@ pub fn main(ctx: cli.Context) u8 {
 fn loadGrammars(ctx: cli.Context, session: *syntax.session.Session, extra_dirs: []const []const u8) void {
     for (extra_dirs) |d| _ = session.loadDir(ctx.io, d) catch {};
     const dir: ?[]u8 = if (cli.getenv(ctx, "XDG_CONFIG_HOME")) |x|
-        std.fs.path.join(ctx.gpa, &.{ x, "cat", "syntaxes" }) catch null
+        std.Io.Dir.path.join(ctx.gpa, &.{ x, "cat", "syntaxes" }) catch null
     else if (cli.getenv(ctx, "HOME")) |h|
-        std.fs.path.join(ctx.gpa, &.{ h, ".config", "cat", "syntaxes" }) catch null
+        std.Io.Dir.path.join(ctx.gpa, &.{ h, ".config", "cat", "syntaxes" }) catch null
     else
         null;
     if (dir) |d| {

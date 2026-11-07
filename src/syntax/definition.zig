@@ -169,7 +169,7 @@ pub const Registry = struct {
     /// Pick a grammar for a file: first by file name / extension, then by the
     /// grammars' `first_line_match` against `first_line`.
     pub fn detect(r: *Registry, path: []const u8, first_line: []const u8) ?*Syntax {
-        const base = std.fs.path.basename(path);
+        const base = std.Io.Dir.path.basename(path);
         if (base.len > 0 and !std.mem.eql(u8, base, "-")) {
             for (r.syntaxes.items) |s| for (s.extensions) |ext| {
                 if (std.mem.eql(u8, base, ext)) return s;
@@ -191,8 +191,8 @@ pub const Registry = struct {
     }
 
     fn byFile(r: *const Registry, path: []const u8) ?*Syntax {
-        const base = std.fs.path.basename(path);
-        for (r.syntaxes.items) |s| if (std.mem.eql(u8, std.fs.path.basename(s.file_name), base)) return s;
+        const base = std.Io.Dir.path.basename(path);
+        for (r.syntaxes.items) |s| if (std.mem.eql(u8, std.Io.Dir.path.basename(s.file_name), base)) return s;
         return null;
     }
 
@@ -237,7 +237,7 @@ pub const Registry = struct {
         const syn = try a.create(Syntax);
         const scope_name = if (doc.get("scope")) |s| s.str() orelse "" else "";
         syn.* = .{
-            .name = if (doc.get("name")) |n| n.str() orelse "" else std.fs.path.stem(file_name),
+            .name = if (doc.get("name")) |n| n.str() orelse "" else std.Io.Dir.path.stem(file_name),
             .file_name = try a.dupe(u8, file_name),
             .scope_name = scope_name,
             .scope = try r.scopes(scope_name),

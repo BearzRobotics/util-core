@@ -7,6 +7,8 @@ test {
     _ = @import("fmt_float.zig");
     _ = @import("mode.zig");
     _ = @import("lines.zig");
+    _ = @import("tabs.zig");
+    _ = @import("sys.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));

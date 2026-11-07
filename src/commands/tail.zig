@@ -12,8 +12,8 @@
 //! last N items in memory.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const cli = @import("../cli.zig");
+const sys = @import("../sys.zig");
 const count_arg = @import("../count_arg.zig");
 const Io = std.Io;
 
@@ -362,15 +362,9 @@ fn followLoop(ctx: cli.Context, out: *cli.Out, files: []Followed, cfg: Config, m
             cli.warn(ctx, "error writing 'standard output'", .{});
             return 1;
         }
-        if (!activity) if (cfg.pid) |pid| if (!processAlive(pid)) return exit_status;
+        if (!activity) if (cfg.pid) |pid| if (!sys.processAlive(pid)) return exit_status;
         std.Io.sleep(ctx.io, .fromNanoseconds(interval_ns), .awake) catch return exit_status;
     }
-}
-
-fn processAlive(pid: i32) bool {
-    if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return true;
-    std.posix.kill(pid, @fromBackingInt(@intCast(0))) catch |e| return e == error.PermissionDenied;
-    return true;
 }
 
 /// Obsolete `-NUM[bcl][f]` as the first argument (GNU rejects other letters,

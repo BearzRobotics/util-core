@@ -115,39 +115,6 @@ pub fn badLong(ctx: Context, arg: []const u8, m: LongMatch) void {
     }
 }
 
-/// Set the disposition of `sig` to ignore (handler == SIG.IGN) or default
-/// (SIG.DFL). No-op where signals do not exist.
-pub fn setSignal(sig: std.posix.SIG, handler: ?std.posix.Sigaction.handler_fn) void {
-    if (comptime @import("builtin").os.tag == .windows or @import("builtin").os.tag == .wasi) return;
-    const act: std.posix.Sigaction = .{
-        .handler = .{ .handler = handler },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(sig, &act, null);
-}
-
-/// Zig's runtime ignores SIGPIPE, which would turn `cmd | head` into a write
-/// error message. The conventional (GNU) behaviour is to die silently, so
-/// every entry point restores the default action; commands that need to see
-/// EPIPE (tee --output-error) set it back to ignore.
-pub fn restoreSigpipe() void {
-    setSignal(.PIPE, std.posix.SIG.DFL);
-}
-
-/// The process file-mode creation mask. Linux reads it with umask(2) (set and
-/// restore, because the call has no pure query form); other systems fall back
-/// to the conventional 022.
-pub fn getUmask() u16 {
-    const builtin = @import("builtin");
-    if (comptime builtin.os.tag == .linux) {
-        const old = std.os.linux.syscall1(.umask, 0);
-        _ = std.os.linux.syscall1(.umask, old);
-        return @intCast(old & 0o7777);
-    }
-    return 0o022;
-}
-
 /// Write `text` to stdout. Returns false on write failure (e.g. closed pipe);
 /// callers decide the exit status.
 pub fn writeStdout(io: Io, text: []const u8) bool {

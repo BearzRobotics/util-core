@@ -8,12 +8,13 @@
 const std = @import("std");
 const options = @import("build_options");
 const cli = @import("cli.zig");
+const sys = @import("sys.zig");
 const commands = @import("commands.zig");
 
 const enabled = options.commands;
 
 pub fn main(init: std.process.Init) !u8 {
-    cli.restoreSigpipe();
+    sys.restoreSigpipe();
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     var ctx: cli.Context = .{
         .name = "",

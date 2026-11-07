@@ -12,9 +12,9 @@
 //! -a is implemented with O_APPEND and is POSIX-only for now.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const Io = std.Io;
 const cli = @import("../cli.zig");
+const sys = @import("../sys.zig");
 
 const long_names = [_][]const u8{ "append", "ignore-interrupts", "output-error", "help", "version" };
 
@@ -73,10 +73,10 @@ pub fn main(ctx: cli.Context) u8 {
     }
     const paths = ctx.args[i..];
 
-    if (ignore_int) cli.setSignal(.INT, std.posix.SIG.IGN);
+    if (ignore_int) sys.ignoreSignal(.int);
     // The entry point restored SIGPIPE's default action (as GNU tee has it);
     // --output-error wants to see EPIPE as an ordinary write error instead.
-    if (mode != .default) cli.setSignal(.PIPE, std.posix.SIG.IGN);
+    if (mode != .default) sys.ignoreSignal(.pipe);
 
     var outs: std.ArrayList(Output) = .empty;
     defer outs.deinit(ctx.gpa);
@@ -131,16 +131,7 @@ fn parseMode(text: []const u8) ?Mode {
 }
 
 fn openOutput(io: Io, path: []const u8, append: bool) !Io.File {
-    if (append) {
-        if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return error.Unsupported;
-        const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
-            .ACCMODE = .WRONLY,
-            .CREAT = true,
-            .APPEND = true,
-            .CLOEXEC = true,
-        }, 0o666);
-        return .{ .handle = fd, .flags = .{ .nonblocking = false } };
-    }
+    if (append) return sys.openAppend(path);
     return Io.Dir.cwd().createFile(io, path, .{});
 }
 

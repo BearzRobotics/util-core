@@ -3,9 +3,11 @@
 Describes what is implemented now (not the target in `ai/SPECS.md`). Update it
 with every structural change.
 
-- Toolchain: Zig 0.17.0 (`zig version`). APIs were checked against the
+- Toolchain: Zig 0.17.1 (`zig version`). APIs were checked against the
   standard-library source shipped with that toolchain
-  (`~/.zvm/0.17.0/lib/std`).
+  (`~/.zvm/0.17.1/lib/std`).
+- Build: release modes strip command executables by default (`-Dstrip=false`
+  keeps debug info); Debug builds are never stripped by default.
 - Commands implemented: `true`, `false`, `yes`, `echo`, `basename`, `dirname`,
   `cat` (GNU baseline, no enhancements yet), `wc` (see its header comment for
   deviations).
@@ -19,8 +21,11 @@ src/
                      (sticky-error buffered stdout), openInput/readChunk
                      ("-" = stdin), errText (strerror-style wording)
                      matchLong/badLong/invalidShort (getopt-style long
-                     option matching and GNU diagnostics), setSignal/
-                     restoreSigpipe, getUmask, giveBack (POSIX 1.4 offset)
+                     option matching and GNU diagnostics), giveBack
+                     (POSIX 1.4 offset, via the Io vtable's fileSeekBy)
+  sys.zig            the only place that touches std.posix/std.os: signal
+                     dispositions, umask, terminal width, pid probe, O_APPEND
+                     open (no std.Io equivalents in Zig 0.17.1)
   lines.zig          LineReader: arbitrarily long delimiter-terminated lines
                      (cut, paste, uniq, fold-style filters, nl)
   count_arg.zig      [+|-]NUM[suffix] parsing for head/tail (GNU "Block size")

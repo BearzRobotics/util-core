@@ -37,7 +37,7 @@ pub const Session = struct {
                 continue;
             };
             defer s.gpa.free(text);
-            const full = try std.fs.path.join(s.gpa, &.{ dir_path, entry.name });
+            const full = try std.Io.Dir.path.join(s.gpa, &.{ dir_path, entry.name });
             defer s.gpa.free(full);
             _ = s.reg.load(text, full) catch |e| switch (e) {
                 error.OutOfMemory => return error.OutOfMemory,
