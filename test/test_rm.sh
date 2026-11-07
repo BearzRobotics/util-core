@@ -81,11 +81,11 @@ TREE_STDIN="$no_all"  run_tree "--interactive=never" "$S" --interactive=never a
 TREE_STDIN="$yes_all" run_tree "--interactive=bogus" "$S" --interactive=bogus a
 TREE_STDIN="$yes_all" run_tree "--interactive=n"   "$S" --interactive=n a
 TREE_STDIN="$yes_all" run_tree "-i answer Y"       "$S" -i a
-printf 'Y\n' > ansY; TREE_STDIN="$PWD/ansY" run_tree "-i capital Y" "$S" -i a
-printf 'yes\n' > ansyes; TREE_STDIN="$PWD/ansyes" run_tree "-i word yes" "$S" -i a
-printf 'nope\n' > ansnope; TREE_STDIN="$PWD/ansnope" run_tree "-i word nope" "$S" -i a
-printf '\n' > ansnl; TREE_STDIN="$PWD/ansnl" run_tree "-i empty answer" "$S" -i a
-printf 'y' > ansnonl; TREE_STDIN="$PWD/ansnonl" run_tree "-i y without newline" "$S" -i a
+printf 'Y\n' > "$TMPDIR/ansY"; TREE_STDIN="$TMPDIR/ansY" run_tree "-i capital Y" "$S" -i a
+printf 'yes\n' > "$TMPDIR/ansyes"; TREE_STDIN="$TMPDIR/ansyes" run_tree "-i word yes" "$S" -i a
+printf 'nope\n' > "$TMPDIR/ansnope"; TREE_STDIN="$TMPDIR/ansnope" run_tree "-i word nope" "$S" -i a
+printf '\n' > "$TMPDIR/ansnl"; TREE_STDIN="$TMPDIR/ansnl" run_tree "-i empty answer" "$S" -i a
+printf 'y' > "$TMPDIR/ansnonl"; TREE_STDIN="$TMPDIR/ansnonl" run_tree "-i y without newline" "$S" -i a
 
 printf "\n[ -I and --interactive=once ]\n"
 for n in 1 2 3 4 5; do
