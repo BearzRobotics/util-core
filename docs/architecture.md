@@ -135,3 +135,12 @@ pinned hash. Zig-native API first; any C FFI is later and optional.
   (`failed to run command 'x': ...`).
 - `src/help/<cmd>.txt`: `--help` text, generated from GNU by `tools/mkhelp.sh`
   (without the GNU project footer) and embedded with `@embedFile`.
+
+## Library module
+
+`build.zig` exports a `util_core` module (root `src/lib.zig`) for dependants:
+`dep.module("util_core")`. It re-exports `cli` (the `Context` every command
+takes), the command registry (`commands.get("echo")(ctx)`), `getopt`, `tz`,
+`strftime`, `datetime`, `fmt_float`, `posixre`, `hash` and `mode`. Everything
+else under `src/` is internal and may change. The module imports the `regex`
+package, which the build wires in.

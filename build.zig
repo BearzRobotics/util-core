@@ -28,6 +28,14 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run Zig unit tests");
 
+    // Library module for dependants: dep.module("util_core").
+    const lib = b.addModule("util_core", .{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    lib.addImport("regex", regex_mod);
+
     // Individual executables.
     for (selected) |name| {
         const opts = b.addOptions();
