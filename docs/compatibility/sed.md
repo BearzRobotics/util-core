@@ -35,7 +35,7 @@ GNU sed 4.9 (`/usr/bin/sed --version` on the development machine). Consulted 202
 ## Known deviations and gaps
 
 - Leftmost-longest alternation is emulated on top of the leftmost-first engine (src/posixre.zig `Finder`): after the engine finds the leftmost match, longer matches ending at later offsets are tried. This is skipped for patterns containing `$`, `\b`, `\B` or lines with more than 4096 bytes after the match, where the leftmost-first match is used. Submatch positions follow the Perl rule, not POSIX's.
-- C locale only: no multibyte characters.
+- UTF-8 locales (LC_ALL, LC_CTYPE or LANG naming UTF-8): `.`, bracket expressions, `\w \W \s \S`, `\b \B \< \>`, `y`, `\U \L \u \l` and `I` work on characters, using tables derived from Unicode 16 (src/unicode_tables.zig). Class membership approximates glibc's C.UTF-8 and may differ for rare code points; `\b` handling and case-insensitive matching of non-ASCII letters inside bracket expressions are approximations; invalid byte sequences behave differently from glibc in `y`, `\w` and `\b`. Other locales are treated as C.
 - `e` and `s///e` run the command through `/bin/sh` and a temporary file in /tmp.
 - `--version` prints an abbreviated banner.
 

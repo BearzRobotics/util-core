@@ -12,11 +12,12 @@ const getopt = @import("../getopt.zig");
 const posixre = @import("../posixre.zig");
 const regex = @import("regex");
 const sys = @import("../sys.zig");
+const unicode = @import("../unicode.zig");
 const LX = std.os.linux;
 
 const help_text = @embedFile("../help/sed.txt");
 
-const Re = struct { re: regex.Regex, groups: u32, multiline: bool, longest: ?regex.Regex = null, src: []const u8 = "", icase: bool = false };
+const Re = struct { re: regex.Regex, groups: u32, multiline: bool, longest: ?regex.Regex = null, src: []const u8 = "", icase: bool = false, mb: bool = false };
 
 const AddrKind = enum { none, line, step, last, re, zero, plus, mult };
 const Addr = struct {
@@ -61,6 +62,7 @@ const Cmd = struct {
     out: usize = 0,
     sub: ?*Subst = null,
     ytab: ?*[256]u8 = null,
+    ypairs: ?[]const [2]u32 = null,
     ysrc: []const u8 = "",
     ydst: []const u8 = "",
     depth: u16 = 0,
@@ -96,6 +98,7 @@ const Opts = struct {
     sandbox: bool = false,
     follow: bool = false,
     debug: bool = false,
+    utf8: bool = false,
 };
 
 const ParseError = error{ BadProg, OutOfMemory };
@@ -264,20 +267,21 @@ const Parser = struct {
         const s = p.s;
         if (pat.len == 0) return null;
         const conv = try convertEscapes(s.arena, pat, true);
-        const body = posixre.translate(s.arena, conv, s.opts.ere) catch |e| switch (e) {
+        var rflags: posixre.Flags = .{};
+        const body = posixre.translateFlags(s.arena, conv, s.opts.ere, .{ .utf8 = s.opts.utf8, .icase = icase }, &rflags) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             error.BadPattern => return p.fail("{s}", .{posixre.diagnoseMode(conv, s.opts.ere)}),
         };
         var src: std.ArrayList(u8) = .empty;
         try src.appendSlice(s.arena, if (mline) "(?sm)" else "(?s)");
         try src.appendSlice(s.arena, body);
-        const re = regex.Regex.compile(s.arena, src.items, .{ .dialect = .perl, .ignore_case = icase }, null) catch {
+        const re = regex.Regex.compile(s.arena, src.items, .{ .dialect = .perl, .ignore_case = icase, .limits = posixre.big_limits }, null) catch {
             return p.fail("{s}", .{posixre.diagnoseMode(conv, s.opts.ere)});
         };
         const r = try s.arena.create(Re);
-        r.* = .{ .re = re, .groups = re.groupCount(), .multiline = mline, .src = pat, .icase = icase };
-        if (posixre.longestSource(s.arena, body, if (mline) "(?sm)" else "(?s)") catch null) |ls| {
-            r.longest = regex.Regex.compile(s.arena, ls, .{ .dialect = .perl, .ignore_case = icase }, null) catch null;
+        r.* = .{ .re = re, .groups = re.groupCount(), .multiline = mline, .src = pat, .icase = icase, .mb = rflags.mb };
+        if (posixre.longestSource(s.arena, body, if (mline) "(?sm)" else "(?s)", rflags) catch null) |ls| {
+            r.longest = regex.Regex.compile(s.arena, ls, .{ .dialect = .perl, .ignore_case = icase, .limits = posixre.big_limits }, null) catch null;
         }
         return r;
     }
@@ -612,6 +616,42 @@ const Parser = struct {
         const b = (try p.matchSlash(delim, false)) orelse return p.fail("unterminated `y' command", .{});
         const src = try yUnescape(p, s.arena, a);
         const dst = try yUnescape(p, s.arena, b);
+        if (s.opts.utf8) {
+            var sp: std.ArrayList(u32) = .empty;
+            var dp: std.ArrayList(u32) = .empty;
+            var k: usize = 0;
+            while (k < src.len) {
+                const d = unicode.decode(src, k);
+                try sp.append(s.arena, d.cp);
+                k += d.len;
+            }
+            k = 0;
+            while (k < dst.len) {
+                const d = unicode.decode(dst, k);
+                try dp.append(s.arena, d.cp);
+                k += d.len;
+            }
+            if (sp.items.len != dp.items.len) return p.fail("strings for `y' command are different lengths", .{});
+            var multi = false;
+            for (sp.items) |cp| if (cp >= 0x80) {
+                multi = true;
+            };
+            for (dp.items) |cp| if (cp >= 0x80) {
+                multi = true;
+            };
+            if (multi) {
+                const pairs = try s.arena.alloc([2]u32, sp.items.len);
+                for (sp.items, dp.items, 0..) |a2, b2, idx| pairs[idx] = .{ a2, b2 };
+                cmd.ypairs = pairs;
+                cmd.ysrc = src;
+                cmd.ydst = dst;
+                const t0 = try s.arena.create([256]u8);
+                for (t0, 0..) |*x, ii| x.* = @intCast(ii);
+                cmd.ytab = t0;
+                try p.endOfCmd();
+                return;
+            }
+        }
         if (src.len != dst.len) return p.fail("strings for `y' command are different lengths", .{});
         const t = try s.arena.create([256]u8);
         for (t, 0..) |*x, i| x.* = @intCast(i);
@@ -835,6 +875,21 @@ fn convertEscapes(a: std.mem.Allocator, pat: []const u8, is_re: bool) ![]u8 {
                     try out.append(a, x);
                     i += 2;
                     continue;
+                }
+                if (n == 'x' or n == 'o' or n == 'd') {
+                    const base: u8 = if (n == 'd') 10 else if (n == 'o') 8 else 16;
+                    const maxd: usize = if (n == 'x') 2 else 3;
+                    var v: u32 = 0;
+                    var k: usize = 0;
+                    while (k < maxd and i + 2 + k < pat.len) : (k += 1) {
+                        const dv = std.fmt.charToDigit(pat[i + 2 + k], base) catch break;
+                        v = v * base + dv;
+                    }
+                    if (k > 0) {
+                        try out.append(a, @truncate(v));
+                        i += 2 + k;
+                        continue;
+                    }
                 }
             }
             try out.append(a, c);
@@ -1324,6 +1379,34 @@ const Exec = struct {
 
     // ---- --debug
 
+    fn translateUtf8(e: *Exec, pairs: []const [2]u32) void {
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(e.gpa);
+        const src = e.ps.items;
+        var i: usize = 0;
+        while (i < src.len) {
+            const d = unicode.decode(src, i);
+            if (!d.valid) {
+                out.append(e.gpa, src[i]) catch oom(e.s.ctx);
+                i += 1;
+                continue;
+            }
+            var cp = d.cp;
+            // the first pair listing the character wins, as in GNU
+            for (pairs) |pr| {
+                if (pr[0] == cp) {
+                    cp = pr[1];
+                    break;
+                }
+            }
+            var buf: [4]u8 = undefined;
+            out.appendSlice(e.gpa, unicode.encode(cp, &buf)) catch oom(e.s.ctx);
+            i += d.len;
+        }
+        e.ps.clearRetainingCapacity();
+        e.ps.appendSlice(e.gpa, out.items) catch oom(e.s.ctx);
+    }
+
     fn dbgOut(e: *Exec, comptime fmt: []const u8, args: anytype) void {
         const text = std.fmt.allocPrint(e.gpa, fmt, args) catch oom(e.s.ctx);
         defer e.gpa.free(text);
@@ -1536,6 +1619,26 @@ const Exec = struct {
     }
 
     fn appendCase(e: *Exec, dst: *std.ArrayList(u8), text: []const u8, persist: u8, oneshot: *u8) void {
+        if (e.s.opts.utf8) {
+            var i: usize = 0;
+            while (i < text.len) {
+                const d = unicode.decode(text, i);
+                if (!d.valid) {
+                    dst.append(e.gpa, text[i]) catch oom(e.s.ctx);
+                    i += 1;
+                    continue;
+                }
+                var cp = d.cp;
+                if (oneshot.* != 0) {
+                    cp = if (oneshot.* == 'u') unicode.toUpper(cp) else unicode.toLower(cp);
+                    oneshot.* = 0;
+                } else if (persist == 'U') cp = unicode.toUpper(cp) else if (persist == 'L') cp = unicode.toLower(cp);
+                var buf: [4]u8 = undefined;
+                dst.appendSlice(e.gpa, unicode.encode(cp, &buf)) catch oom(e.s.ctx);
+                i += d.len;
+            }
+            return;
+        }
         for (text) |ch| {
             var x = ch;
             if (oneshot.* != 0) {
@@ -1544,6 +1647,15 @@ const Exec = struct {
             } else if (persist == 'U') x = std.ascii.toUpper(x) else if (persist == 'L') x = std.ascii.toLower(x);
             dst.append(e.gpa, x) catch oom(e.s.ctx);
         }
+    }
+
+    fn charLen(e: *Exec, s: []const u8, i: usize) usize {
+        // glibc steps over characters when the pattern has multibyte-aware
+        // constructs and over bytes otherwise.
+        if (!e.s.opts.utf8) return 1;
+        const re = e.last_re orelse return 1;
+        if (!re.mb) return 1;
+        return unicode.decode(s, i).len;
     }
 
     fn doSubst(e: *Exec, sub: *Subst) bool {
@@ -1563,8 +1675,9 @@ const Exec = struct {
                 // an empty match right after the previous match does not count
                 if (ms >= subj.len) break;
                 acc.appendSlice(e.gpa, subj[start..ms]) catch oom(e.s.ctx);
-                acc.append(e.gpa, subj[ms]) catch oom(e.s.ctx);
-                start = ms + 1;
+                const cl = e.charLen(subj, ms);
+                acc.appendSlice(e.gpa, subj[ms .. ms + cl]) catch oom(e.s.ctx);
+                start = ms + cl;
                 prev_end = null;
                 continue;
             }
@@ -1604,8 +1717,9 @@ const Exec = struct {
             }
             prev_end = me;
             if (me == ms) {
-                if (ms < subj.len) acc.append(e.gpa, subj[ms]) catch oom(e.s.ctx);
-                start = ms + 1;
+                const cl = if (ms < subj.len) e.charLen(subj, ms) else 1;
+                if (ms < subj.len) acc.appendSlice(e.gpa, subj[ms .. ms + cl]) catch oom(e.s.ctx);
+                start = ms + cl;
                 prev_end = null;
             } else start = me;
         }
@@ -1829,8 +1943,12 @@ const Exec = struct {
                     std.mem.swap(bool, &e.ps_chomped, &e.hs_chomped);
                 },
                 'y' => {
-                    const t = c.ytab.?;
-                    for (e.ps.items) |*ch| ch.* = t[ch.*];
+                    if (c.ypairs) |pairs| {
+                        e.translateUtf8(pairs);
+                    } else {
+                        const t = c.ytab.?;
+                        for (e.ps.items) |*ch| ch.* = t[ch.*];
+                    }
                 },
                 'z' => e.ps.clearRetainingCapacity(),
                 else => {},
@@ -1856,6 +1974,15 @@ const Exec = struct {
     }
 };
 
+fn localeIsUtf8(ctx: cli.Context) bool {
+    for ([_][]const u8{ "LC_ALL", "LC_CTYPE", "LANG" }) |k| {
+        const v = cli.getenv(ctx, k) orelse continue;
+        if (v.len == 0) continue;
+        return std.ascii.findIgnoreCase(v, "utf-8") != null or std.ascii.findIgnoreCase(v, "utf8") != null;
+    }
+    return false;
+}
+
 fn oom(ctx: cli.Context) noreturn {
     cli.warn(ctx, "couldn't allocate memory", .{});
     std.process.exit(4);
@@ -1876,6 +2003,7 @@ pub fn main(ctx: cli.Context) u8 {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var st = State{ .ctx = ctx, .arena = arena, .opts = .{} };
+    st.opts.utf8 = localeIsUtf8(ctx);
 
     var p = getopt.Parser.init(ctx, "bsnrzuEe:f:l:i::V:", &.{
         .{ .name = "binary", .id = 'b' },

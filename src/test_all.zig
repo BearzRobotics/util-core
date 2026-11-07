@@ -17,6 +17,7 @@ test {
     _ = @import("paths.zig");
     _ = @import("numparse.zig");
     _ = @import("posixre.zig");
+    _ = @import("unicode.zig");
     _ = @import("getopt.zig");
     _ = @import("exec.zig");
     _ = @import("tz.zig");

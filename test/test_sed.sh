@@ -485,6 +485,45 @@ run_tree_t 'r then w' "$SET" -e 'r g' -e 'w new' f
 run_tree_t 'W' "$SET" -n 'N;W new' f
 run_tree_t 'w no name' "$SET" 'w' f
 
+# ---- UTF-8 locale (C.UTF-8) and alternation
+printf 'héllo wörld ñ ÀÉÎ 日本語 😀 abc_1\nstraße İ\n' > u8
+printf '\377\376 abc \303 é\n' > u8bad
+printf 'abcd abcd foobarbaz ababc\n' > altin
+for sc in 's/./X/g' 's/.*/\U&/' 's/.*/\L&/' 's/\(.\)\(.\)/\2\1/g' 'y/éö日/EO月/' 'y/àé/ae/' 'y/a/é/' 'y/é/ab/' \
+    's/[[:alpha:]]*/<&>/g' 's/\w\+/<&>/g' 's/\W\+/_/g' 's/[^a-z]/_/g' 's/[é-ö]/_/g' 's/[a-é]/_/g' 's/[[:upper:]]/_/g' \
+    's/[[:lower:]]\+/_/g' 's/[[:punct:]]/_/g' 's/[[:space:]]/_/g' 's/[[:alnum:]_]*/[&]/g' 's/[[:print:]]/p/g' \
+    's/[[:cntrl:]]/c/g' 's/[^é]/_/g' 's/[éñ]/_/g' 's/[[:upper:]é]/_/g' 's/[^[:space:]]\+/<&>/g' 's/[^[:alpha:]]/_/g' \
+    's/é*/-/g' 's/x*/-/g' 's/ä*/Z/g' 's/é\+/-/' 's/É/x/I' 's/[É]/x/Ig' 's/日本/中/' 's/./&&/2' 's/\s/_/g' \
+    's/.\{3\}/[&]/g' 's/\(.\)\1/D/' 's/\u./&/g' 's/\(.\)/\u\1/g' 's/\b./B/g' 's/\B./B/g' 's/\</[/g;s/\>/]/g' \
+    's/\w*\b/<&>/' 's/\w\+\b/X/' 's/ÉL*/X/I' 's/.$/X/' 's/^./X/' 's/ß/SS/' 's/[[:alpha:]]/./2' 's/./&/3' \
+    's/\xc3\xa9/E/' 's/\xc3/E/' 's/[\xc3]/E/' 's/[\x61-\x63]/E/g' '/é/d' '/É/Id' 'l' 'N;s/\n/+/' 's/\(.*\) \(.*\)/\U\1\E \2/' \
+    's/a\|ab\|é/X/g' 's/\(é\)\+/<&>/' 's/é\{2\}/X/'; do
+    CMP_LOCALE=C.UTF-8 sd "utf8 $sc (u8)" u8 -n "$sc;p"
+    CMP_LOCALE=C.UTF-8 sd "utf8 $sc (u8) default" u8 "$sc"
+done
+for sc in 's/./X/g' 's/[^a]/X/g' 's/.*/\U&/' 'l' 's/\xc3/E/' 's/a*/-/g' 's/[[:alpha:]]/./2'; do
+    CMP_LOCALE=C.UTF-8 sd "utf8 invalid bytes $sc" u8bad "$sc"
+done
+CMP_LOCALE=C.UTF-8 sd 'utf8 -E (é|ö)' u8 -E 's/(é|ö)/[\1]/g'
+CMP_LOCALE=C.UTF-8 sd 'utf8 -n /alpha/p' u8 -n '/^[[:alpha:]]*$/p'
+CMP_LOCALE=C.UTF-8 sd 'utf8 LANG only' u8 's/./X/g'
+for sc in 's/a|ab/X/' 's/(a|ab)(c|bcd)/[&]/' 's/x*|y/Z/g' 's/(foo|foobar)baz/<&>/' 's/(a|ab)*c/<&>/' 's/(a|ab)(c|bcd)(d*)/[\1|\2|\3]/' \
+    's/(ab|a)(bc|c)?/[\1|\2]/' 's/(a*)(ab)*(b*)/[\1|\2|\3]/' 's/(wee|week)(knights|night)/[\1|\2]/' 's/(a|b)*/[\1]/'; do
+    sd "alt -E $sc" altin -E "$sc"
+done
+sd 'alt BRE' altin 's/a\|ab/X/'
+sd 'alt BRE nested' altin 's/\(a\|ab\)\(c\|bcd\)/[&]/'
+sd 'quant stack ERE a**' altin -E 's/a**/X/'
+sd 'quant stack ERE a+?' altin -E 's/a+?/X/'
+sd 'quant stack ERE a{1,2}{2}' altin -E 's/a{1,2}{2}/X/'
+sd 'quant {,2}' altin -E 's/a{,2}/X/'
+sd 'ERE leading ?' altin -E 's/?/x/'
+sd 'ERE leading *' altin -E 's/*a/x/'
+sd 'ERE leading +' altin -E 's/+a/x/'
+sd 'ERE unmatched (' altin -E 's/(/x/'
+sd 'ERE unmatched )' altin -E 's/)/x/'
+sd 'BRE a**' altin 's/a**/x/'
+
 # ---- --debug (program listing and execution trace)
 printf 'a/b\n' > dab; printf 'tab\there\\x\001\n' > dweird; printf 'zz\n' > rf.txt
 DBGCASES='p

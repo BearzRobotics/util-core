@@ -125,8 +125,8 @@ run_cmp() {
     description="$1"
     shift
     in="${CMP_STDIN:-/dev/null}"
-    LC_ALL=C gnu "$@" < "$in" > "$TMPDIR_CMP.go" 2> "$TMPDIR_CMP.ge"; gx=$?
-    ours "$@" < "$in" > "$TMPDIR_CMP.oo" 2> "$TMPDIR_CMP.oe"; ox=$?
+    LC_ALL="${CMP_LOCALE:-C}" gnu "$@" < "$in" > "$TMPDIR_CMP.go" 2> "$TMPDIR_CMP.ge"; gx=$?
+    LC_ALL="${CMP_LOCALE:-C}" ours "$@" < "$in" > "$TMPDIR_CMP.oo" 2> "$TMPDIR_CMP.oe"; ox=$?
     norm_err < "$TMPDIR_CMP.ge" > "$TMPDIR_CMP.ge2"; norm_err < "$TMPDIR_CMP.oe" > "$TMPDIR_CMP.oe2"
     if cmp -s "$TMPDIR_CMP.go" "$TMPDIR_CMP.oo" && cmp -s "$TMPDIR_CMP.ge2" "$TMPDIR_CMP.oe2" && [ "$gx" = "$ox" ]; then
         PASS=$((PASS + 1)); printf "PASS %s\n" "$description"

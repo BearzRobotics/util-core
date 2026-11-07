@@ -11,11 +11,42 @@
 
 const std = @import("std");
 const regex = @import("regex");
+const unicode = @import("unicode.zig");
 
 pub const Error = error{ OutOfMemory, BadPattern };
 
+/// UTF-8 classes make large patterns; the package defaults are too small.
+pub const big_limits: regex.Limits = .{ .max_pattern_len = 1 << 22, .max_program_len = 1 << 21 };
+
 /// Perl-dialect source equivalent to the BRE (or ERE) in `pat`.
 pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 {
+    return translateOpts(gpa, pat, ere, .{});
+}
+
+pub const Opts = struct {
+    /// UTF-8 locale: `.`, bracket expressions and classes work on characters.
+    utf8: bool = false,
+    /// Case-insensitive matching (needed here only for non-ASCII literals).
+    icase: bool = false,
+};
+
+/// What the pattern contains that matters for longest-match emulation.
+pub const Flags = struct {
+    /// The pattern itself has an alternation.
+    alt: bool = false,
+    /// The match depends on the text right of it (`$`, word boundaries, `\'`).
+    right: bool = false,
+    /// Uses a construct glibc treats as multibyte-aware (`.`, bracket
+    /// expressions, \\w \\s, word boundaries) in a UTF-8 locale.
+    mb: bool = false,
+};
+
+pub fn translateOpts(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: Opts) Error![]u8 {
+    var flags: Flags = .{};
+    return translateFlags(gpa, pat, ere, opts, &flags);
+}
+
+pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: Opts, flags: *Flags) Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     var i: usize = 0;
@@ -53,6 +84,7 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
                 continue;
             }
             if (!ere and n == '|') {
+                flags.alt = true;
                 try out.append(gpa, '|');
                 at_start = true;
                 continue;
@@ -68,8 +100,41 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
                 at_start = false;
                 continue;
             }
-            if (n == '<' or n == '>') {
+            if (n == '<' or n == '>' or n == 'b' or n == 'B' or n == '\'') flags.right = true;
+            if ((n == '<' or n == '>') and !opts.utf8) {
                 try out.appendSlice(gpa, "\\b");
+                continue;
+            }
+            if (opts.utf8 and (n == 'w' or n == 'W' or n == 's' or n == 'S')) {
+                flags.mb = true;
+                var set: unicode.Set = .{};
+                defer set.deinit(gpa);
+                if (n == 'w' or n == 'W') {
+                    try set.addAll(gpa, unicode.classRanges(.alnum));
+                    try set.add(gpa, '_', '_');
+                } else try set.addAll(gpa, unicode.classRanges(.space));
+                try emitSet(gpa, &out, &set, n == 'W' or n == 'S');
+                at_start = false;
+                continue;
+            }
+            if (opts.utf8 and (n == 'b' or n == 'B' or n == '<' or n == '>')) {
+                flags.mb = true;
+                var set: unicode.Set = .{};
+                defer set.deinit(gpa);
+                try set.addAll(gpa, unicode.classRanges(.alnum));
+                try set.add(gpa, '_', '_');
+                var w: std.ArrayList(u8) = .empty;
+                defer w.deinit(gpa);
+                try unicode.appendSetRegex(gpa, &w, &set);
+                var fl: std.ArrayList(u8) = .empty;
+                defer fl.deinit(gpa);
+                try unicode.appendSetFlat(gpa, &fl, &set);
+                switch (n) {
+                    'b' => try out.print(gpa, "(?:(?<={1s})(?!{0s})|(?<!{1s})(?={0s}))", .{ w.items, fl.items }),
+                    'B' => try out.print(gpa, "(?:(?<={1s})(?={0s})|(?<!{1s})(?!{0s}))", .{ w.items, fl.items }),
+                    '<' => try out.print(gpa, "(?:(?<!{1s})(?={0s}))", .{ w.items, fl.items }),
+                    else => try out.print(gpa, "(?:(?<={1s})(?!{0s}))", .{ w.items, fl.items }),
+                }
                 continue;
             }
             if (n == 'b' or n == 'B' or n == 'w' or n == 'W' or n == 's' or n == 'S') {
@@ -94,12 +159,16 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
         i += 1;
         switch (c) {
             '[' => {
-                const end = try bracket(gpa, &out, pat, i);
+                if (opts.utf8) flags.mb = true;
+                const end = if (opts.utf8) try bracketUtf8(gpa, &out, pat, i, opts) else try bracket(gpa, &out, pat, i);
                 i = end;
                 at_start = false;
             },
             '.' => {
-                try out.append(gpa, '.');
+                if (opts.utf8) {
+                    flags.mb = true;
+                    try out.appendSlice(gpa, unicode.any_char);
+                } else try out.append(gpa, '.');
                 at_start = false;
             },
             '*' => {
@@ -124,6 +193,7 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
             },
             '$' => {
                 const edge = ere or i == pat.len or (!ere and (std.mem.startsWith(u8, pat[i..], "\\)") or std.mem.startsWith(u8, pat[i..], "\\|")));
+                if (edge) flags.right = true;
                 if (edge) try out.append(gpa, '$') else try out.appendSlice(gpa, "\\$");
                 at_start = false;
             },
@@ -145,6 +215,7 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
             },
             '|' => {
                 if (ere) {
+                    flags.alt = true;
                     try out.append(gpa, '|');
                     at_start = true;
                 } else {
@@ -178,6 +249,15 @@ pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 
                 at_start = false;
             },
             else => {
+                if (opts.utf8 and c >= 0x80) {
+                    const d = unicode.decode(pat, i - 1);
+                    if (d.valid) {
+                        try utf8Literal(gpa, &out, d.cp, opts.icase);
+                        i += d.len - 1;
+                        at_start = false;
+                        continue;
+                    }
+                }
                 try literal(gpa, &out, c);
                 at_start = false;
             },
@@ -268,6 +348,145 @@ fn wrapStacked(gpa: std.mem.Allocator, src: []const u8) Error![]u8 {
     return out.toOwnedSlice(gpa);
 }
 
+fn utf8Literal(gpa: std.mem.Allocator, out: *std.ArrayList(u8), cp: u32, icase: bool) !void {
+    var buf: [4]u8 = undefined;
+    const up = unicode.toUpper(cp);
+    const lo = unicode.toLower(cp);
+    try out.appendSlice(gpa, "(?:");
+    const variants = [_]u32{ cp, up, lo };
+    var seen: [3]u32 = .{ cp, cp, cp };
+    var n: usize = 1;
+    for (variants[0..1]) |v| {
+        for (unicode.encode(v, &buf)) |b| try out.appendSlice(gpa, &hexEsc(b));
+    }
+    if (icase) {
+        for (variants[1..]) |v| {
+            var dup = false;
+            for (seen[0..n]) |x| if (x == v) {
+                dup = true;
+            };
+            if (dup) continue;
+            seen[n] = v;
+            n += 1;
+            try out.append(gpa, '|');
+            for (unicode.encode(v, &buf)) |b| try out.appendSlice(gpa, &hexEsc(b));
+        }
+    }
+    try out.append(gpa, ')');
+}
+
+fn hexEsc(b: u8) [4]u8 {
+    const hex = "0123456789abcdef";
+    return .{ '\\', 'x', hex[b >> 4], hex[b & 15] };
+}
+
+/// Emit `set` (or its complement among valid characters) as one unit.
+fn emitSet(gpa: std.mem.Allocator, out: *std.ArrayList(u8), set: *unicode.Set, negate: bool) !void {
+    set.normalize();
+    var ascii_only = true;
+    for (set.ranges.items) |r| {
+        if (r[1] >= 0x80) ascii_only = false;
+    }
+    if (!negate) {
+        try unicode.appendSetRegex(gpa, out, set);
+        return;
+    }
+    if (ascii_only) {
+        try out.appendSlice(gpa, "(?:[^");
+        for (set.ranges.items) |r| {
+            try out.appendSlice(gpa, &hexEsc(@intCast(r[0])));
+            if (r[1] != r[0]) {
+                try out.append(gpa, '-');
+                try out.appendSlice(gpa, &hexEsc(@intCast(r[1])));
+            }
+        }
+        try out.appendSlice(gpa, "\\x80-\\xff]|[\\xc2-\\xdf][\\x80-\\xbf]|[\\xe0-\\xef][\\x80-\\xbf][\\x80-\\xbf]|[\\xf0-\\xf4][\\x80-\\xbf][\\x80-\\xbf][\\x80-\\xbf])");
+        return;
+    }
+    try out.appendSlice(gpa, "(?:(?!");
+    try unicode.appendSetRegex(gpa, out, set);
+    try out.append(gpa, ')');
+    try out.appendSlice(gpa, unicode.any_char);
+    try out.append(gpa, ')');
+}
+
+/// Bracket expression in a UTF-8 locale. Returns the index after the ']'.
+fn bracketUtf8(gpa: std.mem.Allocator, out: *std.ArrayList(u8), pat: []const u8, start: usize, opts: Opts) Error!usize {
+    var set: unicode.Set = .{};
+    defer set.deinit(gpa);
+    var i = start;
+    var negate = false;
+    if (i < pat.len and pat[i] == '^') {
+        negate = true;
+        i += 1;
+    }
+    var first = true;
+    while (i < pat.len) {
+        var c = pat[i];
+        if (c == ']' and !first) {
+            if (opts.icase) try addCaseVariants(gpa, &set);
+            try emitSet(gpa, out, &set, negate);
+            return i + 1;
+        }
+        first = false;
+        if (c == '[' and i + 1 < pat.len and (pat[i + 1] == ':' or pat[i + 1] == '.' or pat[i + 1] == '=')) {
+            const kind = pat[i + 1];
+            const close = std.mem.indexOfPos(u8, pat, i + 2, &[_]u8{ kind, ']' }) orelse return error.BadPattern;
+            const name = pat[i + 2 .. close];
+            i = close + 2;
+            if (kind == ':') {
+                const cl = unicode.classFromName(name) orelse return error.BadPattern;
+                try set.addAll(gpa, unicode.classRanges(cl));
+                continue;
+            }
+            if (name.len == 0) return error.BadPattern;
+            const d = unicode.decode(name, 0);
+            try set.add(gpa, d.cp, d.cp);
+            continue;
+        }
+        const d = unicode.decode(pat, i);
+        if (!d.valid) {
+            // a stray byte of an invalid sequence matches nothing
+            i += 1;
+            continue;
+        }
+        var lo = d.cp;
+        i += d.len;
+        _ = &c;
+        var hi = lo;
+        if (i + 1 < pat.len and pat[i] == '-' and pat[i + 1] != ']') {
+            const d2 = unicode.decode(pat, i + 1);
+            hi = d2.cp;
+            i += 1 + d2.len;
+            if (hi < lo) return error.BadPattern;
+            // glibc's C.UTF-8 has no collation order for non-ASCII ranges.
+            if (hi >= 0x80 or lo >= 0x80) return error.BadPattern;
+        }
+        if (lo > hi) {
+            const t = lo;
+            lo = hi;
+            hi = t;
+        }
+        try set.add(gpa, lo, hi);
+    }
+    return error.BadPattern;
+}
+
+fn addCaseVariants(gpa: std.mem.Allocator, set: *unicode.Set) !void {
+    const n = set.ranges.items.len;
+    for (0..n) |k| {
+        const r = set.ranges.items[k];
+        if (r[1] - r[0] > 0x500) continue;
+        var cp = r[0];
+        while (cp <= r[1]) : (cp += 1) {
+            const u = unicode.toUpper(cp);
+            const l = unicode.toLower(cp);
+            if (u != cp) try set.add(gpa, u, u);
+            if (l != cp) try set.add(gpa, l, l);
+        }
+    }
+}
+
 /// Append `c` so that the Perl dialect reads it as that literal byte.
 fn literal(gpa: std.mem.Allocator, out: *std.ArrayList(u8), c: u8) !void {
     if (std.mem.indexOfScalar(u8, "\\^$.|?*+()[]{}/#", c) != null) try out.append(gpa, '\\');
@@ -338,41 +557,10 @@ pub const Compiled = struct {
     }
 };
 
-/// Source of the "must end here" companion regex when `body` (Perl dialect,
-/// as produced by `translate`) has an alternation and nothing that looks at
-/// the text to the right of the match (`$`, `\b`, `\B`, `\z`, `\Z`).
-pub fn longestSource(gpa: std.mem.Allocator, body: []const u8, prefix: []const u8) Error!?[]u8 {
-    var alt = false;
-    var i: usize = 0;
-    var in_br = false;
-    while (i < body.len) : (i += 1) {
-        const c = body[i];
-        if (c == '\\') {
-            if (i + 1 < body.len and !in_br) {
-                switch (body[i + 1]) {
-                    'b', 'B', 'z', 'Z' => return null,
-                    else => {},
-                }
-            }
-            i += 1;
-            continue;
-        }
-        if (in_br) {
-            if (c == ']') in_br = false;
-            continue;
-        }
-        switch (c) {
-            '[' => {
-                in_br = true;
-                if (i + 1 < body.len and body[i + 1] == '^') i += 1;
-                if (i + 1 < body.len and body[i + 1] == ']') i += 1;
-            },
-            '$' => return null,
-            '|' => alt = true,
-            else => {},
-        }
-    }
-    if (!alt) return null;
+/// Source of the "must end here" companion regex: only for patterns with an
+/// alternation of their own and nothing that looks right of the match.
+pub fn longestSource(gpa: std.mem.Allocator, body: []const u8, prefix: []const u8, flags: Flags) Error!?[]u8 {
+    if (!flags.alt or flags.right) return null;
     return try std.fmt.allocPrint(gpa, "{s}(?:{s})\\z", .{ prefix, body });
 }
 
@@ -420,19 +608,26 @@ pub fn compile(gpa: std.mem.Allocator, pat: []const u8, ere: bool, ignore_case: 
 
 /// `anchored` demands a match at the start of the subject (expr's `:`).
 pub fn compileMode(gpa: std.mem.Allocator, pat: []const u8, ere: bool, ignore_case: bool, anchored: bool) Error!Compiled {
-    const body = try translate(gpa, pat, ere);
+    return compileFull(gpa, pat, ere, ignore_case, anchored, .{});
+}
+
+pub fn compileFull(gpa: std.mem.Allocator, pat: []const u8, ere: bool, ignore_case: bool, anchored: bool, opts_in: Opts) Error!Compiled {
+    var opts = opts_in;
+    opts.icase = ignore_case;
+    var flags: Flags = .{};
+    const body = try translateFlags(gpa, pat, ere, opts, &flags);
     defer gpa.free(body);
     const src = if (anchored) try std.fmt.allocPrint(gpa, "^(?:{s})", .{body}) else try gpa.dupe(u8, body);
     defer gpa.free(src);
-    var re = regex.Regex.compile(gpa, src, .{ .dialect = .perl, .ignore_case = ignore_case }, null) catch |e| switch (e) {
+    var re = regex.Regex.compile(gpa, src, .{ .dialect = .perl, .ignore_case = ignore_case, .limits = big_limits }, null) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.BadPattern,
     };
     errdefer re.deinit(gpa);
     var longest: ?regex.Regex = null;
-    if (try longestSource(gpa, body, "")) |ls| {
+    if (try longestSource(gpa, body, "", flags)) |ls| {
         defer gpa.free(ls);
-        longest = regex.Regex.compile(gpa, ls, .{ .dialect = .perl, .ignore_case = ignore_case }, null) catch null;
+        longest = regex.Regex.compile(gpa, ls, .{ .dialect = .perl, .ignore_case = ignore_case, .limits = big_limits }, null) catch null;
     }
     return .{ .re = re, .groups = re.groupCount(), .longest = longest };
 }
@@ -471,6 +666,7 @@ pub fn diagnose(pat: []const u8) []const u8 {
 }
 
 pub fn diagnoseMode(pat: []const u8, ere: bool) []const u8 {
+    if (nonAsciiRange(pat)) return "Invalid collation character";
     if (ere) {
         var at_start = true;
         var depth: i32 = 0;
@@ -517,6 +713,7 @@ pub fn diagnoseMode(pat: []const u8, ere: bool) []const u8 {
         if (depth > 0) return "Unmatched ( or \\(";
         return "Invalid regular expression";
     }
+    if (std.mem.indexOf(u8, pat, "**") != null and std.mem.indexOf(u8, pat, "[") == null and std.mem.indexOf(u8, pat, "\\") == null) return "Invalid preceding regular expression";
     // glibc reports a lone '[' with the generic message.
     if (std.mem.eql(u8, pat, "[")) return "Invalid regular expression";
     var depth: i32 = 0;
@@ -570,3 +767,25 @@ pub fn diagnoseMode(pat: []const u8, ere: bool) []const u8 {
     return "Invalid regular expression";
 }
 
+
+/// True when a bracket expression holds a range with a non-ASCII endpoint.
+fn nonAsciiRange(pat: []const u8) bool {
+    var i: usize = 0;
+    while (i < pat.len) : (i += 1) {
+        if (pat[i] == '\\') {
+            i += 1;
+            continue;
+        }
+        if (pat[i] != '[') continue;
+        var j = i + 1;
+        if (j < pat.len and pat[j] == '^') j += 1;
+        if (j < pat.len and pat[j] == ']') j += 1;
+        while (j < pat.len and pat[j] != ']') : (j += 1) {
+            if (pat[j] == '-' and j + 1 < pat.len and pat[j + 1] != ']' and j > i + 1) {
+                if (pat[j - 1] >= 0x80 or pat[j + 1] >= 0x80) return true;
+            }
+        }
+        i = j;
+    }
+    return false;
+}
