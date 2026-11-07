@@ -104,4 +104,19 @@ run_cmp "-- then operands"    -- -a b
 run_cmp "dash operand"        - x
 
 cd /; rm -rf "$W"
+printf "\n[ Large inputs: chunk boundaries (64 KiB reads) ]\n"
+# Runs of one byte placed to straddle each 65536-byte read boundary, so a
+# squeeze run is split across two chunks.
+awk 'BEGIN { srand(31); for (i = 0; i < 25000; i++) { n = 1 + int(rand() * 8); s = ""; for (j = 0; j < n; j++) s = s "ab 12 " ; print s "xx\t\t" i } }' > "$W/big"
+{ head -c 65535 /dev/zero | tr '\0' 'q'; head -c 3 /dev/zero | tr '\0' 'a'; head -c 65534 /dev/zero | tr '\0' 'z'; printf 'aaaa\n'; } > "$W/runs65"
+{ head -c 65536 /dev/zero | tr '\0' 'a'; head -c 65536 /dev/zero | tr '\0' 'a'; printf 'b'; } > "$W/oneletter"
+head -c 300000 /dev/urandom > "$W/rnd"
+for f in big runs65 oneletter rnd; do
+    CMP_STDIN="$W/$f"
+    for a in 'a-z A-Z' '-d a' '-d a-z' '-d [:digit:]' '-s a' '-s [:space:]' '-s ab' '-ds a b' '-ds 1 a' '-s a-z A-Z' '-d -c a-z' '-s -c a-z' '-c a-z _' '-cd a-z' '-cs a-z \n' '-s q' '-s z' '-d q' '-s a b' '[:lower:] [:upper:]' '-s [:lower:] [:upper:]' '-t abc x'; do
+        run_cmp "$f tr $a"   $a
+    done
+done
+CMP_STDIN="$W/text"
+
 print_summary

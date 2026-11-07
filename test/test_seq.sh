@@ -85,4 +85,30 @@ e=$(/usr/bin/seq 1 200000 | cksum); o=$("$BIN_DIR/seq" 1 200000 | cksum)
 e=$(/usr/bin/seq -w 0.1 0.1 1000 | cksum); o=$("$BIN_DIR/seq" -w 0.1 0.1 1000 | cksum)
 [ "$e" = "$o" ] && { PASS=$((PASS + 1)); echo "PASS seq -w 0.1 0.1 1000 checksum"; } || { FAIL=$((FAIL + 1)); echo "FAIL large decimals"; }
 
+printf "\n[ Integer fast path boundaries ]\n"
+run_cmp "i64 max-2 .. max"        9223372036854775805 9223372036854775807
+run_cmp "i64 max-2 .. beyond"     9223372036854775805 9223372036854775810
+run_cmp "i64 min .. min+2"        -9223372036854775808 -9223372036854775806
+run_cmp "i64 min-1 .. min+1"      -9223372036854775809 -9223372036854775807
+run_cmp "down to min"             -9223372036854775806 -1 -9223372036854775808
+run_cmp "big step overflow"       9223372036854775800 5 9223372036854775807
+run_cmp "big negative step"       -9223372036854775800 -5 -9223372036854775808
+run_cmp "step larger than range"  1 100 50
+run_cmp "single value"            5 1 5
+run_cmp "empty ascending"         5 1 4
+run_cmp "empty descending"        1 -1 2
+run_cmp "negatives"               -5 3 5
+run_cmp "powers of ten"           98 1 103
+run_cmp "1e3 operands"            1e3 1e3 5e3
+run_cmp "-s separator"            -s, 1 5
+run_cmp "-s multi char"           -s ' | ' 8 12
+run_cmp "-w small"                -w 8 12
+run_cmp "-w negative"             -w -3 3
+run_cmp "step 0"                  1 0 5
+run_cmp "big count 100000 sum"    1 100000
+r=$(ours 1 3000000 | md5sum); g=$(gnu 1 3000000 | md5sum)
+[ "$r" = "$g" ] && { PASS=$((PASS+1)); echo "PASS 3000000 numbers identical"; } || { FAIL=$((FAIL+1)); echo "FAIL 3000000 numbers differ"; }
+r=$(ours -s: -9999 7 99999 | md5sum); g=$(gnu -s: -9999 7 99999 | md5sum)
+[ "$r" = "$g" ] && { PASS=$((PASS+1)); echo "PASS step 7 across zero identical"; } || { FAIL=$((FAIL+1)); echo "FAIL step 7 across zero differ"; }
+
 print_summary

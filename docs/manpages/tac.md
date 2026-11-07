@@ -39,7 +39,7 @@ See docs/compatibility/tac.md for details.
 
 LIMITATIONS
 - `-r` / `--regex` is not implemented (a regex engine is available in the project; planned).
-- Each input is read fully into memory; GNU spools standard input and large inputs to a temporary file.
+- A named regular file is read backwards in 64 KiB windows (memory stays proportional to the window and the longest record). Standard input, pipes and size-0 pseudo files are read fully into memory; GNU spools those to a temporary file.
 - Error text for unreadable files follows GNU (`failed to open 'X' for reading`) but read errors mid-file are reported more generically.
 
 SEE ALSO

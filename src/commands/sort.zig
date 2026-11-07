@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
+const linereader = @import("../lines.zig");
 const Io = std.Io;
 
 const no_field = std.math.maxInt(usize);
@@ -297,6 +298,12 @@ pub fn main(ctx: cli.Context) u8 {
         return fail_status;
     }
 
+    const sorter = Sorter.init(&cfg);
+
+    // -c and -m can work one line at a time; only sorting needs the whole input.
+    if (cfg.check != .none) return checkStream(ctx, &sorter, &cfg, names.items[0]);
+    if (cfg.merge and cfg.output == null and mergeStreamable(names.items)) return mergeStream(ctx, &sorter, &cfg, names.items);
+
     // Read everything before touching the output file, so `sort -o f f` works.
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(ctx.gpa);
@@ -326,10 +333,6 @@ pub fn main(ctx: cli.Context) u8 {
         }
         run_starts.append(ctx.gpa, all_lines.items.len) catch return oom(ctx);
     }
-
-    const sorter = Sorter.init(&cfg);
-
-    if (cfg.check != .none) return runCheck(ctx, &sorter, &cfg, names.items[0], all_lines.items);
 
     if (cfg.merge) {
         mergeRuns(ctx, &sorter, all_lines.items, run_starts.items) catch return oom(ctx);
@@ -704,7 +707,7 @@ const Item = struct {
     }
 };
 
-const PrefixKind = enum { none, lex, numeric };
+const PrefixKind = enum { none, lex, numeric, general };
 
 /// Per-line data of the lines being sorted, indexed by Item.idx.
 const Columns = struct {
@@ -713,6 +716,8 @@ const Columns = struct {
     fields: []const []const u8,
     /// lines.len * nk parsed numbers; valid for -n keys only.
     nums: []const Num,
+    /// lines.len * nk parsed floats; valid for -g keys only.
+    gens: []const General,
 };
 
 fn prefixOf(t: []const u8) u64 {
@@ -745,6 +750,7 @@ fn prefixKind(s: *const Sorter) PrefixKind {
     if (s.simple) return .lex;
     const o = s.keys[0].ord;
     if (o.mode == .numeric) return .numeric;
+    if (o.mode == .general) return .general;
     if (o.mode == .lex and !o.fold and !o.ignores()) return .lex;
     return .none;
 }
@@ -769,10 +775,11 @@ fn compareItems(s: *const Sorter, kind: PrefixKind, c: *const Columns, a: Item, 
     }
     const nk = c.nk;
     for (s.keys[first..], first..) |k, i| {
-        var d = if (k.ord.mode == .numeric)
-            compareNum(c.nums[a.idx * nk + i], c.nums[b.idx * nk + i])
-        else
-            compareField(k.ord, c.fields[a.idx * nk + i], c.fields[b.idx * nk + i]);
+        var d = switch (k.ord.mode) {
+            .numeric => compareNum(c.nums[a.idx * nk + i], c.nums[b.idx * nk + i]),
+            .general => compareGen(c.gens[a.idx * nk + i], c.gens[b.idx * nk + i]),
+            else => compareField(k.ord, c.fields[a.idx * nk + i], c.fields[b.idx * nk + i]),
+        };
         if (k.ord.reverse) d = -d;
         if (d != 0) return d;
     }
@@ -792,24 +799,72 @@ fn sortLines(ctx: cli.Context, s: *const Sorter, lines: [][]const u8) !void {
     const nk = s.keys.len;
 
     var any_numeric = false;
-    for (s.keys) |k| any_numeric = any_numeric or k.ord.mode == .numeric;
+    var any_general = false;
+    for (s.keys) |k| {
+        any_numeric = any_numeric or k.ord.mode == .numeric;
+        any_general = any_general or k.ord.mode == .general;
+    }
     const fields = try gpa.alloc([]const u8, n * nk);
     defer gpa.free(fields);
     const nums = try gpa.alloc(Num, if (any_numeric) n * nk else 0);
     defer gpa.free(nums);
+    const gens = try gpa.alloc(General, if (any_general) n * nk else 0);
+    defer gpa.free(gens);
+
+    // -f, -d and -i keys are compared as plain bytes after one transformation
+    // per line (folded to upper case, ignorable characters removed), instead
+    // of byte by byte with those rules on every comparison. The sort below
+    // uses `eff`, whose transformed keys no longer carry those options.
+    const eff_keys = try gpa.dupe(Key, s.keys);
+    defer gpa.free(eff_keys);
+    // A transformed key is never longer than the original, so the sum of the
+    // original key lengths bounds the space needed.
+    var xtotal: usize = 0;
+    for (s.keys) |k| {
+        if (k.ord.mode == .lex and (k.ord.fold or k.ord.ignores())) {
+            for (lines) |line| xtotal += field(line, k, s.tab).len;
+        }
+    }
+    const xbuf = try gpa.alloc(u8, xtotal);
+    defer gpa.free(xbuf);
+    var xpos: usize = 0;
     const a = try gpa.alloc(Item, n);
     defer gpa.free(a);
     const b = try gpa.alloc(Item, n);
     defer gpa.free(b);
 
-    const kind = prefixKind(s);
+    for (eff_keys) |*k| {
+        if (k.ord.mode == .lex and (k.ord.fold or k.ord.ignores())) {
+            // Mark which keys were transformed by clearing their options on the
+            // working copy; the per-line pass below tests the original `s.keys`.
+            k.ord.fold = false;
+            k.ord.dict = false;
+            k.ord.nonprint = false;
+        }
+    }
+    var eff = s.*;
+    eff.keys = eff_keys;
+    const kind = prefixKind(&eff);
     for (lines, 0..) |line, i| {
         if (line.len > std.math.maxInt(u32)) return error.OutOfMemory;
         var item: Item = .{ .prefix = 0, .ptr = line.ptr, .len = @intCast(line.len), .idx = @intCast(i), .exact = true };
         for (s.keys, 0..) |k, j| {
-            const f = field(line, k, s.tab);
+            var f = field(line, k, s.tab);
+            switch (k.ord.mode) {
+                .numeric => nums[i * nk + j] = parseNum(f),
+                .general => gens[i * nk + j] = parseGeneral(f),
+                .lex => if (k.ord.fold or k.ord.ignores()) {
+                    const start = xpos;
+                    for (f) |ch| {
+                        if (k.ord.ignores() and ignored(k.ord, ch)) continue;
+                        xbuf[xpos] = if (k.ord.fold) std.ascii.toUpper(ch) else ch;
+                        xpos += 1;
+                    }
+                    f = xbuf[start..xpos];
+                },
+                else => {},
+            }
             fields[i * nk + j] = f;
-            if (k.ord.mode == .numeric) nums[i * nk + j] = parseNum(f);
         }
         switch (kind) {
             .none => {},
@@ -819,10 +874,11 @@ fn sortLines(ctx: cli.Context, s: *const Sorter, lines: [][]const u8) !void {
                 item.prefix = p.bits;
                 item.exact = p.exact;
             },
+            .general => item.prefix = generalPrefix(gens[i * nk]),
         }
         a[i] = item;
     }
-    const cols: Columns = .{ .nk = nk, .fields = fields, .nums = nums };
+    const cols: Columns = .{ .nk = nk, .fields = fields, .nums = nums, .gens = gens };
 
     const run = 12;
     var lo: usize = 0;
@@ -832,7 +888,7 @@ fn sortLines(ctx: cli.Context, s: *const Sorter, lines: [][]const u8) !void {
         while (i < hi) : (i += 1) {
             const x = a[i];
             var j = i;
-            while (j > lo and compareItems(s, kind, &cols, x, a[j - 1]) < 0) : (j -= 1) a[j] = a[j - 1];
+            while (j > lo and compareItems(&eff, kind, &cols, x, a[j - 1]) < 0) : (j -= 1) a[j] = a[j - 1];
             a[j] = x;
         }
     }
@@ -850,7 +906,7 @@ fn sortLines(ctx: cli.Context, s: *const Sorter, lines: [][]const u8) !void {
             var o = start;
             while (i < mid and j < end) : (o += 1) {
                 // Take from the right run only when strictly smaller: stable.
-                if (compareItems(s, kind, &cols, src[j], src[i]) < 0) {
+                if (compareItems(&eff, kind, &cols, src[j], src[i]) < 0) {
                     dst[o] = src[j];
                     j += 1;
                 } else {
@@ -1175,8 +1231,19 @@ fn startsWithNoCase(s: []const u8, prefix: []const u8) bool {
 }
 
 fn compareGeneral(a: []const u8, b: []const u8) i32 {
-    const x = parseGeneral(a);
-    const y = parseGeneral(b);
+    return compareGen(parseGeneral(a), parseGeneral(b));
+}
+
+/// Order-preserving integer for -g keys: numbers by value (-0 equals +0),
+/// everything else (conversion failures and NaNs) 0, which is below every
+/// number. Ties are settled by compareGen.
+fn generalPrefix(g: General) u64 {
+    if (!g.parsed or std.math.isNan(g.value)) return 0;
+    const raw: u64 = @bitCast(g.value + 0.0); // + 0.0 turns -0 into +0
+    return if (raw >> 63 != 0) ~raw else raw | (@as(u64, 1) << 63);
+}
+
+fn compareGen(x: General, y: General) i32 {
     // Conversion failures first, then NaNs, then numbers (-0 == +0).
     if (!x.parsed) return if (y.parsed) -1 else 0;
     if (!y.parsed) return 1;
@@ -1203,22 +1270,142 @@ fn monthOf(s: []const u8) i32 {
 
 // -------------------------------------------------------- check and merge
 
-fn runCheck(ctx: cli.Context, s: *const Sorter, cfg: *const Config, name: []const u8, lines: []const []const u8) u8 {
-    var n: usize = 1;
-    while (n < lines.len) : (n += 1) {
-        const d = s.compare(lines[n - 1], lines[n]);
-        if (d > 0 or (cfg.unique and d == 0)) {
-            if (cfg.check == .diagnose) {
-                var out = cli.Out.initFile(ctx.io, Io.File.stderr());
-                out.print("{s}: {s}:{d}: disorder: ", .{ ctx.name, name, n + 1 });
-                out.write(lines[n]);
-                out.writeByte(cfg.term);
-                out.flush();
-            }
-            return 1;
+/// Open an input for sort's diagnostics: `verb` ("cannot read" when sorting or
+/// merging, "open failed" when checking, as GNU words them) when it cannot be
+/// opened, "read failed" for a directory (GNU opens it and fails on read).
+fn openInput(ctx: cli.Context, name: []const u8, verb: []const u8) ?Io.File {
+    return cli.openInput(ctx.io, name) catch |e| {
+        if (e == error.IsDir) {
+            cli.warn(ctx, "read failed: {s}: Is a directory", .{name});
+        } else {
+            cli.warn(ctx, "{s}: {s}: {s}", .{ verb, name, cli.errText(e) });
         }
+        return null;
+    };
+}
+
+/// -c / -C: compare each line with the previous one; stops at the first
+/// disorder (or duplicate with -u). Memory is one line, not the file.
+fn checkStream(ctx: cli.Context, s: *const Sorter, cfg: *const Config, name: []const u8) u8 {
+    const file = openInput(ctx, name, "open failed") orelse return fail_status;
+    defer cli.closeInput(ctx.io, file);
+    var reader = linereader.LineReader.init(ctx.gpa, ctx.io, file, cfg.term);
+    defer reader.deinit();
+    var prev: std.ArrayList(u8) = .empty;
+    defer prev.deinit(ctx.gpa);
+    var n: usize = 0;
+    while (true) {
+        const line = (reader.next() catch |e| {
+            cli.warn(ctx, "read failed: {s}: {s}", .{ name, cli.errText(e) });
+            return fail_status;
+        }) orelse return 0;
+        n += 1;
+        if (n > 1) {
+            const d = s.compare(prev.items, line.text);
+            if (d > 0 or (cfg.unique and d == 0)) {
+                if (cfg.check == .diagnose) {
+                    var out = cli.Out.initFile(ctx.io, Io.File.stderr());
+                    out.print("{s}: {s}:{d}: disorder: ", .{ ctx.name, name, n });
+                    out.write(line.text);
+                    out.writeByte(cfg.term);
+                    out.flush();
+                }
+                return 1;
+            }
+        }
+        prev.clearRetainingCapacity();
+        prev.appendSlice(ctx.gpa, line.text) catch return oom(ctx);
+    }
+}
+
+/// Streaming merge opens every input at once, so it is used for a modest
+/// number of inputs and only when standard input is not named twice (two
+/// readers on one descriptor would split its lines between them).
+fn mergeStreamable(names: []const []const u8) bool {
+    if (names.len > 128) return false;
+    var stdin_count: usize = 0;
+    for (names) |n| stdin_count += @intFromBool(std.mem.eql(u8, n, "-"));
+    return stdin_count <= 1;
+}
+
+/// -m on standard output: keep one pending line per input and repeatedly emit
+/// the smallest, earlier inputs winning ties. Same order as mergeRuns.
+fn mergeStream(ctx: cli.Context, s: *const Sorter, cfg: *const Config, names: []const []const u8) u8 {
+    const k = names.len;
+    const gpa = ctx.gpa;
+    const files = gpa.alloc(Io.File, k) catch return oom(ctx);
+    defer gpa.free(files);
+    const readers = gpa.alloc(linereader.LineReader, k) catch return oom(ctx);
+    defer gpa.free(readers);
+    const heads = gpa.alloc(std.ArrayList(u8), k) catch return oom(ctx);
+    defer gpa.free(heads);
+    const alive = gpa.alloc(bool, k) catch return oom(ctx);
+    defer gpa.free(alive);
+
+    var opened: usize = 0; // inputs whose file, reader and head are initialised
+    defer for (0..opened) |i| {
+        readers[i].deinit();
+        heads[i].deinit(gpa);
+        cli.closeInput(ctx.io, files[i]);
+    };
+    for (names, 0..) |name, i| {
+        files[i] = openInput(ctx, name, "cannot read") orelse return fail_status;
+        readers[i] = linereader.LineReader.init(gpa, ctx.io, files[i], cfg.term);
+        heads[i] = .empty;
+        alive[i] = false;
+        opened += 1;
+    }
+    for (0..k) |i| if (!advance(ctx, readers, heads, alive, names, i, cfg)) return fail_status;
+
+    var out = cli.Out.init(ctx.io);
+    var prev: std.ArrayList(u8) = .empty;
+    defer prev.deinit(gpa);
+    var have_prev = false;
+    while (true) {
+        var best: ?usize = null;
+        for (0..k) |r| {
+            if (!alive[r]) continue;
+            if (best == null or s.compare(heads[r].items, heads[best.?].items) < 0) best = r;
+        }
+        const b = best orelse break;
+        const text = heads[b].items;
+        if (!(cfg.unique and have_prev and s.compare(prev.items, text) == 0)) {
+            out.write(text);
+            out.writeByte(cfg.term);
+            if (out.failed) break;
+            if (cfg.unique) {
+                prev.clearRetainingCapacity();
+                prev.appendSlice(gpa, text) catch return oom(ctx);
+                have_prev = true;
+            }
+        }
+        if (!advance(ctx, readers, heads, alive, names, b, cfg)) return fail_status;
+    }
+    out.flush();
+    if (out.failed) {
+        cli.warn(ctx, "write failed: 'standard output'", .{});
+        return fail_status;
     }
     return 0;
+}
+
+/// Load the next line of input `i` into its head slot.
+fn advance(ctx: cli.Context, readers: []linereader.LineReader, heads: []std.ArrayList(u8), alive: []bool, names: []const []const u8, i: usize, cfg: *const Config) bool {
+    _ = cfg;
+    const line = (readers[i].next() catch |e| {
+        cli.warn(ctx, "read failed: {s}: {s}", .{ names[i], cli.errText(e) });
+        return false;
+    }) orelse {
+        alive[i] = false;
+        return true;
+    };
+    heads[i].clearRetainingCapacity();
+    heads[i].appendSlice(ctx.gpa, line.text) catch {
+        _ = oom(ctx);
+        return false;
+    };
+    alive[i] = true;
+    return true;
 }
 
 /// k-way merge of the already-sorted runs found at `starts[i]..starts[i+1]`

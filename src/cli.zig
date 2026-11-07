@@ -210,6 +210,11 @@ pub const Out = struct {
     }
 
     pub fn writeByte(o: *Out, byte: u8) void {
+        if (o.len < o.buf.len and !o.failed) {
+            o.buf[o.len] = byte;
+            o.len += 1;
+            return;
+        }
         o.write(&.{byte});
     }
 

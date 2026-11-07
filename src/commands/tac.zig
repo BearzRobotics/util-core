@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
+const scan = @import("../bytes.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "before", "regex", "separator", "help", "version" };
@@ -93,15 +94,13 @@ pub fn main(ctx: cli.Context) u8 {
     var status: u8 = 0;
     var data: std.ArrayList(u8) = .empty;
     defer data.deinit(ctx.gpa);
-    var buf: [64 * 1024]u8 = undefined;
     for (inputs) |path| {
         data.clearRetainingCapacity();
-        readAll(ctx, path, &data, &buf) catch |e| {
+        tacInput(ctx, &out, path, sep, before, &data) catch |e| {
             if (e != error.Reported) cli.warn(ctx, "{s}: read error: {s}", .{ path, cli.errText(e) });
             status = 1;
             continue;
         };
-        reverseRecords(&out, data.items, sep, before);
     }
     out.flush();
     if (out.failed) {
@@ -111,45 +110,92 @@ pub fn main(ctx: cli.Context) u8 {
     return status;
 }
 
-fn readAll(ctx: cli.Context, path: []const u8, data: *std.ArrayList(u8), buf: []u8) !void {
+/// Reverse one input. A named regular file is read backwards in windows, so
+/// memory stays proportional to the window (and the longest record); pipes,
+/// the terminal and size-0 pseudo files are read whole into `data` first.
+fn tacInput(ctx: cli.Context, out: *cli.Out, path: []const u8, sep: []const u8, before: bool, data: *std.ArrayList(u8)) !void {
     const file = cli.openInput(ctx.io, path) catch |e| {
         cli.warn(ctx, "failed to open '{s}' for reading: {s}", .{ path, cli.errText(e) });
         return error.Reported;
     };
     defer cli.closeInput(ctx.io, file);
+
+    if (!std.mem.eql(u8, path, "-")) {
+        if (file.stat(ctx.io)) |st| {
+            if (st.kind == .file and st.size > 0) return tacBackwards(ctx, out, file, st.size, sep, before);
+        } else |_| {}
+    }
     while (true) {
-        const n = try cli.readChunk(ctx.io, file, buf);
-        if (n == 0) return;
-        try data.appendSlice(ctx.gpa, buf[0..n]);
+        try data.ensureUnusedCapacity(ctx.gpa, 64 * 1024);
+        const n = try cli.readChunk(ctx.io, file, data.unusedCapacitySlice());
+        if (n == 0) break;
+        data.items.len += n;
+    }
+    _ = reverseWindow(out, data.items, sep, before, true);
+}
+
+const window_size = 64 * 1024;
+
+/// Read `file` (of `size` bytes) from the end in windows. `carry` is the
+/// leftmost piece of the previous window whose beginning is not known yet;
+/// it is glued to the right end of the next window and rescanned.
+fn tacBackwards(ctx: cli.Context, out: *cli.Out, file: Io.File, size: u64, sep: []const u8, before: bool) !void {
+    var window: std.ArrayList(u8) = .empty;
+    defer window.deinit(ctx.gpa);
+    var carry_len: usize = 0; // the carry is window.items[0..carry_len] after each pass
+    var scratch: std.ArrayList(u8) = .empty; // old carry while the window is rebuilt
+    defer scratch.deinit(ctx.gpa);
+    var pos = size;
+    while (pos > 0) {
+        // Grow the window with the carry so one huge record costs O(n), not O(n^2).
+        const want: usize = @intCast(@min(pos, @max(@as(u64, window_size), carry_len)));
+        pos -= want;
+        try scratch.resize(ctx.gpa, carry_len);
+        @memcpy(scratch.items, window.items[0..carry_len]);
+        try window.resize(ctx.gpa, want + carry_len);
+        const got = try file.readPositionalAll(ctx.io, window.items[0..want], pos);
+        if (got != want) return error.UnexpectedEof; // file shrank while reading
+        @memcpy(window.items[want..], scratch.items);
+        carry_len = reverseWindow(out, window.items, sep, before, pos == 0);
+        if (out.failed) return;
     }
 }
 
-/// Write the records of `data` in reverse order. Records end with `sep`
-/// (default) or start with it (`before`); the unterminated piece at the far
-/// end of the file is a record too.
-pub fn reverseRecords(out: *cli.Out, data: []const u8, sep: []const u8, before: bool) void {
-    var end = data.len; // exclusive end of the not-yet-written prefix
+/// Write the complete records of `data` from the last to the first and return
+/// the length of the unfinished piece at the start of `data` (0 when `final`:
+/// that piece is then a record too).
+///
+/// Records end with `sep` (default) or start with it (`before`). With the
+/// default, a separator at the very end of `data` terminates the last record
+/// and the unterminated piece after the last separator is a record of its own,
+/// printed first (GNU). Separators are found right to left, which fixes how
+/// overlapping occurrences of a multi-byte separator are paired.
+fn reverseWindow(out: *cli.Out, data: []const u8, sep: []const u8, before: bool, final: bool) usize {
+    var end = data.len; // exclusive end of the not yet written suffix
     if (before) {
-        // Records begin at a separator: [sep rec][sep rec]... with a possible
-        // leading piece that has no separator.
-        while (end > 0) {
-            const start = std.mem.lastIndexOf(u8, data[0..end], sep) orelse 0;
-            out.write(data[start..end]);
-            end = start;
+        while (lastIndexOfSep(data[0..end], sep)) |p| {
+            out.write(data[p..end]);
+            end = p;
         }
     } else {
-        // Records end at a separator. The final piece after the last separator
-        // (if any) is unterminated and forms the last record.
         var cur = data.len;
-        if (cur >= sep.len and std.mem.endsWith(u8, data, sep)) cur -= sep.len; // terminator of the last record
-        while (end > 0) {
-            const start = if (std.mem.lastIndexOf(u8, data[0..cur], sep)) |p| p + sep.len else 0;
-            out.write(data[start..end]);
-            end = start;
-            cur = if (start >= sep.len) start - sep.len else 0;
-            if (start == 0) break;
+        if (std.mem.endsWith(u8, data, sep)) cur -= sep.len; // terminator of the last record
+        while (lastIndexOfSep(data[0..cur], sep)) |p| {
+            out.write(data[p + sep.len .. end]);
+            end = p + sep.len;
+            cur = p;
         }
     }
+    if (final) {
+        out.write(data[0..end]);
+        return 0;
+    }
+    return end;
+}
+
+fn lastIndexOfSep(hay: []const u8, sep: []const u8) ?usize {
+    if (sep.len == 1) return scan.lastIndexOf(hay, sep[0]);
+    return std.mem.lastIndexOf(u8, hay, sep);
 }
 
 fn regexUnsupported(ctx: cli.Context) u8 {

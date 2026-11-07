@@ -45,16 +45,74 @@ const Formatter = struct {
     at_line_start: bool = true,
     prev_line_blank: bool = false,
     line_no: u64 = 0,
+    /// -E shows a carriage return that directly precedes a newline as "^M".
+    /// A '\r' at the end of a chunk is held back until the next byte (which
+    /// may be in the next chunk or the next file) says which it is.
+    pending_cr: bool = false,
+
+    /// Call after the last input: a held-back '\r' was not followed by '\n'.
+    fn finish(f: *Formatter) void {
+        if (f.pending_cr) f.out.writeByte('\r');
+        f.pending_cr = false;
+    }
+
+    /// Resolve a held-back '\r' given the next byte.
+    fn resolveCr(f: *Formatter, next: u8) void {
+        f.pending_cr = false;
+        if (next == '\n') f.out.write("^M") else f.out.writeByte('\r');
+    }
 
     fn feed(f: *Formatter, bytes: []const u8) void {
+        // -v and -T rewrite bytes inside lines, so they need the byte loop;
+        // everything else only treats '\n' specially and can copy whole runs.
+        if (f.opts.show_nonprinting or f.opts.show_tabs) return f.feedBytes(bytes);
+        var i: usize = 0;
+        while (i < bytes.len) {
+            if (f.pending_cr) f.resolveCr(bytes[i]);
+            if (f.at_line_start) {
+                if (bytes[i] == '\n') {
+                    i += 1;
+                    f.blankLine();
+                    continue;
+                }
+                f.prev_line_blank = false;
+                if (f.opts.number or f.opts.number_nonblank) f.numberLine();
+                f.at_line_start = false;
+            }
+            const nl = std.mem.indexOfScalarPos(u8, bytes, i, '\n');
+            var end = nl orelse bytes.len;
+            const cr = f.opts.show_ends and end > i and bytes[end - 1] == '\r';
+            if (cr) end -= 1;
+            f.out.write(bytes[i..end]);
+            if (cr) {
+                if (nl != null) f.out.write("^M") else f.pending_cr = true;
+                end += 1;
+            }
+            i = end;
+            if (i < bytes.len) {
+                if (f.opts.show_ends) f.out.writeByte('$');
+                f.out.writeByte('\n');
+                f.at_line_start = true;
+                i += 1;
+            }
+        }
+    }
+
+    /// An empty line (a '\n' at the start of a line), honouring -s, -n and -E.
+    fn blankLine(f: *Formatter) void {
+        if (f.opts.squeeze_blank and f.prev_line_blank) return;
+        f.prev_line_blank = true;
+        if (f.opts.number and !f.opts.number_nonblank) f.numberLine();
+        if (f.opts.show_ends) f.out.writeByte('$');
+        f.out.writeByte('\n');
+    }
+
+    fn feedBytes(f: *Formatter, bytes: []const u8) void {
         for (bytes) |c| {
+            if (f.pending_cr) f.resolveCr(c);
             if (f.at_line_start) {
                 if (c == '\n') {
-                    if (f.opts.squeeze_blank and f.prev_line_blank) continue;
-                    f.prev_line_blank = true;
-                    if (f.opts.number and !f.opts.number_nonblank) f.numberLine();
-                    if (f.opts.show_ends) f.out.writeByte('$');
-                    f.out.writeByte('\n');
+                    f.blankLine();
                     continue;
                 }
                 f.prev_line_blank = false;
@@ -65,13 +123,33 @@ const Formatter = struct {
                 if (f.opts.show_ends) f.out.writeByte('$');
                 f.out.writeByte('\n');
                 f.at_line_start = true;
+            } else if (c == '\r' and f.opts.show_ends and !f.opts.show_nonprinting) {
+                f.pending_cr = true;
             } else f.byte(c);
         }
     }
 
+    /// "%6d\t" without the format machinery.
     fn numberLine(f: *Formatter) void {
         f.line_no += 1;
-        f.out.print("{d: >6}\t", .{f.line_no});
+        var buf: [32]u8 = undefined;
+        var i: usize = buf.len;
+        i -= 1;
+        buf[i] = '\t';
+        var n = f.line_no;
+        var digits: usize = 0;
+        while (true) {
+            i -= 1;
+            buf[i] = '0' + @as(u8, @intCast(n % 10));
+            n /= 10;
+            digits += 1;
+            if (n == 0) break;
+        }
+        while (digits < 6) : (digits += 1) {
+            i -= 1;
+            buf[i] = ' ';
+        }
+        f.out.write(buf[i..]);
     }
 
     fn byte(f: *Formatter, c: u8) void {
@@ -625,6 +703,7 @@ pub fn main(ctx: cli.Context) u8 {
             if (out.failed) return 1;
         }
     }
+    fmt.finish();
     out.flush();
     return if (out.failed) 1 else status;
 }

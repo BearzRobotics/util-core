@@ -11,7 +11,7 @@ GNU coreutils 9.7 (`/usr/bin/cat --version` on the development machine, installe
 - `-A, --show-all`: Equivalent to -vET.
 - `-b, --number-nonblank`: Number non-empty lines; overrides -n.
 - `-e`: Equivalent to -vE.
-- `-E, --show-ends`: Print $ at the end of each line.
+- `-E, --show-ends`: Print $ at the end of each line. As GNU 9.7 does, a carriage return directly before the newline is shown as `^M` (also when it is the last byte of one read and the newline the first of the next, or of the next file).
 - `-n, --number`: Number all lines (width 6, then a tab).
 - `-s, --squeeze-blank`: Collapse runs of empty lines into one.
 - `-t`: Equivalent to -vT.

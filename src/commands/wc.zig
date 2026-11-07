@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
+const scan = @import("../bytes.zig");
 
 const Counts = struct {
     lines: u64 = 0,
@@ -40,9 +41,16 @@ const Scanner = struct {
     c: Counts = .{},
     in_word: bool = false,
     line_len: u64 = 0,
+    /// Only lines and/or bytes are wanted: count newlines with a vector loop
+    /// instead of running the per-byte state machine.
+    lines_only: bool = false,
 
     fn feed(s: *Scanner, chunk: []const u8) void {
         s.c.bytes += chunk.len;
+        if (s.lines_only) {
+            s.c.lines += scan.count(chunk, '\n');
+            return;
+        }
         for (chunk) |b| {
             if ((b & 0xC0) != 0x80) s.c.chars += 1;
             switch (b) {
@@ -144,10 +152,14 @@ pub fn main(ctx: cli.Context) u8 {
     var buf: [64 * 1024]u8 = undefined;
 
     for (inputs) |path| {
-        const counts = countFile(ctx, path, &buf, &size_sum, &min_width) catch |e| {
+        const counts = countFile(ctx, path, show, &buf, &size_sum, &min_width) catch |e| {
             cli.warn(ctx, "{s}: {s}", .{ path, cli.errText(e) });
             status = 1;
-            results.append(ctx.gpa, .{ .name = path, .counts = null }) catch return oom(ctx);
+            // GNU opens a directory fine and fails on the read, so it still
+            // prints a line of zeros for it (and counts it in the total).
+            const shown: ?Counts = if (e == error.IsDir) .{} else null;
+            results.append(ctx.gpa, .{ .name = path, .counts = shown }) catch return oom(ctx);
+            if (e == error.IsDir) min_width = @max(min_width, 7);
             continue;
         };
         total.add(counts);
@@ -173,13 +185,21 @@ pub fn main(ctx: cli.Context) u8 {
 /// Counts one input. As a side effect records what GNU uses to size the
 /// columns: the st_size of a regular file is added to `size_sum`; any other
 /// kind of input raises `min_width` to 7.
-fn countFile(ctx: cli.Context, path: []const u8, buf: []u8, size_sum: *u64, min_width: *usize) !Counts {
+fn countFile(ctx: cli.Context, path: []const u8, show: Show, buf: []u8, size_sum: *u64, min_width: *usize) !Counts {
     const file = try cli.openInput(ctx.io, path);
     defer cli.closeInput(ctx.io, file);
     if (file.stat(ctx.io)) |st| {
         if (st.kind == .file) size_sum.* +|= st.size else min_width.* = 7;
     } else |_| min_width.* = 7;
-    var s: Scanner = .{};
+    var s: Scanner = .{ .lines_only = !show.words and !show.chars and !show.max_line };
+    // -c alone: a regular file's size is its byte count (what GNU does too).
+    // Size 0 may be a /proc-style file with real content, so read those.
+    const only_bytes = show.bytes and !show.lines and !show.words and !show.chars and !show.max_line;
+    if (only_bytes and !std.mem.eql(u8, path, "-")) {
+        if (file.stat(ctx.io)) |st| {
+            if (st.kind == .file and st.size > 0) return .{ .bytes = st.size };
+        } else |_| {}
+    }
     while (true) {
         const n = try cli.readChunk(ctx.io, file, buf);
         if (n == 0) break;

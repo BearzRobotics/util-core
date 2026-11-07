@@ -1,0 +1,49 @@
+# util|mode|args   (mode f = file arguments, s = stdin from the first argument, y = yes)
+# Placeholders: @TEXT @SORTED @SORTED2 @CSV @TABS @WIDE @GRAPH @WORK
+true|f|
+false|f|
+echo|f|hello,world
+basename|f|/usr/local/bin/foo.txt .txt
+dirname|f|/usr/local/bin/foo.txt
+pwd|f|
+printenv|f|PATH
+sleep|f|0
+yes|y|
+mkdir|f|-p @WORK/mk/a/b/c
+dircolors|f|-b
+cat|f|@TEXT
+cat|f|-n @TEXT
+wc|f|@TEXT
+wc|f|-l @TEXT
+wc|f|-w @TEXT
+head|f|-n 200000 @TEXT
+tail|f|-n 200000 @TEXT
+tac|f|@TEXT
+seq|f|1 2000000
+seq|f|1 0.5 400000
+tee|s|@TEXT @WORK/tee.out
+cut|f|-d, -f2,4 @CSV
+cut|f|-c1-20 @TEXT
+paste|f|@TEXT @TEXT
+paste|f|-s @TEXT
+uniq|f|@SORTED
+uniq|f|-c @SORTED
+fold|f|-w40 @WIDE
+fold|f|-s -w40 @WIDE
+nl|f|@TEXT
+tr|s|@TEXT a-z A-Z
+tr|s|@TEXT -d 0-9
+expand|f|@TABS
+unexpand|f|-a @TABS
+comm|f|@SORTED @SORTED2
+tsort|f|@GRAPH
+sort|f|@TEXT
+sort|f|-u @TEXT
+sort|f|-r @TEXT
+sort|f|-f @TEXT
+sort|f|-k1,1 @TEXT
+sort|f|-n -k2,2 @TEXT
+sort|f|-t, -k3,3n -k2,2 @CSV
+sort|f|-g -k4,4 @TEXT
+sort|f|-m @SORTED @SORTED2
+sort|f|-c @SORTED

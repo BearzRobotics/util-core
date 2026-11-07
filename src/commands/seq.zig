@@ -255,6 +255,11 @@ fn decimalPath(ctx: cli.Context, out: *cli.Out, first: Dec, step: Dec, last: Dec
         width = @max(fmtDec(&b1, @divTrunc(f, drop), prec, 0).len, lw);
     }
 
+    if (prec == 0 and width == 0 and last.inf == 0 and st != 0 and fitsI64(f) and fitsI64(l) and fitsI64(st)) {
+        integerPath(out, @intCast(f), @intCast(l), @intCast(st), sep);
+        return true;
+    }
+
     var x = f;
     var buf: [64]u8 = undefined;
     var first_item = true;
@@ -267,6 +272,62 @@ fn decimalPath(ctx: cli.Context, out: *cli.Out, first: Dec, step: Dec, last: Dec
     }
     if (!first_item) out.writeByte('\n');
     return true;
+}
+
+fn fitsI64(v: i128) bool {
+    return v >= std.math.minInt(i64) and v <= std.math.maxInt(i64);
+}
+
+/// Integers without padding: plain 64-bit arithmetic and a two-digits-at-a-
+/// time formatter instead of the exact i128 decimal machinery (which divides
+/// 128-bit numbers once per digit). Output is identical to the general path.
+fn integerPath(out: *cli.Out, first: i64, last: i64, step: i64, sep: []const u8) void {
+    var x = first;
+    var any = false;
+    var buf: [24]u8 = undefined;
+    while (if (step > 0) x <= last else x >= last) {
+        if (any) out.write(sep);
+        any = true;
+        out.write(formatI64(&buf, x));
+        if (out.failed) return;
+        x = std.math.add(i64, x, step) catch break;
+    }
+    if (any) out.writeByte('\n');
+}
+
+const digit_pairs = blk: {
+    var t: [200]u8 = undefined;
+    for (0..100) |i| {
+        t[2 * i] = '0' + i / 10;
+        t[2 * i + 1] = '0' + i % 10;
+    }
+    break :blk t;
+};
+
+/// Decimal text of `v`, written backwards into the end of `buf`.
+fn formatI64(buf: *[24]u8, v: i64) []const u8 {
+    var m: u64 = @abs(v);
+    var i: usize = buf.len;
+    while (m >= 100) {
+        const r: usize = @intCast(m % 100);
+        m /= 100;
+        i -= 2;
+        buf[i] = digit_pairs[2 * r];
+        buf[i + 1] = digit_pairs[2 * r + 1];
+    }
+    if (m >= 10) {
+        i -= 2;
+        buf[i] = digit_pairs[2 * @as(usize, @intCast(m))];
+        buf[i + 1] = digit_pairs[2 * @as(usize, @intCast(m)) + 1];
+    } else {
+        i -= 1;
+        buf[i] = '0' + @as(u8, @intCast(m));
+    }
+    if (v < 0) {
+        i -= 1;
+        buf[i] = '-';
+    }
+    return buf[i..];
 }
 
 /// Format `v` (scaled by 10^prec) with `prec` decimals, zero padded to `width`.
@@ -470,4 +531,17 @@ test "fmtDec" {
     try std.testing.expectEqualStrings("-07", fmtDec(&b, -7, 0, 3));
     try std.testing.expectEqualStrings("0", fmtDec(&b, 0, 0, 0));
     try std.testing.expectEqualStrings("12.30", fmtDec(&b, 1230, 2, 0));
+}
+
+test "formatI64" {
+    var b: [24]u8 = undefined;
+    const t = std.testing;
+    try t.expectEqualStrings("0", formatI64(&b, 0));
+    try t.expectEqualStrings("7", formatI64(&b, 7));
+    try t.expectEqualStrings("10", formatI64(&b, 10));
+    try t.expectEqualStrings("-99", formatI64(&b, -99));
+    try t.expectEqualStrings("100", formatI64(&b, 100));
+    try t.expectEqualStrings("123456789", formatI64(&b, 123456789));
+    try t.expectEqualStrings("9223372036854775807", formatI64(&b, std.math.maxInt(i64)));
+    try t.expectEqualStrings("-9223372036854775808", formatI64(&b, std.math.minInt(i64)));
 }

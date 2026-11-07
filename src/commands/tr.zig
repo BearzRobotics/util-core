@@ -181,15 +181,32 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         };
         if (got == 0) break;
-        for (inbuf[0..got]) |b| {
-            if (delete and delete_set[b]) continue;
-            const c = table[b];
-            if (squeeze and squeeze_set[c]) {
-                if (prev == c) continue;
-                prev = c;
-            } else prev = -1;
-            out.writeByte(c);
+        // The result is built in place (never longer than the input) and
+        // written once per chunk instead of once per byte.
+        const chunk = inbuf[0..got];
+        var kept: usize = 0;
+        if (!delete and !squeeze) {
+            for (chunk) |*b| b.* = table[b.*];
+            kept = chunk.len;
+        } else if (!squeeze) {
+            // Branch-free compaction: always store, advance only when kept.
+            for (chunk) |b| {
+                chunk[kept] = table[b];
+                kept += @intFromBool(!delete_set[b]);
+            }
+        } else {
+            for (chunk) |b| {
+                if (delete and delete_set[b]) continue;
+                const c = table[b];
+                if (squeeze_set[c]) {
+                    if (prev == c) continue;
+                    prev = c;
+                } else prev = -1;
+                chunk[kept] = c;
+                kept += 1;
+            }
         }
+        out.write(chunk[0..kept]);
         if (out.failed) break;
     }
     out.flush();

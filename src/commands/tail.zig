@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
+const scan = @import("../bytes.zig");
 const sys = @import("../sys.zig");
 const count_arg = @import("../count_arg.zig");
 const Io = std.Io;
@@ -261,10 +262,9 @@ fn lastFromSeekable(ctx: cli.Context, out: *cli.Out, file: Io.File, cfg: Config,
             const want: usize = @intCast(@min(pos, buf.len));
             pos -= want;
             const got = try file.readPositionalAll(ctx.io, buf[0..want], pos);
-            var k = got;
-            while (k > 0) {
-                k -= 1;
-                if (buf[k] != cfg.delim) continue;
+            var hi = got; // look for delimiters in buf[0..hi]
+            while (scan.lastIndexOf(buf[0..hi], cfg.delim)) |k| {
+                hi = k;
                 if (!skipped_final and pos + k == size - 1) {
                     skipped_final = true;
                     continue;
@@ -303,7 +303,7 @@ fn lastFromStream(ctx: cli.Context, out: *cli.Out, file: Io.File, cfg: Config, b
             const held = pending.items.len - start;
             if (held > cfg.count) start += @intCast(held - cfg.count);
         } else {
-            for (buf[0..n]) |c| delims += @intFromBool(c == cfg.delim);
+            delims += scan.count(buf[0..n], cfg.delim);
             while (true) {
                 const partial: u64 = @intFromBool(pending.items.len > start and pending.items[pending.items.len - 1] != cfg.delim);
                 if (delims + partial <= cfg.count) break;

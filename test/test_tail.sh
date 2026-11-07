@@ -137,4 +137,28 @@ done
 
 cd /
 rm -rf "$W"
+printf "\n[ Backward scan across read windows ]\n"
+W="$(mktemp -d)"
+awk 'BEGIN { srand(21); for (i = 0; i < 60000; i++) { n = int(rand() * 25); s = ""; for (j = 0; j < n; j++) s = s "z"; print i s } }' > "$W/lines"
+head -c 65536 "$W/lines" > "$W/w1"
+head -c 65537 "$W/lines" > "$W/w1p"
+head -c 131072 "$W/lines" > "$W/w2"
+head -c 131073 "$W/lines" > "$W/w2p"
+{ head -c 200000 /dev/zero | tr '\0' 'q'; } > "$W/oneline"
+head -c 100000 /dev/zero | tr '\0' '\n' > "$W/onlynl"
+printf 'a\0b\0c\0' > "$W/nul"
+for f in lines w1 w1p w2 w2p oneline onlynl nul; do
+    for n in 0 1 2 10 100 1000 5000 20000 100000; do
+        run_cmp "$f -n $n"       -n $n "$W/$f"
+    done
+    for c in 1 100 65535 65536 65537 150000; do
+        run_cmp "$f -c $c"       -c $c "$W/$f"
+    done
+    run_cmp "$f -z -n 2"         -z -n 2 "$W/$f"
+    run_cmp "$f +3 lines"        -n +3 "$W/$f"
+done
+CMP_STDIN="$W/lines" run_cmp "stdin -n 50"     -n 50
+CMP_STDIN="$W/lines" run_cmp "stdin -c 5000"   -c 5000
+rm -rf "$W"
+
 print_summary

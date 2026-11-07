@@ -96,4 +96,45 @@ fi
 rm -rf /tmp/test_cat_syn /tmp/test_cat5.toy
 
 rm -f /tmp/test_cat1.txt /tmp/test_cat2.txt /tmp/test_cat3.txt /tmp/test_cat4.txt
+printf "\n[ Formatting options, differential ]\n"
+W="$(mktemp -d)"
+printf 'a\n\n\n\nb\n\nc' > "$W/blanks"
+printf '\n\n\nx\n' > "$W/leadblank"
+printf 'tab\there\n\t\nend  \n\xe9\x01\x7f\xff\x00z\n' > "$W/ctl"
+printf 'one\r\ntwo\r\n\r\n' > "$W/crlf"
+awk 'BEGIN { for (i = 0; i < 30000; i++) { if (i % 7 == 0) print ""; else print "line " i " of the text" } }' > "$W/big"
+: > "$W/empty"
+printf 'no newline' > "$W/nonl"
+for f in blanks leadblank ctl crlf big empty nonl; do
+    for o in -n -b -s -E -T -v -A -e -t -ns -bs -nE -nsE -bE -nET -nv -sT -nbs "-n -b" --number --number-nonblank --squeeze-blank --show-ends; do
+        run_cmp "$f $o"       $o "$W/$f"
+    done
+done
+run_cmp "-n two files continue numbering"  -n "$W/blanks" "$W/big"
+run_cmp "-b two files"                     -b "$W/blanks" "$W/leadblank"
+run_cmp "-s across file boundary"          -s "$W/leadblank" "$W/leadblank"
+run_cmp "-n file without newline then file" -n "$W/nonl" "$W/blanks"
+run_cmp "-E file without newline then file" -E "$W/nonl" "$W/nonl"
+CMP_STDIN="$W/big" run_cmp "-n stdin"      -n
+CMP_STDIN="$W/blanks" run_cmp "-ns stdin"  -ns -
+# A carriage return before a newline under -E, split across read chunks and files.
+{ head -c 65535 /dev/zero | tr '\0' 'x'; printf '\r\nafter\n'; } > "$W/crsplit"
+{ head -c 65534 /dev/zero | tr '\0' 'x'; printf '\r\r\nafter\n'; } > "$W/crsplit2"
+printf 'tail\r' > "$W/crend"
+printf '\nstart\n' > "$W/lfstart"
+printf '\rjust cr\n\r\n\r' > "$W/crmix"
+for o in -E -nE -A -ET -bE -sE; do
+    run_cmp "cr at chunk boundary $o"  $o "$W/crsplit"
+    run_cmp "cr then cr lf $o"         $o "$W/crsplit2"
+    run_cmp "cr at eof $o"             $o "$W/crend"
+    run_cmp "cr eof then lf file $o"   $o "$W/crend" "$W/lfstart"
+    run_cmp "cr eof then cr eof $o"    $o "$W/crend" "$W/crend"
+    run_cmp "cr mix $o"                $o "$W/crmix"
+done
+# Numbers wider than the 6-column field.
+awk 'BEGIN { for (i = 0; i < 1000050; i++) print "x" }' > "$W/million"
+r=$(ours -n "$W/million" | md5sum); g=$(gnu -n "$W/million" | md5sum)
+[ "$r" = "$g" ] && { PASS=$((PASS+1)); echo "PASS -n past 999999 lines"; } || { FAIL=$((FAIL+1)); echo "FAIL -n past 999999 lines"; }
+rm -rf "$W"
+
 print_summary

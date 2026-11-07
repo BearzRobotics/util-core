@@ -45,7 +45,7 @@ OPTIONS
 : Read NUL-separated input names from F (`-` for standard input).
 
 -S, -T, --parallel, --batch-size, --compress-program
-: Accepted and validated, then ignored: all input is held in memory and sorted on one thread.
+: Accepted and validated, then ignored: sorting holds all input in memory on one thread.
 
 --help, --version
 : Print help or version and exit.
@@ -68,7 +68,7 @@ See docs/compatibility/sort.md for details.
 
 LIMITATIONS
 - **Not implemented (rejected with exit status 2):** `-R/--random-sort`, `--random-source`, `-V/--version-sort` (GNU's filevercmp rules, including the file-extension handling, are specified in the manual but not yet ported), `--debug`.
-- Whole input is held in memory; there are no temporary files, so `-S`, `-T`, `--batch-size`, `--compress-program` have no effect and inputs larger than memory fail.
+- Sorting holds the whole input in memory; there are no temporary files, so `-S`, `-T`, `--batch-size`, `--compress-program` have no effect and inputs larger than memory fail. `-c`/`-C` and `-m` (to standard output, at most 128 inputs, standard input named at most once) stream one line per input instead.
 - Single-threaded; `--parallel=N` is validated and ignored.
 - Comparison is bytewise (C locale). LC_COLLATE, LC_CTYPE and LC_NUMERIC (thousands separators, multibyte characters) are not consulted; `-f` folds ASCII only.
 - `-g` parses with `double`; GNU uses `long double`, so values that differ only beyond 53 bits compare equal here. NaNs compare equal to each other; GNU orders them by representation.

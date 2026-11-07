@@ -11,7 +11,7 @@ GNU coreutils 9.7 (`/usr/bin/wc --version` on the development machine, installed
 - `-l, --lines`: Newline count.
 - `-w, --words`: Word count.
 - `-m, --chars`: UTF-8 code-point count (bytes that are not continuation bytes), independent of locale.
-- `-c, --bytes`: Byte count.
+- `-c, --bytes`: Byte count. Used alone on a regular file with a nonzero size it is taken from the file size without reading (GNU does the same). `-l` alone counts newlines with a vector loop. A directory operand prints a line of zeros plus the "Is a directory" error, as GNU does.
 - `-L, --max-line-length`: Longest line: tabs advance to multiples of 8; printable ASCII has width 1, all other bytes width 0 (C-locale behaviour).
 
 ## Known deviations and gaps

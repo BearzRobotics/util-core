@@ -9,6 +9,7 @@ test {
     _ = @import("lines.zig");
     _ = @import("tabs.zig");
     _ = @import("sys.zig");
+    _ = @import("bytes.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));

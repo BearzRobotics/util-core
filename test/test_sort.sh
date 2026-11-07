@@ -234,6 +234,64 @@ for o in -n -nr -nu -ns "-k1,1n -k1,1" "-nk1,1 -k2"; do
     run_cmp "bigrnd $o"      $o bigrnd
 done
 
+printf "\n[ Transformed keys (-f -d -i) and -g on larger input ]\n"
+awk 'BEGIN { srand(41); split("Alpha beta GAMMA delta-x Eps_il zeta! eta, THETA iota.k Kappa", w, " ")
+    for (i = 0; i < 4000; i++) {
+        n = 1 + int(rand() * 3); line = ""
+        for (j = 0; j < n; j++) line = line w[1 + int(rand() * 10)] (rand() < 0.3 ? int(rand() * 100) : "") (j < n - 1 ? (rand() < 0.5 ? " " : "\t") : "")
+        if (rand() < 0.1) line = " " line
+        if (rand() < 0.05) line = line "\001"
+        print line } }' > bigmix
+awk 'BEGIN { srand(42); split("1 -1 0 -0 +0 1e3 1E-2 .5 5. 0x10 0x1p3 inf -inf nan NaN abc 12abc 1.5e+2 007 -.5e1", w, " ")
+    for (i = 0; i < 4000; i++) print w[1 + int(rand() * 20)] (rand() < 0.3 ? " tail" i : "") }' > biggen
+for o in -f -d -i -fd -fi -di -fdi -fr -fu -du -iu -fs "-f -k1,1" "-f -k2" "-fk1,1 -k2" "-k1,1f -k1" "-t' ' -fk2" "-df -k1,1" "-ik1,1 -k2f" -fb "-fk2b"; do
+    eval run_cmp \"bigmix \$o\" $o bigmix
+done
+for o in -g -gr -gu -gs "-g -k1,1" "-gk1,1 -k2" "-k1,1g -k1" "-k2g"; do
+    eval run_cmp \"biggen \$o\" $o biggen
+done
+
+printf "\n[ Streaming -c and -m on larger inputs ]\n"
+awk 'BEGIN { srand(51); for (i = 0; i < 30000; i++) printf "key%05d %d\n", int(rand() * 20000), i }' | LC_ALL=C /usr/bin/sort > bs1
+awk 'BEGIN { srand(52); for (i = 0; i < 25000; i++) printf "key%05d %d\n", int(rand() * 20000), i }' | LC_ALL=C /usr/bin/sort > bs2
+awk 'BEGIN { srand(53); for (i = 0; i < 20000; i++) printf "key%05d %d\n", int(rand() * 20000), i }' | LC_ALL=C /usr/bin/sort > bs3
+for o in "" -u -s -r -c; do
+    run_cmp "merge big $o 2 files"   -m $o bs1 bs2
+    run_cmp "merge big $o 3 files"   -m $o bs1 bs2 bs3
+done
+run_cmp "merge big -k1,1"            -m -k1,1 bs1 bs2 bs3
+run_cmp "merge big -s -k1,1"         -m -s -k1,1 bs1 bs2 bs3
+run_cmp "merge same file thrice"     -m bs1 bs1 bs1
+run_cmp "merge -u same file thrice"  -m -u bs1 bs1 bs1
+run_cmp "merge with missing input"   -m bs1 nonexistent bs2
+run_cmp "merge a directory"          -m bs1 .
+CMP_STDIN=bs2 run_cmp "merge stdin and file" -m bs1 -
+# Two "-" operands share one descriptor; GNU interleaves buffer-sized blocks
+# between them for large input, which is not reproduced. Small input is stable:
+printf "k1\nk2\nk3\n" > small3
+CMP_STDIN=small3 run_cmp "merge two dashes (small)" -m - -
+CMP_STDIN=small3 run_cmp "merge dash dash file (small)" -m - - small3
+for o in -m "-m -u" "-m -r"; do
+    cp bs1 mo_g; cp bs1 mo_o
+    LC_ALL=C gnu $o -o mo_g bs1 bs2; ours $o -o mo_o bs1 bs2
+    if cmp -s mo_g mo_o; then PASS=$((PASS+1)); echo "PASS merge -o $o"; else FAIL=$((FAIL+1)); echo "FAIL merge -o $o"; fi
+done
+rm -f mo_g mo_o
+# -c: disorder far into a file, and on the very last line.
+{ cat bs1; printf 'aaa first-out-of-order\n'; cat bs2; } > cdis
+{ cat bs1; printf 'aaa last\n'; } > clast
+{ cat bs1; printf 'zzzzz no newline at the end'; } > cnonl
+{ cat bs1; tail -n 1 bs1; } > cdup
+for f in cdis clast cnonl cdup bs1; do
+    for o in -c -C -cu -cs; do
+        run_cmp "check $f $o"        $o $f
+    done
+done
+CMP_STDIN=cdis run_cmp "check stdin disorder" -c
+CMP_STDIN=bs1 run_cmp "check stdin sorted"    -c
+run_cmp "check missing"              -c nonexistent
+run_cmp "check directory"            -c .
+
 printf "\n[ Randomised differential runs ]\n"
 # Deterministic pseudo-random inputs: lines of 1-4 fields drawn from a small
 # vocabulary so that ties, blanks, signs, units and months all occur often.
@@ -257,7 +315,7 @@ gen() {
 r=0
 while [ $r -lt 12 ]; do
     gen $r 60 > rnd
-    for o in "" -r -u -s -n -nr -g -h -M -f -d -i -b "-k2" "-k2,2" "-k2n" "-k1,1 -k2n" "-k2,3r" "-k1.2,1.3" "-k2b,2" "-t: -k2" "-t: -k2n" "-t, -k1,2" "-nk2" "-n -k1 -k2" "-fk1,1 -k2n" "-ur -k2,2" "-su -k1,1" "-hr" "-Mk1" "-gk2" "-bk2n" "-dk2" "-ik1"; do
+    for o in "" -r -u -s -n -nr -g -h -M -f -d -i -b "-k2" "-k2,2" "-k2n" "-k1,1 -k2n" "-k2,3r" "-k1.2,1.3" "-k2b,2" "-t: -k2" "-t: -k2n" "-t, -k1,2" "-nk2" "-n -k1 -k2" "-fk1,1 -k2n" "-ur -k2,2" "-su -k1,1" "-hr" "-Mk1" "-gk2" "-fd" "-fi" "-dfk2" "-gr" "-fu" "-iu" "-gk2,2 -k1" "-fk2,2 -k1,1" "-bk2n" "-dk2" "-ik1"; do
         eval run_cmp \"rnd\$r \$o\" $o rnd
     done
     TAB="$(printf '\t')"
