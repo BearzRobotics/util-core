@@ -15,6 +15,7 @@ test {
     _ = @import("baseenc.zig");
     _ = @import("userdb.zig");
     _ = @import("paths.zig");
+    _ = @import("numparse.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));

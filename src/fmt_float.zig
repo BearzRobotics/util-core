@@ -27,8 +27,43 @@ pub const Spec = struct {
     conv: u8 = 'f',
 };
 
+/// A finite non-negative value as mant * 2^exp (mant == 0 for zero).
+const Dec = struct {
+    mant: u64,
+    exp: i64,
+
+    fn of64(v: f64) Dec {
+        const bits: u64 = @bitCast(@abs(v));
+        const frac = bits & ((1 << 52) - 1);
+        const be: i64 = @intCast((bits >> 52) & 0x7ff);
+        return .{ .mant = if (be == 0) frac else frac | (1 << 52), .exp = (if (be == 0) 1 else be) - 1075 };
+    }
+
+    fn of80(v: f80) Dec {
+        const bits: u80 = @bitCast(v);
+        const mant: u64 = @truncate(bits);
+        const be: i64 = @intCast((bits >> 64) & 0x7fff);
+        return .{ .mant = mant, .exp = (if (be == 0) 1 else be) - 16383 - 63 };
+    }
+
+    /// floor(log10(value)) up to one unit; callers correct it by retrying.
+    fn log10Estimate(d: Dec) i64 {
+        const e2 = d.exp + 63 - @as(i64, @clz(d.mant));
+        return @intFromFloat(@floor(@as(f64, @floatFromInt(e2)) * 0.30102999566398120));
+    }
+};
+
 /// Format `value` according to `spec`; the caller owns the returned slice.
 pub fn formatAlloc(gpa: Allocator, spec: Spec, value: f64) ![]u8 {
+    return formatAllocT(f64, gpa, spec, value);
+}
+
+/// Same for an x87 long double (what GNU printf and seq format with).
+pub fn formatAllocLong(gpa: Allocator, spec: Spec, value: f80) ![]u8 {
+    return formatAllocT(f80, gpa, spec, value);
+}
+
+fn formatAllocT(comptime T: type, gpa: Allocator, spec: Spec, value: T) ![]u8 {
     var body: std.ArrayList(u8) = .empty;
     defer body.deinit(gpa);
 
@@ -42,10 +77,10 @@ pub fn formatAlloc(gpa: Allocator, spec: Spec, value: f64) ![]u8 {
         finite = false;
         try body.appendSlice(gpa, if (upper) "INF" else "inf");
     } else {
-        try formatFinite(gpa, &body, spec, @abs(value));
+        try formatFinite(gpa, &body, spec, if (T == f80) Dec.of80(value) else Dec.of64(value));
     }
 
-    const sign: []const u8 = if (neg and !std.math.isNan(value)) "-" else if (spec.plus) "+" else if (spec.space) " " else "";
+    const sign: []const u8 = if (neg) "-" else if (spec.plus) "+" else if (spec.space) " " else "";
     const len = sign.len + body.items.len;
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
@@ -66,7 +101,7 @@ pub fn formatAlloc(gpa: Allocator, spec: Spec, value: f64) ![]u8 {
     return out.toOwnedSlice(gpa);
 }
 
-fn formatFinite(gpa: Allocator, body: *std.ArrayList(u8), spec: Spec, v: f64) !void {
+fn formatFinite(gpa: Allocator, body: *std.ArrayList(u8), spec: Spec, v: Dec) !void {
     const prec = spec.precision orelse 6;
     switch (spec.conv) {
         'f', 'F' => try fixed(gpa, body, v, prec, spec.alt),
@@ -106,13 +141,10 @@ fn stripZeros(body: *std.ArrayList(u8)) void {
 }
 
 /// round_half_even(v * 10^pow10) as a big integer.
-fn scaledRound(gpa: Allocator, v: f64, pow10: i64) !big.int.Managed {
+fn scaledRound(gpa: Allocator, v: Dec, pow10: i64) !big.int.Managed {
     // v = mant * 2^exp exactly.
-    const bits: u64 = @bitCast(v);
-    const frac = bits & ((1 << 52) - 1);
-    const be: i64 = @intCast((bits >> 52) & 0x7ff);
-    const mant: u64 = if (be == 0) frac else frac | (1 << 52);
-    const exp: i64 = (if (be == 0) 1 else be) - 1075;
+    const mant = v.mant;
+    const exp = v.exp;
 
     var num = try big.int.Managed.initSet(gpa, mant);
     defer num.deinit();
@@ -158,7 +190,7 @@ fn digitsOf(gpa: Allocator, n: *const big.int.Managed) ![]u8 {
     return n.toString(gpa, 10, .lower);
 }
 
-fn fixed(gpa: Allocator, body: *std.ArrayList(u8), v: f64, prec: usize, alt: bool) !void {
+fn fixed(gpa: Allocator, body: *std.ArrayList(u8), v: Dec, prec: usize, alt: bool) !void {
     var q = try scaledRound(gpa, v, @intCast(prec));
     defer q.deinit();
     const digits = try digitsOf(gpa, &q);
@@ -176,12 +208,12 @@ fn fixed(gpa: Allocator, body: *std.ArrayList(u8), v: f64, prec: usize, alt: boo
 }
 
 /// Appends d.ddde±XX and returns the decimal exponent printed.
-fn expo(gpa: Allocator, body: *std.ArrayList(u8), v: f64, prec: usize, alt: bool, upper: bool) !i64 {
+fn expo(gpa: Allocator, body: *std.ArrayList(u8), v: Dec, prec: usize, alt: bool, upper: bool) !i64 {
     var x: i64 = 0;
     var digits: []u8 = &.{};
     defer if (digits.len > 0) gpa.free(digits);
-    if (v != 0) {
-        x = @intFromFloat(@floor(std.math.log10(v)));
+    if (v.mant != 0) {
+        x = v.log10Estimate();
         while (true) {
             var q = try scaledRound(gpa, v, @as(i64, @intCast(prec)) - x);
             defer q.deinit();

@@ -4,17 +4,17 @@ Updated 2026-11-07. Every implemented command has a differential test suite
 against GNU coreutils 9.7 (`test/test_<cmd>.sh`), a compatibility record
 (`docs/compatibility/<cmd>.md`) and a manual page (`docs/manpages/<cmd>.md`).
 
-## Implemented (63)
+## Implemented (64)
 
 true false yes echo basename dirname cat wc dircolors pwd printenv sleep tee
 head tac tail seq mkdir rmdir cut paste uniq fold nl tr expand unexpand comm
 tsort sort md5sum sha1sum sha224sum sha256sum sha384sum sha512sum b2sum cksum
 sum base64 base32 basenc factor join uname arch nproc whoami logname hostid id
-groups tty users unlink link readlink realpath truncate ln chmod rm test [
+groups tty users unlink link readlink realpath truncate ln chmod rm test [ printf
 
 ## Not yet implemented
 
-- **Text:** fmt, pr, ptx, od, numfmt, printf, expr, shuf, split, csplit.
+- **Text:** fmt, pr, ptx, od, numfmt, expr, shuf, split, csplit.
 - **Files:** cp, mv, touch, mktemp, dd, install, shred, chown, chgrp, mkfifo,
   mknod, stat, df, du, sync, pathchk, ls, dir, vdir, chcon, runcon, chroot.
 - **Processes and environment:** env, timeout, nice, nohup, kill, stdbuf, stty,
