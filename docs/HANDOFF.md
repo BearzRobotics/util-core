@@ -14,8 +14,8 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
   the authority on what is done and what remains; update it whenever a
   command lands.
 - Remaining: the absorbed utilities find, grep, sed, locate, updatedb, tree.
-  (Oracles on the dev machine: find is bfs, grep is ugrep; locate and
-  updatedb are not installed.) After that: the stress-testing pass the owner
+  (Oracles on the dev machine: /usr/bin find 4.10.0, grep 3.12 and sed 4.9 are
+  all GNU; locate and updatedb are not installed.) After that: the stress-testing pass the owner
   asked for.
 - Unix-only utilities belong in util-unix and are not to be added here:
   chmod, id, groups, tty, uname, chown, chgrp, chcon, runcon, kill, stty,
