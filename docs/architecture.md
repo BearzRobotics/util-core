@@ -123,3 +123,15 @@ pinned hash. Zig-native API first; any C FFI is later and optional.
 - No CI; Windows and macOS are unverified.
 - Only the minimal `--help`/`--version` text exists; the version string is
   `0.0.0-dev`.
+
+## Shared helpers added with the process commands
+
+- `src/getopt.zig`: getopt_long-compatible parser (permutation, bundling,
+  unique-prefix long options, glibc diagnostics). New commands use it instead of
+  hand-written loops. `--help`/`--version` are built in.
+- `src/exec.zig`: runs another program. It searches PATH in the *modified*
+  environment (std.process.replace does not) and reports failures in the GNU
+  styles of env (`'x': No such file or directory`) and nohup/chroot/stdbuf
+  (`failed to run command 'x': ...`).
+- `src/help/<cmd>.txt`: `--help` text, generated from GNU by `tools/mkhelp.sh`
+  (without the GNU project footer) and embedded with `@embedFile`.

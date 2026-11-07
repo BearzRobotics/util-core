@@ -21,12 +21,12 @@ BIN_DIR="$(cd "$(dirname "$0")/../zig-out/bin" 2>/dev/null && pwd)"
 # every differential comparison below meaningless.
 # `test --version` is just the test "--version" (no output); `[` has the banner.
 GNU_PROBE="$UTIL"; [ "$UTIL" = test ] && GNU_PROBE='['
-if ! "/usr/bin/$GNU_PROBE" --version 2>/dev/null | head -n 1 | grep -q 'GNU'; then
-    echo "FATAL: /usr/bin/$UTIL is not a GNU implementation; refusing to run." >&2
+if ! "${GNU_BIN:-/usr/bin}/$GNU_PROBE" --version 2>/dev/null | head -n 1 | grep -q 'GNU'; then
+    echo "FATAL: ${GNU_BIN:-/usr/bin}/$UTIL is not a GNU implementation; refusing to run." >&2
     exit 2
 fi
 
-gnu() { "/usr/bin/$UTIL" "$@"; }
+gnu() { "${GNU_BIN:-/usr/bin}/$UTIL" "$@"; }
 ours() { "$BIN_DIR/$UTIL" "$@"; }
 
 run_test() {
@@ -203,4 +203,12 @@ print_summary() {
         fi
     fi
     printf "======================================\n"
+}
+# help_cmp: ours --help must equal GNU's --help minus the "GNU coreutils online
+# help" footer (that footer names the GNU project, which we are not).
+help_cmp() {
+    exp=$(PATH="${GNU_BIN:-/usr/bin}:/usr/bin" LC_ALL=C "$UTIL" --help | awk '/^GNU coreutils online help/ { exit } { lines[n++] = $0 } END { while (n > 0 && lines[n-1] == "") n--; for (i = 0; i < n; i++) print lines[i] }')
+    act=$(ours --help)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); printf "PASS --help text\n"
+    else FAIL=$((FAIL + 1)); printf "FAIL --help text\n"; fi
 }

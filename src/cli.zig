@@ -163,6 +163,13 @@ pub fn warn(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
 
+/// Print a line to stderr exactly as formatted (no command-name prefix).
+pub fn writeStderr(ctx: Context, comptime fmt: []const u8, args: anytype) void {
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, fmt ++ "\n", args) catch return;
+    Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
+}
+
 /// Print an informational line `<name>: <message>\n` to stdout (used by the
 /// -v/--verbose options of mkdir, rmdir, ...). Best effort.
 pub fn say(ctx: Context, comptime fmt: []const u8, args: anytype) void {

@@ -260,3 +260,261 @@ pub fn errnoText(e: std.os.linux.E) []const u8 {
         else => @tagName(e),
     };
 }
+
+// ----------------------------------------------------------------- signals
+// Signal names and dispositions by number, for env, nohup, timeout and kill.
+// std.Io has no signal API (see docs/decisions/0002-std-io-exceptions.md).
+
+/// Names of signals 1..31 on Linux (generic architectures), without "SIG".
+pub const signal_names = [_][]const u8{
+    "HUP",  "INT",  "QUIT", "ILL",   "TRAP", "ABRT",   "BUS", "FPE",
+    "KILL", "USR1", "SEGV", "USR2",  "PIPE", "ALRM",   "TERM", "STKFLT",
+    "CHLD", "CONT", "STOP", "TSTP",  "TTIN", "TTOU",   "URG", "XCPU",
+    "XFSZ", "VTALRM", "PROF", "WINCH", "POLL", "PWR",  "SYS",
+};
+
+/// Name of signal `n` (1..64, not 32/33 which libc reserves): the table above
+/// or RTMIN+k / RTMAX-k for real-time signals. `buf` holds the formatted name.
+pub fn signalName(n: u8, buf: *[16]u8) ?[]const u8 {
+    if (n >= 1 and n <= 31) return signal_names[n - 1];
+    if (n < 34 or n > 64) return null;
+    if (n == 34) return "RTMIN";
+    if (n == 64) return "RTMAX";
+    if (n <= 49) return std.fmt.bufPrint(buf, "RTMIN+{d}", .{n - 34}) catch null;
+    return std.fmt.bufPrint(buf, "RTMAX-{d}", .{64 - n}) catch null;
+}
+
+/// Signal number for a name ("INT", "SIGINT", case-insensitive) or a decimal
+/// number; null if unknown. "IO" is accepted as an alias of POLL.
+pub fn signalNumber(text: []const u8) ?u8 {
+    if (text.len == 0) return null;
+    if (std.ascii.isDigit(text[0])) {
+        const n = std.fmt.parseInt(u8, text, 10) catch return null;
+        return if (n <= 64) n else null;
+    }
+    var name = text;
+    if (name.len > 3 and std.ascii.eqlIgnoreCase(name[0..3], "SIG")) name = name[3..];
+    if (std.ascii.eqlIgnoreCase(name, "IO")) return 29;
+    if (std.ascii.eqlIgnoreCase(name, "CLD")) return 17;
+    for (signal_names, 1..) |n, i| if (std.ascii.eqlIgnoreCase(n, name)) return @intCast(i);
+    var n: u8 = 34;
+    while (n <= 64) : (n += 1) {
+        var buf: [16]u8 = undefined;
+        if (signalName(n, &buf)) |nm| if (std.ascii.eqlIgnoreCase(nm, name)) return n;
+    }
+    return null;
+}
+
+pub const Disposition = enum { default, ignore, block };
+
+/// Set the action for signal `num` (1..64) in this process; it is inherited
+/// across exec, which is how `env` and `nohup` use it.
+pub fn setSignal(num: u8, d: Disposition) bool {
+    if (comptime builtin.os.tag != .linux) return false;
+    const L = std.os.linux;
+    const sig: L.SIG = @enumFromInt(num);
+    // KILL and STOP can be blocked (silently ineffective) but not caught or ignored.
+    if ((num == 9 or num == 19) and d != .block) return false;
+    switch (d) {
+        .block => {
+            var set = L.sigemptyset();
+            L.sigaddset(&set, sig);
+            _ = L.sigprocmask(L.SIG.BLOCK, &set, null);
+            return true;
+        },
+        .default, .ignore => {
+            const act: L.Sigaction = .{
+                .handler = .{ .handler = if (d == .ignore) L.SIG.IGN else L.SIG.DFL },
+                .mask = L.sigemptyset(),
+                .flags = 0,
+            };
+            return L.errno(L.sigaction(sig, &act, null)) == .SUCCESS;
+        },
+    }
+}
+
+/// Unblock signal `num` (used before running a child that should see it).
+pub fn unblockSignal(num: u8) void {
+    if (comptime builtin.os.tag != .linux) return;
+    const L = std.os.linux;
+    var set = L.sigemptyset();
+    L.sigaddset(&set, @enumFromInt(num));
+    _ = L.sigprocmask(L.SIG.UNBLOCK, &set, null);
+}
+
+/// Current action of signal `num`: .ignore, .default, or null when a handler
+/// is installed (or on error). Also reports whether it is blocked.
+pub fn signalState(num: u8) struct { disp: ?Disposition, blocked: bool } {
+    if (comptime builtin.os.tag != .linux) return .{ .disp = .default, .blocked = false };
+    const L = std.os.linux;
+    const sig: L.SIG = @enumFromInt(num);
+    if (num == 9 or num == 19) return .{ .disp = .default, .blocked = false };
+    var old: L.Sigaction = undefined;
+    _ = L.sigaction(sig, null, &old);
+    var cur: L.sigset_t = undefined;
+    _ = L.sigprocmask(L.SIG.BLOCK, null, &cur);
+    const blocked = L.sigismember(&cur, sig);
+    const h = old.handler.handler;
+    const d: ?Disposition = if (h == L.SIG.IGN) .ignore else if (h == L.SIG.DFL or h == null) .default else null;
+    return .{ .disp = d, .blocked = blocked };
+}
+
+/// kill(2): send `sig` to `pid` (negative pid = process group). Returns the
+/// errno on failure.
+pub fn sendSignal(pid: i32, sig: u8) ?std.os.linux.E {
+    if (comptime builtin.os.tag != .linux) return .NOSYS;
+    const rc = std.os.linux.kill(pid, @enumFromInt(sig));
+    const e = std.os.linux.errno(rc);
+    return if (e == .SUCCESS) null else e;
+}
+
+// ------------------------------------------------- processes and descriptors
+// Linux system calls used by nohup, nice, timeout, sync, chroot, mkfifo and
+// mknod; none has a std.Io equivalent.
+
+const LX = std.os.linux;
+
+fn errOf(rc: usize) ?LX.E {
+    const e = LX.errno(rc);
+    return if (e == .SUCCESS) null else e;
+}
+
+/// dup2(2).
+pub fn dup2(old: i32, new: i32) ?LX.E {
+    return errOf(LX.dup2(old, new));
+}
+
+/// True when descriptor `fd` is open (fcntl F_GETFD succeeds).
+pub fn fdOpen(fd: i32) bool {
+    return LX.errno(LX.fcntl(fd, LX.F.GETFD, 0)) == .SUCCESS;
+}
+
+/// Open `path` for appending, creating it with `mode` if needed.
+pub fn openAppendMode(path: []const u8, mode: u32) !Io.File {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .APPEND = true,
+        .CLOEXEC = true,
+    }, mode);
+    return .{ .handle = fd, .flags = .{ .nonblocking = false } };
+}
+
+/// Scheduling priority ("niceness") of this process, -20..19.
+pub fn getNice() i32 {
+    // The raw syscall returns 20 - nice.
+    const rc = LX.syscall2(.getpriority, 0, 0);
+    return 20 - @as(i32, @intCast(@as(isize, @bitCast(rc))));
+}
+
+/// setpriority(PRIO_PROCESS, 0, nice).
+pub fn setNice(value: i32) ?LX.E {
+    return errOf(LX.syscall3(.setpriority, 0, 0, @bitCast(@as(isize, value))));
+}
+
+/// Make this process a process-group leader (setpgid(0, 0)).
+pub fn becomeGroupLeader() void {
+    _ = LX.syscall2(.setpgid, 0, 0);
+}
+
+/// chroot(2).
+pub fn chroot(path: [:0]const u8) ?LX.E {
+    return errOf(LX.chroot(path.ptr));
+}
+
+/// sync(2), fsync(2), fdatasync(2) and syncfs(2) on an open descriptor.
+pub const SyncKind = enum { all, data, file, fs };
+pub fn syncFile(fd: i32, kind: SyncKind) ?LX.E {
+    return switch (kind) {
+        .all => blk: {
+            LX.sync();
+            break :blk null;
+        },
+        .data => errOf(LX.fdatasync(fd)),
+        .file => errOf(LX.fsync(fd)),
+        .fs => errOf(LX.syncfs(fd)),
+    };
+}
+
+/// mknodat(2) relative to the working directory; `mode` includes the file
+/// type bits (S_IFIFO, S_IFCHR, ...) and `dev` is makedev(major, minor).
+pub fn mknod(path: [:0]const u8, mode: u32, dev: u64) ?LX.E {
+    return errOf(LX.mknodat(LX.AT.FDCWD, path.ptr, mode, @intCast(dev)));
+}
+
+/// Result of waiting for a child.
+pub const WaitResult = union(enum) { exited: u8, signaled: u8, none };
+
+/// waitpid(pid, WNOHANG or blocking).
+pub fn waitPid(pid: i32, block: bool) WaitResult {
+    var status: i32 = 0;
+    while (true) {
+        const rc = LX.waitpid(pid, &status, if (block) 0 else LX.W.NOHANG);
+        switch (LX.errno(rc)) {
+            .SUCCESS => {},
+            .INTR => continue,
+            else => return .none,
+        }
+        if (rc == 0) return .none;
+        const st: u32 = @bitCast(status);
+        if (LX.W.IFEXITED(st)) return .{ .exited = LX.W.EXITSTATUS(st) };
+        if (LX.W.IFSIGNALED(st)) return .{ .signaled = @intCast(@intFromEnum(LX.W.TERMSIG(st))) };
+        return .none;
+    }
+}
+
+/// An event source for `timeout`: waits until the child exits, a watched
+/// signal arrives, or the timeout passes. Signals are received through a
+/// signalfd so no handler (and no async-signal-safety concern) is needed.
+pub const Watcher = struct {
+    pidfd: i32,
+    sigfd: i32,
+
+    pub const Event = union(enum) { child_exited, signal: u8, timeout, failed };
+
+    /// Block `signals` and open descriptors for `pid` and for those signals.
+    pub fn init(pid: i32, signals: []const u8) ?Watcher {
+        var set = LX.sigemptyset();
+        for (signals) |s| LX.sigaddset(&set, @enumFromInt(s));
+        _ = LX.sigprocmask(LX.SIG.BLOCK, &set, null);
+        const sfd = LX.signalfd(-1, &set, LX.SFD.CLOEXEC);
+        if (LX.errno(sfd) != .SUCCESS) return null;
+        const pfd = LX.syscall2(.pidfd_open, @intCast(pid), 0);
+        if (LX.errno(pfd) != .SUCCESS) return null;
+        return .{ .pidfd = @intCast(pfd), .sigfd = @intCast(sfd) };
+    }
+
+    /// Wait up to `timeout_ns` (null = forever).
+    pub fn wait(w: Watcher, timeout_ns: ?u64) Event {
+        var fds = [_]LX.pollfd{
+            .{ .fd = w.pidfd, .events = LX.POLL.IN, .revents = 0 },
+            .{ .fd = w.sigfd, .events = LX.POLL.IN, .revents = 0 },
+        };
+        while (true) {
+            var ts: LX.timespec = undefined;
+            var tsp: ?*LX.timespec = null;
+            if (timeout_ns) |t| {
+                ts = .{ .sec = @intCast(t / std.time.ns_per_s), .nsec = @intCast(t % std.time.ns_per_s) };
+                tsp = &ts;
+            }
+            const rc = LX.ppoll(&fds, fds.len, tsp, null);
+            switch (LX.errno(rc)) {
+                .SUCCESS => {},
+                .INTR => continue,
+                else => return .failed,
+            }
+            if (rc == 0) return .timeout;
+            if (fds[1].revents & LX.POLL.IN != 0) {
+                var info: LX.signalfd_siginfo = undefined;
+                const n = LX.read(w.sigfd, @ptrCast(&info), @sizeOf(LX.signalfd_siginfo));
+                if (LX.errno(n) == .SUCCESS and n == @sizeOf(LX.signalfd_siginfo)) return .{ .signal = @intCast(info.signo) };
+            }
+            if (fds[0].revents & LX.POLL.IN != 0) return .child_exited;
+        }
+    }
+
+    pub fn deinit(w: Watcher) void {
+        _ = LX.close(w.pidfd);
+        _ = LX.close(w.sigfd);
+    }
+};

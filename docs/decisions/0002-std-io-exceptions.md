@@ -35,6 +35,12 @@ WASI.
 | `identity`, `supplementaryGroups` | `id`, `groups`, `whoami` | `getuid`/`geteuid`/`getgid`/`getegid`, `getgroups` | no process-identity API |
 | `uname` | `uname`, `arch`, `hostid` | the `uname(2)` system call | no host-information API |
 | `affinityCpus` | `nproc` | `sched_getaffinity` | no CPU-set API |
+| `signalNumber`, `signalName`, `setSignal`, `unblockSignal`, `signalState`, `sendSignal` | `env`, `nohup`, `timeout` | `rt_sigaction`, `rt_sigprocmask`, `kill` | no signal API |
+| `Watcher`, `waitPid`, `becomeGroupLeader` | `timeout` | `pidfd_open`, `signalfd`, `ppoll`, `wait4`, `setpgid` | `Child.wait` has no timeout and no signal events |
+| `dup2`, `fdOpen`, `openAppendMode` | `nohup` | `dup2`, `fcntl(F_GETFD)`, `openat(O_APPEND)` | no descriptor-level API |
+| `getNice`, `setNice` | `nice` | `getpriority`, `setpriority` | no scheduling API |
+| `syncFile` | `sync` | `sync`, `fsync`, `fdatasync`, `syncfs` | no flush API |
+| `chroot`, `mknod` | `chroot`, `mkfifo`, `mknod` | `chroot`, `mknodat` | no such API |
 | `fileStat`, `errnoText` | `test` (and later `stat`, `ls`, `du`, `find`, `chown`) | `statx(2)` for owner, group, device, block count and nanosecond times | `Io.File.Stat` has no uid, gid, device number or block count |
 
 One related use stays outside `sys.zig`: `cli.giveBack` calls

@@ -17,6 +17,8 @@ test {
     _ = @import("paths.zig");
     _ = @import("numparse.zig");
     _ = @import("posixre.zig");
+    _ = @import("getopt.zig");
+    _ = @import("exec.zig");
     inline for (commands.all) |name| {
         _ = commands.get(name);
         std.testing.refAllDecls(@field(commands.modules, name));
