@@ -137,7 +137,8 @@ run_cmp() {
 TEST_TMP="$(mktemp -d)"
 TMPDIR="$TEST_TMP"; export TMPDIR
 TMPDIR_CMP="$TEST_TMP/cmp"
-trap 'rm -rf "$TEST_TMP"' EXIT
+# Tests may leave read-only directories behind; make them removable first.
+trap 'chmod -R u+rwx "$TEST_TMP" 2>/dev/null; rm -rf "$TEST_TMP"' EXIT
 
 # run_tree DESC SETUP_CMD ARGS...
 # For commands that change the file system. SETUP_CMD (a shell snippet) runs in
@@ -146,11 +147,18 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 # (path, type, octal mode). Set TREE_UMASK to run both under a given umask.
 run_tree() {
     description="$1"; setup="$2"; shift 2
-    base="$(dirname "$TMPDIR_CMP")/tree"; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
+    base="$(dirname "$TMPDIR_CMP")/tree"; chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
     for x in g o; do (cd "$base/$x" && eval "$setup"); done
     (umask "${TREE_UMASK:-022}"; cd "$base/g" && LC_ALL=C gnu "$@" < /dev/null > "$base/g.out" 2> "$base/g.err"; echo $? > "$base/g.rc")
     (umask "${TREE_UMASK:-022}"; cd "$base/o" && ours "$@" < /dev/null > "$base/o.out" 2> "$base/o.err"; echo $? > "$base/o.rc")
-    for x in g o; do (cd "$base/$x" && find . -printf '%p %y %m\n' | sort > "$base/$x.tree"); norm_err < "$base/$x.err" > "$base/$x.err2"; norm_err < "$base/$x.out" > "$base/$x.out2"; done
+    # Trees are compared with symlink targets (%l); the two working directories
+    # differ only in their last component, which is masked in the output.
+    for x in g o; do
+        (cd "$base/$x" && find . -printf '%p %y %m %l\n' | sort > "$base/$x.tree")
+        rel="${base#/}"
+        norm_err < "$base/$x.err" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.err2"
+        norm_err < "$base/$x.out" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.out2"
+    done
     if cmp -s "$base/g.out2" "$base/o.out2" && cmp -s "$base/g.err2" "$base/o.err2" && cmp -s "$base/g.rc" "$base/o.rc" && cmp -s "$base/g.tree" "$base/o.tree"; then
         PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
     else

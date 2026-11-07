@@ -179,6 +179,8 @@ pub fn say(ctx: Context, comptime fmt: []const u8, args: anytype) void {
 /// Use with `{f}`: `cli.warn(ctx, "{f}: {s}", .{ cli.quote(name), msg })`.
 pub const Quoted = struct {
     name: []const u8,
+    /// GNU `quoteaf`: quote even when nothing needs it.
+    always: bool = false,
 
     pub fn format(q: Quoted, w: *Io.Writer) Io.Writer.Error!void {
         const name = q.name;
@@ -205,7 +207,12 @@ pub const Quoted = struct {
             }
         }
         needs = has_ctl or has_squote or has_other;
-        if (!needs) return w.writeAll(name);
+        if (!needs) {
+            if (!q.always) return w.writeAll(name);
+            try w.writeByte('\'');
+            try w.writeAll(name);
+            return w.writeByte('\'');
+        }
         if (!has_ctl and has_squote and !has_other and std.mem.indexOfAny(u8, name, "\"$`\\") == null) {
             try w.writeByte('"');
             try w.writeAll(name);
@@ -249,6 +256,12 @@ pub fn quote(name: []const u8) Quoted {
     return .{ .name = name };
 }
 
+/// Like `quote`, but a name that needs no quoting is still put in single
+/// quotes (GNU `quoteaf`, used in "cannot remove 'x'" style messages).
+pub fn quoteA(name: []const u8) Quoted {
+    return .{ .name = name, .always = true };
+}
+
 /// A string as GNU `quote()` prints it in messages such as "'abc' is not a
 /// valid number": single-quoted with C escapes (\\ for a backslash, \' for a
 /// quote, \a \b \t \n \v \f \r, and three-digit octal for other control
@@ -283,7 +296,8 @@ pub fn quoteC(text: []const u8) QuotedC {
 pub fn errText(err: anyerror) []const u8 {
     return switch (err) {
         error.FileNotFound => "No such file or directory",
-        error.AccessDenied, error.PermissionDenied => "Permission denied",
+        error.AccessDenied => "Permission denied",
+        error.PermissionDenied => "Operation not permitted",
         error.IsDir => "Is a directory",
         error.NotDir => "Not a directory",
         error.BrokenPipe => "Broken pipe",
