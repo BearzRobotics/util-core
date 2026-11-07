@@ -17,6 +17,9 @@ const Parser = struct {
     ctx: cli.Context,
     toks: []const [:0]const u8,
     pos: usize = 0,
+    /// Nonzero while parsing an operand that short-circuiting means is never
+    /// evaluated (GNU: no errors, no results; `0 & 1 / 0` is 0).
+    skip: u32 = 0,
     arena: std.heap.ArenaAllocator,
 
     fn alloc(p: *Parser) std.mem.Allocator {
@@ -47,8 +50,14 @@ const Parser = struct {
             if (!std.mem.eql(u8, t, "|")) break;
             p.pos += 1;
             if (p.pos >= p.toks.len) return p.missingAfter();
-            const r = try p.andExpr();
-            if (isNull(v)) v = r;
+            const live = isNull(v);
+            if (!live) p.skip += 1;
+            const r = p.andExpr() catch |e| {
+                if (!live) p.skip -= 1;
+                return e;
+            };
+            if (!live) p.skip -= 1;
+            if (live) v = if (isNull(r)) "0" else r;
         }
         return v;
     }
@@ -59,8 +68,14 @@ const Parser = struct {
             if (!std.mem.eql(u8, t, "&")) break;
             p.pos += 1;
             if (p.pos >= p.toks.len) return p.missingAfter();
-            const r = try p.cmpExpr();
-            if (isNull(v) or isNull(r)) v = "0";
+            const live = !isNull(v);
+            if (!live) p.skip += 1;
+            const r = p.cmpExpr() catch |e| {
+                if (!live) p.skip -= 1;
+                return e;
+            };
+            if (!live) p.skip -= 1;
+            if (!live or isNull(r)) v = "0";
         }
         return v;
     }
@@ -171,6 +186,8 @@ const Parser = struct {
             const s = try p.primary();
             const pos_v = try p.primary();
             const len_v = try p.primary();
+            // GNU: a non-integer POS or LENGTH gives the null string.
+            if (p.skip > 0 or !isInt(pos_v) or !isInt(len_v)) return "";
             const pos = try p.intOf(pos_v);
             const len = try p.intOf(len_v);
             return substr(p.alloc(), s, pos, len) catch return error.Fatal;
@@ -184,6 +201,7 @@ const Parser = struct {
     }
 
     fn arith(p: *Parser, op: u8, a: []const u8, b: []const u8) Error![]const u8 {
+        if (p.skip > 0) return "0";
         if (!isInt(a) or !isInt(b)) return p.fatal("non-integer argument", .{});
         const gpa = p.alloc();
         var x = big.Managed.init(gpa) catch return error.Fatal;
@@ -208,9 +226,10 @@ const Parser = struct {
     }
 
     fn regexMatch(p: *Parser, subject: []const u8, pattern: []const u8) Error![]const u8 {
+        if (p.skip > 0) return "0";
         const gpa = p.alloc();
         var c = posixre.compileMode(gpa, pattern, false, false, true) catch |e| switch (e) {
-            error.BadPattern => return p.fatal("Invalid regular expression", .{}),
+            error.BadPattern => return p.fatal("{s}", .{breError(pattern)}),
             else => return error.Fatal,
         };
         var searcher = c.re.searcher(gpa) catch return error.Fatal;
@@ -225,6 +244,45 @@ const Parser = struct {
         return std.fmt.allocPrint(gpa, "{d}", .{m.end() - m.start()}) catch error.Fatal;
     }
 };
+
+/// glibc's wording for the common malformed basic regular expressions;
+/// posixre only reports that the pattern is bad.
+fn breError(pat: []const u8) []const u8 {
+    var depth: i32 = 0;
+    var i: usize = 0;
+    while (i < pat.len) : (i += 1) {
+        switch (pat[i]) {
+            '\\' => {
+                if (i + 1 >= pat.len) return "Trailing backslash";
+                i += 1;
+                switch (pat[i]) {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if (depth < 0) return "Unmatched ) or \\)";
+                    },
+                    '{' => {
+                        const close = std.mem.indexOfPos(u8, pat, i, "\\}") orelse return "Unmatched \\{";
+                        _ = close;
+                        return "Invalid content of \\{\\}";
+                    },
+                    else => {},
+                }
+            },
+            '[' => {
+                var j = i + 1;
+                if (j < pat.len and pat[j] == '^') j += 1;
+                if (j < pat.len and pat[j] == ']') j += 1;
+                while (j < pat.len and pat[j] != ']') j += 1;
+                if (j >= pat.len) return "Unmatched [, [^, [:, [., or [=";
+                i = j;
+            },
+            else => {},
+        }
+    }
+    if (depth > 0) return "Unmatched ( or \\(";
+    return "Invalid regular expression";
+}
 
 fn substr(gpa: std.mem.Allocator, s: []const u8, pos: i128, len: i128) ![]const u8 {
     if (pos <= 0 or len <= 0 or pos > s.len) return "";
