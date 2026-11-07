@@ -41,7 +41,7 @@ WASI.
 | `getNice`, `setNice` | `nice` | `getpriority`, `setpriority` | no scheduling API |
 | `syncFile` | `sync` | `sync`, `fsync`, `fdatasync`, `syncfs` | no flush API |
 | `chroot`, `mknod` | `chroot`, `mkfifo`, `mknod` | `chroot`, `mknodat` | no such API |
-| `chownAt` | `chown`, `chgrp` | `fchownat` | `Io.File` has no owner-change API |
+| `chownAt` | `cp`, `mv`, `install` | `fchownat` | `Io.File` has no owner-change API |
 | `fileStat`, `errnoText` | `test` (and later `stat`, `ls`, `du`, `find`, `chown`) | `statx(2)` for owner, group, device, block count and nanosecond times | `Io.File.Stat` has no uid, gid, device number or block count |
 
 One related use stays outside `sys.zig`: `cli.giveBack` calls

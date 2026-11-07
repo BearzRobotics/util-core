@@ -38,7 +38,7 @@ src/
                      (cut, paste, uniq, fold-style filters, nl)
   count_arg.zig      [+|-]NUM[suffix] parsing for head/tail (GNU "Block size")
   fmt_float.zig      exact C printf %e/%f/%g for doubles (seq; later printf)
-  mode.zig           chmod/mkdir -m mode parsing (octal and symbolic)
+  mode.zig           mkdir/mkfifo/mknod -m mode parsing (octal and symbolic)
   commands.zig       registry: `all` (names) + `modules` (imports) + get/find
   commands/<name>.zig  one frontend per command: pub fn main(ctx) u8
   exe.zig            entry point of an individual executable

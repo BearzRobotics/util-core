@@ -7,7 +7,7 @@ const std = @import("std");
 const cli = @import("cli.zig");
 
 /// Every command this source tree knows about.
-pub const all = [_][]const u8{ "true", "false", "yes", "echo", "basename", "dirname", "cat", "wc", "dircolors", "pwd", "printenv", "sleep", "tee", "head", "tac", "tail", "seq", "mkdir", "rmdir", "cut", "paste", "uniq", "fold", "nl", "tr", "expand", "unexpand", "comm", "tsort", "sort", "cksum", "md5sum", "sha1sum", "sha224sum", "sha256sum", "sha384sum", "sha512sum", "b2sum", "sum", "base64", "base32", "basenc", "factor", "join", "uname", "arch", "nproc", "whoami", "logname", "hostid", "id", "groups", "tty", "users", "unlink", "link", "readlink", "realpath", "truncate", "ln", "chmod", "rm", "test", "[", "printf", "expr", "env", "nice", "nohup", "timeout", "sync", "chroot", "stdbuf", "pathchk", "mkfifo", "mknod", "mktemp", "split", "od", "fmt", "shuf", "numfmt", "pr", "ptx", "csplit", "date", "touch", "stat", "ls", "dir", "vdir", "chown", "chgrp", "du", "df" };
+pub const all = [_][]const u8{ "true", "false", "yes", "echo", "basename", "dirname", "cat", "wc", "dircolors", "pwd", "printenv", "sleep", "tee", "head", "tac", "tail", "seq", "mkdir", "rmdir", "cut", "paste", "uniq", "fold", "nl", "tr", "expand", "unexpand", "comm", "tsort", "sort", "cksum", "md5sum", "sha1sum", "sha224sum", "sha256sum", "sha384sum", "sha512sum", "b2sum", "sum", "base64", "base32", "basenc", "factor", "join", "arch", "nproc", "whoami", "logname", "hostid", "users", "unlink", "link", "readlink", "realpath", "truncate", "ln", "rm", "test", "[", "printf", "expr", "env", "nice", "nohup", "timeout", "sync", "chroot", "stdbuf", "pathchk", "mkfifo", "mknod", "mktemp", "split", "od", "fmt", "shuf", "numfmt", "pr", "ptx", "csplit", "date", "touch", "stat", "ls", "dir", "vdir", "du", "df", "cp" };
 
 /// Command source files, keyed by command name. @import needs a string
 /// literal, so each command is listed here explicitly. Importing a file only
@@ -58,15 +58,11 @@ pub const modules = .{
     .basenc = @import("commands/basenc.zig"),
     .factor = @import("commands/factor.zig"),
     .join = @import("commands/join.zig"),
-    .uname = @import("commands/uname.zig"),
     .arch = @import("commands/arch.zig"),
     .nproc = @import("commands/nproc.zig"),
     .whoami = @import("commands/whoami.zig"),
     .logname = @import("commands/logname.zig"),
     .hostid = @import("commands/hostid.zig"),
-    .id = @import("commands/id.zig"),
-    .groups = @import("commands/groups.zig"),
-    .tty = @import("commands/tty.zig"),
     .users = @import("commands/users.zig"),
     .unlink = @import("commands/unlink.zig"),
     .link = @import("commands/link.zig"),
@@ -74,7 +70,6 @@ pub const modules = .{
     .realpath = @import("commands/realpath.zig"),
     .truncate = @import("commands/truncate.zig"),
     .ln = @import("commands/ln.zig"),
-    .chmod = @import("commands/chmod.zig"),
     .rm = @import("commands/rm.zig"),
     .@"test" = @import("commands/test.zig"),
     .@"[" = @import("commands/bracket.zig"),
@@ -105,10 +100,9 @@ pub const modules = .{
     .ls = @import("commands/ls.zig"),
     .dir = @import("commands/dir.zig"),
     .vdir = @import("commands/vdir.zig"),
-    .chown = @import("commands/chown.zig"),
-    .chgrp = @import("commands/chgrp.zig"),
     .du = @import("commands/du.zig"),
     .df = @import("commands/df.zig"),
+    .cp = @import("commands/cp.zig"),
 };
 
 /// Frontend for a command known at comptime.
