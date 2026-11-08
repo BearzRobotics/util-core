@@ -1,4 +1,4 @@
-# Handoff for the next Claude (written 2026-11-07)
+# Handoff for the next Claude (updated 2026-11-08)
 
 ## What this project is
 A Zig 0.17.1 reimplementation of GNU coreutils 9.7 (plus the absorbed
@@ -18,9 +18,30 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
   tree 2.3.1 is /usr/bin/tree (`ORACLE_OK=1`). locate/updatedb/xargs oracles are
   built from the findutils-4.10.0 tarball by `tools/build-gnu-findutils.sh` into
   `~/.cache/util-core/findutils` (suites skip if absent; `GNU_BIN` overrides).
-- Next: the stress-testing pass the owner asked for (large inputs, hostile
-  option combinations, low-memory/full-disk behaviour, fuzzing the regex
-  translator and the parsers against the GNU binaries).
+- Release: GitHub release `v0.0.0` carries `util-core-0.0.0-vendored.tar.gz`
+  (main at d823cf7 plus regex-zig copied to `vendor/regex`, `build.zig.zon`
+  pointing at the copy; builds offline). To cut another: `git archive` HEAD into
+  a staging dir, copy `zig-pkg/regex-*` to `vendor/regex`, change the zon
+  dependency to `.path = "vendor/regex"` and add `"vendor"` to `.paths`, build it
+  with an empty `ZIG_GLOBAL_CACHE_DIR`, tar it, `gh release create`.
+- Stress pass (started 2026-11-08): 58 MB inputs through the core filters,
+  grep/sed regexes, pathological regexes, write failures to /dev/full, SIGPIPE,
+  and option fuzzing against GNU for most commands. Found and fixed: write
+  errors (shared `cli.finish`/`writeErrorWarn` hook: message plus exit status),
+  invalid-option wording, `rm`/`dd` edge cases, glibc's mktime offset hint
+  (`tz.zig`). Added: sort -V/-R/--debug/+POS, tail -F/--follow=name/--retry,
+  rm --one-file-system. Not yet done: option fuzzing for the file-modifying
+  commands (cp, mv, ln, install, mkdir, touch, split, csplit, shred, truncate),
+  low-memory behaviour, fuzzing the regex translator (`posixre.zig`) against
+  GNU grep/sed with random patterns, and a multicall-binary pass of every suite
+  (suites test the per-command binaries only).
+- Latest full run (`sh test/run_all_tests.sh`, ~25 min, 54129 cases): all pass
+  except one date case that depended on today's date, since fixed. Occasional
+  flakes: `install -C times` (timing). Run it with `TMPDIR` on a roomy disk.
+- Test infrastructure notes: tail follow tests start background drivers and use
+  `timeout 2.5` per run; rm --one-file-system tests need `unshare -rm` (they skip
+  without it); sort -R tests use a fixed `--random-source` (GNU hashes the key
+  without the trailing NUL in C/POSIX locales, with it otherwise).
 - Unix-only utilities belong in util-unix and are not to be added here:
   chmod, id, groups, tty, uname, chown, chgrp, chcon, runcon, kill, stty,
   who, pinky, hostname, uptime.
@@ -95,11 +116,18 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
   sets its "unpairable seen" flag AFTER advancing; `test` only treats
   `--help/--version` specially for `[`; `base32` rejects a padded short tail
   without output; `chmod` re-checks umask-protected removals.
+- `/tmp` fills up; leftover `sed 'G;D'` processes from an earlier session
+  (pids 2990174 2990175 3008569) may still be spinning: the owner has to kill
+  them (`! kill ...`), the classifier denied it.
 - Leave unrelated user files alone (`/tmp/util-unix-bench`, the owner's other
   projects). `Readme.md` was removed at the owner's request.
 
 ## Known gaps (also in each compatibility doc)
-sort: no external merge. factor: no elliptic-curve method
+sort: no external merge, --debug is C-locale only. tail: --max-unchanged-stats
+rejected; following polls instead of using inotify (GNU says "has been replaced"
+where we say "has become inaccessible"/"has appeared" for a just-appeared file
+that is deleted and re-created). rm: --preserve-root=all does not compare
+devices. factor: no elliptic-curve method
 (very hard numbers are reported, not factored). users: no systemd-logind
 fallback. printf/seq: f80
 approximations of `long double` beyond x87 range. Locale: C everywhere except sed, grep, find, tree and locate (UTF-8 vs C only).
