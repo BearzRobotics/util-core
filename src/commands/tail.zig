@@ -2,10 +2,9 @@
 //! References: GNU coreutils manual "tail invocation" (9.7); POSIX.1-2024 tail.
 //!
 //! Implemented: -n/-c with [+]NUM[suffix], -q, -v, -z, long options, the
-//! obsolete `-NUM[bcl][f]` first-argument form, and -f/--follow=descriptor with -s and
-//! --pid for regular files. Not implemented (rejected with an error):
-//! -F, --follow=name, --retry, --max-unchanged-stats, POSIX -r (GNU tail has
-//! no -r either).
+//! obsolete `-NUM[bcl][f]` first-argument form, and -f/--follow=descriptor|name,
+//! -F, --retry, -s, --pid for regular files (by polling). Not implemented (rejected
+//! with an error): --max-unchanged-stats.
 //!
 //! Strategy: a regular file named on the command line is read backwards from
 //! its end; other inputs (stdin, pipes) are streamed while holding only the
@@ -27,6 +26,8 @@ const Config = struct {
     from_start: bool = false,
     delim: u8 = '\n',
     follow: bool = false,
+    follow_name: bool = false,
+    retry: bool = false,
     sleep_seconds: f64 = 1.0,
     pid: ?i32 = null,
 };
@@ -95,13 +96,13 @@ pub fn main(ctx: cli.Context) u8 {
                             cli.warn(ctx, "invalid argument '{s}' for '--follow'\nValid arguments are:\n  - 'descriptor'\n  - 'name'\nTry '{s} --help' for more information.", .{ how, ctx.name });
                             return 1;
                         }
-                        if (std.mem.startsWith(u8, "name", how)) return unsupported(ctx, "--follow=name");
-                    }
+                        cfg.follow_name = std.mem.startsWith(u8, "name", how);
+                    } else cfg.follow_name = false;
                 },
                 3, 4 => header = .never,
                 5 => header = .always,
                 6 => cfg.delim = 0,
-                9 => return unsupported(ctx, "--retry"),
+                9 => cfg.retry = true,
                 11 => return help(ctx),
                 else => return if (cli.printVersion(ctx)) 0 else 1,
             }
@@ -112,8 +113,15 @@ pub fn main(ctx: cli.Context) u8 {
             'q' => header = .never,
             'v' => header = .always,
             'z' => cfg.delim = 0,
-            'f' => cfg.follow = true,
-            'F' => return unsupported(ctx, "-F"),
+            'f' => {
+                cfg.follow = true;
+                cfg.follow_name = false;
+            },
+            'F' => {
+                cfg.follow = true;
+                cfg.follow_name = true;
+                cfg.retry = true;
+            },
             '0'...'9' => {
                 // GNU: digits are only valid in the obsolete first-argument form.
                 cli.warn(ctx, "option used in invalid context -- {c}", .{a[j]});
@@ -142,6 +150,16 @@ pub fn main(ctx: cli.Context) u8 {
 
     const stdin_only = [_][]const u8{"-"};
     const inputs: []const []const u8 = if (files.items.len == 0) &stdin_only else files.items;
+    if (!cfg.follow) {
+        if (cfg.retry) cli.warn(ctx, "warning: --retry ignored; --retry is useful only when following", .{});
+        if (cfg.pid != null) cli.warn(ctx, "warning: PID ignored; --pid=PID is useful only when following", .{});
+    } else if (cfg.retry and !cfg.follow_name) {
+        cli.warn(ctx, "warning: --retry only effective for the initial open", .{});
+    }
+    if (cfg.follow and cfg.follow_name) for (inputs) |nm| if (std.mem.eql(u8, nm, "-")) {
+        cli.warn(ctx, "cannot follow '-' by name", .{});
+        return 1;
+    };
     const show_header = switch (header) {
         .always => true,
         .never => false,
@@ -153,15 +171,22 @@ pub fn main(ctx: cli.Context) u8 {
     var first = true;
     var followed: std.ArrayList(Followed) = .empty;
     defer followed.deinit(ctx.gpa);
-    defer for (followed.items) |f| cli.closeInput(ctx.io, f.file);
+    defer for (followed.items) |f| if (f.file) |fl| cli.closeInput(ctx.io, fl);
 
     var buf: [64 * 1024]u8 = undefined;
     for (inputs) |path| {
         const file = cli.openInput(ctx.io, path) catch |e| {
             if (e == error.IsDir) {
                 if (show_header) printHeader(&out, path, &first);
+                out.flush();
                 cli.warn(ctx, "error reading '{s}': Is a directory", .{path});
-            } else cli.warn(ctx, "cannot open '{s}' for reading: {s}", .{ path, cli.errText(e) });
+            } else {
+                out.flush();
+                cli.warn(ctx, "cannot open '{s}' for reading: {s}", .{ path, cli.errText(e) });
+                if (cfg.follow and cfg.retry and e != error.IsDir) {
+                    followed.append(ctx.gpa, .{ .file = null, .path = path, .pos = 0 }) catch return oom(ctx);
+                }
+            }
             status = 1;
             continue;
         };
@@ -177,7 +202,15 @@ pub fn main(ctx: cli.Context) u8 {
             continue;
         };
         if (cfg.follow and is_regular) {
-            followed.append(ctx.gpa, .{ .file = file, .path = path, .pos = end }) catch return oom(ctx);
+            var fe: std.os.linux.E = .SUCCESS;
+            const fst = sys.fstatFd(file.handle, &fe);
+            followed.append(ctx.gpa, .{
+                .file = file,
+                .path = path,
+                .pos = end,
+                .dev = if (fst) |f| (@as(u64, f.dev_major) << 32) | f.dev_minor else 0,
+                .ino = if (fst) |f| f.ino else 0,
+            }) catch return oom(ctx);
             keep = true;
         }
     }
@@ -186,13 +219,26 @@ pub fn main(ctx: cli.Context) u8 {
         cli.writeErrorWarn(ctx);
         return 1;
     }
+    if (cfg.follow and followed.items.len == 0) {
+        if (!cfg.retry or !cfg.follow_name) {
+            cli.warn(ctx, "no files remaining", .{});
+            return 1;
+        }
+    }
     if (cfg.follow and followed.items.len > 0) {
         return followLoop(ctx, &out, followed.items, cfg, show_header or inputs.len > 1, header != .never, &buf, status);
     }
     return status;
 }
 
-const Followed = struct { file: Io.File, path: []const u8, pos: u64 };
+const Followed = struct {
+    file: ?Io.File,
+    path: []const u8,
+    pos: u64,
+    dev: u64 = 0,
+    ino: u64 = 0,
+    ignored: bool = false,
+};
 
 fn printHeader(out: *cli.Out, path: []const u8, first: *bool) void {
     if (!first.*) out.writeByte('\n');
@@ -323,23 +369,56 @@ fn lastFromStream(ctx: cli.Context, out: *cli.Out, file: Io.File, cfg: Config, b
     return total;
 }
 
-/// --follow=descriptor for regular files: poll for growth.
+/// --follow=descriptor / --follow=name: poll for growth (and, by name, for
+/// removal, replacement and re-creation).
 fn followLoop(ctx: cli.Context, out: *cli.Out, files: []Followed, cfg: Config, multiple: bool, headers_ok: bool, buf: []u8, status: u8) u8 {
     var last_printed: ?usize = if (files.len > 0) files.len - 1 else null;
-    // After the initial pass the file whose tail was printed last is current.
     const interval_ns: i96 = @intFromFloat(@min(cfg.sleep_seconds, 1e9) * std.time.ns_per_s);
     var exit_status = status;
     while (true) {
         var activity = false;
         for (files, 0..) |*f, idx| {
-            const size = f.file.length(ctx.io) catch continue;
+            if (f.ignored) continue;
+            if (cfg.follow_name or f.file == null) {
+                var se: std.os.linux.E = .SUCCESS;
+                const st = sys.fileStat(f.path, true, &se);
+                if (st == null) {
+                    if (f.file) |fl| {
+                        out.flush();
+                        if (cfg.retry) {
+                            cli.warn(ctx, "'{s}' has become inaccessible: {s}", .{ f.path, sys.errnoText(se) });
+                        } else cli.warn(ctx, "{s}: {s}", .{ f.path, sys.errnoText(se) });
+                        cli.closeInput(ctx.io, fl);
+                        f.file = null;
+                        f.ignored = !cfg.retry;
+                        exit_status = if (cfg.retry) exit_status else 1;
+                    }
+                    continue;
+                }
+                const dev = (@as(u64, st.?.dev_major) << 32) | st.?.dev_minor;
+                const fresh = f.file == null;
+                if (fresh or (cfg.follow_name and (dev != f.dev or st.?.ino != f.ino))) {
+                    const nf = cli.openInput(ctx.io, f.path) catch continue;
+                    out.flush();
+                    if (f.file) |old| cli.closeInput(ctx.io, old);
+                    if (fresh) {
+                        cli.warn(ctx, "'{s}' has appeared;  following new file", .{f.path});
+                    } else cli.warn(ctx, "'{s}' has been replaced;  following new file", .{f.path});
+                    f.file = nf;
+                    f.pos = 0;
+                    f.dev = dev;
+                    f.ino = st.?.ino;
+                }
+            }
+            const fl = f.file orelse continue;
+            const size = fl.length(ctx.io) catch continue;
             if (size < f.pos) {
                 out.flush();
                 cli.warn(ctx, "{s}: file truncated", .{f.path});
                 f.pos = 0;
             }
             while (f.pos < size) {
-                const n = f.file.readPositional(ctx.io, &.{buf}, f.pos) catch |e| {
+                const n = fl.readPositional(ctx.io, &.{buf}, f.pos) catch |e| {
                     out.flush();
                     cli.warn(ctx, "error reading '{s}': {s}", .{ f.path, cli.errText(e) });
                     exit_status = 1;
@@ -360,6 +439,14 @@ fn followLoop(ctx: cli.Context, out: *cli.Out, files: []Followed, cfg: Config, m
         out.flush();
         if (out.failed) {
             cli.writeErrorWarn(ctx);
+            return 1;
+        }
+        var live = false;
+        for (files) |f| if (!f.ignored) {
+            live = true;
+        };
+        if (!live) {
+            cli.warn(ctx, "no files remaining", .{});
             return 1;
         }
         if (!activity) if (cfg.pid) |pid| if (!sys.processAlive(pid)) return exit_status;

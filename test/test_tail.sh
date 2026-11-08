@@ -1,7 +1,6 @@
 #!/bin/sh
 # tail: differential tests against GNU tail. References: GNU manual "tail
-# invocation"; POSIX.1-2024 tail. -F, --follow=name and --retry are not
-# implemented and are not tested here.
+# invocation"; POSIX.1-2024 tail. --max-unchanged-stats is not implemented.
 UTIL="tail"
 . "$(dirname "$0")/testlib.sh"
 
@@ -129,11 +128,35 @@ sleep 0.5; kill $spid; wait $spid 2>/dev/null; sleep 0.5
 kill -0 $tpid 2>/dev/null && { FAIL=$((FAIL + 1)); echo "FAIL --pid did not end tail"; kill $tpid; } || { PASS=$((PASS + 1)); echo "PASS --pid ends tail after the process dies"; }
 wait 2>/dev/null
 
-printf "\n[ Not implemented: clear errors ]\n"
-for o in -F --retry --follow=name; do
-    "$BIN_DIR/tail" $o n25 >/dev/null 2>&1; rc=$?
-    [ $rc -ne 0 ] && { PASS=$((PASS + 1)); echo "PASS $o rejected (rc=$rc)"; } || { FAIL=$((FAIL + 1)); echo "FAIL $o accepted"; }
-done
+printf "\n[ -F / --follow=name / --retry ]\n"
+# scen DESC "tail args" "driver commands": run GNU and ours in fresh dirs with the same
+# background driver, compare stdout, normalised stderr and exit status.
+scen() {
+    d="$1"; a="$2"; drv="$3"
+    for t in gnu ours; do
+        D="$W/sc.$t"; rm -rf "$D"; mkdir "$D"; (cd "$D" && printf 'a1\na2\na3\n' > f && printf 'b1\n' > g)
+        if [ $t = gnu ]; then bin=/usr/bin/tail; else bin="$BIN_DIR/tail"; fi
+        ( cd "$D" && { ( eval "$drv" ) & LC_ALL=C timeout 2.5 $bin $a > out 2> err; echo "rc=$?" >> out; wait; } )
+        sed "s#$bin#tail#g; s#^tail: #E: #" "$D/err" > "$D/err2"
+    done
+    if cmp -s "$W/sc.gnu/out" "$W/sc.ours/out" && cmp -s "$W/sc.gnu/err2" "$W/sc.ours/err2"; then PASS=$((PASS + 1)); echo "PASS $d"
+    else FAIL=$((FAIL + 1)); echo "FAIL $d"; diff "$W/sc.gnu/out" "$W/sc.ours/out"; diff "$W/sc.gnu/err2" "$W/sc.ours/err2"; fi
+}
+scen "-F appends, remove, re-create" "-F -s 0.2 f" "sleep 0.5; echo a4 >> f; sleep 0.5; rm f; sleep 0.5; echo n1 > f; sleep 0.5; echo n2 >> f"
+scen "-F replaced and truncated" "-F -s 0.2 f" "sleep 0.5; echo r1 > f.new; mv f.new f; sleep 0.5; : > f; sleep 0.5; echo t >> f"
+scen "--follow=name removal ends" "--follow=name -s 0.2 f" "sleep 0.5; rm f"
+scen "-f missing file" "-f -s 0.2 nofile" "sleep 0.3"
+scen "-F two files, headers" "-F -s 0.2 f g" "sleep 0.5; echo a4 >> f; sleep 0.4; echo b2 >> g; sleep 0.4; echo a5 >> f"
+scen "-F two files, -q" "-F -s 0.2 -q f g" "sleep 0.5; echo a4 >> f; sleep 0.4; echo b2 >> g"
+scen "--follow=name --retry" "--follow=name --retry -s 0.2 f" "sleep 0.5; echo x >> f"
+scen "-f --retry warns" "-f --retry -s 0.2 f" "sleep 0.5; echo x >> f"
+scen "--follow=name on stdin" "--follow=name -s 0.2 -" "sleep 0.3"
+scen "--retry without -f" "--retry f" "sleep 0.1"
+scen "--pid without -f" "--pid=1 f" "sleep 0.1"
+scen "--pid and --retry without -f" "--pid=1 --retry f" "sleep 0.1"
+scen "-F existing and missing" "-F -s 0.2 f nofile" "sleep 0.5; echo z > nofile"
+scen "-F -n0" "-F -n0 -s 0.2 f" "sleep 0.4; echo q >> f"
+scen "-f then removal keeps following" "-f -s 0.2 f" "sleep 0.5; echo q >> f; sleep 0.4; rm f; sleep 0.3"
 
 cd /
 rm -rf "$W"

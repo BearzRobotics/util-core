@@ -16,7 +16,8 @@ GNU coreutils 9.7 (`/usr/bin/tail --version` on the development machine, install
 - `-q, --quiet, --silent`: Never print file name headers.
 - `-v, --verbose`: Always print file name headers.
 - `-z, --zero-terminated`: Lines end with NUL instead of newline.
-- `-F, --follow=name, --retry, --max-unchanged-stats`: NOT IMPLEMENTED: rejected with an error.
+- `-F, --follow=name, --retry`: Follow by name: report removal, replacement, truncation and re-creation (polling every -s seconds); -F is --follow=name --retry.
+- `--max-unchanged-stats`: NOT IMPLEMENTED: rejected with an error.
 - `--help, --version`: Print help or version and exit.
 
 ## Supported behaviour
@@ -28,7 +29,7 @@ GNU coreutils 9.7 (`/usr/bin/tail --version` on the development machine, install
 
 ## Known deviations and gaps
 
-- Not implemented: -F, --follow=name, --retry, --max-unchanged-stats (rejected with an error).
+- Not implemented: --max-unchanged-stats (rejected with an error). Following is done by polling, not inotify, so changes that happen and revert between two polls are not reported; GNU's inotify mode additionally says `has been replaced` instead of `has become inaccessible`/`has appeared` when a file that only just appeared is deleted and re-created.
 - -f is polling only (no inotify); it follows regular files only, whereas GNU also follows FIFOs. -f is ignored for pipes on standard input, as in the manual.
 - The obsolete `tail +5` form is treated as a file name (GNU's default since POSIX 2001); POSIX `-r` is not supported (GNU has none).
 - `--help` text is shorter than GNU's; ASCII quotes in diagnostics.
