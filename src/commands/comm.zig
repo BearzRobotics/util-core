@@ -132,7 +132,7 @@ pub fn main(ctx: cli.Context) u8 {
     const status = compare(ctx, &out, &sides, suppress, check, sep, total, term);
     out.flush();
     if (out.failed) {
-        cli.warn(ctx, "write error", .{});
+        cli.writeErrorWarn(ctx);
         return 1;
     }
     return status;

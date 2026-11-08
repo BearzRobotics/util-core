@@ -183,7 +183,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
     out.flush();
     if (out.failed) {
-        cli.warn(ctx, "error writing 'standard output'", .{});
+        cli.writeErrorWarn(ctx);
         return 1;
     }
     if (cfg.follow and followed.items.len > 0) {
@@ -359,7 +359,7 @@ fn followLoop(ctx: cli.Context, out: *cli.Out, files: []Followed, cfg: Config, m
         }
         out.flush();
         if (out.failed) {
-            cli.warn(ctx, "error writing 'standard output'", .{});
+            cli.writeErrorWarn(ctx);
             return 1;
         }
         if (!activity) if (cfg.pid) |pid| if (!sys.processAlive(pid)) return exit_status;

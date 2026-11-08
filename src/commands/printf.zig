@@ -65,7 +65,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
     out.flush();
     if (out.failed) {
-        cli.warn(ctx, "write error", .{});
+        cli.writeErrorWarn(ctx);
         return 1;
     }
     return st.status;

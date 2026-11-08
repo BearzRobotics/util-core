@@ -218,7 +218,7 @@ pub fn main(ctx: cli.Context) u8 {
     const ok = run(&st, &in[0], &in[1]);
     out.flush();
     if (out.failed) {
-        cli.warn(ctx, "write error", .{});
+        cli.writeErrorWarn(ctx);
         return 1;
     }
     if (!ok) return 1;

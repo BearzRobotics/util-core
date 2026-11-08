@@ -1383,7 +1383,10 @@ fn mergeStream(ctx: cli.Context, s: *const Sorter, cfg: *const Config, names: []
     }
     out.flush();
     if (out.failed) {
-        cli.warn(ctx, "write failed: 'standard output'", .{});
+        {
+            cli.warn(ctx, "write failed: 'standard output': {s}", .{cli.stdout_err orelse "write error"});
+            cli.warn(ctx, "write error", .{});
+        }
         return fail_status;
     }
     return 0;

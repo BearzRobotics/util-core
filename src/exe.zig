@@ -20,11 +20,12 @@ pub const panic = if (builtin.mode == .debug) std.debug.FullPanic(std.debug.defa
 pub fn main(init: std.process.Init) !u8 {
     sys.restoreSigpipe();
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    return commands.get(options.command)(.{
+    const ctx: cli.Context = .{
         .name = options.command,
         .args = args[1..],
         .io = init.io,
         .gpa = init.gpa,
         .environ = init.environ_map,
-    });
+    };
+    return cli.finish(ctx, commands.get(options.command)(ctx));
 }

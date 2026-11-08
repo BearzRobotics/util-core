@@ -146,7 +146,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
     out.flush();
     if (out.failed) {
-        cli.warn(ctx, "error writing 'standard output'", .{});
+        cli.writeErrorWarn(ctx);
         return 1;
     }
     return status;

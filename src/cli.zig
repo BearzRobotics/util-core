@@ -145,8 +145,46 @@ pub fn badLong(ctx: Context, arg: []const u8, m: LongMatch) void {
 /// Write `text` to stdout. Returns false on write failure (e.g. closed pipe);
 /// callers decide the exit status.
 pub fn writeStdout(io: Io, text: []const u8) bool {
-    Io.File.stdout().writeStreamingAll(io, text) catch return false;
+    Io.File.stdout().writeStreamingAll(io, text) catch |e| {
+        noteStdoutFailure(errText(e));
+        return false;
+    };
     return true;
+}
+
+/// First error seen writing standard output, and whether any diagnostic was
+/// printed; `finish` turns an unreported write failure into GNU's
+/// close_stdout diagnostic and a failing exit status.
+pub var stdout_err: ?[]const u8 = null;
+
+/// Record the first failure writing standard output (strerror-style text).
+pub fn noteStdoutFailure(text: []const u8) void {
+    if (stdout_err == null) stdout_err = text;
+}
+pub var warned: bool = false; // a diagnostic mentioning a write failure was printed
+
+/// Commands whose GNU counterpart prints a bare "write error" (no strerror text).
+fn bareWriteError(name: []const u8) bool {
+    const bare = [_][]const u8{ "sum", "tac", "md5sum", "sha1sum", "sha224sum", "sha256sum", "sha384sum", "sha512sum", "b2sum", "cksum", "wc", "du" };
+    for (bare) |b| if (std.mem.eql(u8, name, b)) return true;
+    return false;
+}
+
+/// Report a failed write to standard output the way GNU's close_stdout does.
+pub fn writeErrorWarn(ctx: Context) void {
+    warned = true;
+    if (stdout_err) |e| {
+        if (std.mem.eql(u8, ctx.name, "yes")) return warn(ctx, "standard output: {s}", .{e});
+        if (!bareWriteError(ctx.name)) return warn(ctx, "write error: {s}", .{e});
+    }
+    warn(ctx, "write error", .{});
+}
+
+/// Called by the entry points after a command returns.
+pub fn finish(ctx: Context, rc: u8) u8 {
+    if (stdout_err == null) return rc;
+    if (!warned) writeErrorWarn(ctx);
+    return if (rc == 0) 1 else rc;
 }
 
 /// Print `<name> (util-core) <version>` to stdout.
@@ -160,6 +198,7 @@ pub fn printVersion(ctx: Context) bool {
 pub fn warn(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     var buf: [8192]u8 = undefined; // room for two PATH_MAX-long names
     const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
+    if (std.mem.indexOf(u8, msg, "writ") != null) warned = true;
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
 

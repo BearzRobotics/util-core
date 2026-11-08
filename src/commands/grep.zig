@@ -126,7 +126,8 @@ fn oom(ctx: cli.Context) noreturn {
 fn flushOut(g: *G) void {
     if (g.out.items.len == 0) return;
     if (sys.writeAllFd(1, g.out.items)) |err| {
-        _ = err;
+        cli.noteStdoutFailure(sys.errnoText(err));
+        cli.writeErrorWarn(g.ctx);
         std.process.exit(2);
     }
     g.out.clearRetainingCapacity();

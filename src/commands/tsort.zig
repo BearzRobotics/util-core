@@ -161,7 +161,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
     out.flush();
     if (out.failed) {
-        cli.warn(ctx, "write error", .{});
+        cli.writeErrorWarn(ctx);
         return 1;
     }
     if (cycles > 0) return if (count_cycles) @intCast(@min(cycles, 125)) else 1;

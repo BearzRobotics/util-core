@@ -177,7 +177,7 @@ pub fn main(ctx: cli.Context) u8 {
     const ok = run(ctx, &out, &reader, cfg);
     out.flush();
     if (out.failed) {
-        cli.warn(ctx, "write error", .{});
+        cli.writeErrorWarn(ctx);
         return 1;
     }
     return if (ok) 0 else 1;

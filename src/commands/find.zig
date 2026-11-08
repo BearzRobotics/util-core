@@ -165,7 +165,7 @@ fn warnMsg(st: *State, comptime fmt: []const u8, args: anytype) void {
 
 fn flushOut(st: *State) void {
     if (st.out.items.len > 0) {
-        _ = sys.writeAllFd(1, st.out.items);
+        if (sys.writeAllFd(1, st.out.items)) |err| cli.noteStdoutFailure(sys.errnoText(err));
         st.out.clearRetainingCapacity();
     }
 }

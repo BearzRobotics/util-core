@@ -37,7 +37,7 @@ pub fn main(init: std.process.Init) !u8 {
     const invoked = baseName(args[0]);
     if (commands.find(enabled, invoked)) |run| {
         ctx.name = invoked;
-        return run(ctx);
+        return cli.finish(ctx, run(ctx));
     }
 
     // Subcommand mode.
@@ -45,7 +45,7 @@ pub fn main(init: std.process.Init) !u8 {
     if (std.mem.eql(u8, args[1], "--list")) return list(ctx);
     ctx.name = args[1];
     ctx.args = args[2..];
-    if (commands.find(enabled, args[1])) |run| return run(ctx);
+    if (commands.find(enabled, args[1])) |run| return cli.finish(ctx, run(ctx));
 
     cli.warn(.{ .name = invoked, .args = &.{}, .io = init.io, .gpa = init.gpa }, "unknown command '{s}'", .{args[1]});
     return 127;

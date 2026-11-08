@@ -1826,7 +1826,7 @@ pub fn run(ctx: cli.Context, mode: Mode) u8 {
     const rc = realMain(&s);
     s.out.flush();
     if (s.out.failed and rc == 0) {
-        cli.warn(ctx, "write error", .{});
+        cli.writeErrorWarn(ctx);
         return 2;
     }
     return rc;
