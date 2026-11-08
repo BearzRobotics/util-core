@@ -28,7 +28,26 @@ pub const Opts = struct {
     utf8: bool = false,
     /// Case-insensitive matching (needed here only for non-ASCII literals).
     icase: bool = false,
+    /// GNU grep -E: a `{` that does not start a valid interval is literal.
+    lenient_brace: bool = false,
 };
+
+/// `rest` follows a `{`: true for `n}`, `n,}`, `,m}` and `n,m}`.
+fn validInterval(rest: []const u8) bool {
+    var i: usize = 0;
+    var digits1: usize = 0;
+    while (i < rest.len and std.ascii.isDigit(rest[i])) : (i += 1) digits1 += 1;
+    var digits2: usize = 0;
+    var comma = false;
+    if (i < rest.len and rest[i] == ',') {
+        comma = true;
+        i += 1;
+        while (i < rest.len and std.ascii.isDigit(rest[i])) : (i += 1) digits2 += 1;
+    }
+    if (i >= rest.len or rest[i] != '}') return false;
+    if (!comma) return digits1 > 0;
+    return digits1 > 0 or digits2 > 0;
+}
 
 /// What the pattern contains that matters for longest-match emulation.
 pub const Flags = struct {
@@ -39,6 +58,8 @@ pub const Flags = struct {
     /// Uses a construct glibc treats as multibyte-aware (`.`, bracket
     /// expressions, \\w \\s, word boundaries) in a UTF-8 locale.
     mb: bool = false,
+    /// First operator ignored at the start of an ERE (grep warns about it).
+    leading_op: u8 = 0,
 };
 
 pub fn translateOpts(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: Opts) Error![]u8 {
@@ -56,6 +77,7 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
     var depth: usize = 0;
     while (i < pat.len) {
         const c = pat[i];
+        if (c == '\\' and i + 1 >= pat.len) return error.BadPattern;
         if (c == '\\' and i + 1 < pat.len) {
             const n = pat[i + 1];
             i += 2;
@@ -175,9 +197,12 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                 if (at_start and !ere) {
                     try out.appendSlice(gpa, "\\*");
                 } else if (at_start and ere) {
-                    return error.BadPattern;
+                    if (!opts.lenient_brace) return error.BadPattern;
+                    if (flags.leading_op == 0) flags.leading_op = '*';
+                    i += 0;
+                    continue;
                 } else {
-                    if (!ere and out.items.len > 0 and out.items[out.items.len - 1] == '*' and (out.items.len < 2 or out.items[out.items.len - 2] != '\\')) return error.BadPattern;
+                    if (!ere and !opts.lenient_brace and out.items.len > 0 and out.items[out.items.len - 1] == '*' and (out.items.len < 2 or out.items[out.items.len - 2] != '\\')) return error.BadPattern;
                     try out.append(gpa, '*');
                 }
                 at_start = false;
@@ -207,9 +232,13 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
             },
             ')' => {
                 if (ere) {
-                    if (depth == 0) return error.BadPattern;
-                    depth -= 1;
-                    try out.append(gpa, ')');
+                    if (depth == 0) {
+                        if (!opts.lenient_brace) return error.BadPattern;
+                        try out.appendSlice(gpa, "\\)");
+                    } else {
+                        depth -= 1;
+                        try out.append(gpa, ')');
+                    }
                 } else try out.appendSlice(gpa, "\\)");
                 at_start = false;
             },
@@ -224,7 +253,11 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                 }
             },
             '+', '?' => {
-                if (ere and at_start) return error.BadPattern;
+                if (ere and at_start) {
+                    if (!opts.lenient_brace) return error.BadPattern;
+                    if (flags.leading_op == 0) flags.leading_op = c;
+                    continue;
+                }
                 if (ere and !at_start) try out.append(gpa, c) else {
                     try out.append(gpa, '\\');
                     try out.append(gpa, c);
@@ -232,7 +265,13 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                 at_start = false;
             },
             '{' => {
-                if (ere and !at_start) {
+                if (ere and opts.lenient_brace and !validInterval(pat[i..])) {
+                    try out.appendSlice(gpa, "\\{");
+                } else if (ere and at_start and opts.lenient_brace) {
+                    if (flags.leading_op == 0) flags.leading_op = '{';
+                    i = (std.mem.indexOfScalarPos(u8, pat, i, '}') orelse pat.len - 1) + 1;
+                    continue;
+                } else if (ere and !at_start) {
                     const close = std.mem.indexOfScalarPos(u8, pat, i, '}') orelse return error.BadPattern;
                     try out.append(gpa, '{');
                     if (close > i and pat[i] == ',') try out.append(gpa, '0');
@@ -348,7 +387,7 @@ fn wrapStacked(gpa: std.mem.Allocator, src: []const u8) Error![]u8 {
     return out.toOwnedSlice(gpa);
 }
 
-fn utf8Literal(gpa: std.mem.Allocator, out: *std.ArrayList(u8), cp: u32, icase: bool) !void {
+pub fn utf8Literal(gpa: std.mem.Allocator, out: *std.ArrayList(u8), cp: u32, icase: bool) !void {
     var buf: [4]u8 = undefined;
     const up = unicode.toUpper(cp);
     const lo = unicode.toLower(cp);
@@ -786,6 +825,130 @@ fn nonAsciiRange(pat: []const u8) bool {
             }
         }
         i = j;
+    }
+    return false;
+}
+
+/// GNU grep's wording for malformed patterns (dfa.c and glibc regcomp).
+pub fn diagnoseGrep(pat: []const u8, ere: bool) []const u8 {
+    if (std.mem.eql(u8, pat, "[")) return "Invalid regular expression";
+    var open: i32 = 0;
+    var closed: u32 = 0;
+    var i: usize = 0;
+    while (i < pat.len) : (i += 1) {
+        const c = pat[i];
+        if (c == '\\') {
+            if (i + 1 >= pat.len) return "Trailing backslash";
+            const n = pat[i + 1];
+            i += 1;
+            if (!ere and n == '(') {
+                open += 1;
+            } else if (!ere and n == ')') {
+                if (open == 0) return "Unmatched ) or \\)";
+                open -= 1;
+                closed += 1;
+            } else if (!ere and n == '{') {
+                const close = std.mem.indexOfPos(u8, pat, i, "\\}") orelse return "Unmatched \\{";
+                if (intervalProblem(pat[i + 1 .. close])) |m| return m;
+                i = close + 1;
+            } else if (n >= '1' and n <= '9') {
+                if (n - '0' > closed) return "Invalid back reference";
+            }
+            continue;
+        }
+        if (c == '[') {
+            var j = i + 1;
+            if (j < pat.len and pat[j] == '^') j += 1;
+            if (j < pat.len and pat[j] == ']') j += 1;
+            var end: ?usize = null;
+            var k = j;
+            while (k < pat.len) : (k += 1) {
+                if (pat[k] == '[' and k + 1 < pat.len and (pat[k + 1] == ':' or pat[k + 1] == '.' or pat[k + 1] == '=')) {
+                    const kind = pat[k + 1];
+                    const cl = std.mem.indexOfPos(u8, pat, k + 2, &[_]u8{ kind, ']' }) orelse return "Unmatched [, [^, [:, [., or [=";
+                    if (kind == ':') {
+                        const name = pat[k + 2 .. cl];
+                        const known = [_][]const u8{ "alpha", "digit", "alnum", "upper", "lower", "space", "blank", "punct", "print", "graph", "cntrl", "xdigit" };
+                        var ok = false;
+                        for (known) |kn| if (std.mem.eql(u8, kn, name)) {
+                            ok = true;
+                        };
+                        if (!ok) return "Invalid character class name";
+                    }
+                    k = cl + 1;
+                    continue;
+                }
+                if (pat[k] == ']') {
+                    end = k;
+                    break;
+                }
+                if (pat[k] == '-' and k > j and k + 1 < pat.len and pat[k + 1] != ']' and pat[k - 1] != '[') {
+                    if (pat[k - 1] > pat[k + 1] and pat[k - 1] < 0x80 and pat[k + 1] < 0x80) return "Invalid range end";
+                }
+            }
+            if (end == null) return "Unmatched [, [^, [:, [., or [=";
+            i = end.?;
+            continue;
+        }
+        if (ere) {
+            if (c == '(') open += 1;
+            if (c == ')' and open > 0) {
+                open -= 1;
+                closed += 1;
+            }
+            if (c == '{' and validInterval(pat[i + 1 ..])) {
+                const close = std.mem.indexOfScalarPos(u8, pat, i, '}').?;
+                if (intervalProblem(pat[i + 1 .. close])) |m| return m;
+                i = close;
+            }
+        }
+    }
+    if (open > 0) return "Unmatched ( or \\(";
+    return "Invalid regular expression";
+}
+
+fn intervalProblem(body: []const u8) ?[]const u8 {
+    var lo: u64 = 0;
+    var hi: ?u64 = null;
+    var comma = false;
+    var cur: u64 = 0;
+    var have = false;
+    for (body) |ch| {
+        if (ch == ',') {
+            if (comma) return "Invalid content of \\{\\}";
+            comma = true;
+            lo = cur;
+            cur = 0;
+            have = false;
+        } else if (std.ascii.isDigit(ch)) {
+            cur = cur *| 10 +| (ch - '0');
+            have = true;
+        } else return "Invalid content of \\{\\}";
+    }
+    if (comma) {
+        if (have) hi = cur;
+    } else lo = cur;
+    if (lo > 0x7fff or (hi != null and hi.? > 0x7fff)) return "Regular expression too big";
+    if (hi != null and hi.? < lo) return "Invalid content of \\{\\}";
+    return null;
+}
+
+/// `[:class:]` written without the outer brackets (a GNU grep error).
+pub fn bareClass(pat: []const u8) bool {
+    var i: usize = 0;
+    while (i < pat.len) : (i += 1) {
+        if (pat[i] == '\\') {
+            i += 1;
+            continue;
+        }
+        if (pat[i] == '[' and i + 1 < pat.len and pat[i + 1] == ':') {
+            const close = std.mem.indexOfScalarPos(u8, pat, i + 2, ']') orelse return false;
+            if (close >= 2 and pat[close - 1] == ':') return true;
+            i = close;
+        } else if (pat[i] == '[') {
+            const close = std.mem.indexOfScalarPos(u8, pat, i + 1, ']') orelse return false;
+            i = close;
+        }
     }
     return false;
 }

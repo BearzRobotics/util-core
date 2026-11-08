@@ -28,6 +28,11 @@ pub fn match(arg: []const u8, table: []const Entry) Result {
 /// Print "invalid/ambiguous argument ... for 'CONTEXT'" plus the valid list
 /// and the usage hint, as XARGMATCH does. The caller exits with status 1.
 pub fn die(ctx: cli.Context, arg: []const u8, context: []const u8, table: []const Entry, r: Result) void {
+    dieEx(ctx, arg, context, table, r, null);
+}
+
+/// Like `die`, with a usage line (GNU grep prints one) before the hint.
+pub fn dieEx(ctx: cli.Context, arg: []const u8, context: []const u8, table: []const Entry, r: Result, usage_line: ?[]const u8) void {
     const q = quotearg.quoteAlloc(ctx.gpa, arg, .locale, null) catch return;
     defer ctx.gpa.free(q);
     var buf: std.ArrayList(u8) = .empty;
@@ -45,6 +50,7 @@ pub fn die(ctx: cli.Context, arg: []const u8, context: []const u8, table: []cons
             w(&buf, ctx.gpa, "\n  - {f}", .{cli.quoteC(e.name)});
         } else w(&buf, ctx.gpa, ", {f}", .{cli.quoteC(e.name)});
     }
+    if (usage_line) |u| w(&buf, ctx.gpa, "\n{s}", .{u});
     w(&buf, ctx.gpa, "\nTry '{s} --help' for more information.", .{ctx.name});
     cli.warn(ctx, "{s}", .{buf.items});
 }
