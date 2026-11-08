@@ -263,7 +263,9 @@ fn oom(ctx: cli.Context) u8 {
 }
 
 fn badOption(ctx: cli.Context, opt: []const u8) u8 {
-    cli.warn(ctx, "invalid option '{s}'\nTry '{s} --help' for more information.", .{ opt, ctx.name });
+    if (opt.len >= 2 and opt[0] == '-' and opt[1] != '-') {
+        cli.invalidShort(ctx, opt[1]);
+    } else cli.warn(ctx, "unrecognized option '{s}'\nTry '{s} --help' for more information.", .{ opt, ctx.name });
     return 1;
 }
 

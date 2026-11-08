@@ -531,7 +531,24 @@ fn usageError(ctx: cli.Context, msg: []const u8) u8 {
 }
 
 fn badOption(ctx: cli.Context, opt: []const u8) u8 {
-    cli.warn(ctx, "invalid option '{s}'\nTry '{s} --help' for more information.", .{ opt, ctx.name });
+    if (opt.len >= 2 and opt[0] == '-' and opt[1] != '-') {
+        cli.invalidShort(ctx, opt[1]);
+    } else {
+        const nm = opt[2..];
+        var buf: [512]u8 = undefined;
+        var n: usize = 0;
+        var cnt: usize = 0;
+        for (long_options) |o| {
+            if (nm.len > 0 and std.mem.startsWith(u8, o.name, nm)) {
+                const piece = std.fmt.bufPrint(buf[n..], " '--{s}'", .{o.name}) catch break;
+                n += piece.len;
+                cnt += 1;
+            }
+        }
+        if (cnt > 1) {
+            cli.warn(ctx, "option '{s}' is ambiguous; possibilities:{s}\nTry '{s} --help' for more information.", .{ opt, buf[0..n], ctx.name });
+        } else cli.warn(ctx, "unrecognized option '{s}'\nTry '{s} --help' for more information.", .{ opt, ctx.name });
+    }
     return 1;
 }
 

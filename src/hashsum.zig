@@ -256,6 +256,12 @@ fn setAlgo(ctx: cli.Context, cfg: *Config, v: []const u8) bool {
 }
 
 fn setLength(ctx: cli.Context, cfg: *Config, v: []const u8) bool {
+    // GNU validates the value only once it knows the algorithm accepts a length.
+    const bad = if (std.fmt.parseInt(u64, v, 10)) |b| b % 8 != 0 else |_| true;
+    if (bad and cfg.algo != .blake2b and !cfg.check) {
+        cli.warn(ctx, "--length is only supported with --algorithm=blake2b", .{});
+        return false;
+    }
     const bits = std.fmt.parseInt(u64, v, 10) catch {
         cli.warn(ctx, "invalid length: '{s}'", .{v});
         return false;

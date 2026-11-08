@@ -130,7 +130,7 @@ check_msg "--print-ls-colors with -c"              "mutually exclusive" --print-
 check_msg "-p with --print-ls-colors"              "options --print-database and --print-ls-colors are mutually exclusive" -p --print-ls-colors
 check_msg "-p with a file operand"                 "file operands cannot be combined with --print-database (-p)" -p "$T/a"
 check_msg "extra operand"                          "extra operand '$T/a'" -b "$T/a" "$T/a"
-check_msg "invalid option"                         "invalid option" --bogus
-check_msg "ambiguous abbreviation"                 "invalid option" --print
+check_msg "invalid option"                         "unrecognized option" --bogus
+check_msg "ambiguous abbreviation"                 "is ambiguous" --print
 
 print_summary
