@@ -174,6 +174,10 @@ fn bareWriteError(name: []const u8) bool {
 pub fn writeErrorWarn(ctx: Context) void {
     warned = true;
     if (stdout_err) |e| {
+        if (std.mem.eql(u8, ctx.name, "find")) {
+            warn(ctx, "'standard output': {s}", .{e});
+            return warn(ctx, "write error", .{});
+        }
         if (std.mem.eql(u8, ctx.name, "yes")) return warn(ctx, "standard output: {s}", .{e});
         if (!bareWriteError(ctx.name)) return warn(ctx, "write error: {s}", .{e});
     }

@@ -99,7 +99,7 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
   projects). `Readme.md` was removed at the owner's request.
 
 ## Known gaps (also in each compatibility doc)
-sort: no --debug, no external merge. factor: no elliptic-curve method
+sort: no external merge. factor: no elliptic-curve method
 (very hard numbers are reported, not factored). users: no systemd-logind
 fallback. printf/seq: f80
 approximations of `long double` beyond x87 range. Locale: C everywhere except sed, grep, find, tree and locate (UTF-8 vs C only).

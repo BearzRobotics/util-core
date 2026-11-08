@@ -6,7 +6,7 @@
 //!   * keys: -k F[.C][OPTS][,F[.C][OPTS]], -t, -b, global options inherited by
 //!     keys that carry no ordering letters of their own;
 //!   * orderings: lexicographic (-d -f -i), -n, -g, -h, -M, -V, -R, -r.
-//!   * NOT implemented: --debug (rejected with exit status 2). -S -T --parallel --batch-size --compress-program
+//!   * --debug (C locale), obsolete +POS1 -POS2 keys. -S -T --parallel --batch-size --compress-program
 //!     are validated and then ignored: all input is held in memory.
 //!
 //! Design: every input is read into one byte buffer; the lines are slices of
@@ -65,6 +65,11 @@ const Key = struct {
     eword: usize = no_field, // 0-based last field; no_field = end of line
     echar: usize = 0, // 1-based last character; 0 = end of field
     ord: Ordering = .{},
+    synthetic: bool = false, // built from the global options (no -k given)
+    obsolete: bool = false, // written as +POS1 [-POS2]
+    obs_s: usize = 0, // the POS1 field count as written
+    obs_e: usize = 0, // the -POS2 field count as written, plus one when it carries a character offset
+    obs_has_e: bool = false,
 };
 
 const Config = struct {
@@ -79,6 +84,7 @@ const Config = struct {
     output: ?[]const u8 = null,
     random_source: ?[]const u8 = null,
     files0_from: ?[]const u8 = null,
+    debug: bool = false,
 };
 
 const long_names = [_][]const u8{
@@ -112,6 +118,12 @@ pub fn main(ctx: cli.Context) u8 {
     var only_operands = false;
     while (i < args.len) : (i += 1) {
         const a: []const u8 = args[i];
+        if (!only_operands and a.len >= 2 and a[0] == '+') {
+            if (parseObsolete(ctx, &cfg, a, args, &i)) |ok| {
+                if (!ok) return fail_status;
+                continue;
+            }
+        }
         if (only_operands or a.len < 2 or a[0] != '-') {
             operands.append(ctx.gpa, a) catch return oom(ctx);
             continue;
@@ -206,7 +218,7 @@ pub fn main(ctx: cli.Context) u8 {
                     }
                 },
                 15 => {}, // --compress-program: temporaries are never written
-                16 => return unsupported(ctx, "--debug"),
+                16 => cfg.debug = true,
                 17 => cfg.files0_from = value.?,
                 18 => {
                     if (!addKey(ctx, &cfg, value.?)) return fail_status;
@@ -273,6 +285,17 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     if (!finishKeys(ctx, &cfg)) return fail_status;
+    if (cfg.debug) {
+        if (cfg.check != .none) {
+            cli.warn(ctx, "options '-{c} --debug' are incompatible", .{@as(u8, if (cfg.check == .quiet) 'C' else 'c')});
+            return fail_status;
+        }
+        if (cfg.output != null) {
+            cli.warn(ctx, "options '-o --debug' are incompatible", .{});
+            return fail_status;
+        }
+        debugWarnings(ctx, &cfg);
+    }
     if (usesRandom(&cfg)) if (!seedRandom(ctx, cfg.random_source)) return fail_status;
 
     // Input names.
@@ -369,8 +392,7 @@ pub fn main(ctx: cli.Context) u8 {
             if (prev) |p| if (sorter.compare(p, line) == 0) continue;
             prev = line;
         }
-        out.write(line);
-        out.writeByte(cfg.term);
+        emitRecord(&out, &cfg, line);
         if (out.failed) break;
     }
     out.flush();
@@ -557,6 +579,57 @@ fn parseLetters(s: *[]const u8, o: *Ordering, where: Where) void {
     }
 }
 
+/// Digits (at least one) from the front of `s`; null when there are none.
+fn digitsPrefix(s: *[]const u8) ?usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < s.len and std.ascii.isDigit(s.*[i])) : (i += 1) n = n *| 10 +| (s.*[i] - '0');
+    if (i == 0) return null;
+    s.* = s.*[i..];
+    return n;
+}
+
+/// Obsolete `+POS1 [-POS2]` key. Returns null when `a` is not a possible key (it is then a
+/// file name), otherwise whether the key was accepted.
+fn parseObsolete(ctx: cli.Context, cfg: *Config, a: []const u8, args: []const []const u8, i: *usize) ?bool {
+    var s: []const u8 = a[1..];
+    var key: Key = .{};
+    key.sword = digitsPrefix(&s) orelse return null;
+    if (s.len > 0 and s[0] == '.') {
+        s = s[1..];
+        key.schar = digitsPrefix(&s) orelse return null;
+    }
+    var ord: Ordering = .{};
+    parseLetters(&s, &ord, .start);
+    if (s.len > 0) return null;
+    key.ord = ord;
+    key.obsolete = true;
+    key.obs_s = key.sword;
+    if (i.* + 1 < args.len and args[i.* + 1].len >= 2 and args[i.* + 1][0] == '-' and std.ascii.isDigit(args[i.* + 1][1])) {
+        i.* += 1;
+        const a2 = args[i.*];
+        var t: []const u8 = a2[1..];
+        key.eword = digitsPrefix(&t) orelse return null;
+        if (t.len > 0 and t[0] == '.') {
+            t = t[1..];
+            key.echar = digitsPrefix(&t) orelse {
+                cli.warn(ctx, "{s}: invalid number after '.': invalid count at start of '{s}'", .{ a2, t });
+                return false;
+            };
+        }
+        key.obs_e = key.eword + @intFromBool(key.echar != 0);
+        key.obs_has_e = true;
+        if (key.echar == 0 and key.eword != 0) key.eword -= 1;
+        parseLetters(&t, &key.ord, .end);
+        if (t.len > 0) return badSpec(ctx, "stray character in field spec", a2);
+    }
+    cfg.keys.append(ctx.gpa, key) catch {
+        cli.warn(ctx, "out of memory", .{});
+        return false;
+    };
+    return true;
+}
+
 fn addKey(ctx: cli.Context, cfg: *Config, spec: []const u8) bool {
     var key: Key = .{};
     var s = spec;
@@ -596,7 +669,7 @@ fn finishKeys(ctx: cli.Context, cfg: *Config) bool {
         if (k.ord.isPlain()) k.ord = cfg.gkey;
     }
     if (cfg.keys.items.len == 0 and !cfg.gkey.isPlainExceptReverse()) {
-        cfg.keys.append(ctx.gpa, .{ .ord = cfg.gkey }) catch {
+        cfg.keys.append(ctx.gpa, .{ .ord = cfg.gkey, .synthetic = true }) catch {
             cli.warn(ctx, "out of memory", .{});
             return false;
         };
@@ -1457,6 +1530,220 @@ fn monthOf(s: []const u8) i32 {
     return 0;
 }
 
+
+// ------------------------------------------------------------------- --debug
+
+fn keyNumeric(o: Ordering) bool {
+    return o.mode == .numeric or o.mode == .general or o.mode == .human;
+}
+
+/// GNU key_warnings() and the --debug start-up notes (all on stderr, C locale).
+fn debugWarnings(ctx: cli.Context, cfg: *const Config) void {
+    cli.warn(ctx, "text ordering performed using simple byte comparison", .{});
+    const synth = cfg.keys.items.len > 0 and cfg.keys.items[0].synthetic;
+    for (cfg.keys.items, 1..) |k, num| {
+        if (k.obsolete) {
+            var po: [64]u8 = undefined;
+            var pn: [64]u8 = undefined;
+            const o1 = std.fmt.bufPrint(&po, "+{d}", .{k.obs_s}) catch "";
+            const n1 = std.fmt.bufPrint(&pn, "-k {d}", .{k.obs_s + 1}) catch "";
+            var ob: [96]u8 = undefined;
+            var nb: [96]u8 = undefined;
+            var ol: []const u8 = o1;
+            var nl: []const u8 = n1;
+            if (k.obs_has_e) {
+                ol = std.fmt.bufPrint(&ob, "{s} -{d}", .{ o1, k.obs_e }) catch o1;
+                nl = std.fmt.bufPrint(&nb, "{s},{d}", .{ n1, k.obs_e }) catch n1;
+            }
+            cli.warn(ctx, "obsolescent key '{s}' used; consider '{s}' instead", .{ ol, nl });
+        }
+        if (k.synthetic) continue;
+        const zero_width = k.eword != no_field and k.eword < k.sword;
+        if (zero_width) cli.warn(ctx, "key {d} has zero width and will be ignored", .{num});
+        const o = k.ord;
+        const implicit_skip = keyNumeric(o) or o.mode == .month;
+        const line_offset = k.eword == 0 and k.echar != 0;
+        if (!zero_width and cfg.tab == null and !line_offset and
+            ((!o.skip_sblanks and !implicit_skip) or (!o.skip_sblanks and k.schar != 0) or (!o.skip_eblanks and k.echar != 0)))
+            cli.warn(ctx, "leading blanks are significant in key {d}; consider also specifying 'b'", .{num});
+        if (keyNumeric(o) and (k.eword == no_field or k.eword > k.sword))
+            cli.warn(ctx, "key {d} is numeric and spans multiple fields", .{num});
+    }
+    var numeric = keyNumeric(cfg.gkey) and cfg.keys.items.len == 0;
+    for (cfg.keys.items) |k| numeric = numeric or keyNumeric(k.ord);
+    if (numeric) cli.warn(ctx, "numbers use '.' as a decimal point in this locale", .{});
+    // Global ordering options that no key picked up.
+    if (!synth and cfg.keys.items.len > 0) {
+        const g = cfg.gkey;
+        var used: Ordering = .{};
+        var any_rev = false;
+        for (cfg.keys.items) |k| {
+            const o = k.ord;
+            used.skip_sblanks = used.skip_sblanks or o.skip_sblanks or o.skip_eblanks;
+            used.dict = used.dict or o.dict;
+            used.fold = used.fold or o.fold;
+            used.nonprint = used.nonprint or o.nonprint;
+            used.mode_mask |= o.mode_mask;
+            any_rev = any_rev or o.reverse;
+        }
+        var letters: [12]u8 = undefined;
+        var n: usize = 0;
+        const rev_unused = g.reverse and !any_rev;
+        const stable_like = cfg.stable or cfg.unique;
+        const checks = [_]struct { c: u8, set: bool }{
+            .{ .c = 'b', .set = (g.skip_sblanks or g.skip_eblanks) and !used.skip_sblanks },
+            .{ .c = 'd', .set = g.dict and !used.dict },
+            .{ .c = 'f', .set = g.fold and !used.fold },
+            .{ .c = 'g', .set = g.mode_mask & 1 != 0 and used.mode_mask & 1 == 0 },
+            .{ .c = 'h', .set = g.mode_mask & 2 != 0 and used.mode_mask & 2 == 0 },
+            .{ .c = 'i', .set = g.nonprint and !g.dict and !used.nonprint },
+            .{ .c = 'M', .set = g.mode_mask & 4 != 0 and used.mode_mask & 4 == 0 },
+            .{ .c = 'n', .set = g.mode_mask & 8 != 0 and used.mode_mask & 8 == 0 },
+            .{ .c = 'R', .set = g.mode_mask & 32 != 0 and used.mode_mask & 32 == 0 },
+            .{ .c = 'r', .set = rev_unused and stable_like },
+            .{ .c = 'V', .set = g.mode_mask & 16 != 0 and used.mode_mask & 16 == 0 },
+        };
+        for (checks) |c| if (c.set) {
+            letters[n] = c.c;
+            n += 1;
+        };
+        if (n == 1) {
+            cli.warn(ctx, "option '-{s}' is ignored", .{letters[0..n]});
+        } else if (n > 1) cli.warn(ctx, "options '-{s}' are ignored", .{letters[0..n]});
+        if (rev_unused and !stable_like) cli.warn(ctx, "option '-r' only applies to last-resort comparison", .{});
+    }
+}
+
+/// Columns a byte range takes in the C locale: tabs are shown as '>', other
+/// control bytes take no room.
+fn debugWidth(text: []const u8) usize {
+    var w: usize = 0;
+    for (text) |c| {
+        if (c == '\t' or !(c < 0x20 or c == 0x7f)) w += 1;
+    }
+    return w;
+}
+
+/// Length of the longest prefix of `s` that strtold() would accept as a number.
+fn strtoldLen(s: []const u8) usize {
+    var i: usize = 0;
+    while (i < s.len and (s[i] == ' ' or (s[i] >= 9 and s[i] <= 13))) i += 1;
+    const start = i;
+    if (i < s.len and (s[i] == '+' or s[i] == '-')) i += 1;
+    const rest = s[i..];
+    if (std.ascii.startsWithIgnoreCase(rest, "infinity")) return i + 8;
+    if (std.ascii.startsWithIgnoreCase(rest, "inf")) return i + 3;
+    if (std.ascii.startsWithIgnoreCase(rest, "nan")) {
+        var j = i + 3;
+        if (j < s.len and s[j] == '(') {
+            var k = j + 1;
+            while (k < s.len and (std.ascii.isAlphanumeric(s[k]) or s[k] == '_')) k += 1;
+            if (k < s.len and s[k] == ')') j = k + 1;
+        }
+        return j;
+    }
+    var hex = false;
+    if (rest.len >= 2 and rest[0] == '0' and (rest[1] == 'x' or rest[1] == 'X')) {
+        // Needs at least one hex digit (possibly after the point); otherwise only the "0" counts.
+        var j = i + 2;
+        var digits = false;
+        while (j < s.len and std.ascii.isHex(s[j])) : (j += 1) digits = true;
+        if (j < s.len and s[j] == '.') {
+            j += 1;
+            while (j < s.len and std.ascii.isHex(s[j])) : (j += 1) digits = true;
+        }
+        if (digits) {
+            hex = true;
+            i = j;
+        }
+    }
+    if (!hex) {
+        var digits = false;
+        while (i < s.len and std.ascii.isDigit(s[i])) : (i += 1) digits = true;
+        if (i < s.len and s[i] == '.') {
+            i += 1;
+            while (i < s.len and std.ascii.isDigit(s[i])) : (i += 1) digits = true;
+        }
+        if (!digits) return 0;
+    }
+    if (i < s.len and ((!hex and (s[i] == 'e' or s[i] == 'E')) or (hex and (s[i] == 'p' or s[i] == 'P')))) {
+        var j = i + 1;
+        if (j < s.len and (s[j] == '+' or s[j] == '-')) j += 1;
+        if (j < s.len and std.ascii.isDigit(s[j])) {
+            while (j < s.len and std.ascii.isDigit(s[j])) j += 1;
+            i = j;
+        }
+    }
+    _ = start;
+    return i;
+}
+
+/// One underline row for key `k` (null = the whole line).
+fn debugMark(out: *cli.Out, cfg: *const Config, line: []const u8, key: ?Key) void {
+    var beg: usize = 0;
+    var lim: usize = line.len;
+    if (key) |k| {
+        beg = begField(line, k, cfg.tab);
+        lim = limField(line, k, cfg.tab);
+        const o = k.ord;
+        if ((o.skip_sblanks and k.synthetic) or o.mode == .month or keyNumeric(o)) {
+            const end = @max(beg, @min(lim, line.len));
+            while (beg < end and isBlank(line[beg])) beg += 1;
+            var tight = beg;
+            if (lim < beg) {
+                tight = lim;
+            } else if (o.mode == .month) {
+                if (monthOf(line[beg..lim]) != 0 and lim - beg >= 3) tight = beg + 3;
+            } else if (o.mode == .general) {
+                tight = beg + strtoldLen(line[beg..lim]);
+            } else if (o.mode == .numeric or o.mode == .human) {
+                var p = beg;
+                if (p < lim and line[p] == '-') p += 1;
+                var found = false;
+                while (p < lim and std.ascii.isDigit(line[p])) : (p += 1) found = true;
+                if (p < lim and line[p] == '.') {
+                    p += 1;
+                    while (p < lim and std.ascii.isDigit(line[p])) : (p += 1) found = true;
+                }
+                if (found) {
+                    tight = p;
+                    if (o.mode == .human and p < lim and std.mem.indexOfScalar(u8, "kKMGTPEZYRQ", line[p]) != null) tight = p + 1;
+                }
+            } else tight = lim;
+            lim = tight;
+        }
+    }
+    const offset = debugWidth(line[0..@min(beg, line.len)]);
+    const width = if (lim > beg) debugWidth(line[beg..@min(lim, line.len)]) else 0;
+    var i: usize = 0;
+    while (i < offset) : (i += 1) out.writeByte(' ');
+    if (width == 0) {
+        out.write("^ no match for key\n");
+    } else {
+        i = 0;
+        while (i < width) : (i += 1) out.writeByte('_');
+        out.writeByte('\n');
+    }
+}
+
+/// Write one output record. With --debug the text is followed by the key
+/// underlines (GNU write_line + debug_line).
+fn emitRecord(out: *cli.Out, cfg: *const Config, text: []const u8) void {
+    if (!cfg.debug) {
+        out.write(text);
+        out.writeByte(cfg.term);
+        return;
+    }
+    for (text) |c| out.writeByte(if (c == '\t') '>' else c);
+    out.writeByte('\n');
+    if (cfg.keys.items.len == 0) {
+        debugMark(out, cfg, text, null);
+        return;
+    }
+    for (cfg.keys.items) |k| debugMark(out, cfg, text, k);
+    if (!cfg.stable and !cfg.unique) debugMark(out, cfg, text, null);
+}
+
 // -------------------------------------------------------- check and merge
 
 /// Open an input for sort's diagnostics: `verb` ("cannot read" when sorting or
@@ -1559,8 +1846,7 @@ fn mergeStream(ctx: cli.Context, s: *const Sorter, cfg: *const Config, names: []
         const b = best orelse break;
         const text = heads[b].items;
         if (!(cfg.unique and have_prev and s.compare(prev.items, text) == 0)) {
-            out.write(text);
-            out.writeByte(cfg.term);
+            emitRecord(&out, cfg, text);
             if (out.failed) break;
             if (cfg.unique) {
                 prev.clearRetainingCapacity();

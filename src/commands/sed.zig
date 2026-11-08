@@ -76,6 +76,10 @@ const Output = struct {
     is_std: bool = false,
     /// Buffer and descriptor are shared with this Output (w /dev/stdout).
     sink: ?*Output = null,
+    /// Simulated stdio buffer fill and the size of the first fwrite that would have overflowed it
+    /// (GNU's "couldn't write N items" reports that call's length).
+    sim_fill: usize = 0,
+    fail_n: usize = 0,
 };
 
 const Chunk = struct {
@@ -984,7 +988,7 @@ const Exec = struct {
         if (o.buf.items.len == 0) return;
         if (sys.writeAllFd(o.fd, o.buf.items)) |err| {
             if (err != .PIPE) {
-                cli.warn(e.s.ctx, "couldn't write {d} items to {s}: {s}", .{ o.buf.items.len, if (o.fd == 1) "stdout" else o.path, errnoMsg(err) });
+                cli.warn(e.s.ctx, "couldn't write {d} items to {s}: {s}", .{ if (o.fail_n != 0) o.fail_n else o.buf.items.len, if (o.fd == 1) "stdout" else o.path, errnoMsg(err) });
                 std.process.exit(4);
             }
             std.process.exit(4);
@@ -999,6 +1003,9 @@ const Exec = struct {
 
     fn emit(e: *Exec, out: *Output, bytes: []const u8) void {
         const o = out.sink orelse out;
+        if (o.fail_n == 0) {
+            if (o.sim_fill + bytes.len > 4096) o.fail_n = bytes.len else o.sim_fill += bytes.len;
+        }
         o.buf.appendSlice(e.gpa, bytes) catch oom(e.s.ctx);
         if (o.buf.items.len > 65536 or e.s.opts.unbuffered or o.fd == 2) e.flushOut(o);
     }

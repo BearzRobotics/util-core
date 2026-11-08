@@ -406,4 +406,19 @@ run_cmp "source without R" --random-source=nosuch words
 run_cmp "R dups"          -R --random-source=rseed dup
 run_cmp "R empty input"   -R --random-source=rseed empty
 
+printf "\n[ --debug ]\n"
+printf 'a\tb 12.5x\n  -3,4 z\n\tjan 1e3 junk\nxx  0x1F abc\n\nb 2k\nc 3K\nd 4m 1e5\ne 5G -inf\nf 6Q nan(x)\ng 7x\ncaf\303\251 \001ctl\n' > dbg
+printf 'one two\nTwo  three\n  three four\nfour\n' > dbg2
+for f in dbg dbg2 kv nums fnums human months colon blanks ties; do
+    for o in "" -n -g -h -M -r -b -d -f -i -V -u -s -z -k1 -k2 -k1,1 -k2,2 -k2n -k2,2n -k2b -k2,2b -k1.2 -k1.2,1.3 -k2.2,3.1 "-k1,1 -k2,2n" "-k2 -k1" -k3 -k9 -k2,1 "-t, -k1" "-t: -k2" "-t: -k2n" "-t' ' -k2" -nk2 -gk2 -hk2 -Mk2 -k2M -k2g -k2h -k2V "-n -k1,1f" "-r -s -k1,1f" "-fn -k1,1M" "-nr -k1,1f" "-g -k2n" "-d -k1,1f" "-bn -k1,1f -k2" "-rn -k2" "-u -k1,1" "-s -k1,1" -us +1 "+1 -2" "+0 -1" "+1.2 -3.4" +1n "+1 -2n" "-n +1" "-k1,1b -k2n" "-k2 -u" "-k2 -s" -c -C "-o /dev/null" "-k1 -k2 -k3 -r" "-k2,2 -k1,1r"; do
+        eval run_cmp \"debug \$f \$o\" --debug $o $f
+    done
+done
+run_cmp "debug two files"  --debug -k2 dbg dbg2
+run_cmp "debug -m"         --debug -m dbg2 dbg2
+run_cmp "debug -m -u"      --debug -m -u -k1,1 dbg2 dbg2
+run_cmp "debug -z records" --debug -z -k2 nul
+run_cmp "debug empty"      --debug empty
+CMP_STDIN=dbg2 run_cmp "debug stdin" --debug -k2
+
 print_summary

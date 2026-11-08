@@ -26,7 +26,7 @@ users unlink link readlink realpath truncate ln rm test [ printf expr env nice n
 ## Known gaps in implemented commands
 
 See each command's `docs/compatibility/<cmd>.md`; the larger ones are: sort
-(no --debug, no external merge), factor (no elliptic-curve method),
+(no external merge), factor (no elliptic-curve method),
 users (no systemd-logind fallback), and the locale-dependent behaviour that is
 C-locale only everywhere.
 

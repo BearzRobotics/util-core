@@ -185,7 +185,17 @@ pub fn mktime(zone: *const Zone, year: i64, mon: i64, mday: i64, hour: i64, min:
     return mktimeIsdst(zone, year, mon, mday, hour, min, sec, -1);
 }
 
+/// glibc's mktime starts its search from the offset found by the previous call and
+/// so resolves a repeated local time to the instant with that offset when there is one.
+var mktime_hint: i32 = 0;
+
 pub fn mktimeIsdst(zone: *const Zone, year: i64, mon: i64, mday: i64, hour: i64, min: i64, sec: i64, isdst: i8) i64 {
+    const r = mktimeSearch(zone, year, mon, mday, hour, min, sec, isdst);
+    mktime_hint = zone.at(r).utoff;
+    return r;
+}
+
+fn mktimeSearch(zone: *const Zone, year: i64, mon: i64, mday: i64, hour: i64, min: i64, sec: i64, isdst: i8) i64 {
     // `mon` is zero-based like struct tm; fields may be out of range.
     const guess = timegm(year, mon + 1, mday, hour, min, sec);
     var offs: [9]i32 = undefined;
@@ -204,6 +214,7 @@ pub fn mktimeIsdst(zone: *const Zone, year: i64, mon: i64, mday: i64, hour: i64,
     }
     var best: ?i64 = null;
     var best_any: ?i64 = null;
+    var hint_hit: ?i64 = null;
     for (offs[0..n]) |o| {
         const t = guess - o;
         const ty = zone.at(t);
@@ -211,8 +222,10 @@ pub fn mktimeIsdst(zone: *const Zone, year: i64, mon: i64, mday: i64, hour: i64,
         if (best_any == null or t < best_any.?) best_any = t;
         if (isdst < 0 or ty.isdst == (isdst > 0)) {
             if (best == null or t < best.?) best = t;
+            if (isdst < 0 and o == mktime_hint) hint_hit = t;
         }
     }
+    if (hint_hit) |h| return h;
     if (best) |b| return b;
     if (isdst >= 0) {
         // Use the offset of a zone type of the requested kind.

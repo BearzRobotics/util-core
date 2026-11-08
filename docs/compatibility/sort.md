@@ -31,7 +31,7 @@ GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, install
 
 ## Known deviations and gaps
 
-- **Not implemented (rejected with exit status 2):** `--debug`. `-V/--version-sort` follows gnulib's filevercmp (suffix handling, `~`, leading dots) and `-R/--random-sort` hashes keys with MD5 over the 16-byte `--random-source` seed exactly like GNU (the key text is NUL-terminated only when the collation locale is not C/POSIX), so seeded output matches GNU byte for byte; without a seed the system RNG is used.
+- `--debug` prints GNU's start-up notes on stderr and underlines the key extents under each output line (tabs shown as `>`, numeric/general/human/month keys marked only over the parsed text), in the C locale only; obsolete `+POS1 -POS2` keys are accepted. `--debug` with `-c`, `-C` or `-o` is rejected like GNU. `-V/--version-sort` follows gnulib's filevercmp (suffix handling, `~`, leading dots) and `-R/--random-sort` hashes keys with MD5 over the 16-byte `--random-source` seed exactly like GNU (the key text is NUL-terminated only when the collation locale is not C/POSIX), so seeded output matches GNU byte for byte; without a seed the system RNG is used.
 - Sorting holds the whole input in memory; there are no temporary files, so `-S`, `-T`, `--batch-size`, `--compress-program` have no effect and inputs larger than memory fail. `-c`/`-C` and `-m` (to standard output, at most 128 inputs, standard input named at most once) stream one line per input instead.
 - Single-threaded; `--parallel=N` is validated and ignored.
 - Comparison is bytewise (C locale). LC_COLLATE, LC_CTYPE and LC_NUMERIC (thousands separators, multibyte characters) are not consulted; `-f` folds ASCII only.
@@ -43,7 +43,7 @@ GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, install
 
 ## Tests
 
-test/test_sort.sh: stdout, normalised stderr and exit status compared with GNU sort 9.7 under LC_ALL=C. It covers every ordering option, keys with and without `-t`, option and key error messages, `-z`, `-o`, `--files0-from`, `-c`/`-C`, `-m`, and 12 seeded pseudo-random inputs run through 35 option combinations each, version sort (-V) on a hand-made list and 10 random inputs, and random sort (-R) with a fixed `--random-source`.
+test/test_sort.sh: stdout, normalised stderr and exit status compared with GNU sort 9.7 under LC_ALL=C. It covers every ordering option, keys with and without `-t`, option and key error messages, `-z`, `-o`, `--files0-from`, `-c`/`-C`, `-m`, and 12 seeded pseudo-random inputs run through 35 option combinations each, version sort (-V) on a hand-made list and 10 random inputs, random sort (-R) with a fixed `--random-source`, and `--debug` over about 690 option/fixture combinations.
 
 ## Performance (poop, ReleaseFast, 300 000 lines, 2026-11-07)
 
