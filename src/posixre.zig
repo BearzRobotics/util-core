@@ -953,3 +953,179 @@ pub fn bareClass(pat: []const u8) bool {
     }
     return false;
 }
+
+// ---- regex dialect converters shared by find and locate
+
+/// Emacs regex syntax to POSIX ERE: groups, alternation and intervals are
+/// backslashed in Emacs and plain in ERE; the postfix operators agree. In the
+/// Emacs syntax proper `.` does not match a newline and bracket expressions
+/// have no character classes.
+pub fn emacsToEre(gpa: std.mem.Allocator, pat: []const u8, strict_emacs: bool) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    var at_start = true;
+    while (i < pat.len) {
+        const c = pat[i];
+        if (c == '[') {
+            // collect the set up to the first ']' (no [:class:] support)
+            i += 1;
+            var neg = false;
+            if (i < pat.len and pat[i] == '^') {
+                neg = true;
+                i += 1;
+            }
+            var members: std.ArrayList(u8) = .empty;
+            var has_close = false;
+            var has_open = false;
+            if (i < pat.len and pat[i] == ']') {
+                has_close = true;
+                i += 1;
+            }
+            while (i < pat.len and pat[i] != ']') : (i += 1) {
+                if (pat[i] == '[') has_open = true else members.append(gpa, pat[i]) catch return pat;
+            }
+            const closed = i < pat.len;
+            if (closed) i += 1;
+            out.append(gpa, '[') catch return pat;
+            if (neg) out.append(gpa, '^') catch return pat;
+            if (has_close) out.append(gpa, ']') catch return pat;
+            out.appendSlice(gpa, members.items) catch return pat;
+            if (has_open) out.append(gpa, '[') catch return pat;
+            if (closed) out.append(gpa, ']') catch return pat;
+            at_start = false;
+            continue;
+        }
+        if (c == '\\' and i + 1 < pat.len) {
+            const n = pat[i + 1];
+            i += 2;
+            switch (n) {
+                '(' => {
+                    out.append(gpa, '(') catch return pat;
+                    at_start = true;
+                    continue;
+                },
+                '|' => {
+                    out.append(gpa, '|') catch return pat;
+                    at_start = true;
+                    continue;
+                },
+                ')' => out.append(gpa, n) catch return pat,
+                '{', '}' => {
+                    out.append(gpa, '\\') catch return pat;
+                    out.append(gpa, n) catch return pat;
+                },
+                else => {
+                    out.append(gpa, '\\') catch return pat;
+                    out.append(gpa, n) catch return pat;
+                },
+            }
+            at_start = false;
+            continue;
+        }
+        switch (c) {
+            '.' => {
+                if (strict_emacs) out.appendSlice(gpa, "[^\n]") catch return pat else out.append(gpa, '.') catch return pat;
+                at_start = false;
+            },
+            '*', '+', '?' => {
+                if (at_start) out.append(gpa, '\\') catch return pat;
+                out.append(gpa, c) catch return pat;
+            },
+            '(', ')', '|', '{', '}' => {
+                out.append(gpa, '\\') catch return pat;
+                out.append(gpa, c) catch return pat;
+                at_start = false;
+            },
+            '^' => {
+                out.append(gpa, c) catch return pat;
+            },
+            else => {
+                out.append(gpa, c) catch return pat;
+                at_start = false;
+            },
+        }
+        i += 1;
+    }
+    return out.items;
+}
+
+/// GNU awk syntax: ERE in which a leading repetition operator is literal and
+/// (for plain `awk`) intervals are not available.
+pub fn awkEre(gpa: std.mem.Allocator, pat: []const u8, no_intervals: bool) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var at_start = true;
+    var in_br = false;
+    var i: usize = 0;
+    while (i < pat.len) : (i += 1) {
+        const c = pat[i];
+        if (in_br) {
+            out.append(gpa, c) catch return pat;
+            if (c == ']') in_br = false;
+            continue;
+        }
+        if (c == '\\' and i + 1 < pat.len) {
+            out.append(gpa, c) catch return pat;
+            i += 1;
+            out.append(gpa, pat[i]) catch return pat;
+            at_start = false;
+            continue;
+        }
+        switch (c) {
+            '[' => {
+                in_br = true;
+                out.append(gpa, c) catch return pat;
+                if (i + 1 < pat.len and pat[i + 1] == '^') {
+                    i += 1;
+                    out.append(gpa, '^') catch return pat;
+                }
+                if (i + 1 < pat.len and pat[i + 1] == ']') {
+                    i += 1;
+                    out.append(gpa, ']') catch return pat;
+                }
+                at_start = false;
+            },
+            '*', '+', '?' => {
+                if (at_start) out.append(gpa, '\\') catch return pat;
+                out.append(gpa, c) catch return pat;
+            },
+            '{', '}' => {
+                if (no_intervals or at_start) out.append(gpa, '\\') catch return pat;
+                out.append(gpa, c) catch return pat;
+                at_start = false;
+            },
+            '(', '|' => {
+                out.append(gpa, c) catch return pat;
+                at_start = true;
+            },
+            '^' => out.append(gpa, c) catch return pat,
+            else => {
+                out.append(gpa, c) catch return pat;
+                at_start = false;
+            },
+        }
+    }
+    return out.items;
+}
+
+/// POSIX minimal basic syntax: the GNU extensions \| \+ \? are ordinary.
+pub fn minimalBasic(gpa: std.mem.Allocator, pat: []const u8) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < pat.len) {
+        if (pat[i] == '\\' and i + 1 < pat.len) {
+            const n = pat[i + 1];
+            i += 2;
+            if (n == '|' or n == '+' or n == '?') {
+                out.append(gpa, n) catch return pat;
+            } else {
+                out.append(gpa, '\\') catch return pat;
+                out.append(gpa, n) catch return pat;
+            }
+            continue;
+        }
+        out.append(gpa, pat[i]) catch return pat;
+        i += 1;
+    }
+    return out.items;
+}
+

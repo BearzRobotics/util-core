@@ -776,7 +776,7 @@ const Parser = struct {
             'm' => {
                 ere = false;
                 lenient = true;
-                conv = minimalBasic(st, pat);
+                conv = posixre.minimalBasic(st.gpa, pat);
             },
             'x' => ere = true,
             'g' => {
@@ -785,10 +785,10 @@ const Parser = struct {
             },
             'a', 'p' => {
                 ere = true;
-                conv = awkEre(st, pat, st.regextype == 'a');
+                conv = posixre.awkEre(st.gpa, pat, st.regextype == 'a');
             },
             else => {
-                conv = emacsToEre(st, pat, st.regextype == 'e');
+                conv = posixre.emacsToEre(st.gpa, pat, st.regextype == 'e');
                 ere = true;
             },
         }
@@ -940,179 +940,6 @@ fn ensureZone(st: *State) void {
         st.zone = tzmod.load(st.gpa, st.ctx.io, cli.getenv(st.ctx, "TZ"));
         st.zone_loaded = true;
     }
-}
-
-/// Emacs regex syntax to POSIX ERE: groups, alternation and intervals are
-/// backslashed in Emacs and plain in ERE; the postfix operators agree. In the
-/// Emacs syntax proper `.` does not match a newline and bracket expressions
-/// have no character classes.
-fn emacsToEre(st: *State, pat: []const u8, strict_emacs: bool) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    var i: usize = 0;
-    var at_start = true;
-    while (i < pat.len) {
-        const c = pat[i];
-        if (c == '[') {
-            // collect the set up to the first ']' (no [:class:] support)
-            i += 1;
-            var neg = false;
-            if (i < pat.len and pat[i] == '^') {
-                neg = true;
-                i += 1;
-            }
-            var members: std.ArrayList(u8) = .empty;
-            var has_close = false;
-            var has_open = false;
-            if (i < pat.len and pat[i] == ']') {
-                has_close = true;
-                i += 1;
-            }
-            while (i < pat.len and pat[i] != ']') : (i += 1) {
-                if (pat[i] == '[') has_open = true else members.append(st.gpa, pat[i]) catch oom(st.ctx);
-            }
-            const closed = i < pat.len;
-            if (closed) i += 1;
-            out.append(st.gpa, '[') catch oom(st.ctx);
-            if (neg) out.append(st.gpa, '^') catch oom(st.ctx);
-            if (has_close) out.append(st.gpa, ']') catch oom(st.ctx);
-            out.appendSlice(st.gpa, members.items) catch oom(st.ctx);
-            if (has_open) out.append(st.gpa, '[') catch oom(st.ctx);
-            if (closed) out.append(st.gpa, ']') catch oom(st.ctx);
-            at_start = false;
-            continue;
-        }
-        if (c == '\\' and i + 1 < pat.len) {
-            const n = pat[i + 1];
-            i += 2;
-            switch (n) {
-                '(' => {
-                    out.append(st.gpa, '(') catch oom(st.ctx);
-                    at_start = true;
-                    continue;
-                },
-                '|' => {
-                    out.append(st.gpa, '|') catch oom(st.ctx);
-                    at_start = true;
-                    continue;
-                },
-                ')' => out.append(st.gpa, n) catch oom(st.ctx),
-                '{', '}' => {
-                    out.append(st.gpa, '\\') catch oom(st.ctx);
-                    out.append(st.gpa, n) catch oom(st.ctx);
-                },
-                else => {
-                    out.append(st.gpa, '\\') catch oom(st.ctx);
-                    out.append(st.gpa, n) catch oom(st.ctx);
-                },
-            }
-            at_start = false;
-            continue;
-        }
-        switch (c) {
-            '.' => {
-                if (strict_emacs) out.appendSlice(st.gpa, "[^\n]") catch oom(st.ctx) else out.append(st.gpa, '.') catch oom(st.ctx);
-                at_start = false;
-            },
-            '*', '+', '?' => {
-                if (at_start) out.append(st.gpa, '\\') catch oom(st.ctx);
-                out.append(st.gpa, c) catch oom(st.ctx);
-            },
-            '(', ')', '|', '{', '}' => {
-                out.append(st.gpa, '\\') catch oom(st.ctx);
-                out.append(st.gpa, c) catch oom(st.ctx);
-                at_start = false;
-            },
-            '^' => {
-                out.append(st.gpa, c) catch oom(st.ctx);
-            },
-            else => {
-                out.append(st.gpa, c) catch oom(st.ctx);
-                at_start = false;
-            },
-        }
-        i += 1;
-    }
-    return out.items;
-}
-
-/// GNU awk syntax: ERE in which a leading repetition operator is literal and
-/// (for plain `awk`) intervals are not available.
-fn awkEre(st: *State, pat: []const u8, no_intervals: bool) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    var at_start = true;
-    var in_br = false;
-    var i: usize = 0;
-    while (i < pat.len) : (i += 1) {
-        const c = pat[i];
-        if (in_br) {
-            out.append(st.gpa, c) catch oom(st.ctx);
-            if (c == ']') in_br = false;
-            continue;
-        }
-        if (c == '\\' and i + 1 < pat.len) {
-            out.append(st.gpa, c) catch oom(st.ctx);
-            i += 1;
-            out.append(st.gpa, pat[i]) catch oom(st.ctx);
-            at_start = false;
-            continue;
-        }
-        switch (c) {
-            '[' => {
-                in_br = true;
-                out.append(st.gpa, c) catch oom(st.ctx);
-                if (i + 1 < pat.len and pat[i + 1] == '^') {
-                    i += 1;
-                    out.append(st.gpa, '^') catch oom(st.ctx);
-                }
-                if (i + 1 < pat.len and pat[i + 1] == ']') {
-                    i += 1;
-                    out.append(st.gpa, ']') catch oom(st.ctx);
-                }
-                at_start = false;
-            },
-            '*', '+', '?' => {
-                if (at_start) out.append(st.gpa, '\\') catch oom(st.ctx);
-                out.append(st.gpa, c) catch oom(st.ctx);
-            },
-            '{', '}' => {
-                if (no_intervals or at_start) out.append(st.gpa, '\\') catch oom(st.ctx);
-                out.append(st.gpa, c) catch oom(st.ctx);
-                at_start = false;
-            },
-            '(', '|' => {
-                out.append(st.gpa, c) catch oom(st.ctx);
-                at_start = true;
-            },
-            '^' => out.append(st.gpa, c) catch oom(st.ctx),
-            else => {
-                out.append(st.gpa, c) catch oom(st.ctx);
-                at_start = false;
-            },
-        }
-    }
-    return out.items;
-}
-
-/// POSIX minimal basic syntax: the GNU extensions \| \+ \? are ordinary.
-fn minimalBasic(st: *State, pat: []const u8) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    var i: usize = 0;
-    while (i < pat.len) {
-        if (pat[i] == '\\' and i + 1 < pat.len) {
-            const n = pat[i + 1];
-            i += 2;
-            if (n == '|' or n == '+' or n == '?') {
-                out.append(st.gpa, n) catch oom(st.ctx);
-            } else {
-                out.append(st.gpa, '\\') catch oom(st.ctx);
-                out.append(st.gpa, n) catch oom(st.ctx);
-            }
-            continue;
-        }
-        out.append(st.gpa, pat[i]) catch oom(st.ctx);
-        i += 1;
-    }
-    return out.items;
 }
 
 // ------------------------------------------------------------ evaluation
