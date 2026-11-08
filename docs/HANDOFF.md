@@ -2,7 +2,7 @@
 
 ## What this project is
 A Zig 0.17.1 reimplementation of GNU coreutils 9.7 (plus the absorbed
-find/grep/sed/xargs/locate/tree, not started). The owner wants drop-in
+find/grep/sed/xargs/locate/updatedb/tree, all done). The owner wants drop-in
 behaviour verified against the real GNU binaries on this machine
 (`/usr/bin/<cmd>` is GNU 9.7), small and fast binaries, and everything done
 through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
@@ -10,13 +10,17 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
 `docs/decisions/0002-std-io-exceptions.md`.
 
 ## State
-- 93 commands are implemented, tested and documented. `docs/status.md` is
-  the authority on what is done and what remains; update it whenever a
-  command lands.
-- Remaining: the absorbed utilities find, grep, sed, locate, updatedb, tree.
-  (Oracles on the dev machine: /usr/bin find 4.10.0, grep 3.12 and sed 4.9 are
-  all GNU; locate and updatedb are not installed.) After that: the stress-testing pass the owner
-  asked for.
+- 99 commands are implemented, tested and documented (every command on the
+  list, including the absorbed sed, grep, find, xargs, tree, locate and
+  updatedb). `docs/status.md` is the authority; update it whenever a command
+  lands.
+- Oracles: coreutils, find 4.10.0, grep 3.12 and sed 4.9 are GNU in /usr/bin.
+  tree 2.3.1 is /usr/bin/tree (`ORACLE_OK=1`). locate/updatedb/xargs oracles are
+  built from the findutils-4.10.0 tarball by `tools/build-gnu-findutils.sh` into
+  `~/.cache/util-core/findutils` (suites skip if absent; `GNU_BIN` overrides).
+- Next: the stress-testing pass the owner asked for (large inputs, hostile
+  option combinations, low-memory/full-disk behaviour, fuzzing the regex
+  translator and the parsers against the GNU binaries).
 - Unix-only utilities belong in util-unix and are not to be added here:
   chmod, id, groups, tty, uname, chown, chgrp, chcon, runcon, kill, stty,
   who, pinky, hostname, uptime.
@@ -71,11 +75,12 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
   (exact C float formatting, f64 and f80), `mode.zig` (chmod modes),
   `posixre.zig` (BRE/ERE -> the regex package's Perl dialect), `tabs.zig`,
   `lines.zig`, `count_arg.zig`.
-- The regex package (`~/de/regex-zig`, imported as `regex`) has no POSIX
-  dialect; `posixre.zig` translates. Alternation is leftmost-first there
-  (POSIX is leftmost-longest). grep/sed/csplit/find need real POSIX matching;
-  consider extending regex-zig (the owner's own project) rather than piling
-  more onto the translator.
+- The regex package (remote dependency BearzRobotics/regex-zig, imported as
+  `regex`, not to be modified here) has no POSIX dialect; `posixre.zig`
+  translates BRE/ERE and the findutils/Emacs/awk dialects, and emulates
+  leftmost-longest alternation (`Finder`, `Flags.alt`) and UTF-8 classes
+  (`unicode.zig`, `unicode_tables.zig`). grep -P is regex-zig's Perl dialect,
+  not PCRE2.
 
 ## Pitfalls learned the hard way
 - `/tmp` is a small shared tmpfs that other projects fill. Keep build prefixes
@@ -97,7 +102,10 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
 sort: no -R/-V/--debug, no external merge. factor: no elliptic-curve method
 (very hard numbers are reported, not factored). users: no systemd-logind
 fallback. rm: --one-file-system accepted, not enforced. printf/seq: f80
-approximations of `long double` beyond x87 range. Locale: C only everywhere.
+approximations of `long double` beyond x87 range. Locale: C everywhere except sed, grep, find, tree and locate (UTF-8 vs C only).
+tree lacks -H/--fromfile/--gitignore/--info/--hyperlink/--compress/--condense/-R;
+find lacks -D tracing, -O, -files0-from, -context; locate lacks the old bigram
+database format; updatedb ignores --localuser/--netuser.
 
 ## Owner preferences
 Cite GNU manual + POSIX for every command (see memory

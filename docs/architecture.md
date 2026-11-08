@@ -16,9 +16,9 @@ with every structural change.
   multicall `main` holds all commands in 513 KB (ReleaseSmall).
 - Build: release modes strip command executables by default (`-Dstrip=false`
   keeps debug info); Debug builds are never stripped by default.
-- Commands implemented: `true`, `false`, `yes`, `echo`, `basename`, `dirname`,
-  `cat` (GNU baseline, no enhancements yet), `wc` (see its header comment for
-  deviations).
+- Commands implemented: 99, the full coreutils list minus the unix-only
+  utilities (which live in util-unix) plus the absorbed sed, grep, find, xargs,
+  tree, locate and updatedb. See `docs/status.md`.
 
 ## Layout
 
@@ -96,10 +96,9 @@ identically in both modes, and the same unit and shell tests cover both
 
 ## Dependencies
 
-No external dependencies yet. Planned: `regex-zig` (`~/de/regex-zig`) for
-`grep`/`sed`. Until it has a release it is referenced by local path in
-`build.zig.zon`; it will later be fetched as a vendored GitHub tarball with a
-pinned hash. Zig-native API first; any C FFI is later and optional.
+One external dependency: `regex-zig` (github.com/BearzRobotics/regex-zig,
+pinned in `build.zig.zon`), used through `src/posixre.zig` by grep, sed, find,
+csplit, expr, ptx, locate and updatedb. Zig-native; no C FFI.
 
 ## Testing
 
@@ -112,14 +111,15 @@ pinned hash. Zig-native API first; any C FFI is later and optional.
   otherwise). Differential checks show agreement with one GNU build; they are
   not by themselves conformance evidence, so each command's compatibility record
   also cites the GNU manual and POSIX.1-2024 pages it was checked against.
-- echo, basename, dirname, cat, wc, true, false, yes, dircolors, pwd, printenv, sleep, tee, head, tac, tail, seq, mkdir, rmdir, cut, paste, uniq, fold, nl and tr pass
-  against GNU coreutils 9.7, plus manual `cat`/`wc` comparisons on a binary
-  file (`-A -n -b -s -T -e`, `-l -w -m -c -L`).
+- Every implemented command has `test/test_<cmd>.sh` passing against its
+  oracle (GNU coreutils 9.7, GNU findutils 4.10.0, grep 3.12, sed 4.9, and tree
+  2.3.1). The findutils oracles for xargs/locate/updatedb are built from source
+  by `tools/build-gnu-findutils.sh`. `testlib.sh` also offers `CMP_STDIN`,
+  `CMP_LOCALE` (LC_ALL for both sides) and `ORACLE_OK=1` (skip the is-GNU probe).
 - Tests are not yet run for both dispatch modes (SPEC §11).
 
 ## Known gaps
 
-- No per-command compatibility records (`docs/compatibility/`) or manpages yet.
 - No CI; Windows and macOS are unverified.
 - Only the minimal `--help`/`--version` text exists; the version string is
   `0.0.0-dev`.
@@ -135,6 +135,19 @@ pinned hash. Zig-native API first; any C FFI is later and optional.
   (`failed to run command 'x': ...`).
 - `src/help/<cmd>.txt`: `--help` text, generated from GNU by `tools/mkhelp.sh`
   (without the GNU project footer) and embedded with `@embedFile`.
+
+## Search and regex layer
+
+- `src/posixre.zig`: dialect translation to regex-zig's Perl syntax, option
+  flags (`utf8`, `icase`, `lenient_brace`), leftmost-longest `Finder`, and
+  diagnostics matching glibc/GNU grep/sed wording.
+- `src/unicode.zig` + `unicode_tables.zig`: UTF-8 character sets, classes and
+  case maps used for locale-aware matching.
+- `src/fnmatch.zig`: fnmatch(3) with `period`/`casefold` flags (find, locate, tree).
+- `sys.readDirRaw` returns getdents64 order including `.`/`..`; `ls -f/-U`,
+  `find` and `tree` rely on kernel order to match their oracles.
+- locate decodes LOCATE02/slocate front-coded databases; updatedb walks,
+  sorts bytewise and encodes them (byte-identical to GNU's script + frcode).
 
 ## Library module
 
