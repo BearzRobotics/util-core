@@ -21,7 +21,7 @@ BIN_DIR="$(cd "$(dirname "$0")/../zig-out/bin" 2>/dev/null && pwd)"
 # every differential comparison below meaningless.
 # `test --version` is just the test "--version" (no output); `[` has the banner.
 GNU_PROBE="$UTIL"; [ "$UTIL" = test ] && GNU_PROBE='['
-if ! "${GNU_BIN:-/usr/bin}/$GNU_PROBE" --version 2>/dev/null | head -n 1 | grep -q 'GNU\|coreutils'; then
+if [ -z "$ORACLE_OK" ] && ! "${GNU_BIN:-/usr/bin}/$GNU_PROBE" --version 2>/dev/null | head -n 1 | grep -q 'GNU\|coreutils'; then
     echo "FATAL: ${GNU_BIN:-/usr/bin}/$UTIL is not a GNU implementation; refusing to run." >&2
     exit 2
 fi

@@ -55,6 +55,10 @@ pub const Parser = struct {
     ended: bool = false,
     /// Omit the "Try '--help'" line (sed prints its whole usage instead).
     no_try: bool = false,
+    /// Do not print diagnostics; the formatted text is kept in `last_diag`.
+    silent: bool = false,
+    last_diag: []const u8 = "",
+    diag_buf: [256]u8 = undefined,
     operands: std.ArrayList([]const u8) = .empty,
 
     pub fn init(ctx: cli.Context, short: []const u8, longs: []const Long) Parser {
@@ -75,7 +79,11 @@ pub const Parser = struct {
         p.operands.deinit(p.ctx.gpa);
     }
 
-    fn warnTry(p: *const Parser, comptime fmt: []const u8, args: anytype) void {
+    fn warnTry(p: *Parser, comptime fmt: []const u8, args: anytype) void {
+        if (p.silent) {
+            p.last_diag = std.fmt.bufPrint(&p.diag_buf, fmt, args) catch "";
+            return;
+        }
         if (p.no_try) cli.warn(p.ctx, fmt, args) else cli.warn(p.ctx, fmt ++ "\nTry '{s} --help' for more information.", args ++ .{p.ctx.name});
     }
 
