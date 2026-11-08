@@ -101,7 +101,7 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
 ## Known gaps (also in each compatibility doc)
 sort: no --debug, no external merge. factor: no elliptic-curve method
 (very hard numbers are reported, not factored). users: no systemd-logind
-fallback. rm: --one-file-system accepted, not enforced. printf/seq: f80
+fallback. printf/seq: f80
 approximations of `long double` beyond x87 range. Locale: C everywhere except sed, grep, find, tree and locate (UTF-8 vs C only).
 tree lacks -H/--fromfile/--gitignore/--info/--hyperlink/--compress/--condense/-R;
 find lacks -D tracing, -O, -files0-from, -context; locate lacks the old bigram

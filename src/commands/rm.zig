@@ -1,12 +1,11 @@
 //! rm — remove files or directories.
 //! References: GNU coreutils manual "rm invocation" (9.7); POSIX.1-2024 rm.
 //!
-//! Deviations: --one-file-system is accepted but not enforced (std.Io.File.Stat
-//! has no device number to compare), and --preserve-root=all is treated as
-//! plain --preserve-root.
+//! Deviations: --preserve-root=all is treated as plain --preserve-root.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "force", "interactive", "one-file-system", "no-preserve-root", "preserve-root", "recursive", "dir", "verbose", "help", "version" };
@@ -20,6 +19,7 @@ const Config = struct {
     dirs: bool = false, // -d
     verbose: bool = false,
     preserve_root: bool = true,
+    one_fs: bool = false,
     stdin_tty: bool = false,
 };
 
@@ -28,6 +28,7 @@ const State = struct {
     cfg: *const Config,
     out: *cli.Out,
     ok: bool = true,
+    root_dev: u64 = 0, // device of the current command-line argument (--one-file-system)
     nerr: usize = 0, // hard failures so far (declined prompts do not count)
 };
 
@@ -80,7 +81,7 @@ pub fn main(ctx: cli.Context) u8 {
                     }
                     cfg.force = false;
                 },
-                2 => {},
+                2 => cfg.one_fs = true,
                 3 => cfg.preserve_root = false,
                 4 => {
                     if (value) |v| {
@@ -238,6 +239,20 @@ fn remove(st: *State, path: []const u8, is_arg: bool) bool {
             st.ok = false;
         st.nerr += 1;
             return false;
+        }
+        if (cfg.one_fs) {
+            var de: std.os.linux.E = .SUCCESS;
+            if (sys.fileStat(path, false, &de)) |fs| {
+                const dev = (@as(u64, fs.dev_major) << 32) | fs.dev_minor;
+                if (is_arg) {
+                    st.root_dev = dev;
+                } else if (dev != st.root_dev) {
+                    cli.warn(ctx, "skipping {f}, since it's on a different device", .{cli.quoteA(path)});
+                    st.ok = false;
+                    st.nerr += 1;
+                    return false;
+                }
+            }
         }
         if (cfg.interactive == .always) {
             const q = std.fmt.bufPrint(&buf, "descend into directory {f}? ", .{cli.quoteA(path)}) catch return false;

@@ -128,5 +128,31 @@ run_tree "-v dangling and dir"     "$S" -rv dang d sd
 run_tree "twice the same file"     "$S" a a
 run_tree "-f twice"                "$S" -f a a
 run_tree "dir that is a symlink loop" 'ln -s l l' l
+
+printf "\n[ --one-file-system (needs unshare -rm) ]\n"
+if unshare -rm true 2>/dev/null; then
+    OW="$(mktemp -d)"
+    ofs() { # DESC ARGS...: tree with a tmpfs mounted at d/m; compare output, status and what is left
+        d="$1"; shift
+        for t in gnu ours; do
+            if [ $t = gnu ]; then bin=/usr/bin/rm; else bin="$BIN_DIR/rm"; fi
+            rm -rf "$OW/$t"; mkdir -p "$OW/$t/d/m/deep" "$OW/$t/d/n" "$OW/$t/e"; : > "$OW/$t/d/f"; : > "$OW/$t/d/n/g"; : > "$OW/$t/e/h"
+            ( cd "$OW/$t" && unshare -rm sh -c "mount -t tmpfs t d/m && mkdir d/m/deep && : > d/m/x && : > d/m/deep/y && LC_ALL=C $bin \"\$@\" > out 2> err </dev/null; echo \$? > rc; find . -not -path ./out -not -path ./err -not -path ./rc | sort > left" sh "$@" )
+            sed "s#$bin#rm#g" "$OW/$t/err" > "$OW/$t/err2"
+        done
+        for f in rc err2 left out; do cmp -s "$OW/gnu/$f" "$OW/ours/$f" || { FAIL=$((FAIL + 1)); echo "FAIL $d ($f)"; diff "$OW/gnu/$f" "$OW/ours/$f" | head -5; return; }; done
+        PASS=$((PASS + 1)); echo "PASS $d"
+    }
+    ofs "-r --one-file-system"      -r --one-file-system d
+    ofs "-rf --one-file-system"     -rf --one-file-system d
+    ofs "-rv --one-file-system"     -rv --one-file-system d
+    ofs "-r --one-file-system two"  -r --one-file-system d e
+    ofs "-r --one-file-system mnt"  -r --one-file-system d/m
+    ofs "-r without option"         -r d
+    ofs "-rd --one-file-system"     -rd --one-file-system d/n
+    rm -rf "$OW"
+else
+    echo "SKIP: unshare -rm is not available"
+fi
 rm -f "$yes_all" "$no_all" "$mixed"
 print_summary
