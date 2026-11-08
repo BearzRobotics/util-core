@@ -560,6 +560,12 @@ fn isNul(buf: []const u8) bool {
 
 fn iwrite(d: *D, buf: []const u8) usize {
     var total: usize = 0;
+    // A partial final block cannot be written with O_DIRECT: drop the flag (as GNU does).
+    if (d.oflags & O_DIRECT != 0 and buf.len > 0 and buf.len < d.output_blocksize) {
+        const old = std.os.linux.fcntl(1, std.os.linux.F.GETFL, 0);
+        if (std.os.linux.errno(old) == .SUCCESS) _ = std.os.linux.fcntl(1, std.os.linux.F.SETFL, old & ~@as(usize, O_DIRECT));
+        d.oflags &= ~@as(@TypeOf(d.oflags), O_DIRECT);
+    }
     while (total < buf.len) {
         d.final_op_was_seek = false;
         var nwritten: usize = 0;

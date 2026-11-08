@@ -28,6 +28,7 @@ const State = struct {
     cfg: *const Config,
     out: *cli.Out,
     ok: bool = true,
+    nerr: usize = 0, // hard failures so far (declined prompts do not count)
 };
 
 pub fn main(ctx: cli.Context) u8 {
@@ -182,6 +183,7 @@ fn removeArg(st: *State, path: []const u8) void {
     if (cfg.recursive and (std.mem.eql(u8, last, ".") or std.mem.eql(u8, last, ".."))) {
         cli.warn(ctx, "refusing to remove '.' or '..' directory: skipping {f}", .{cli.quoteA(path)});
         st.ok = false;
+        st.nerr += 1;
         return;
     }
     if (cfg.preserve_root and cfg.recursive and isRoot(ctx, path)) {
@@ -189,6 +191,7 @@ fn removeArg(st: *State, path: []const u8) void {
         cli.warn(ctx, "it is dangerous to operate recursively on {f}{s}", .{ cli.quoteA(path), if (literal) "" else " (same as '/')" });
         cli.warn(ctx, "use --no-preserve-root to override this failsafe", .{});
         st.ok = false;
+        st.nerr += 1;
         return;
     }
     _ = remove(st, path, true);
@@ -223,6 +226,7 @@ fn remove(st: *State, path: []const u8, is_arg: bool) bool {
         if (cfg.force and e == error.FileNotFound) return true;
         cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), cli.errText(e) });
         st.ok = false;
+        st.nerr += 1;
         return false;
     };
     var buf: [4400]u8 = undefined;
@@ -232,6 +236,7 @@ fn remove(st: *State, path: []const u8, is_arg: bool) bool {
             if (cfg.dirs) return removeEmptyDir(st, path, lst, is_arg);
             cli.warn(ctx, "cannot remove {f}: Is a directory", .{cli.quoteA(path)});
             st.ok = false;
+        st.nerr += 1;
             return false;
         }
         if (cfg.interactive == .always) {
@@ -241,6 +246,7 @@ fn remove(st: *State, path: []const u8, is_arg: bool) bool {
         var dir = cwd.openDir(ctx.io, path, .{ .iterate = true }) catch |e| {
             cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), cli.errText(e) });
             st.ok = false;
+        st.nerr += 1;
             return false;
         };
         var names: std.ArrayList([]u8) = .empty;
@@ -257,16 +263,16 @@ fn remove(st: *State, path: []const u8, is_arg: bool) bool {
             };
         }
         dir.close(ctx.io);
-        var all_gone = true;
+        const errs_before = st.nerr;
         for (names.items) |n| {
             const child = if (std.mem.endsWith(u8, path, "/"))
                 std.fmt.allocPrint(ctx.gpa, "{s}{s}", .{ path, n }) catch return false
             else
                 std.fmt.allocPrint(ctx.gpa, "{s}/{s}", .{ path, n }) catch return false;
             defer ctx.gpa.free(child);
-            if (!remove(st, child, false)) all_gone = false;
+            _ = remove(st, child, false);
         }
-        if (!all_gone) return false; // children failed: leave the directory, as GNU does
+        if (st.nerr != errs_before) return false; // a child failed: leave the directory, as GNU does
         return removeEmptyDir(st, path, lst, is_arg);
     }
 
@@ -285,6 +291,7 @@ fn remove(st: *State, path: []const u8, is_arg: bool) bool {
     cwd.deleteFile(ctx.io, path) catch |e| {
         cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), cli.errText(e) });
         st.ok = false;
+        st.nerr += 1;
         return false;
     };
     if (cfg.verbose) st.out.print("removed {f}\n", .{cli.quoteA(path)});
@@ -320,6 +327,7 @@ fn removeEmptyDir(st: *State, path: []const u8, lst: Io.File.Stat, is_arg: bool)
         const busy_root = (e == error.FileBusy and isRoot(ctx, path)) or (e == error.Unexpected and std.mem.endsWith(u8, std.mem.trimEnd(u8, path, "/"), "."));
         cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), if (busy_root) "Directory not empty" else cli.errText(e) });
         st.ok = false;
+        st.nerr += 1;
         return false;
     };
     if (cfg.verbose) st.out.print("removed directory {f}\n", .{cli.quoteA(path)});
