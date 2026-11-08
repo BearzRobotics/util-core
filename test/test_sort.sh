@@ -1,6 +1,6 @@
 #!/bin/sh
 # sort: differential tests against GNU sort (C locale). References: GNU manual
-# "sort invocation"; POSIX.1-2024 sort. Not covered (not implemented): -R, -V,
+# "sort invocation"; POSIX.1-2024 sort. Not covered (not implemented): -R and
 # --debug.
 UTIL="sort"
 . "$(dirname "$0")/testlib.sh"
@@ -323,4 +323,87 @@ while [ $r -lt 12 ]; do
     run_cmp "rnd$r -t TAB -k2n,2 -k1" -t "$TAB" -k2n,2 -k1 rnd
     r=$((r+1))
 done
+printf "\n[ Version sort -V ]\n"
+cat > vers <<'EOT'
+file1.txt
+file10.txt
+file2.txt
+file02.txt
+file1.10.txt
+file1.9.txt
+1.0
+1.0.0
+1.0~rc1
+1.0-1
+1.0a
+1.0.1
+.hidden
+..
+.
+..a
+.a
+a.tar.gz
+a.tar
+a.tar.bz2
+a1
+a01
+a001
+a
+A
+~tilde
+~~
+x~
+x
+10
+9
+009
+ sp
+-dash
+_u
+foo.5
+foo.5.gz
+foo.50.gz
+foo.6
+glibc-2.31
+glibc-2.4
+glibc-2.31.tar.xz
+glibc-2.4.tar.xz
+12345678901234567890123
+12345678901234567891
+a.b
+a.B
+a..b
+a.
+.b.c
+EOT
+printf 'x 1.10\nx 1.9\ny 1.2\nx 1.9\n' > vkv
+for o in -V -Vr -Vu -Vs -Vf -Vd -Vi -Vb -Vc -VC -Vm "--sort=version" "--sort=v" "-k1,1V" "-k2V" "-k2,2V -k1,1" "-k2Vr" "-Vk2" "-nV" "-gV" "-hV" "-MV" "-Vn" "-t. -k2V" "-z -V"; do
+    eval run_cmp \"vers \$o\" $o vers
+done
+run_cmp "vkv -k2V" -k2V vkv
+run_cmp "vkv -V -k2" -V -k2 vkv
+run_cmp "vkv -k2,2V -u" -k2,2V -u vkv
+r=0
+while [ $r -lt 10 ]; do
+    awk -v seed=$r 'BEGIN{srand(seed+7); a="ab01.~-_9Z"; for(i=0;i<300;i++){n=int(rand()*9); l=""; for(j=0;j<n;j++) l=l substr(a,int(rand()*10)+1,1); print l}}' > vrnd
+    for o in -V -Vr -Vu -Vf -Vd -Vi "-Vs -r"; do eval run_cmp \"vrnd$r \$o\" $o vrnd; done
+    r=$((r+1))
+done
+
+printf "\n[ Random sort -R with --random-source ]\n"
+head -c 64 /dev/urandom > rseed
+head -c 9 /dev/urandom > rshort
+for o in -R -Rr -Ru -Rs -Rf -Rd -Ri -Rb -Rm -RV -VR --sort=random --sort=r "-k1,1R" "-k2R" "-k2,2R -k1,1" "-k2R -r" "-t: -k2R" "-Rn" "-Rg" "-Rh" "-RM" "-n -k1R" "-u -k1,1R" "-Rz"; do
+    eval run_cmp \"rnd0 \$o\" $o --random-source=rseed rnd0
+    eval run_cmp \"words \$o\" $o --random-source=rseed words
+done
+run_cmp "R short source"  -R --random-source=rshort words
+run_cmp "R empty source"  -R --random-source=empty words
+run_cmp "R missing source" -R --random-source=nosuch words
+run_cmp "R two sources"   -R --random-source=rseed --random-source=rshort words
+run_cmp "R same source twice" -R --random-source=rseed --random-source=rseed words
+run_cmp "source without R" --random-source=nosuch words
+run_cmp "R dups"          -R --random-source=rseed dup
+run_cmp "R empty input"   -R --random-source=rseed empty
+
 print_summary

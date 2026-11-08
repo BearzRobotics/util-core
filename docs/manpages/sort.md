@@ -67,7 +67,7 @@ Reference: GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machi
 See docs/compatibility/sort.md for details.
 
 LIMITATIONS
-- **Not implemented (rejected with exit status 2):** `-R/--random-sort`, `--random-source`, `-V/--version-sort` (GNU's filevercmp rules, including the file-extension handling, are specified in the manual but not yet ported), `--debug`.
+- **Not implemented (rejected with exit status 2):** `--debug`. `-V/--version-sort` follows gnulib's filevercmp (suffix handling, `~`, leading dots) and `-R/--random-sort` hashes keys with MD5 over the 16-byte `--random-source` seed exactly like GNU (the key text is NUL-terminated only when the collation locale is not C/POSIX), so seeded output matches GNU byte for byte; without a seed the system RNG is used.
 - Sorting holds the whole input in memory; there are no temporary files, so `-S`, `-T`, `--batch-size`, `--compress-program` have no effect and inputs larger than memory fail. `-c`/`-C` and `-m` (to standard output, at most 128 inputs, standard input named at most once) stream one line per input instead.
 - Single-threaded; `--parallel=N` is validated and ignored.
 - Comparison is bytewise (C locale). LC_COLLATE, LC_CTYPE and LC_NUMERIC (thousands separators, multibyte characters) are not consulted; `-f` folds ASCII only.

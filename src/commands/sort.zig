@@ -5,9 +5,8 @@
 //!   * modes: sort, -m merge, -c/-C check; -o, -u, -s, -z, --files0-from;
 //!   * keys: -k F[.C][OPTS][,F[.C][OPTS]], -t, -b, global options inherited by
 //!     keys that carry no ordering letters of their own;
-//!   * orderings: lexicographic (-d -f -i), -n, -g, -h, -M, -r.
-//!   * NOT implemented: -R/--random-sort, -V/--version-sort, --debug (rejected
-//!     with exit status 2). -S -T --parallel --batch-size --compress-program
+//!   * orderings: lexicographic (-d -f -i), -n, -g, -h, -M, -V, -R, -r.
+//!   * NOT implemented: --debug (rejected with exit status 2). -S -T --parallel --batch-size --compress-program
 //!     are validated and then ignored: all input is held in memory.
 //!
 //! Design: every input is read into one byte buffer; the lines are slices of
@@ -24,14 +23,19 @@ const Io = std.Io;
 
 const no_field = std.math.maxInt(usize);
 
-const Mode = enum { lex, numeric, general, human, month };
+const Mode = enum { lex, numeric, general, human, month, version, random };
+
+/// -R: 16 bytes drawn from --random-source (or the system RNG), prepended to every key before hashing.
+var random_seed: [16]u8 = @splat(0);
+/// GNU hashes the strxfrm form (NUL-terminated) when the collation locale is not C/POSIX.
+var random_nul: bool = false;
 
 /// Ordering options of one key, or of the whole command line ("global").
 const Ordering = struct {
     mode: Mode = .lex,
     /// Bit per numeric-style ordering requested (g, h, M, n); more than one
     /// is an error, as in GNU.
-    mode_mask: u4 = 0,
+    mode_mask: u6 = 0,
     fold: bool = false, // -f
     dict: bool = false, // -d
     nonprint: bool = false, // -i
@@ -73,6 +77,7 @@ const Config = struct {
     check: enum { none, diagnose, quiet } = .none,
     term: u8 = '\n',
     output: ?[]const u8 = null,
+    random_source: ?[]const u8 = null,
     files0_from: ?[]const u8 = null,
 };
 
@@ -151,7 +156,7 @@ pub fn main(ctx: cli.Context) u8 {
                 5 => setLetter(&cfg.gkey, 'M', .both),
                 6 => setLetter(&cfg.gkey, 'h', .both),
                 7 => setLetter(&cfg.gkey, 'n', .both),
-                8 => return unsupported(ctx, "random sort (-R)"),
+                8 => setLetter(&cfg.gkey, 'R', .both),
                 9 => cfg.gkey.reverse = true,
                 10 => {
                     const w = value.?;
@@ -174,11 +179,18 @@ pub fn main(ctx: cli.Context) u8 {
                         cli.warn(ctx, "{s} argument '{s}' for '--sort'\nValid arguments are:\n  - 'general-numeric'\n  - 'human-numeric'\n  - 'month'\n  - 'numeric'\n  - 'random'\n  - 'version'\nTry '{s} --help' for more information.", .{ if (found == null) "invalid" else "ambiguous", w, ctx.name });
                         return 1;
                     }
-                    if (letters[found.?] == 'R' or letters[found.?] == 'V') return unsupported(ctx, if (letters[found.?] == 'R') "random sort (-R)" else "version sort (-V)");
                     setLetter(&cfg.gkey, letters[found.?], .both);
                 },
-                11 => return unsupported(ctx, "version sort (-V)"),
-                12 => return unsupported(ctx, "--random-source"),
+                11 => setLetter(&cfg.gkey, 'V', .both),
+                12 => {
+                    if (cfg.random_source) |prev| {
+                        if (!std.mem.eql(u8, prev, value.?)) {
+                            cli.warn(ctx, "multiple random sources specified", .{});
+                            return fail_status;
+                        }
+                    }
+                    cfg.random_source = value.?;
+                },
                 13 => {
                     if (!validBatchSize(ctx, value.?)) return fail_status;
                 },
@@ -244,8 +256,8 @@ pub fn main(ctx: cli.Context) u8 {
             switch (c) {
                 'b', 'd', 'f', 'g', 'h', 'i', 'M', 'n' => setLetter(&cfg.gkey, c, .both),
                 'r' => cfg.gkey.reverse = true,
-                'R' => return unsupported(ctx, "random sort (-R)"),
-                'V' => return unsupported(ctx, "version sort (-V)"),
+                'R' => setLetter(&cfg.gkey, 'R', .both),
+                'V' => setLetter(&cfg.gkey, 'V', .both),
                 'c' => cfg.check = .diagnose,
                 'C' => cfg.check = .quiet,
                 'm' => cfg.merge = true,
@@ -261,6 +273,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     if (!finishKeys(ctx, &cfg)) return fail_status;
+    if (usesRandom(&cfg)) if (!seedRandom(ctx, cfg.random_source)) return fail_status;
 
     // Input names.
     var names: std.ArrayList([]const u8) = .empty;
@@ -397,9 +410,58 @@ fn setLetter(o: *Ordering, c: u8, where: Where) void {
             o.mode = .numeric;
             o.mode_mask |= 8;
         },
+        'R' => {
+            o.mode = .random;
+            o.mode_mask |= 32;
+        },
+        'V' => {
+            if (o.mode != .random) o.mode = .version;
+            o.mode_mask |= 16;
+        },
         'r' => o.reverse = true,
         else => unreachable,
     }
+}
+
+fn usesRandom(cfg: *const Config) bool {
+    if (cfg.gkey.mode == .random) return true;
+    for (cfg.keys.items) |k| if (k.ord.mode == .random) return true;
+    return false;
+}
+
+fn seedRandom(ctx: cli.Context, source: ?[]const u8) bool {
+    random_nul = false;
+    for ([_][]const u8{ "LC_ALL", "LC_COLLATE", "LANG" }) |v| {
+        if (cli.getenv(ctx, v)) |val| {
+            if (val.len == 0) continue;
+            random_nul = !(std.mem.eql(u8, val, "C") or std.mem.eql(u8, val, "POSIX"));
+            break;
+        }
+    }
+    const path = source orelse {
+        ctx.io.random(&random_seed);
+        return true;
+    };
+    const file = std.Io.Dir.cwd().openFile(ctx.io, path, .{}) catch |e| {
+        cli.warn(ctx, "open failed: {s}: {s}", .{ path, cli.errText(e) });
+        return false;
+    };
+    defer file.close(ctx.io);
+    var got: usize = 0;
+    while (got < random_seed.len) {
+        const n = file.readStreaming(ctx.io, &.{random_seed[got..]}) catch |e| {
+            if (e == error.EndOfStream) {
+                cli.warn(ctx, "{f}: end of file", .{cli.quoteA(path)});
+            } else cli.warn(ctx, "read failed: {s}: {s}", .{ path, cli.errText(e) });
+            return false;
+        };
+        if (n == 0) {
+            cli.warn(ctx, "{f}: end of file", .{cli.quoteA(path)});
+            return false;
+        }
+        got += n;
+    }
+    return true;
 }
 
 fn unsupported(ctx: cli.Context, what: []const u8) u8 {
@@ -489,17 +551,13 @@ fn parseCount(ctx: cli.Context, s: *[]const u8, msg: []const u8) ?usize {
 }
 
 fn parseLetters(s: *[]const u8, o: *Ordering, where: Where) void {
-    while (s.len > 0 and std.mem.indexOfScalar(u8, "bdfghiMnr", s.*[0]) != null) {
+    while (s.len > 0 and std.mem.indexOfScalar(u8, "bdfghiMnrRV", s.*[0]) != null) {
         setLetter(o, s.*[0], where);
         s.* = s.*[1..];
     }
 }
 
 fn addKey(ctx: cli.Context, cfg: *Config, spec: []const u8) bool {
-    if (std.mem.indexOfAny(u8, spec, "RV") != null) {
-        cli.warn(ctx, "random/version ordering in a key is not implemented in this build", .{});
-        return false;
-    }
     var key: Key = .{};
     var s = spec;
     const sword = parseCount(ctx, &s, "invalid number at field start") orelse return false;
@@ -550,7 +608,7 @@ fn finishKeys(ctx: cli.Context, cfg: *Config) bool {
 }
 
 fn compatible(ctx: cli.Context, o: Ordering) bool {
-    const n: u8 = @popCount(o.mode_mask) + @as(u8, @intFromBool(o.ignores()));
+    const n: u8 = @popCount(o.mode_mask & 15) + @as(u8, @intFromBool(o.mode_mask & 48 != 0)) + @as(u8, @intFromBool(o.ignores() and o.mode_mask & 15 != 0));
     if (n <= 1) return true;
     var letters: [12]u8 = undefined;
     var len: usize = 0;
@@ -568,7 +626,9 @@ fn compatible(ctx: cli.Context, o: Ordering) bool {
     if (o.nonprint and !o.dict) add(&letters, &len, 'i');
     if (o.mode_mask & 4 != 0) add(&letters, &len, 'M');
     if (o.mode_mask & 8 != 0) add(&letters, &len, 'n');
+    if (o.mode_mask & 32 != 0) add(&letters, &len, 'R');
     if (o.reverse) add(&letters, &len, 'r');
+    if (o.mode_mask & 16 != 0) add(&letters, &len, 'V');
     cli.warn(ctx, "options '-{s}' are incompatible", .{letters[0..len]});
     return false;
 }
@@ -1022,7 +1082,136 @@ fn compareField(o: Ordering, a: []const u8, b: []const u8) i32 {
         .general => compareGeneral(a, b),
         .human => compareHuman(a, b),
         .month => monthOf(a) - monthOf(b),
+        .random => compareRandom(o, a, b),
+        .version => if (o.fold or o.ignores()) filteredVercmp(o, a, b) else filevercmp(a, b),
     };
+}
+
+// -V: gnulib filenvercmp (version comparison that understands file suffixes).
+fn vOrder(s: []const u8, pos: usize) i32 {
+    if (pos >= s.len) return 0;
+    const c = s[pos];
+    if (std.ascii.isDigit(c)) return 0;
+    if (std.ascii.isAlphabetic(c)) return c;
+    if (c == '~') return -1;
+    return @as(i32, c) + 256;
+}
+
+fn verrevcmp(s1: []const u8, s2: []const u8) i32 {
+    var p1: usize = 0;
+    var p2: usize = 0;
+    while (p1 < s1.len or p2 < s2.len) {
+        var first_diff: i32 = 0;
+        while ((p1 < s1.len and !std.ascii.isDigit(s1[p1])) or (p2 < s2.len and !std.ascii.isDigit(s2[p2]))) {
+            const c1 = vOrder(s1, p1);
+            const c2 = vOrder(s2, p2);
+            if (c1 != c2) return c1 - c2;
+            p1 += 1;
+            p2 += 1;
+        }
+        while (p1 < s1.len and s1[p1] == '0') p1 += 1;
+        while (p2 < s2.len and s2[p2] == '0') p2 += 1;
+        while (p1 < s1.len and p2 < s2.len and std.ascii.isDigit(s1[p1]) and std.ascii.isDigit(s2[p2])) {
+            if (first_diff == 0) first_diff = @as(i32, s1[p1]) - @as(i32, s2[p2]);
+            p1 += 1;
+            p2 += 1;
+        }
+        if (p1 < s1.len and std.ascii.isDigit(s1[p1])) return 1;
+        if (p2 < s2.len and std.ascii.isDigit(s2[p2])) return -1;
+        if (first_diff != 0) return first_diff;
+    }
+    return 0;
+}
+
+fn filePrefixLen(s: []const u8) usize {
+    if (s.len == 0) return 0;
+    var prefix: usize = 0;
+    var i: usize = 0;
+    while (true) {
+        if (i == s.len) return prefix;
+        i += 1;
+        prefix = i;
+        while (i + 1 < s.len and s[i] == '.' and (std.ascii.isAlphabetic(s[i + 1]) or s[i + 1] == '~')) {
+            i += 2;
+            while (i < s.len and (std.ascii.isAlphanumeric(s[i]) or s[i] == '~')) i += 1;
+        }
+    }
+}
+
+/// -V with -f/-d/-i: GNU compares copies with ignored characters dropped and
+/// letters upper-cased.
+fn randomDigest(text: []const u8, out: *[16]u8) void {
+    var h = std.crypto.hash.Md5.init(.{});
+    h.update(&random_seed);
+    h.update(text);
+    if (random_nul) h.update(&.{0});
+    h.final(out);
+}
+
+fn compareRandom(o: Ordering, a0: []const u8, b0: []const u8) i32 {
+    var a = a0;
+    var b = b0;
+    if (o.fold or o.ignores()) {
+        const gpa = std.heap.page_allocator;
+        const ba = gpa.alloc(u8, a.len) catch return 0;
+        defer gpa.free(ba);
+        const bb = gpa.alloc(u8, b.len) catch return 0;
+        defer gpa.free(bb);
+        a = filterKey(o, a, ba);
+        b = filterKey(o, b, bb);
+        var da: [16]u8 = undefined;
+        var db: [16]u8 = undefined;
+        randomDigest(a, &da);
+        randomDigest(b, &db);
+        return sign(orderBytes(&da, &db));
+    }
+    var da: [16]u8 = undefined;
+    var db: [16]u8 = undefined;
+    randomDigest(a, &da);
+    randomDigest(b, &db);
+    return sign(orderBytes(&da, &db));
+}
+
+fn filteredVercmp(o: Ordering, a: []const u8, b: []const u8) i32 {
+    const gpa = std.heap.page_allocator;
+    const ca = gpa.alloc(u8, a.len) catch return filevercmp(a, b);
+    defer gpa.free(ca);
+    const cb = gpa.alloc(u8, b.len) catch return filevercmp(a, b);
+    defer gpa.free(cb);
+    const fa = filterKey(o, a, ca);
+    const fb = filterKey(o, b, cb);
+    return filevercmp(fa, fb);
+}
+
+fn filterKey(o: Ordering, src: []const u8, dst: []u8) []u8 {
+    var n: usize = 0;
+    for (src) |c| {
+        if (o.ignores() and ignored(o, c)) continue;
+        dst[n] = if (o.fold) std.ascii.toUpper(c) else c;
+        n += 1;
+    }
+    return dst[0..n];
+}
+
+fn filevercmp(a: []const u8, b: []const u8) i32 {
+    if (a.len == 0) return if (b.len == 0) 0 else -1;
+    if (b.len == 0) return 1;
+    if (a[0] == '.') {
+        if (b[0] != '.') return -1;
+        const adot = a.len == 1;
+        const bdot = b.len == 1;
+        if (adot) return if (bdot) 0 else -1;
+        if (bdot) return 1;
+        const add = a.len == 2 and a[1] == '.';
+        const bdd = b.len == 2 and b[1] == '.';
+        if (add) return if (bdd) 0 else -1;
+        if (bdd) return 1;
+    } else if (b[0] == '.') return 1;
+    const ap = filePrefixLen(a);
+    const bp = filePrefixLen(b);
+    const one_pass = ap == a.len and bp == b.len;
+    const r = verrevcmp(a[0..ap], b[0..bp]);
+    return if (r != 0 or one_pass) r else verrevcmp(a, b);
 }
 
 fn ignored(o: Ordering, c: u8) bool {
