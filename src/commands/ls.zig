@@ -1172,24 +1172,29 @@ const Ls = struct {
         }
 
         var total_blocks: u64 = 0;
-        // std.Io hides "." and ".."; readdir lists them first.
-        for ([_][]const u8{ ".", ".." }) |dots| {
-            if (s.fileIgnored(dots)) continue;
-            total_blocks += s.gobbleFile(dots, .directory, false, name);
-            if (s.format == .one_per_line and s.sort_type == .none and !s.print_block_size and !s.recursive) {
-                s.sortFiles();
-                s.printCurrentFiles();
-                s.clearFiles();
-            }
-        }
-        var it = dir.iterate();
-        while (true) {
-            const entry = it.next(s.ctx.io) catch |e| {
-                s.fileFailureText(command_line_arg, "reading directory {f}", name, cli.errText(e));
-                break;
-            } orelse break;
+        // Raw getdents order, "." and ".." included, as readdir returns it.
+        var derr: std.os.linux.E = .SUCCESS;
+        const raw = sys.readDirRaw(s.gpa, name, &derr);
+        defer if (raw) |rs| {
+            for (rs) |x| s.gpa.free(x.name);
+            s.gpa.free(rs);
+        };
+        if (raw == null) {
+            s.fileFailureText(command_line_arg, "reading directory {f}", name, sys.errnoText(derr));
+        } else for (raw.?) |entry| {
             if (s.fileIgnored(entry.name)) continue;
-            total_blocks += s.gobbleFile(entry.name, typeFromKind(entry.kind), false, name);
+            const kind: Io.File.Kind = switch (entry.dtype) {
+                4 => .directory,
+                8 => .file,
+                10 => .sym_link,
+                1 => .named_pipe,
+                2 => .character_device,
+                6 => .block_device,
+                12 => .unix_domain_socket,
+                14 => .whiteout,
+                else => .unknown,
+            };
+            total_blocks += s.gobbleFile(entry.name, typeFromKind(kind), false, name);
             if (s.format == .one_per_line and s.sort_type == .none and !s.print_block_size and !s.recursive) {
                 s.sortFiles();
                 s.printCurrentFiles();
@@ -2213,7 +2218,7 @@ fn realMain(s: *Ls) u8 {
             const c: u8 = @intCast(i);
             s.rfc3986[i] = std.ascii.isAlphanumeric(c) or c == '~' or c == '-' or c == '.' or c == '_';
         }
-        s.hostname = s.cfg.allocator().dupe(u8, sys.uname().nodename) catch "";
+        s.hostname = s.cfg.allocator().dupe(u8, sys.uname().nodename()) catch "";
     }
 
     s.clearFiles();

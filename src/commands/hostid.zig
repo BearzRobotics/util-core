@@ -46,7 +46,8 @@ fn hostId(ctx: cli.Context) u32 {
     } else |_| {}
     // 32-bit value whose bytes are the address as it sits in memory, with its
     // 16-bit halves swapped.
-    const host = sys.uname().nodename;
+    const uts = sys.uname();
+    const host = uts.nodename();
     const f = Io.Dir.cwd().openFile(ctx.io, "/etc/hosts", .{}) catch return 0;
     defer f.close(ctx.io);
     var text: std.ArrayList(u8) = .empty;

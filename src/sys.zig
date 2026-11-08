@@ -119,25 +119,38 @@ pub fn supplementaryGroups(buf: []u32) []u32 {
     return buf[0..n];
 }
 
+/// uname(2) result. The strings are read from the stored buffers through
+/// methods, so copying the struct never leaves a slice pointing at a dead frame.
 pub const Uname = struct {
-    sysname: []const u8,
-    nodename: []const u8,
-    release: []const u8,
-    version: []const u8,
-    machine: []const u8,
-    // Backing storage for the slices above.
     raw: if (builtin.os.tag == .linux) std.os.linux.utsname else void,
+
+    pub fn sysname(u: *const Uname) []const u8 {
+        if (comptime builtin.os.tag != .linux) return "unknown";
+        return std.mem.sliceTo(&u.raw.sysname, 0);
+    }
+    pub fn nodename(u: *const Uname) []const u8 {
+        if (comptime builtin.os.tag != .linux) return "unknown";
+        return std.mem.sliceTo(&u.raw.nodename, 0);
+    }
+    pub fn release(u: *const Uname) []const u8 {
+        if (comptime builtin.os.tag != .linux) return "unknown";
+        return std.mem.sliceTo(&u.raw.release, 0);
+    }
+    pub fn version(u: *const Uname) []const u8 {
+        if (comptime builtin.os.tag != .linux) return "unknown";
+        return std.mem.sliceTo(&u.raw.version, 0);
+    }
+    pub fn machine(u: *const Uname) []const u8 {
+        if (comptime builtin.os.tag != .linux) return "unknown";
+        return std.mem.sliceTo(&u.raw.machine, 0);
+    }
 };
 
 pub fn uname() Uname {
-    if (comptime builtin.os.tag != .linux) return .{ .sysname = "unknown", .nodename = "unknown", .release = "unknown", .version = "unknown", .machine = "unknown", .raw = {} };
     var u: Uname = undefined;
-    _ = std.os.linux.uname(&u.raw);
-    u.sysname = std.mem.sliceTo(&u.raw.sysname, 0);
-    u.nodename = std.mem.sliceTo(&u.raw.nodename, 0);
-    u.release = std.mem.sliceTo(&u.raw.release, 0);
-    u.version = std.mem.sliceTo(&u.raw.version, 0);
-    u.machine = std.mem.sliceTo(&u.raw.machine, 0);
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.uname(&u.raw);
+    } else u.raw = {};
     return u;
 }
 
@@ -691,6 +704,47 @@ pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?i32 {
         return null;
     }
     return @intCast(rc);
+}
+
+/// One directory entry as the kernel returns it.
+pub const RawEntry = struct { name: []u8, dtype: u8 };
+
+/// All entries of the directory `path` in readdir order, including "." and
+/// ".." (std.Io hides them). Names are allocated with `gpa`.
+pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEntry {
+    if (comptime builtin.os.tag != .linux) return null;
+    const fd = openFd(path, O.RDONLY | O.DIRECTORY, 0, err) orelse return null;
+    defer _ = closeFd(fd);
+    var list: std.ArrayList(RawEntry) = .empty;
+    var buf: [32768]u8 align(8) = undefined;
+    while (true) {
+        const rc = LX.syscall3(.getdents64, @bitCast(@as(isize, fd)), @intFromPtr(&buf), buf.len);
+        const e = LX.errno(rc);
+        if (e == .INTR) continue;
+        if (e != .SUCCESS) {
+            err.* = e;
+            for (list.items) |x| gpa.free(x.name);
+            list.deinit(gpa);
+            return null;
+        }
+        if (rc == 0) break;
+        var off: usize = 0;
+        while (off < rc) {
+            const reclen = std.mem.readInt(u16, buf[off + 16 ..][0..2], .little);
+            const dtype = buf[off + 18];
+            const nm = std.mem.sliceTo(buf[off + 19 .. off + reclen], 0);
+            const dup = gpa.dupe(u8, nm) catch {
+                err.* = .NOMEM;
+                return null;
+            };
+            list.append(gpa, .{ .name = dup, .dtype = dtype }) catch {
+                err.* = .NOMEM;
+                return null;
+            };
+            off += reclen;
+        }
+    }
+    return list.toOwnedSlice(gpa) catch null;
 }
 
 pub fn closeFd(fd: i32) ?LX.E {

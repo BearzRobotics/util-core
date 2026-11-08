@@ -31,7 +31,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
     const u = sys.uname();
     var buf: [128]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{s}\n", .{u.machine}) catch return 1;
+    const line = std.fmt.bufPrint(&buf, "{s}\n", .{u.machine()}) catch return 1;
     return if (cli.writeStdout(ctx.io, line)) 0 else 1;
 }
 

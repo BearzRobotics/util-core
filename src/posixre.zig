@@ -706,6 +706,7 @@ pub fn diagnose(pat: []const u8) []const u8 {
 
 pub fn diagnoseMode(pat: []const u8, ere: bool) []const u8 {
     if (nonAsciiRange(pat)) return "Invalid collation character";
+    if (ere and std.mem.eql(u8, pat, "[")) return "Invalid regular expression";
     if (ere) {
         var at_start = true;
         var depth: i32 = 0;

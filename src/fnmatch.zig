@@ -3,7 +3,15 @@
 
 const std = @import("std");
 
-pub const Flags = struct { period: bool = false };
+pub const Flags = struct { period: bool = false, casefold: bool = false };
+
+fn other(c: u8) u8 {
+    return if (std.ascii.isUpper(c)) std.ascii.toLower(c) else if (std.ascii.isLower(c)) std.ascii.toUpper(c) else c;
+}
+
+fn ceq(a: u8, b: u8, cf: bool) bool {
+    return a == b or (cf and other(a) == b);
+}
 
 pub fn match(pattern: []const u8, text: []const u8, flags: Flags) bool {
     return matchAt(pattern, 0, text, 0, flags);
@@ -29,7 +37,7 @@ fn classMatch(name: []const u8, c: u8) ?bool {
 /// Parse the bracket expression starting at pattern[start] == '['. Returns
 /// whether `c` matches and the index after the closing ']', or null when the
 /// expression is not terminated (the '[' is then literal).
-fn bracket(pattern: []const u8, start: usize, c: u8) ?struct { matched: bool, next: usize } {
+fn bracket(pattern: []const u8, start: usize, c: u8, cf: bool) ?struct { matched: bool, next: usize } {
     var i = start + 1;
     var negate = false;
     if (i < pattern.len and (pattern[i] == '!' or pattern[i] == '^')) {
@@ -67,8 +75,8 @@ fn bracket(pattern: []const u8, start: usize, c: u8) ?struct { matched: bool, ne
                 hi = pattern[i];
                 i += 1;
             }
-            if (lo <= c and c <= hi) matched = true;
-        } else if (lo == c) matched = true;
+            if ((lo <= c and c <= hi) or (cf and lo <= other(c) and other(c) <= hi)) matched = true;
+        } else if (ceq(lo, c, cf)) matched = true;
     }
     return .{ .matched = matched != negate, .next = i };
 }
@@ -97,7 +105,7 @@ fn matchAt(pattern: []const u8, pi_in: usize, text: []const u8, ti_in: usize, fl
             },
             '[' => {
                 if (ti >= text.len) return false;
-                if (bracket(pattern, pi, text[ti])) |b| {
+                if (bracket(pattern, pi, text[ti], flags.casefold)) |b| {
                     if (flags.period and ti == 0 and text[0] == '.') return false;
                     if (!b.matched) return false;
                     pi = b.next;
@@ -114,12 +122,12 @@ fn matchAt(pattern: []const u8, pi_in: usize, text: []const u8, ti_in: usize, fl
                     pi += 1;
                     lit = pattern[pi];
                 }
-                if (ti >= text.len or text[ti] != lit) return false;
+                if (ti >= text.len or !ceq(lit, text[ti], flags.casefold)) return false;
                 pi += 1;
                 ti += 1;
             },
             else => {
-                if (ti >= text.len or text[ti] != pc) return false;
+                if (ti >= text.len or !ceq(pc, text[ti], flags.casefold)) return false;
                 pi += 1;
                 ti += 1;
             },
