@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! realpath — print the resolved absolute file name.
 //! Reference: GNU coreutils manual "realpath invocation" (9.7).
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! seq — print a sequence of numbers.
 //! Reference: GNU coreutils manual "seq invocation" (9.7); POSIX does not
 //! specify seq.

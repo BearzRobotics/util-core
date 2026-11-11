@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! strtold-like parsing of a floating-point prefix, shared by printf and
 //! numfmt. Accepts leading white space, a sign, decimal numbers with an
 //! optional exponent, hexadecimal floating point (0x1.8p3), "inf"/"infinity"

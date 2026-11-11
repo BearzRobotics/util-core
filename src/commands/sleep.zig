@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! sleep — delay for a specified time.
 //! References: GNU coreutils manual "sleep invocation" (9.7); POSIX.1-2024
 //! sleep (a single non-negative decimal integer number of seconds).

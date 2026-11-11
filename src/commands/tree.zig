@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! tree — list directory contents in a tree-like format. Reference: tree 2.3.1
 //! (Steve Baker et al.). Supported: the listing, sorting, filtering and
 //! information options, -C colours, -A/-S line drawing, -X/-J output. Not

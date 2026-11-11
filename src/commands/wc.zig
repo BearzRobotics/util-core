@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! wc — count lines, words, characters, bytes and maximum line length.
 //! Reference: GNU coreutils wc(1), POSIX wc.
 //!

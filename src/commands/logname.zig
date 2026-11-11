@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! logname — print the user's login name.
 //! Reference: GNU coreutils manual "logname invocation" (9.7); POSIX.1-2024
 //! logname. glibc's getlogin() first consults /proc/self/loginuid; the utmp

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! paste — merge corresponding lines of files.
 //! References: GNU coreutils manual "paste invocation" (9.7); POSIX.1-2024
 //! paste.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! mkfifo — make named pipes.
 //! Reference: GNU coreutils manual "mkfifo invocation" (9.7); POSIX.1-2024 mkfifo.
 

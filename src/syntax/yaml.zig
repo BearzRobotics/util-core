@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! A small YAML reader: the subset used by Sublime `.sublime-syntax` files.
 //!
 //! Supported: block mappings and sequences (including a sequence at the same

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! ptx — produce a permuted index of file contents.
 //! Reference: GNU coreutils manual "ptx invocation" (9.7). POSIX does not
 //! specify ptx.

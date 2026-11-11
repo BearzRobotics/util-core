@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! fnmatch(3) subset used by ls: `*`, `?`, bracket expressions with ranges,
 //! negation and POSIX classes, backslash quoting, and FNM_PERIOD. C locale.
 

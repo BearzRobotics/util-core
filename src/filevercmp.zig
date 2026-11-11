@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Version-aware file name comparison (GNU filevercmp, coreutils 9.6
 //! lib/filevercmp.c, consulted 2026-11-07), C locale.
 

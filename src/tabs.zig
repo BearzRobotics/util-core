@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Tab stop lists for expand and unexpand.
 //! References: GNU coreutils manual "expand invocation" / "unexpand
 //! invocation" (9.7); POSIX.1-2024 expand and unexpand (-t tablist).

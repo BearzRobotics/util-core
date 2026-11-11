@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! nice — run a program with a modified scheduling priority.
 //! Reference: GNU coreutils manual "nice invocation" (9.7); POSIX.1-2024 nice.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Operating-system facilities that std.Io (Zig 0.17.1) does not provide.
 //!
 //! The project does all file, stream, clock and process I/O through `std.Io`

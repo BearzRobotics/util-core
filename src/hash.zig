@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Message digests and legacy checksums for md5sum, sha*sum, b2sum, cksum
 //! and sum. MD5, SHA-1 and SHA-2 come from std.crypto; BLAKE2b (with a
 //! variable digest length, which std does not offer at run time), SM3 and the

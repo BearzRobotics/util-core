@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Port of gnulib argmatch: match an option argument against a table of
 //! names (exact match, else unique prefix) and the standard diagnostics.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! cat — concatenate files to standard output. Reference: GNU coreutils cat(1),
 //! POSIX cat, and bat(1) for the terminal view (SPEC §8.2).
 //!

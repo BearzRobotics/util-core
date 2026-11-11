@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Sublime `.sublime-syntax` grammar model and loader.
 //!
 //! A Registry owns every loaded Syntax. All definition data (strings, rules,

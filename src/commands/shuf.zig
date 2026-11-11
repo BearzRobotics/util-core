@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! shuf — generate random permutations.
 //! Reference: GNU coreutils manual "shuf invocation" (9.7). POSIX does not
 //! specify shuf.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! comm — compare two sorted files line by line.
 //! References: GNU coreutils manual "comm invocation" (9.7); POSIX.1-2024 comm.
 //!

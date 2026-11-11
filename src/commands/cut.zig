@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! cut — select bytes, characters or fields from each line.
 //! References: GNU coreutils manual "cut invocation" (9.7); POSIX.1-2024 cut.
 //!

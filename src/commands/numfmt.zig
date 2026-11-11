@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! numfmt — convert numbers from/to human-readable strings.
 //! Reference: GNU coreutils manual "numfmt invocation" (9.7). POSIX does not
 //! specify numfmt.

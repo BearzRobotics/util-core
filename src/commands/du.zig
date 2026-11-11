@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! du — estimate file space usage.
 //!
 //! References, consulted 2026-11-07: GNU coreutils manual "du invocation"

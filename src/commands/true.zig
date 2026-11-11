@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! true — do nothing, successfully. Reference: GNU coreutils true(1).
 //! Ignores all arguments except a sole --help or --version.
 

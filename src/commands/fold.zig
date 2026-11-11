@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! fold — wrap input lines to fit a given width.
 //! References: GNU coreutils manual "fold invocation" (9.7); POSIX.1-2024 fold.
 //!

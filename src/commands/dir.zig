@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! dir — list directory contents in columns (ls -C -b). See ls.zig.
 
 const cli = @import("../cli.zig");

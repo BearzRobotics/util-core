@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Line-at-a-time Sublime-syntax highlighter.
 //!
 //! Memory use does not depend on file size: the only state carried between

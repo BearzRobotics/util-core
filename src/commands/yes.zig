@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! yes — repeatedly output a line. Reference: GNU coreutils yes(1).
 //!
 //! The output line (arguments joined by single spaces plus newline, default

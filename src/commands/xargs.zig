@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! xargs — build and execute command lines from standard input.
 //!
 //! References, consulted 2026-11-07: POSIX.1-2024 xargs and the GNU findutils

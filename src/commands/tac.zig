@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! tac — concatenate and print files in reverse.
 //! Reference: GNU coreutils manual "tac invocation" (9.7). POSIX does not
 //! specify tac.

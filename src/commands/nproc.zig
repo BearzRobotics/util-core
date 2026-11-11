@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! nproc — print the number of processing units available.
 //! Reference: GNU coreutils manual "nproc invocation" (9.7).
 //! The default honours OMP_NUM_THREADS and OMP_THREAD_LIMIT as GNU does.

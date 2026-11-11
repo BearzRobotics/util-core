@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! unexpand — convert spaces to tabs.
 //! References: GNU coreutils manual "unexpand invocation" (9.7); POSIX.1-2024
 //! unexpand. Tab list syntax lives in src/tabs.zig.

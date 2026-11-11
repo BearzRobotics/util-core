@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! find — walk directory trees and evaluate an expression. Reference: GNU
 //! findutils 4.10 (parser.c, pred.c, tree.c, find.c). Traversal order is the
 //! order of readdir, like fts without a comparison function.

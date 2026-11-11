@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! dircolors — output commands to set the LS_COLORS environment variable.
 //!
 //! References, consulted 2026-11-04 (see docs/compatibility/dircolors.md):

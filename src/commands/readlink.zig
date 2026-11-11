@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! readlink — print the value of a symbolic link or canonical file name.
 //! Reference: GNU coreutils manual "readlink invocation" (9.7).
 

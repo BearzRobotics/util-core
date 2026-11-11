@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! truncate — shrink or extend the size of a file.
 //! Reference: GNU coreutils manual "truncate invocation" (9.7).
 

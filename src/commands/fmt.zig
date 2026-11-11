@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! fmt — simple optimal text formatter.
 //! Reference: GNU coreutils manual "fmt invocation" (9.7); POSIX does not
 //! specify fmt. The paragraph-filling algorithm (a dynamic-programming search

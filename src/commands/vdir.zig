@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! vdir — list directory contents verbosely (ls -l -b). See ls.zig.
 
 const cli = @import("../cli.zig");

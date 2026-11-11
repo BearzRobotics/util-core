@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! sum — checksum and block count (BSD or System V algorithm).
 //! Reference: GNU coreutils manual "sum invocation" (9.7).
 //!

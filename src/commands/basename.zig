@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! basename — strip directory and suffix. Reference: GNU coreutils basename(1),
 //! POSIX basename.
 //!

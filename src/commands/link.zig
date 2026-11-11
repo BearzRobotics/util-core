@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! link — create a hard link by calling link(2).
 //! Reference: GNU coreutils manual "link invocation" (9.7).
 

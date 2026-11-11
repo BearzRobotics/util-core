@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! timeout — run a command with a time limit.
 //! Reference: GNU coreutils manual "timeout invocation" (9.7).
 //!

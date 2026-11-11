@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! unlink — remove a file by calling unlink(2).
 //! Reference: GNU coreutils manual "unlink invocation" (9.7).
 

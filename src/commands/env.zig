@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! env — run a program in a modified environment, or print the environment.
 //! Reference: GNU coreutils manual "env invocation" (9.7); POSIX.1-2024 env.
 //!

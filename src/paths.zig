@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Path canonicalisation shared by readlink and realpath.
 //! Reference: GNU coreutils manual "realpath invocation" / "readlink
 //! invocation" (9.7); gnulib canonicalize_filename_mode.

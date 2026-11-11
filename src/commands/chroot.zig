@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! chroot — run a command with a different root directory.
 //! Reference: GNU coreutils manual "chroot invocation" (9.7).
 //!

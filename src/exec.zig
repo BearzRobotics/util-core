@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Running another program for env, nohup, nice, stdbuf, chroot and timeout.
 //!
 //! std.process.replace never consults PATH from a custom environment map, but

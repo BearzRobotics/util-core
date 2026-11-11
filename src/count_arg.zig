@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Parsing of the numeric argument of head/tail -n and -c: `[+|-]NUM[SUFFIX]`.
 //! Reference: GNU coreutils manual, "head invocation" and "Block size" (suffix
 //! table). POSIX.1-2024 only requires a plain decimal integer (tail: optional

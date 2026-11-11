@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! mktemp — create a temporary file or directory, safely, and print its name.
 //! Reference: GNU coreutils manual "mktemp invocation" (9.7). POSIX does not
 //! specify mktemp.

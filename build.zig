@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Util Core build script. See SPEC.md §7 for the packaging modes.
 //!
 //! Options:

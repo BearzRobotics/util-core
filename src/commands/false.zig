@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! false — do nothing, unsuccessfully. Reference: GNU coreutils false(1).
 //! Ignores all arguments except a sole --help or --version, and exits 1 even
 //! for those.

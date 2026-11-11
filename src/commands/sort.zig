@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! sort — sort, merge, or check lines of text.
 //! References: GNU coreutils manual "sort invocation" (9.7); POSIX.1-2024 sort.
 //!

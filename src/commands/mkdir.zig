@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! mkdir — make directories.
 //! References: GNU coreutils manual "mkdir invocation" (9.7); POSIX.1-2024
 //! mkdir.

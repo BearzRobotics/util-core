@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! sed — stream editor. Reference: GNU sed 4.9 (compile.c, execute.c) and
 //! POSIX sed. Regular expressions go through src/posixre.zig (BRE/ERE
 //! translated to the regex-zig Perl dialect), so alternation is

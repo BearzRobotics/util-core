@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Port of the quoting algorithm of GNU quotearg (C locale only), written
 //! from the behaviour of coreutils 9.6's lib/quotearg.c (consulted
 //! 2026-11-07). Used by ls for file names and by argument diagnostics.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! arch — print the machine hardware name (same as uname -m).
 //! Reference: GNU coreutils manual "arch invocation" (9.7).
 

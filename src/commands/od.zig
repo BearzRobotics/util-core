@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! od — dump files in octal and other formats.
 //! Reference: GNU coreutils manual "od invocation" (9.7); POSIX.1-2024 od
 //! (-A -b -c -d -j -N -o -s -t -v -x and the offset operand).

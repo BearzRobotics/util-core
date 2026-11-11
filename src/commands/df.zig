@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! df — report file system space usage.
 //!
 //! References, consulted 2026-11-07: GNU coreutils manual "df invocation"

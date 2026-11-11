@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! hostid — print the numeric identifier of the current host.
 //! Reference: GNU coreutils manual "hostid invocation" (9.7); glibc
 //! gethostid(): /etc/hostid if present, otherwise derived from the IPv4

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! grep — print lines that match patterns. Reference: GNU grep 3.12 (grep.c).
 //! Patterns are compiled to the Perl dialect of regex-zig through
 //! src/posixre.zig (BRE, ERE, fixed strings) or passed as is (-P).

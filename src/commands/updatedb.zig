@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! updatedb — build the file-name database used by locate. Reference: GNU
 //! findutils 4.10 (locate/updatedb.sh and frcode.c). The shell pipeline
 //! `find | sort -z | frcode` is done in process: the tree is walked in

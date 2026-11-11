@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! pr — paginate or columnate files for printing.
 //! Reference: GNU coreutils manual "pr invocation" (9.7); POSIX.1-2024 pr.
 //!

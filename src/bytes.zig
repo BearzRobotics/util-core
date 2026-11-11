@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Byte-scanning helpers shared by the utilities. std.mem's scalar searches
 //! are plain byte loops in Zig 0.17.1 (`findScalarLast`), so these use 32-byte
 //! vectors. A vector comparison becomes a bit mask whose lane i is bit i

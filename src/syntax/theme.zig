@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Maps Sublime scope names to terminal colors (SGR sequences).
 //!
 //! The default theme uses only the 16 standard ANSI colors so it follows the

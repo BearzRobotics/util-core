@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! printenv — print environment variables.
 //! Reference: GNU coreutils manual "printenv invocation" (9.7). POSIX does not
 //! specify printenv.

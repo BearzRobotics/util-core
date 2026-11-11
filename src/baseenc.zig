@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Shared implementation of base64, base32 and basenc.
 //! References: GNU coreutils manual (9.7) "base64 invocation", "base32
 //! invocation", "basenc invocation"; RFC 4648 (sections 4 to 8); ZeroMQ

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! shred — overwrite a file to hide its contents, and optionally delete it.
 //!
 //! References, consulted 2026-11-07: GNU coreutils manual "shred invocation"

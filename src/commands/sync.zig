@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! sync — flush file system buffers.
 //! Reference: GNU coreutils manual "sync invocation" (9.7); POSIX.1-2024 sync.
 //!

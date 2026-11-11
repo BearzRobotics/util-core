@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! POSIX basic and extended regular expressions (with the GNU extensions
 //! \| \+ \? in BRE), translated into the Perl dialect of the regex package
 //! (~/de/regex-zig), which has no POSIX dialect yet.

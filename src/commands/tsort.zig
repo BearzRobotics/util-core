@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! tsort — topological sort.
 //! References: GNU coreutils manual "tsort invocation" (9.7); POSIX.1-2024
 //! tsort.

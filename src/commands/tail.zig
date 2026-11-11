@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! tail — output the last part of files.
 //! References: GNU coreutils manual "tail invocation" (9.7); POSIX.1-2024 tail.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Minimal UTF-8 and Unicode support for locale-aware regexes and case
 //! conversion: decoding, simple case mapping and translation of codepoint sets
 //! into byte-level patterns for the regex package (which works on bytes).

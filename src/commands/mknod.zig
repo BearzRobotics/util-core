@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! mknod — make block or character special files, or named pipes.
 //! Reference: GNU coreutils manual "mknod invocation" (9.7); POSIX.1-2024
 //! does not specify mknod. Block and character devices need privilege.

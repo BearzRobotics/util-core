@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! whoami — print the user name of the effective user ID.
 //! Reference: GNU coreutils manual "whoami invocation" (9.7).
 

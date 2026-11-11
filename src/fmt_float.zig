@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! C-compatible printf formatting of one double: %e %E %f %F %g %G with the
 //! flags `-+ #0`, a width and a precision (as in POSIX.1-2024 printf(1) /
 //! fprintf and the GNU seq format rules).

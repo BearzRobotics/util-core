@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Public library surface of util-core (the `util_core` module).
 //!
 //! Everything else under src/ is internal. Consumers add the dependency in

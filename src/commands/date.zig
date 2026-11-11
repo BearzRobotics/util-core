@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! date — print or set the system date and time.
 //! Reference: GNU coreutils manual "date invocation" (9.7); POSIX.1-2024 date
 //! (output formats, -u, MMDDhhmm[[CC]YY] setting).

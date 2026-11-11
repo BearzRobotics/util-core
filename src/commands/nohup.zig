@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! nohup — run a program immune to hangups.
 //! Reference: GNU coreutils manual "nohup invocation" (9.7); POSIX.1-2024 nohup.
 //!

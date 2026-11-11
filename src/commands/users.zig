@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! users — print the login names of the users currently logged in.
 //! Reference: GNU coreutils manual "users invocation" (9.7). Reads Linux
 //! utmp records (384 bytes; type 7 is a user process).

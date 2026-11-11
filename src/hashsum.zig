@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Shared implementation of cksum, md5sum, sha1sum, sha224sum, sha256sum,
 //! sha384sum, sha512sum and b2sum.
 //! References: GNU coreutils manual (9.7) "cksum invocation", "md5sum

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Shared copy engine of cp, mv and install: a port of the control flow of
 //! GNU coreutils 9.6 src/copy.c (copy_internal, copy_reg, copy_dir,
 //! same_file_ok, overwrite_ok and friends), consulted 2026-11-07, checked

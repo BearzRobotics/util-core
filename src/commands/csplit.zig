@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! csplit — split a file into sections determined by context lines.
 //! Reference: GNU coreutils manual "csplit invocation" (9.7); POSIX.1-2024
 //! csplit.

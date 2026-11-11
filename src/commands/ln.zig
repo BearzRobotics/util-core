@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! ln — make links between files.
 //! Reference: GNU coreutils manual "ln invocation" (9.7); POSIX.1-2024 ln.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! tee — copy standard input to standard output and to files.
 //! References: GNU coreutils manual "tee invocation" (9.7); POSIX.1-2024 tee.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Unit-test root: pulls in every command so `zig build test` covers them.
 const std = @import("std");
 const commands = @import("commands.zig");

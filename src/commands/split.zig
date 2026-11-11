@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! split — split a file into pieces.
 //! Reference: GNU coreutils manual "split invocation" (9.7). POSIX.1-2024 split
 //! specifies only -a, -b, -l and the alphabetic suffixes.

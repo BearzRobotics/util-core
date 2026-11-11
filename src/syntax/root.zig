@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Sublime-syntax highlighting: YAML subset reader, grammar loader, and the
 //! line-oriented engine. See docs/decisions/0001-cat-syntax-highlighting.md.
 

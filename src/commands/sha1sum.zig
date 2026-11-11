@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! sha1sum — see src/hashsum.zig.
 const cli = @import("../cli.zig");
 const hashsum = @import("../hashsum.zig");

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Look-ups in /etc/passwd and /etc/group (no NSS: GNU goes through libc, so
 //! users that exist only in LDAP or similar are not found here).
 

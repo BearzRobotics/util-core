@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! uniq — report or filter out repeated adjacent lines.
 //! References: GNU coreutils manual "uniq invocation" (9.7); POSIX.1-2024 uniq.
 //!

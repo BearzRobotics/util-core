@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! factor — print the prime factors of each number.
 //! Reference: GNU coreutils manual "factor invocation" (9.7). POSIX does not
 //! specify factor.

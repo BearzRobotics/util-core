@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! join — join lines of two sorted files on a common field.
 //! References: GNU coreutils manual "join invocation" (9.7); POSIX.1-2024 join.
 //!

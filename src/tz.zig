@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Time zones: TZif files and POSIX TZ strings, plus the civil-calendar
 //! arithmetic that date, touch, ls, stat, pr and who share.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! getopt_long-compatible option parsing with glibc's diagnostics.
 //!
 //! Behaviour follows glibc getopt_long as the GNU tools use it: option

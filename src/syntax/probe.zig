@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Developer tool: load .sublime-syntax grammars, highlight a file with the
 //! first one, print a summary (warnings, rejected patterns, timing).
 //!

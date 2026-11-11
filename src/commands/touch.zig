@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! touch — change file timestamps.
 //! Reference: GNU coreutils manual "touch invocation" (9.7); POSIX.1-2024
 //! touch (-a -c -d -m -r -t). Times are set with utimensat(2) through

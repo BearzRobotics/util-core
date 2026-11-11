@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! stdbuf — run a command with modified buffering of its standard streams.
 //! Reference: GNU coreutils manual "stdbuf invocation" (9.7).
 //!

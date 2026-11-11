@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! nl — number lines of files.
 //! References: GNU coreutils manual "nl invocation" (9.7); POSIX.1-2024 nl
 //! (an XSI utility).

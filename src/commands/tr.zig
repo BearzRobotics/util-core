@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! tr — translate, squeeze and/or delete characters.
 //! References: GNU coreutils manual "tr invocation" (9.7); POSIX.1-2024 tr.
 //!

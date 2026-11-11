@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Human-readable sizes and block-size specifications: ports of GNU
 //! gnulib's human_readable() and human_options() (coreutils 9.6 lib/human.c,
 //! consulted 2026-11-07) and of the part of xstrtoumax() they rely on.

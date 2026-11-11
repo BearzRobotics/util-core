@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! stat — display file or file system status.
 //! Reference: GNU coreutils manual "stat invocation" (9.7); POSIX does not
 //! specify stat. Format directives, printf flag handling and the default and

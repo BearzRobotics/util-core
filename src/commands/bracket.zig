@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! `[` — the bracketed form of test; see test.zig.
 const cli = @import("../cli.zig");
 const test_cmd = @import("test.zig");

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! expr — evaluate expressions.
 //! Reference: GNU coreutils manual "expr invocation" (9.7); POSIX.1-2024 expr.
 //!

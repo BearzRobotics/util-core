@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! ls, dir and vdir — list directory contents.
 //!
 //! References, consulted 2026-11-07: GNU coreutils manual "ls invocation"

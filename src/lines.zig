@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Line-at-a-time input for the filter utilities (cut, paste, uniq, fold, nl).
 //!
 //! A line may be arbitrarily long (POSIX: "line lengths shall be unlimited"),

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Shared command-line facilities: the per-invocation context handed to every
 //! command frontend, and small helpers for the --help/--version convention.
 //!

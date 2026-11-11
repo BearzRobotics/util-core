@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! locate — find files by name in a database made by updatedb. Reference: GNU
 //! findutils 4.10 (locate/locate.c). Reads GNU LOCATE02 and slocate databases;
 //! the old bigram format is not supported.

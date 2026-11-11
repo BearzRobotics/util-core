@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! echo — write arguments separated by spaces. Reference: GNU coreutils echo(1).
 //!
 //! Options -n, -e, -E are recognised only as leading arguments made solely of

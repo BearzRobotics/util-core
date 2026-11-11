@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! mv — move (rename) files.
 //!
 //! References, consulted 2026-11-07: GNU coreutils manual "mv invocation"

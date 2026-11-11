@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! strftime in the C locale with the GNU extensions of gnulib's nstrftime:
 //! the flags `_ - 0 ^ # :`, field widths, %N (nanoseconds), %s, the %:z family,
 //! and %F/%G/%V/%U/%W week arithmetic. Used by date, ls, stat, pr, who, du,

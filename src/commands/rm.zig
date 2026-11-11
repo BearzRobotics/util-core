@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! rm — remove files or directories.
 //! References: GNU coreutils manual "rm invocation" (9.7); POSIX.1-2024 rm.
 //!

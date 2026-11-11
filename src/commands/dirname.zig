@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! dirname — strip the last path component. Reference: GNU coreutils
 //! dirname(1), POSIX dirname. Only '/' is a separator (see basename.zig).
 

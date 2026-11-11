@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Grammar discovery for a command-line tool: reads `.sublime-syntax` files
 //! from directories and picks a grammar for a file or a user-given name.
 

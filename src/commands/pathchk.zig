@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! pathchk — check whether file names are valid or portable.
 //! Reference: GNU coreutils manual "pathchk invocation" (9.7); POSIX.1-2024 pathchk.
 //!

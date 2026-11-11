@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! test — evaluate a conditional expression (also installed as `[`).
 //! References: GNU coreutils manual "test invocation" (9.7); POSIX.1-2024
 //! test (the 0 to 4 argument rules). Expressions longer than four arguments

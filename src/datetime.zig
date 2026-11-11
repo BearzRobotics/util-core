@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Date/time string parsing as done by GNU date -d and touch -d
 //! (gnulib parse-datetime.y, coreutils 9.6 sources, consulted 2026-11-07).
 //!
