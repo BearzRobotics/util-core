@@ -51,6 +51,15 @@ code is untouched. `fsusage.zig` (exported as `util_core.fsusage`) holds the
 type and `--output` options, which only change the text layout.
 Verified: `test/test_df.sh` 290/290 before and after; `test/test_df_json.sh`.
 
+## Third command: du
+
+`du` has one print point (`printSize`) for every line, and the path it is
+given is a temporary that is freed right after, so each entry is serialized
+as it is produced (`diskusage.writeEntry`) into a buffer that is written when
+the walk ends. The traversal and the text path are untouched. `diskusage.zig`
+(exported as `util_core.diskusage`) holds `Entry` and the writer. Verified:
+`test/test_du.sh` 315/315 before and after; `test/test_du_json.sh`.
+
 ## Consequences
 
 - Every later command adds one library module and one test script in the same

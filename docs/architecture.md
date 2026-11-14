@@ -155,6 +155,6 @@ csplit, expr, ptx, locate and updatedb. Zig-native; no C FFI.
 `dep.module("util_core")`. It re-exports `cli` (the `Context` every command
 takes), the command registry (`commands.get("echo")(ctx)`), `getopt`, `tz`,
 `strftime`, `datetime`, `fmt_float`, `posixre`, `hash`, `mode`, `fileinfo` (file metadata as
-data and the `--json` form of a stat result), `fsusage` (file system usage as data and its `--json` form) and `json`. Everything
+data and the `--json` form of a stat result), `fsusage` and `diskusage` (file system and per-path disk usage as data, with their `--json` forms) and `json`. Everything
 else under `src/` is internal and may change. The module imports the `regex`
 package, which the build wires in.

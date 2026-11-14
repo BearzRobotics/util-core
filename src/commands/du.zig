@@ -14,6 +14,7 @@ const tzmod = @import("../tz.zig");
 const strftime = @import("../strftime.zig");
 const human = @import("../human.zig");
 const argmatch = @import("../argmatch.zig");
+const diskusage = @import("../diskusage.zig");
 const fnmatch = @import("../fnmatch.zig");
 const Io = std.Io;
 
@@ -69,9 +70,29 @@ const S = struct {
     patterns: std.ArrayList(Pattern) = .empty,
     seen: std.AutoHashMap(DevIno, void),
     total: Dui = .{},
+    /// --json: entries are serialized as they are produced (the path passed to
+    /// printSize is a temporary), one object per line.
+    json: ?std.Io.Writer.Allocating = null,
+    json_count: usize = 0,
+    json_total: bool = false,
     ancestors: std.ArrayList(DevIno) = .empty,
 
     fn printSize(s: *S, d: Dui, name: []const u8) void {
+        if (s.json) |*aw| {
+            const unknown_time = d.tmax_sec == std.math.minInt(i64);
+            aw.writer.writeAll(if (s.json_count == 0) "\n" else ",\n") catch return;
+            diskusage.writeEntry(&aw.writer, .{
+                .path = name,
+                .size = if (d.size == std.math.maxInt(u64)) null else d.size,
+                .inodes = d.inodes,
+                .time = if (unknown_time) null else d.tmax_sec,
+                .time_nsec = if (unknown_time) null else @intCast(@max(0, d.tmax_nsec)),
+                .time_kind = @tagName(s.time_type),
+                .total = std.mem.eql(u8, name, "total") and s.json_total,
+            }) catch return;
+            s.json_count += 1;
+            return;
+        }
         var hb: [human.longest]u8 = undefined;
         const n = if (s.inodes) d.inodes else d.size;
         if (n == std.math.maxInt(u64)) {
@@ -373,6 +394,8 @@ fn realMain(s: *S) u8 {
     const ctx = s.ctx;
     var ok = true;
     var max_depth_specified = false;
+    var unit_opt = false;
+    var as_json = false;
     var depth_negative = false;
     var depth_text: u64 = 0;
     var summarize_only = false;
@@ -415,6 +438,7 @@ fn realMain(s: *S) u8 {
         .{ .name = "threshold", .arg = .required, .id = 't' },
         .{ .name = "time", .arg = .optional, .id = 1104 },
         .{ .name = "time-style", .arg = .required, .id = 1106 },
+        .{ .name = "json", .id = 1107 },
     });
     defer p.deinit();
 
@@ -422,7 +446,10 @@ fn realMain(s: *S) u8 {
         .done => break,
         .bad => return 1,
         .opt => |o| switch (o.id) {
-            '0' => s.nul_terminate = true,
+            '0' => {
+                s.nul_terminate = true;
+                unit_opt = true;
+            },
             'a' => s.opt_all = true,
             1100 => s.apparent_size = true,
             'b' => {
@@ -432,14 +459,17 @@ fn realMain(s: *S) u8 {
             },
             'c' => s.print_grand_total = true,
             'h' => {
+                unit_opt = true;
                 s.human_opts = human.autoscale | human.si | human.base_1024;
                 s.block_size = 1;
             },
             1103 => {
+                unit_opt = true;
                 s.human_opts = human.autoscale | human.si;
                 s.block_size = 1;
             },
             'k' => {
+                unit_opt = true;
                 s.human_opts = 0;
                 s.block_size = 1024;
             },
@@ -461,6 +491,7 @@ fn realMain(s: *S) u8 {
                 }
             },
             'm' => {
+                unit_opt = true;
                 s.human_opts = 0;
                 s.block_size = 1024 * 1024;
             },
@@ -480,6 +511,7 @@ fn realMain(s: *S) u8 {
             },
             'x' => s.xdev = true,
             'B' => {
+                unit_opt = true;
                 const bs = human.options(o.arg.?, null, false);
                 if (bs.err != .ok) {
                     xstrtolFatal(ctx, bs.err, o, "block-size", 'B', o.arg.?);
@@ -540,13 +572,23 @@ fn realMain(s: *S) u8 {
                     }
                 }
             },
-            1106 => time_style = o.arg.?,
+            1106 => {
+                time_style = o.arg.?;
+                unit_opt = true;
+            },
+            1107 => as_json = true,
             getopt.help_id => return if (cli.writeStdout(ctx.io, help_text ++ "\n")) 0 else 1,
             getopt.version_id => return if (cli.printVersion(ctx)) 0 else 1,
             else => unreachable,
         },
     };
     if (!ok) return usageFail(ctx);
+    if (as_json and unit_opt) {
+        cli.warn(ctx, "--json cannot be combined with -h, --si, -k, -m, -B, -0 or --time-style", .{});
+        return usageFail(ctx);
+    }
+    if (as_json) s.json = .init(ctx.gpa);
+    defer if (s.json) |*aw| aw.deinit();
 
     if (s.opt_all and summarize_only) {
         cli.warn(ctx, "cannot both summarize and show all entries", .{});
@@ -679,6 +721,15 @@ fn realMain(s: *S) u8 {
         if (!visit(s, name, 0, &top, dev)) ok = false;
     }
 
-    if (s.print_grand_total) s.printSize(s.total, "total");
+    if (s.print_grand_total) {
+        s.json_total = true;
+        s.printSize(s.total, "total");
+    }
+    if (s.json) |*aw| {
+        aw.writer.writeAll(if (s.json_count == 0) "]\n" else "\n]\n") catch {};
+        s.out.write("[");
+        s.out.write(aw.written());
+        s.out.flush();
+    }
     return if (ok) 0 else 1;
 }

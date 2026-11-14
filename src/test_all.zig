@@ -10,6 +10,7 @@ test {
     _ = @import("fileinfo.zig");
     _ = @import("json.zig");
     _ = @import("fsusage.zig");
+    _ = @import("diskusage.zig");
     _ = @import("lines.zig");
     _ = @import("tabs.zig");
     _ = @import("sys.zig");

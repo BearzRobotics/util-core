@@ -24,6 +24,8 @@ GNU coreutils 9.7 (`/usr/bin/du --version` on the development machine, installed
 - `-0, --null, --files0-from=F`: NUL-terminated output and input lists.
 - `--help, --version`: Print help or version and exit.
 
+- `--json` (extension, not in GNU): one JSON array, one object per line, for every line `du` would print: `path`, `size` (bytes, null on overflow), `inodes`, `time` and `time_nsec` (the latest time under the path, per `--time`), `time_kind` and `total` (true for the `--total` line). Cannot be combined with `-h`, `--si`, `-k`, `-m`, `-B`, `-0` or `--time-style` (fixed units and format). `--threshold`, `-d`, `-s`, `-a`, `-S`, `-c`, `-x`, `-L`, `--exclude` and `--apparent-size`/`-b` apply as usual. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
+
 ## Supported behaviour
 
 - The traversal is a recursive walk that reproduces the per-level totals GNU du.c keeps for fts: each directory is reported after its entries, children are added to their directory unless -S is given, and the grand total counts every entry once.
@@ -39,6 +41,8 @@ GNU coreutils 9.7 (`/usr/bin/du --version` on the development machine, installed
 ## Tests
 
 `sh test/test_du.sh`: 315 differential cases against GNU du 9.7 (C locale): sizes and units, hard links, symbolic links, depth, thresholds, time styles and zones, excludes, `--files0-from`, error paths and usage.
+
+`sh test/test_du_json.sh`: 33 checks of `--json` against GNU `du -B1`, `du --inodes` and `du --time` over a tree with hard links, a symlink, a name with a space and an unreadable directory, for the common option combinations, the three time kinds, `--total`, and the refused options.
 
 ## Not yet done
 

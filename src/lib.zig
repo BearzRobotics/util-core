@@ -33,3 +33,5 @@ pub const fileinfo = @import("fileinfo.zig");
 pub const json = @import("json.zig");
 /// File system usage as data and its `--json` form.
 pub const fsusage = @import("fsusage.zig");
+/// Disk usage per path as data and its `--json` form.
+pub const diskusage = @import("diskusage.zig");
