@@ -14,6 +14,7 @@ GNU coreutils 9.7 (`/usr/bin/stat --version` on the development machine, install
 - `-t, --terse`: Terse form.
 - `--cached=MODE`: Accepted (statx sync flags are not passed on).
 - `--help, --version`: Print help or version and exit.
+- `--json` (extension, not in GNU): one JSON object per operand, one per line; with `-f`, the file-system fields. Cannot be combined with `-c`, `--printf` or `-t`. Not listed in `--help`. Keys and value rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -28,7 +29,7 @@ GNU coreutils 9.7 (`/usr/bin/stat --version` on the development machine, install
 
 ## Tests
 
-`sh test/test_stat.sh`: 989 differential cases against GNU stat 9.7 in the C locale. 
+`sh test/test_stat.sh`: 989 differential cases against GNU stat 9.7 in the C locale. `sh test/test_stat_json.sh`: 254 cases that compare every `--json` field with what GNU stat prints for the same file (GNU has no `--json`, so this is not a text comparison).
 
 ## Not yet done
 

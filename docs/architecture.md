@@ -154,6 +154,7 @@ csplit, expr, ptx, locate and updatedb. Zig-native; no C FFI.
 `build.zig` exports a `util_core` module (root `src/lib.zig`) for dependants:
 `dep.module("util_core")`. It re-exports `cli` (the `Context` every command
 takes), the command registry (`commands.get("echo")(ctx)`), `getopt`, `tz`,
-`strftime`, `datetime`, `fmt_float`, `posixre`, `hash` and `mode`. Everything
+`strftime`, `datetime`, `fmt_float`, `posixre`, `hash`, `mode`, `fileinfo` (file metadata as
+data and the `--json` form of a stat result) and `json`. Everything
 else under `src/` is internal and may change. The module imports the `regex`
 package, which the build wires in.

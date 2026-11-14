@@ -12,9 +12,14 @@ const sys = @import("../sys.zig");
 const tzmod = @import("../tz.zig");
 const strftime = @import("../strftime.zig");
 const userdb = @import("../userdb.zig");
+const fileinfo = @import("../fileinfo.zig");
 const Io = std.Io;
 
 const help_text = @embedFile("../help/stat.txt");
+
+const fileType = fileinfo.fileType;
+const modeString = fileinfo.modeString;
+const fs_names = fileinfo.fs_names;
 
 const fmt_terse_fs = "%n %i %l %t %s %S %b %f %a %c %d\n";
 const fmt_terse_regular = "%n %s %b %f %u %g %D %i %h %t %T %X %Y %Z %W %o\n";
@@ -30,54 +35,6 @@ const default_tail = "Access: (%04a/%10.10A)  Uid: (%5u/%8U)   Gid: (%5g/%8G)\n"
 const default_plain = default_head ++ "Device: %Hd,%Ld\tInode: %-10i  Links: %h\n" ++ default_tail;
 const default_device = default_head ++ "Device: %Hd,%Ld\tInode: %-10i  Links: %-5h Device type: %Hr,%Lr\n" ++ default_tail;
 
-const FsName = struct { magic: u64, name: []const u8 };
-const fs_names = [_]FsName{
-    .{ .magic = 0x5A3C69F0, .name = "aafs" },      .{ .magic = 0x61636673, .name = "acfs" },      .{ .magic = 0xADF5, .name = "adfs" },
-    .{ .magic = 0xADFF, .name = "affs" },          .{ .magic = 0x5346414F, .name = "afs" },       .{ .magic = 0x09041934, .name = "anon-inode FS" },
-    .{ .magic = 0x61756673, .name = "aufs" },      .{ .magic = 0x0187, .name = "autofs" },        .{ .magic = 0x13661366, .name = "balloon-kvm-fs" },
-    .{ .magic = 0xCA451A4E, .name = "bcachefs" },  .{ .magic = 0x42465331, .name = "befs" },      .{ .magic = 0x62646576, .name = "bdevfs" },
-    .{ .magic = 0x1BADFACE, .name = "bfs" },       .{ .magic = 0x6C6F6F70, .name = "binderfs" },  .{ .magic = 0xCAFE4A11, .name = "bpf_fs" },
-    .{ .magic = 0x42494E4D, .name = "binfmt_misc" }, .{ .magic = 0x9123683E, .name = "btrfs" },   .{ .magic = 0x73727279, .name = "btrfs_test" },
-    .{ .magic = 0x00C36400, .name = "ceph" },      .{ .magic = 0x0027E0EB, .name = "cgroupfs" },  .{ .magic = 0x63677270, .name = "cgroup2fs" },
-    .{ .magic = 0xFF534D42, .name = "cifs" },      .{ .magic = 0x73757245, .name = "coda" },      .{ .magic = 0x012FF7B7, .name = "coh" },
-    .{ .magic = 0x62656570, .name = "configfs" },  .{ .magic = 0x28CD3D45, .name = "cramfs" },    .{ .magic = 0x453DCD28, .name = "cramfs-wend" },
-    .{ .magic = 0x64646178, .name = "daxfs" },     .{ .magic = 0x64626720, .name = "debugfs" },   .{ .magic = 0x1373, .name = "devfs" },
-    .{ .magic = 0x454D444D, .name = "devmem" },    .{ .magic = 0x1CD1, .name = "devpts" },        .{ .magic = 0x444D4142, .name = "dma-buf-fs" },
-    .{ .magic = 0xF15F, .name = "ecryptfs" },      .{ .magic = 0xDE5E81E4, .name = "efivarfs" },  .{ .magic = 0x00414A53, .name = "efs" },
-    .{ .magic = 0xE0F5E1E2, .name = "erofs" },     .{ .magic = 0x2011BAB0, .name = "exfat" },     .{ .magic = 0x45584653, .name = "exfs" },
-    .{ .magic = 0x5DF5, .name = "exofs" },         .{ .magic = 0x137D, .name = "ext" },           .{ .magic = 0xEF53, .name = "ext2/ext3" },
-    .{ .magic = 0xEF51, .name = "ext2" },          .{ .magic = 0xF2F52010, .name = "f2fs" },      .{ .magic = 0x4006, .name = "fat" },
-    .{ .magic = 0x19830326, .name = "fhgfs" },     .{ .magic = 0x65735546, .name = "fuse" },      .{ .magic = 0x65735543, .name = "fusectl" },
-    .{ .magic = 0x0BAD1DEA, .name = "futexfs" },   .{ .magic = 0x01161970, .name = "gfs/gfs2" },  .{ .magic = 0x47504653, .name = "gpfs" },
-    .{ .magic = 0x4244, .name = "hfs" },           .{ .magic = 0x482B, .name = "hfs+" },          .{ .magic = 0x4858, .name = "hfsx" },
-    .{ .magic = 0x00C0FFEE, .name = "hostfs" },    .{ .magic = 0xF995E849, .name = "hpfs" },      .{ .magic = 0x958458F6, .name = "hugetlbfs" },
-    .{ .magic = 0x11307854, .name = "inodefs" },   .{ .magic = 0x013111A8, .name = "ibrix" },     .{ .magic = 0x2BAD1DEA, .name = "inotifyfs" },
-    .{ .magic = 0x9660, .name = "isofs" },         .{ .magic = 0x4004, .name = "isofs" },         .{ .magic = 0x4000, .name = "isofs" },
-    .{ .magic = 0x07C0, .name = "jffs" },          .{ .magic = 0x72B6, .name = "jffs2" },         .{ .magic = 0x3153464A, .name = "jfs" },
-    .{ .magic = 0x6B414653, .name = "k-afs" },     .{ .magic = 0xC97E8168, .name = "logfs" },     .{ .magic = 0x0BD00BD0, .name = "lustre" },
-    .{ .magic = 0x5346314D, .name = "m1fs" },      .{ .magic = 0x137F, .name = "minix" },         .{ .magic = 0x138F, .name = "minix (30 char.)" },
-    .{ .magic = 0x2468, .name = "minix v2" },      .{ .magic = 0x2478, .name = "minix v2 (30 char.)" }, .{ .magic = 0x4D5A, .name = "minix3" },
-    .{ .magic = 0x19800202, .name = "mqueue" },    .{ .magic = 0x4D44, .name = "msdos" },         .{ .magic = 0x564C, .name = "novell" },
-    .{ .magic = 0x6969, .name = "nfs" },           .{ .magic = 0x6E667364, .name = "nfsd" },      .{ .magic = 0x3434, .name = "nilfs" },
-    .{ .magic = 0x6E736673, .name = "nsfs" },      .{ .magic = 0x5346544E, .name = "ntfs" },      .{ .magic = 0x9FA1, .name = "openprom" },
-    .{ .magic = 0x7461636F, .name = "ocfs2" },     .{ .magic = 0x794C7630, .name = "overlayfs" }, .{ .magic = 0xAAD7AAEA, .name = "panfs" },
-    .{ .magic = 0x50494446, .name = "pidfs" },     .{ .magic = 0x50495045, .name = "pipefs" },    .{ .magic = 0xC7571590, .name = "ppc-cmm-fs" },
-    .{ .magic = 0x7C7C6673, .name = "prl_fs" },    .{ .magic = 0x9FA0, .name = "proc" },          .{ .magic = 0x6165676C, .name = "pstorefs" },
-    .{ .magic = 0x002F, .name = "qnx4" },          .{ .magic = 0x68191122, .name = "qnx6" },      .{ .magic = 0x858458F6, .name = "ramfs" },
-    .{ .magic = 0x07655821, .name = "rdt" },       .{ .magic = 0x52654973, .name = "reiserfs" },  .{ .magic = 0x7275, .name = "romfs" },
-    .{ .magic = 0x67596969, .name = "rpc_pipefs" }, .{ .magic = 0x5DCA2DF5, .name = "sdcardfs" }, .{ .magic = 0x5345434D, .name = "secretmem" },
-    .{ .magic = 0x73636673, .name = "securityfs" }, .{ .magic = 0xF97CFF8C, .name = "selinux" },   .{ .magic = 0x43415D53, .name = "smackfs" },
-    .{ .magic = 0x517B, .name = "smb" },           .{ .magic = 0xFE534D42, .name = "smb2" },      .{ .magic = 0xBEEFDEAD, .name = "snfs" },
-    .{ .magic = 0x534F434B, .name = "sockfs" },    .{ .magic = 0x73717368, .name = "squashfs" },  .{ .magic = 0x62656572, .name = "sysfs" },
-    .{ .magic = 0x012FF7B6, .name = "sysv2" },     .{ .magic = 0x012FF7B5, .name = "sysv4" },     .{ .magic = 0x01021994, .name = "tmpfs" },
-    .{ .magic = 0x74726163, .name = "tracefs" },   .{ .magic = 0x24051905, .name = "ubifs" },     .{ .magic = 0x15013346, .name = "udf" },
-    .{ .magic = 0x00011954, .name = "ufs" },       .{ .magic = 0x54190100, .name = "ufs" },       .{ .magic = 0x9FA2, .name = "usbdevfs" },
-    .{ .magic = 0x01021997, .name = "v9fs" },      .{ .magic = 0x786F4256, .name = "vboxsf" },    .{ .magic = 0xBACBACBC, .name = "vmhgfs" },
-    .{ .magic = 0xA501FCF5, .name = "vxfs" },      .{ .magic = 0x565A4653, .name = "vzfs" },      .{ .magic = 0x53464846, .name = "wslfs" },
-    .{ .magic = 0xABBA1974, .name = "xenfs" },     .{ .magic = 0x012FF7B4, .name = "xenix" },     .{ .magic = 0x58465342, .name = "xfs" },
-    .{ .magic = 0x012FD16D, .name = "xia" },       .{ .magic = 0x0033, .name = "z3fold" },        .{ .magic = 0x2FC12FC1, .name = "zfs" },
-    .{ .magic = 0x5A4F4653, .name = "zonefs" },    .{ .magic = 0x58295829, .name = "zsmallocfs" },
-};
 
 const Flags = struct {
     quote: bool = false, // '
@@ -190,38 +147,6 @@ fn outNum(out: *cli.Out, f: Flags, value: i128, base: u8, signed: bool) void {
 fn humanTime(s: *Ctx, sec: i64, nsec: u32, buf: *std.ArrayList(u8)) void {
     const tm = tzmod.localtime(&s.zone, sec);
     strftime.format(buf, s.c.gpa, "%Y-%m-%d %H:%M:%S.%N %z", &tm, sec, nsec) catch {};
-}
-
-fn fileType(mode: u32, size: u64) []const u8 {
-    return switch (mode & 0o170000) {
-        0o100000 => if (size == 0) "regular empty file" else "regular file",
-        0o040000 => "directory",
-        0o120000 => "symbolic link",
-        0o060000 => "block special file",
-        0o020000 => "character special file",
-        0o010000 => "fifo",
-        0o140000 => "socket",
-        else => "weird file",
-    };
-}
-
-fn modeString(mode: u32, buf: *[10]u8) []const u8 {
-    buf[0] = switch (mode & 0o170000) {
-        0o100000 => '-',
-        0o040000 => 'd',
-        0o120000 => 'l',
-        0o060000 => 'b',
-        0o020000 => 'c',
-        0o010000 => 'p',
-        0o140000 => 's',
-        else => '?',
-    };
-    const bits = "rwxrwxrwx";
-    for (0..9) |i| buf[1 + i] = if (mode & (@as(u32, 0o400) >> @intCast(i)) != 0) bits[i] else '-';
-    if (mode & 0o4000 != 0) buf[3] = if (mode & 0o100 != 0) 's' else 'S';
-    if (mode & 0o2000 != 0) buf[6] = if (mode & 0o010 != 0) 's' else 'S';
-    if (mode & 0o1000 != 0) buf[9] = if (mode & 0o001 != 0) 't' else 'T';
-    return buf[0..10];
 }
 
 fn major(dev: u64) u64 {
@@ -641,6 +566,28 @@ fn printIt(s: *Ctx, format: []const u8, filename: []const u8, st: ?*const sys.Fi
     return fail;
 }
 
+/// --json: one object per operand (decision 0007 in util-unix, which sets the
+/// rules for every --json command). `link_of` names the symlink whose target
+/// to read. Failures to resolve names or links only make those fields null.
+fn writeJsonLine(s: *Ctx, name: []const u8, st: ?*const sys.FileStat, fs: ?*const sys.StatFs, link_of: ?[]const u8) void {
+    var aw: Io.Writer.Allocating = .init(s.c.gpa);
+    defer aw.deinit();
+    if (fs) |f| {
+        fileinfo.writeFsJson(&aw.writer, name, f) catch return;
+    } else if (st) |sp| {
+        if (s.db == null) s.db = userdb.Db.load(s.c.gpa, s.c.io);
+        var lbuf: [4096]u8 = undefined;
+        var target: ?[]const u8 = null;
+        if (link_of) |l| {
+            if (Io.Dir.cwd().readLink(s.c.io, l, &lbuf)) |n| target = lbuf[0..n] else |_| {}
+        }
+        const user = if (s.db.?.userByUid(sp.uid)) |u| u.name else null;
+        const group = if (s.db.?.groupByGid(sp.gid)) |g| g.name else null;
+        fileinfo.writeJson(&aw.writer, name, sp, target, user, group) catch return;
+    }
+    s.out.write(aw.written());
+}
+
 pub fn main(ctx: cli.Context) u8 {
     const gpa = ctx.gpa;
     var fs_mode = false;
@@ -648,6 +595,7 @@ pub fn main(ctx: cli.Context) u8 {
     var format: ?[]const u8 = null;
     var printf_mode = false;
     var follow = false;
+    var as_json = false;
 
     var tz_env: ?[]const u8 = null;
     if (ctx.environ) |m| tz_env = m.get("TZ");
@@ -662,6 +610,7 @@ pub fn main(ctx: cli.Context) u8 {
         .{ .name = "printf", .arg = .required, .id = 1100 },
         .{ .name = "terse", .id = 't' },
         .{ .name = "cached", .arg = .required, .id = 1101 },
+        .{ .name = "json", .id = 1102 },
     });
     defer p.deinit();
     while (true) switch (p.next()) {
@@ -679,6 +628,7 @@ pub fn main(ctx: cli.Context) u8 {
             'L' => follow = true,
             'f' => fs_mode = true,
             't' => terse = true,
+            1102 => as_json = true,
             1101 => {
                 const names = [_][]const u8{ "default", "never", "always" };
                 var found = false;
@@ -695,6 +645,10 @@ pub fn main(ctx: cli.Context) u8 {
             else => unreachable,
         },
     };
+    if (as_json and (format != null or terse)) {
+        cli.warn(ctx, "--json cannot be combined with --format, --printf or --terse", .{});
+        return 1;
+    }
     s.printf_mode = printf_mode;
     // %N quotes with shell-escape-always only when the user gave a format.
     s.quote_always = format != null and std.mem.indexOf(u8, format.?, "%N") != null;
@@ -754,6 +708,10 @@ pub fn main(ctx: cli.Context) u8 {
                 ok = false;
                 continue;
             };
+            if (as_json) {
+                writeJsonLine(&s, name, null, &sf, null);
+                continue;
+            }
             if (printIt(&s, fmt1, name, null, &sf, follow, if (has_own_nl) "" else trailing)) ok = false;
         } else {
             var st: sys.FileStat = undefined;
@@ -778,6 +736,10 @@ pub fn main(ctx: cli.Context) u8 {
                 ok = false;
                 continue;
             };
+            if (as_json) {
+                writeJsonLine(&s, name, &st, null, if (st.isLink()) name else null);
+                continue;
+            }
             const is_dev = (st.mode & 0o170000) == 0o060000 or (st.mode & 0o170000) == 0o020000;
             const fmt = if (is_dev) fmt2 else fmt1;
             if (printIt(&s, fmt, name, &st, null, follow, if (has_own_nl) "" else trailing)) ok = false;

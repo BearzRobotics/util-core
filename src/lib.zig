@@ -26,3 +26,8 @@ pub const posixre = @import("posixre.zig");
 pub const hash = @import("hash.zig");
 /// chmod-style symbolic and octal mode parsing.
 pub const mode = @import("mode.zig");
+/// File metadata as data (type and mode names, file-system types) and the
+/// `--json` form of a stat result.
+pub const fileinfo = @import("fileinfo.zig");
+/// JSON string output helpers for the `--json` modes.
+pub const json = @import("json.zig");

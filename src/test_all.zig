@@ -7,6 +7,8 @@ test {
     _ = @import("count_arg.zig");
     _ = @import("fmt_float.zig");
     _ = @import("mode.zig");
+    _ = @import("fileinfo.zig");
+    _ = @import("json.zig");
     _ = @import("lines.zig");
     _ = @import("tabs.zig");
     _ = @import("sys.zig");
