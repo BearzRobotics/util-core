@@ -29,11 +29,12 @@ tree 2.3.1 by Steve Baker, Thomas Moore, Francesc Rocher, Florian Sesser and Kyo
 
 - Not implemented: `-H` (HTML), `--fromfile`, `--fromtabfile`, `--gitignore`, `--info`, `--hyperlink`, `--compress`, `--condense`, `-R`, `--opt-toggle`, ACL and SELinux display.
 - The multi-root JSON/XML output reproduces tree's separators only for the cases covered by the tests; a symbolic link to the start directory in -J output lacks tree's empty `contents` array.
+- `-J` and `-X` differences from tree 2.3.1 that are left as they are: with `-i` tree writes the JSON on one line (ours keeps the indentation); tree prints inode and device `0` for the start directory and for symbolic links under `--inodes`/`--device` (ours prints the real numbers, which is more useful); with `-l` tree reports a link to an already-listed directory as `recursive, not followed` in JSON/XML (ours descends, as in the text listing).
 - --charset names other than UTF-8 and ASCII only change the last connector (`&middot;--`) like tree does; the 'Valid charsets' list for a missing argument is not printed.
 
 ## Tests
 
-`sh test/test_tree.sh`: about 650 differential cases against tree 2.3.1 (installed here) in the C and C.UTF-8 locales on a fixture with odd names, links, loops, fifos and an unreadable directory, including LS_COLORS variants. tree is not a GNU program, so the test library is told to accept it as the reference.
+`sh test/test_tree.sh`: 741 differential cases against tree 2.3.1 (installed here) in the C and C.UTF-8 locales on a fixture with odd names, links, loops, fifos and an unreadable directory, including LS_COLORS variants. tree is not a GNU program, so the test library is told to accept it as the reference. The structured output (`-J`, `-X`) is covered with `-f`, `-h`, `--si`, `-D`, `--timefmt`, `-pugsD`, `--du` and several roots; those cases found and fixed four gaps (see decision 0003).
 
 ## Not yet done
 

@@ -627,6 +627,20 @@ fn typeName(e: *const Entry) []const u8 {
     };
 }
 
+/// The modification time as JSON and XML show it, which is the text listing's
+/// format: `--timefmt` when given, else "%b %e %H:%M" (or "%b %e  %Y" for a file
+/// older than about six months).
+fn formatMtime(t: *T, s: sys.FileStat, tb: *std.ArrayList(u8)) void {
+    ensureZone(t);
+    const tm = tzmod.localtime(&t.zone, s.mtime_s);
+    if (t.o.timefmt) |f| {
+        strftime.format(tb, t.gpa, f, &tm, s.mtime_s, s.mtime_ns) catch {};
+    } else {
+        const old = t.now - s.mtime_s > 182 * 86400 or s.mtime_s > t.now;
+        strftime.format(tb, t.gpa, if (old) "%b %e  %Y" else "%b %e %H:%M", &tm, s.mtime_s, s.mtime_ns) catch {};
+    }
+}
+
 fn putAttrs(t: *T, e: *const Entry, json: bool) void {
     const o = &t.o;
     const s = e.lst;
@@ -644,14 +658,23 @@ fn putAttrs(t: *T, e: *const Entry, json: bool) void {
             loadDb(t);
             if (t.db.groupByGid(s.gid)) |g| putFmt(t, ",\"group\":\"{s}\"", .{g.name}) else putFmt(t, ",\"group\":{d}", .{s.gid});
         }
-        if (o.size or o.human) putFmt(t, ",\"size\":{d}", .{if (o.du and e.is_dir) e.du else s.size});
+        if (o.size or o.human) {
+            const n = if (o.du and e.is_dir) e.du else s.size;
+            if (o.human) {
+                // tree writes a human-readable size as a string ("1.9M").
+                var hb: std.ArrayList(u8) = .empty;
+                defer hb.deinit(t.gpa);
+                humanSize(t, n, &hb);
+                putFmt(t, ",\"size\":\"{s}\"", .{std.mem.trim(u8, hb.items, " ")});
+            } else putFmt(t, ",\"size\":{d}", .{n});
+        }
         if (o.date) {
-            ensureZone(t);
-            const tm = tzmod.localtime(&t.zone, s.mtime_s);
             var tb: std.ArrayList(u8) = .empty;
             defer tb.deinit(t.gpa);
-            strftime.format(&tb, t.gpa, "%FT%T%z", &tm, s.mtime_s, 0) catch {};
-            putFmt(t, ",\"time\":\"{s}\"", .{tb.items});
+            formatMtime(t, s, &tb);
+            put(t, ",\"time\":\"");
+            jsonEsc(t, tb.items);
+            put(t, "\"");
         }
     } else {
         if (o.inodes) putFmt(t, " inode=\"{d}\"", .{s.ino});
@@ -667,13 +690,12 @@ fn putAttrs(t: *T, e: *const Entry, json: bool) void {
         }
         if (o.size or o.human) putFmt(t, " size=\"{d}\"", .{if (o.du and e.is_dir) e.du else s.size});
         if (o.date) {
-            ensureZone(t);
-            const tm = tzmod.localtime(&t.zone, s.mtime_s);
             var tb: std.ArrayList(u8) = .empty;
             defer tb.deinit(t.gpa);
-            const old = t.now - s.mtime_s > 182 * 86400 or s.mtime_s > t.now;
-            strftime.format(&tb, t.gpa, if (old) "%b %e  %Y" else "%b %e %H:%M", &tm, s.mtime_s, 0) catch {};
-            putFmt(t, " time=\"{s}\"", .{tb.items});
+            formatMtime(t, s, &tb);
+            put(t, " time=\"");
+            xmlEsc(t, tb.items);
+            put(t, "\"");
         }
     }
 }
@@ -805,7 +827,8 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
     var unreadable = false;
     if (descend and !canOpen(e.path)) {
         unreadable = true;
-        t.exit_code = 2;
+        // With --du tree reports the unreadable directory but exits 0 (as the text listing does).
+        if (!t.o.du) t.exit_code = 2;
     }
     if (descend and !unreadable) {
         var err: LX.E = .SUCCESS;
@@ -820,7 +843,7 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
         put(t, "{\"type\":\"");
         put(t, tn);
         put(t, "\",\"name\":\"");
-        jsonEsc(t, e.name);
+        jsonEsc(t, if (t.o.full_path) e.path else e.name);
         put(t, "\"");
         if (e.target) |tg| {
             put(t, ",\"target\":\"");
@@ -836,7 +859,7 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
             walkStruct(t, e.path, level + 1, indent + 1, true, dev);
             pad(t, indent);
             put(t, "]}");
-        } else if (t.json_err and !e.lst.isDir()) {
+        } else if (t.json_err and !t.o.du and !e.lst.isDir()) {
             put(t, ",\"contents\":[    ]}");
         } else put(t, "}");
         put(t, if (last) "\n" else ",\n");
@@ -844,7 +867,7 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
         put(t, "<");
         put(t, tn);
         put(t, " name=\"");
-        xmlEsc(t, e.name);
+        xmlEsc(t, if (t.o.full_path) e.path else e.name);
         put(t, "\"");
         if (e.target) |tg| {
             put(t, " target=\"");
@@ -1227,13 +1250,21 @@ pub fn main(ctx: cli.Context) u8 {
         },
         .xml => {
             if (!t.o.noreport) {
-                if (t.o.dirs_only) putFmt(&t, "    <report>\n        <directories>{d}</directories>\n    </report>\n", .{t.dirs}) else putFmt(&t, "    <report>\n        <directories>{d}</directories>\n        <files>{d}</files>\n    </report>\n", .{ t.dirs, t.files });
+                put(&t, "    <report>\n");
+                if (t.o.du) putFmt(&t, "        <size>{d}</size>\n", .{t.total_du});
+                putFmt(&t, "        <directories>{d}</directories>\n", .{t.dirs});
+                if (!t.o.dirs_only) putFmt(&t, "        <files>{d}</files>\n", .{t.files});
+                put(&t, "    </report>\n");
             }
             put(&t, "</tree>\n");
         },
         .json => {
             if (!t.o.noreport) {
-                if (t.o.dirs_only) putFmt(&t, ",    {{\"type\":\"report\",\"directories\":{d}}}\n", .{t.dirs}) else putFmt(&t, ",    {{\"type\":\"report\",\"directories\":{d},\"files\":{d}}}\n", .{ t.dirs, t.files });
+                put(&t, ",    {\"type\":\"report\"");
+                if (t.o.du) putFmt(&t, ",\"size\":{d}", .{t.total_du});
+                putFmt(&t, ",\"directories\":{d}", .{t.dirs});
+                if (!t.o.dirs_only) putFmt(&t, ",\"files\":{d}", .{t.files});
+                put(&t, "}\n");
             } else put(&t, "\n");
             put(&t, "]\n");
         },

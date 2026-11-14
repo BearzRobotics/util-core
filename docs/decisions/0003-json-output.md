@@ -111,6 +111,24 @@ for `find`: one object per line, not an array. The traversal, the tests and
 the existing actions are untouched. Verified: `test/test_find.sh` 1987/1987
 before and after; `test/test_find_json.sh`.
 
+## Seventh: tree (no new flag)
+
+`tree` is not a GNU command and already has structured output: `-J` (JSON)
+and `-X` (XML), compatible with tree 2.3.1, which is installed here and is the
+reference. A `--json` flag would only duplicate `-J`, so none was added;
+scripts should use `tree -J`. Its shape (nested `contents`, a final `report`
+object) is the reference's, not decision 0007's: compatibility with the
+reference wins for a command that is a clone of an existing program.
+
+Comparing `-J`/`-X` with the real tree on more option combinations found four
+gaps in util-core's tree, all fixed and now covered by the differential test:
+`-f` must put the full path in `name`; `-h` and `--si` write the JSON size as
+a string; the time is the text listing's format and honours `--timefmt` (ours
+had printed an ISO timestamp in JSON and ignored `--timefmt`); and `--du` adds
+the total to the report (and exits 0 with an unreadable directory, as the
+text listing does). Differences left alone are listed in
+docs/compatibility/tree.md. Verified: `test/test_tree.sh` 741/741 (657 before).
+
 ## Consequences
 
 - Every later command adds one library module and one test script in the same
