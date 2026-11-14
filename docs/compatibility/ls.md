@@ -36,6 +36,7 @@ GNU coreutils 9.7 (`/usr/bin/ls --version` on the development machine, installed
 - `-Z, --context`: Security context (read from the `security.selinux` attribute; `?` when absent).
 - `--zero`: End lines with NUL.
 - `--help, --version`: Print help or version and exit.
+- `--json` (extension, not in GNU; also `dir` and `vdir`): one JSON array of every listed file, one object per line, in the order the text form would print them. Each object has the `stat --json` fields (docs/compatibility/stat.md) preceded by `dir`, the directory the entry was listed in (null for a command-line operand); an entry whose metadata could not be read has only `dir`, `name` and a `type` of "unknown". It behaves like `-l` for stat purposes: symbolic links are not followed unless `-L`/`-H` is given, so a symlink to a directory is listed as a link, not descended into. Sorting, `-a`/`-A`, `-d`, `-R`, `-I`/`--hide`, `-B`, `-L`/`-H` and `--time` apply as usual. Layout, quoting, colour, indicator, size-unit and `--dired` options have no effect on the JSON. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -59,6 +60,8 @@ GNU coreutils 9.7 (`/usr/bin/ls --version` on the development machine, installed
 ## Tests
 
 `sh test/test_ls.sh`: 1291 differential cases against GNU ls 9.7 (C locale) covering sorting, formats and widths, long format, time styles and zones, all quoting and indicator styles, ignore patterns, recursion and loop detection, dereference options, `--dired`, `--zero`, hyperlinks, LS_COLORS parsing and terminal output through `script`, plus `dir` and `vdir`.
+
+`sh test/test_ls_json.sh`: 44 checks of `--json`: entries and order against GNU `ls -1` for about 30 option combinations (sorts, `-a`/`-A`, `-d`, `-R`, several operands, `--hide`, `-I`, `-B`, `-L`, `-H`), every metadata field against GNU `stat` for each listed path, `dir` and `vdir`, and that layout options do not change the output.
 
 ## Not yet done
 

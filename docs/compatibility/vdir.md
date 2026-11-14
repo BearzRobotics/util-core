@@ -9,6 +9,7 @@ GNU coreutils 9.7 (`/usr/bin/vdir --version` on the development machine, install
 ## Supported options
 
 - `(all ls options)`: Same as `ls`; `ls -l -b`: long listing with C-style escapes.
+- `--json` (extension, not in GNU): as for `ls`; see docs/compatibility/ls.md.
 - `--help, --version`: Print help or version and exit.
 
 ## Supported behaviour

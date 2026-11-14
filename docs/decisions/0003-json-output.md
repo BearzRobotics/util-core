@@ -60,6 +60,21 @@ the walk ends. The traversal and the text path are untouched. `diskusage.zig`
 (exported as `util_core.diskusage`) holds `Entry` and the writer. Verified:
 `test/test_du.sh` 315/315 before and after; `test/test_du_json.sh`.
 
+## Fourth command: ls (with dir and vdir)
+
+`ls` already collects a `FileInfo` per file (with the `sys.FileStat`), sorts
+the list and then dispatches on the format, so `--json` is a branch in
+`printCurrentFiles` that prints the sorted list through `fileinfo`. Directory
+headers, the `total` line and the blank separators are suppressed, and the
+array brackets are written by the first and last entry. `--json` selects the
+`-l` format internally, so every field is available and symlinks are not
+followed by default (a symlink to a directory is listed as a link; `-L`/`-H`
+change that). That is a deliberate difference from plain `ls`, which follows a
+command-line symlink to a directory. Presentation options are accepted and
+have no effect; they are not refused, because there are dozens and ls users
+combine them freely. Verified: `test/test_ls.sh` 1291/1291, `test_dir.sh` and
+`test_vdir.sh` 38/38, `test/test_ls_json.sh`.
+
 ## Consequences
 
 - Every later command adds one library module and one test script in the same

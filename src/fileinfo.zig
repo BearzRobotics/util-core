@@ -130,8 +130,34 @@ fn writeTime(w: *Io.Writer, key: []const u8, sec: i64, nsec: u32) Io.Writer.Erro
 /// Birth time is null when the file system does not record it; `rdev_*` are
 /// null unless the file is a device.
 pub fn writeJson(w: *Io.Writer, name: []const u8, st: *const sys.FileStat, link_target: ?[]const u8, user: ?[]const u8, group: ?[]const u8) Io.Writer.Error!void {
+    try w.writeByte('{');
+    try writeFields(w, name, st, link_target, user, group);
+    try w.writeByte('\n');
+}
+
+/// Like `writeJson`, for a directory listing: the object starts with `dir`, the
+/// directory the entry was listed in (null for a command-line operand), and
+/// there is no trailing newline.
+pub fn writeJsonIn(w: *Io.Writer, dir: ?[]const u8, name: []const u8, st: *const sys.FileStat, link_target: ?[]const u8, user: ?[]const u8, group: ?[]const u8) Io.Writer.Error!void {
+    try w.writeAll("{\"dir\":");
+    try json.writeOptString(w, dir);
+    try w.writeByte(',');
+    try writeFields(w, name, st, link_target, user, group);
+}
+
+/// An entry whose metadata could not be read: only `dir`, `name` and a type of
+/// "unknown" (the stat fields are absent, not null).
+pub fn writeJsonUnknownIn(w: *Io.Writer, dir: ?[]const u8, name: []const u8) Io.Writer.Error!void {
+    try w.writeAll("{\"dir\":");
+    try json.writeOptString(w, dir);
+    try w.writeAll(",\"name\":");
+    try json.writeString(w, name);
+    try w.writeAll(",\"type\":\"unknown\"}");
+}
+
+fn writeFields(w: *Io.Writer, name: []const u8, st: *const sys.FileStat, link_target: ?[]const u8, user: ?[]const u8, group: ?[]const u8) Io.Writer.Error!void {
     var mb: [10]u8 = undefined;
-    try w.writeAll("{\"name\":");
+    try w.writeAll("\"name\":");
     try json.writeString(w, name);
     try w.print(",\"type\":\"{s}\",\"type_desc\":", .{typeKey(st.mode)});
     try json.writeString(w, fileType(st.mode, st.size));
@@ -159,7 +185,7 @@ pub fn writeJson(w: *Io.Writer, name: []const u8, st: *const sys.FileStat, link_
     }
     try w.writeAll(",\"link_target\":");
     try json.writeOptString(w, link_target);
-    try w.writeAll("}\n");
+    try w.writeByte('}');
 }
 
 /// Write one file-system (`stat -f`) result as a JSON object and a newline.
@@ -196,6 +222,19 @@ test "json: a setuid regular file with a missing group and no birth time" {
             "\"ctime\":30,\"ctime_nsec\":3,\"birth\":null,\"birth_nsec\":null,\"link_target\":null}\n",
         w.buffered(),
     );
+}
+
+test "json: listing entries carry the directory" {
+    var buf: [1024]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    var st = sample();
+    st.mode = 0o120777;
+    try writeJsonIn(&w, "src", "lnk", &st, "tgt", null, null);
+    try std.testing.expect(std.mem.startsWith(u8, w.buffered(), "{\"dir\":\"src\",\"name\":\"lnk\",\"type\":\"symlink\""));
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), "\"link_target\":\"tgt\"}"));
+    var w2: Io.Writer = .fixed(&buf);
+    try writeJsonUnknownIn(&w2, null, "x");
+    try std.testing.expectEqualStrings("{\"dir\":null,\"name\":\"x\",\"type\":\"unknown\"}", w2.buffered());
 }
 
 test "json: device numbers, birth time and link target" {

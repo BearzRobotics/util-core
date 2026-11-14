@@ -22,6 +22,7 @@ const argmatch = @import("../argmatch.zig");
 const filevercmp = @import("../filevercmp.zig");
 const fnmatch = @import("../fnmatch.zig");
 const paths = @import("../paths.zig");
+const fileinfo = @import("../fileinfo.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
@@ -158,6 +159,10 @@ const Ls = struct {
     file_human_output_opts: u32 = 0,
     file_output_block_size: u64 = 1,
     dired: bool = false,
+    /// --json: entries of every listed directory as one array (decision 0003).
+    json: bool = false,
+    json_dir: ?[]const u8 = null,
+    json_count: usize = 0,
     indicator_style: IndicatorStyle = .none,
     print_with_color: bool = false,
     print_hyperlink: bool = false,
@@ -1157,8 +1162,10 @@ const Ls = struct {
         }
 
         s.clearFiles();
+        s.json_dir = realname orelse name;
+        defer s.json_dir = null;
 
-        if (s.recursive or s.print_dir_name) {
+        if (!s.json and (s.recursive or s.print_dir_name)) {
             if (!s.first_dir) s.putByte('\n');
             s.first_dir = false;
             s.diredIndent();
@@ -1206,7 +1213,7 @@ const Ls = struct {
         s.sortFiles();
         if (s.recursive) s.extractDirsFromFiles(name, false);
 
-        if (s.format == .long or s.print_block_size) {
+        if (!s.json and (s.format == .long or s.print_block_size)) {
             var hb: [human.longest]u8 = undefined;
             const t = human.readable(total_blocks, &hb, s.human_output_opts, 512, s.output_block_size);
             s.diredIndent();
@@ -1680,7 +1687,25 @@ const Ls = struct {
         s.out.writeByte('\n');
     }
 
+    /// --json: one object per listed file, in the order the text form would
+    /// print them. The array brackets are written by the first/last entry.
+    fn printJsonFiles(s: *Ls) void {
+        for (s.files.items) |f| {
+            var aw: Io.Writer.Allocating = .init(s.gpa);
+            defer aw.deinit();
+            const ok = if (f.stat_ok)
+                fileinfo.writeJsonIn(&aw.writer, s.json_dir, f.name, &f.st, f.linkname, s.getUser(f.st.uid), s.getGroup(f.st.gid))
+            else
+                fileinfo.writeJsonUnknownIn(&aw.writer, s.json_dir, f.name);
+            ok catch continue;
+            s.put(if (s.json_count == 0) "[\n" else ",\n");
+            s.put(aw.written());
+            s.json_count += 1;
+        }
+    }
+
     fn printCurrentFiles(s: *Ls) void {
+        if (s.json) return s.printJsonFiles();
         switch (s.format) {
             .one_per_line => for (s.files.items) |f| {
                 _ = s.printFileNameAndFrills(f, 0);
@@ -1719,6 +1744,7 @@ const Opt = struct {
     const time = 1115;
     const time_style = 1116;
     const zero = 1117;
+    const json = 1118;
     const classify = 'F';
 };
 
@@ -1884,6 +1910,7 @@ fn realMain(s: *Ls) u8 {
         .{ .name = "time", .arg = .required, .id = Opt.time },
         .{ .name = "time-style", .arg = .required, .id = Opt.time_style },
         .{ .name = "zero", .id = Opt.zero },
+        .{ .name = "json", .id = Opt.json },
         .{ .name = "color", .arg = .optional, .id = Opt.color },
         .{ .name = "hyperlink", .arg = .optional, .id = Opt.hyperlink },
         .{ .name = "block-size", .arg = .required, .id = Opt.block_size },
@@ -1993,6 +2020,7 @@ fn realMain(s: *Ls) u8 {
                 format_opt = @intFromEnum(Format.one_per_line);
             },
             Opt.author => s.print_author = true,
+            Opt.json => s.json = true,
             Opt.hide => s.hide_patterns.append(ctx.gpa, o.arg.?) catch {},
             Opt.sort => sort_opt = @intCast(xargmatch(ctx, o.arg.?, "--sort", &sort_table) orelse return 1),
             Opt.group_dirs_first => s.directories_first = true,
@@ -2147,6 +2175,13 @@ fn realMain(s: *Ls) u8 {
     }
     s.dirname_extra.add(':');
 
+    if (s.json) {
+        // Same stat behaviour as -l (lstat by default, every field known);
+        // layout, quoting, colour and size-unit options have no effect.
+        s.format = .long;
+        s.print_hyperlink = false;
+        s.dired = false;
+    }
     s.dired = s.dired and s.format == .long and !s.print_hyperlink;
     if (s.eolbyte < @intFromBool(s.dired)) {
         cli.warn(ctx, "--dired and --zero are incompatible", .{});
@@ -2240,7 +2275,7 @@ fn realMain(s: *Ls) u8 {
 
     if (s.files.items.len > 0) {
         s.printCurrentFiles();
-        if (s.pending.items.len > 0) s.putByte('\n');
+        if (s.pending.items.len > 0 and !s.json) s.putByte('\n');
     } else if (operands.len <= 1 and s.pending.items.len == 1) {
         s.print_dir_name = false;
     }
@@ -2265,6 +2300,8 @@ fn realMain(s: *Ls) u8 {
         const rc = s.indicators[C_RIGHT] orelse "";
         if (!(std.mem.eql(u8, lc, "\x1b[") and std.mem.eql(u8, rc, "m"))) s.restoreDefaultColor();
     }
+
+    if (s.json) s.put(if (s.json_count == 0) "[]\n" else "\n]\n");
 
     if (s.dired) {
         s.dumpOffsets("//DIRED//", &s.dired_offsets);
