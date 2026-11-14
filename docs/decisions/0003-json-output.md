@@ -39,6 +39,18 @@ names, so the GNU text path is the same code. Verified: `test/test_stat.sh`
 989/989 against GNU stat 9.7 before and after, and `test/test_stat_json.sh`
 compares every JSON field with GNU's own value.
 
+## Second command: df
+
+`df` builds string cells for its table, so there was no data struct to reuse.
+`getDev` now also records a numeric `fsusage.Entry` beside each row it adds
+(same order, same filtering, so the entry list is exactly the rows `df` would
+print), and `--json` prints the entries instead of the table. The text table
+code is untouched. `fsusage.zig` (exported as `util_core.fsusage`) holds the
+`Entry` type and the writer. Units are fixed (bytes and plain counts), so
+`--json` is refused with the block-size, human-readable, inode, portability,
+type and `--output` options, which only change the text layout.
+Verified: `test/test_df.sh` 290/290 before and after; `test/test_df_json.sh`.
+
 ## Consequences
 
 - Every later command adds one library module and one test script in the same

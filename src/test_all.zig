@@ -9,6 +9,7 @@ test {
     _ = @import("mode.zig");
     _ = @import("fileinfo.zig");
     _ = @import("json.zig");
+    _ = @import("fsusage.zig");
     _ = @import("lines.zig");
     _ = @import("tabs.zig");
     _ = @import("sys.zig");

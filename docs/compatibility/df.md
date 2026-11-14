@@ -17,6 +17,7 @@ GNU coreutils 9.7 (`/usr/bin/df --version` on the development machine, installed
 - `--sync, --no-sync`: Accepted; sync(2) is not needed on Linux.
 - `--total`: Produce a grand total.
 - `-t, --type=TYPE, -x, --exclude-type=TYPE, -T, --print-type`: Select, exclude and show file system types.
+- `--json` (extension, not in GNU): one JSON array of file system entries, one object per line. Sizes are always bytes and counts plain numbers; unknown values are null; `--total` adds a last entry with `total: true`. Cannot be combined with `-B`, `-h`, `-H`, `-k`, `-m`, `-i`, `-P`, `-T` or `--output` (it has fixed fields and units). Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
 - `--help, --version`: Print help or version and exit.
 
 ## Supported behaviour
@@ -34,6 +35,8 @@ GNU coreutils 9.7 (`/usr/bin/df --version` on the development machine, installed
 ## Tests
 
 `sh test/test_df.sh`: 290 differential cases against GNU df 9.7 (C locale), each retried a few times because usage figures of live file systems change between the two runs.
+
+`sh test/test_df_json.sh`: 26 checks of `--json` against GNU `df -B1 --output=...` (exact for source, type, target, size and inode total; a tolerance for used and available space, which change while the test runs), the mount lists with and without `-a`, `-t`, `-x`, `--total`, and the refused option combinations.
 
 ## Not yet done
 

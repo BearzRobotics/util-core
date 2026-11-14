@@ -31,3 +31,5 @@ pub const mode = @import("mode.zig");
 pub const fileinfo = @import("fileinfo.zig");
 /// JSON string output helpers for the `--json` modes.
 pub const json = @import("json.zig");
+/// File system usage as data and its `--json` form.
+pub const fsusage = @import("fsusage.zig");

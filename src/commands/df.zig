@@ -13,6 +13,7 @@ const getopt = @import("../getopt.zig");
 const sys = @import("../sys.zig");
 const human = @import("../human.zig");
 const paths = @import("../paths.zig");
+const fsusage = @import("../fsusage.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
@@ -76,6 +77,7 @@ const S = struct {
     mounts: std.ArrayList(Mount) = .empty,
     mounts_read: bool = false,
     print_type: bool = false,
+    json: bool = false,
     print_grand_total: bool = false,
     grand: Fsu = .{ .blocksize = 1 },
     header_mode: HeaderMode = .default,
@@ -96,6 +98,8 @@ const S = struct {
     columns: std.ArrayList(Field) = .empty,
     table: std.ArrayList([][]const u8) = .empty,
     kept: std.ArrayList(DevKeyed) = .empty,
+    /// --json: one numeric entry per row `getDev` adds, in the same order.
+    entries: std.ArrayList(fsusage.Entry) = .empty,
     last_for_dev: std.AutoHashMap(u64, usize),
 
     fn alloc(s: *S) Allocator {
@@ -397,6 +401,42 @@ fn percent(v: FieldValues) ?u64 {
     return @intFromFloat(pct);
 }
 
+/// A block or inode count as a signed number of `units`; null when unknown.
+/// A negative value is stored as the two's complement of its magnitude, as
+/// `getFieldValues` leaves it.
+fn signedValue(n: u64, negative: bool, units: u64) ?i128 {
+    if (negative) return -(@as(i128, 0 -% n) * units);
+    if (!knownValue(n)) return null;
+    return @as(i128, n) * units;
+}
+
+fn recordEntry(s: *S, dev_name: []const u8, ftype: []const u8, mount_point: ?[]const u8, file: []const u8, total: bool, bv: FieldValues, iv: FieldValues) void {
+    const unit = bv.input_units;
+    const known_unit = knownValue(unit);
+    const dash = struct {
+        fn opt(t: []const u8) ?[]const u8 {
+            return if (std.mem.eql(u8, t, "-")) null else t;
+        }
+    }.opt;
+    s.entries.append(s.gpa, .{
+        .total = total,
+        .source = if (total) null else dash(dev_name),
+        .fstype = if (total) null else dash(ftype),
+        .target = if (total) null else mount_point,
+        .file = if (total) null else dash(file),
+        .block_size = if (known_unit) unit else null,
+        .size = if (known_unit) signedValue(bv.total, false, unit) else null,
+        .used = if (known_unit) signedValue(bv.used, bv.negate_used, unit) else null,
+        .avail = if (known_unit) signedValue(bv.available, bv.negate_available, unit) else null,
+        .free = if (known_unit) signedValue(bv.available_to_root, false, unit) else null,
+        .use_percent = percent(bv),
+        .inodes = signedValue(iv.total, false, 1),
+        .inodes_used = signedValue(iv.used, iv.negate_used, 1),
+        .inodes_avail = signedValue(iv.available, false, 1),
+        .inodes_use_percent = percent(iv),
+    }) catch {};
+}
+
 fn allocRow(s: *S) ?[][]const u8 {
     const a = s.alloc();
     const row = a.alloc([]const u8, s.columns.items.len) catch return null;
@@ -470,6 +510,7 @@ fn getDev(s: *S, device_in: ?[]const u8, mount_point: ?[]const u8, file_in: ?[]c
     var iv: FieldValues = undefined;
     getFieldValues(s, fsu, &bv, &iv);
     if (s.print_grand_total and force_fsu == null) addToGrandTotal(s, bv, iv);
+    if (s.json) recordEntry(s, dev_name, ftype, mount_point, file, force_fsu != null, bv, iv);
 
     for (s.columns.items, 0..) |col, ci| {
         const fd = &s.fields[@intFromEnum(col)];
@@ -802,6 +843,7 @@ pub fn main(ctx: cli.Context) u8 {
         s.columns.deinit(ctx.gpa);
         s.table.deinit(ctx.gpa);
         s.kept.deinit(ctx.gpa);
+        s.entries.deinit(ctx.gpa);
         s.last_for_dev.deinit();
     }
     const rc = realMain(&s);
@@ -832,6 +874,7 @@ fn realMain(s: *S) u8 {
         .{ .name = "total", .id = 1103 },
         .{ .name = "type", .arg = .required, .id = 't' },
         .{ .name = "exclude-type", .arg = .required, .id = 'x' },
+        .{ .name = "json", .id = 1104 },
     });
     defer p.deinit();
     while (true) switch (p.next()) {
@@ -908,12 +951,17 @@ fn realMain(s: *S) u8 {
                 if (o.arg) |a| if (!decodeOutputArg(s, a)) return usageFail(ctx);
             },
             1103 => s.print_grand_total = true,
+            1104 => s.json = true,
             getopt.help_id => return if (cli.writeStdout(ctx.io, help_text ++ "\n")) 0 else 1,
             getopt.version_id => return if (cli.printVersion(ctx)) 0 else 1,
             else => unreachable,
         },
     };
 
+    if (s.json and (s.human_opts != -1 or s.header_mode != .default or s.print_type or posix_format)) {
+        cli.warn(ctx, "--json cannot be combined with -B, -h, -H, -k, -m, -i, -P, -T or --output", .{});
+        return usageFail(ctx);
+    }
     if (s.human_opts == -1) {
         if (posix_format) {
             s.human_opts = 0;
@@ -991,7 +1039,12 @@ fn realMain(s: *S) u8 {
         if (s.print_grand_total) {
             getDev(s, "total", if (s.fields[@intFromEnum(Field.source)].used) "-" else "total", null, null, null, false, false, s.grand, false);
         }
-        printTable(s);
+        if (s.json) {
+            var aw: Io.Writer.Allocating = .init(s.gpa);
+            defer aw.deinit();
+            fsusage.writeJson(&aw.writer, s.entries.items) catch {};
+            s.out.write(aw.written());
+        } else printTable(s);
     } else {
         if (s.exit_status == 0) {
             cli.warn(ctx, "no file systems processed", .{});
