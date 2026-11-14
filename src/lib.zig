@@ -35,3 +35,9 @@ pub const json = @import("json.zig");
 pub const fsusage = @import("fsusage.zig");
 /// Disk usage per path as data and its `--json` form.
 pub const diskusage = @import("diskusage.zig");
+/// `wc` results as data and their `--json` form.
+pub const wordcount = @import("wordcount.zig");
+/// A moment in time as broken-down data and its `--json` form.
+pub const dateinfo = @import("dateinfo.zig");
+/// A computed checksum as data and its `--json` form.
+pub const digestinfo = @import("digestinfo.zig");

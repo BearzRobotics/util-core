@@ -15,6 +15,7 @@ GNU coreutils 9.7 (`/usr/bin/sha384sum --version` on the development machine, in
 - `-z, --zero`: End lines with NUL and do not escape file names.
 - `--ignore-missing, --quiet, --status, --strict, -w/--warn`: Check-mode controls, as GNU.
 - `--help, --version`: Print help or version and exit.
+- `--json` (extension, not in GNU): one JSON object per input, one per line: `file` (null for standard input read without an operand), `algorithm`, `digest` (lowercase hex; null for the numeric algorithms), `checksum` (the number for crc, crc32b, bsd and sysv; null for digests), `size` (bytes, for crc, crc32b, bsd and sysv; null otherwise) and `blocks` (bsd and sysv). Cannot be combined with `--check`, `--raw`, `--base64`, `--tag`, `--untagged` or `--zero`. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -32,6 +33,8 @@ GNU coreutils 9.7 (`/usr/bin/sha384sum --version` on the development machine, in
 ## Tests
 
 test/test_sha384sum.sh (116 cases from test/hashtests.sh: every block-size boundary up to 64 KiB plus 1 MB, escaping, all option errors, every check-mode path) compared with GNU sha384sum 9.7 under LC_ALL=C (stdout, normalised stderr, exit status).
+
+`sh test/test_hashsum_json.sh`: 69 checks of `--json` for md5sum, sha1sum, sha224sum, sha256sum, sha384sum, sha512sum, b2sum (including `-l 256`) and every cksum algorithm, against the digest or number GNU prints for the same input, plus stdin, several files, errors and the refused combinations. One script covers all of these tools.
 
 ## Not yet done
 

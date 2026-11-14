@@ -75,6 +75,32 @@ have no effect; they are not refused, because there are dozens and ls users
 combine them freely. Verified: `test/test_ls.sh` 1291/1291, `test_dir.sh` and
 `test_vdir.sh` 38/38, `test/test_ls_json.sh`.
 
+## Fifth group: wc, printenv, date and the checksum tools
+
+These need no restructuring of the text path. Each gets a small library module
+holding the data and its writer (`wordcount`, `dateinfo`, `digestinfo`;
+`printenv` uses `json` directly) and a hook where the command already has the
+finished values. Choices that follow decision 0007:
+
+- `wc`, the checksum tools and `date` report per input, so one object per line.
+  Only the selected counts of `wc` are present (an unselected count is absent,
+  not null, because null means unknown).
+- `factor` was left out: its numbers can exceed 128 bits and JSON numbers are
+  not exact past 2^53, so every value would have to be a string, and the text
+  form is already trivial to parse. `users` (covered by `who --json`) and
+  `locate` (`@(locate x)` already yields the list) were left out too.
+- `date --json` is refused with any format option, since the fields are fixed.
+- Found by the unit test, not by GNU comparison: Zig prints a signed integer
+  with a fill width as `+2009`, so the year is clamped to unsigned before
+  formatting (`dateinfo.zig`).
+- `wc` keeps its documented deviation from GNU (code points for `-m`, ASCII
+  whitespace for words); the JSON reports this wc's counts, and the test
+  compares with GNU only where the deviation does not apply.
+
+Verified: the GNU text baselines of all these commands unchanged (wc 82, printenv
+14, the digest tools 116 each, cksum 556, date 3755), plus the four `--json`
+test scripts.
+
 ## Consequences
 
 - Every later command adds one library module and one test script in the same

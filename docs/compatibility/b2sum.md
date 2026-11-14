@@ -16,6 +16,7 @@ GNU coreutils 9.7 (`/usr/bin/b2sum --version` on the development machine, instal
 - `--ignore-missing, --quiet, --status, --strict, -w/--warn`: Check-mode controls, as GNU.
 - `-l, --length=BITS`: Digest length in bits, a multiple of 8; 0 or more than 512 means 512. Shortened digests are tagged `BLAKE2b-BITS`.
 - `--help, --version`: Print help or version and exit.
+- `--json` (extension, not in GNU): one JSON object per input, one per line: `file` (null for standard input read without an operand), `algorithm`, `digest` (lowercase hex; null for the numeric algorithms), `checksum` (the number for crc, crc32b, bsd and sysv; null for digests), `size` (bytes, for crc, crc32b, bsd and sysv; null otherwise) and `blocks` (bsd and sysv). Cannot be combined with `--check`, `--raw`, `--base64`, `--tag`, `--untagged` or `--zero`. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -31,6 +32,8 @@ GNU coreutils 9.7 (`/usr/bin/b2sum --version` on the development machine, instal
 ## Tests
 
 test/test_b2sum.sh (116 cases from test/hashtests.sh) compared with GNU b2sum 9.7 under LC_ALL=C; test/test_cksum.sh covers `-a blake2b -l N` for N = 0 to 1024.
+
+`sh test/test_hashsum_json.sh`: 69 checks of `--json` for md5sum, sha1sum, sha224sum, sha256sum, sha384sum, sha512sum, b2sum (including `-l 256`) and every cksum algorithm, against the digest or number GNU prints for the same input, plus stdin, several files, errors and the refused combinations. One script covers all of these tools.
 
 ## Not yet done
 

@@ -18,6 +18,7 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const scan = @import("../bytes.zig");
+const wordcount = @import("../wordcount.zig");
 
 const Counts = struct {
     lines: u64 = 0,
@@ -100,6 +101,7 @@ const Result = struct { name: []const u8, counts: ?Counts };
 pub fn main(ctx: cli.Context) u8 {
     var show: Show = .{};
     var any = false;
+    var as_json = false;
     var files: std.ArrayList([]const u8) = .empty;
     defer files.deinit(ctx.gpa);
 
@@ -112,6 +114,10 @@ pub fn main(ctx: cli.Context) u8 {
         } else if (std.mem.startsWith(u8, a, "--")) {
             if (std.mem.eql(u8, a, "--help")) return help(ctx);
             if (std.mem.eql(u8, a, "--version")) return if (cli.printVersion(ctx)) 0 else 1;
+            if (std.mem.eql(u8, a, "--json")) {
+                as_json = true;
+                continue;
+            }
             if (std.mem.eql(u8, a, "--lines")) {
                 show.lines = true;
             } else if (std.mem.eql(u8, a, "--words")) {
@@ -175,12 +181,37 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     var out = cli.Out.init(ctx.io);
+    if (as_json) {
+        var aw: std.Io.Writer.Allocating = .init(ctx.gpa);
+        defer aw.deinit();
+        for (results.items) |r| {
+            const c = r.counts orelse continue;
+            wordcount.writeEntry(&aw.writer, jsonEntry(show, c, if (files.items.len == 0) null else r.name, false)) catch return oom(ctx);
+        }
+        if (inputs.len > 1) wordcount.writeEntry(&aw.writer, jsonEntry(show, total, null, true)) catch return oom(ctx);
+        out.write(aw.written());
+        out.flush();
+        return if (out.failed) 1 else status;
+    }
     for (results.items) |r| {
         if (r.counts) |c| printLine(&out, show, c, width, if (files.items.len == 0) null else r.name);
     }
     if (inputs.len > 1) printLine(&out, show, total, width, "total");
     out.flush();
     return if (out.failed) 1 else status;
+}
+
+/// The selected counts of one input as a `wordcount.Entry`.
+fn jsonEntry(show: Show, c: Counts, file: ?[]const u8, is_total: bool) wordcount.Entry {
+    return .{
+        .file = file,
+        .total = is_total,
+        .lines = if (show.lines) c.lines else null,
+        .words = if (show.words) c.words else null,
+        .chars = if (show.chars) c.chars else null,
+        .bytes = if (show.bytes) c.bytes else null,
+        .max_line_length = if (show.max_line) c.max_line else null,
+    };
 }
 
 /// Counts one input. As a side effect records what GNU uses to size the

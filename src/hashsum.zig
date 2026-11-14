@@ -14,6 +14,7 @@
 const std = @import("std");
 const cli = @import("cli.zig");
 const hash = @import("hash.zig");
+const digestinfo = @import("digestinfo.zig");
 const Io = std.Io;
 
 pub const Tool = enum { cksum, md5sum, sha1sum, sha224sum, sha256sum, sha384sum, sha512sum, b2sum };
@@ -38,6 +39,7 @@ const Config = struct {
     /// BLAKE2b digest length in bytes.
     length: usize = 64,
     length_given: bool = false,
+    json: bool = false,
 
     fn standalone(c: Config) bool {
         return c.tool != .cksum;
@@ -62,6 +64,7 @@ const alg_names = [_][]const u8{ "bsd", "sysv", "crc", "crc32b", "md5", "sha1", 
 const long_names = [_][]const u8{
     "algorithm", "base64", "binary", "check", "debug", "help", "ignore-missing", "length", "quiet", "raw", //  0-9
     "status", "strict", "tag", "text", "untagged", "version", "warn", "zero", //  10-17
+    "json", //  18
 };
 
 pub fn main(ctx: cli.Context, tool: Tool) u8 {
@@ -147,7 +150,8 @@ pub fn main(ctx: cli.Context, tool: Tool) u8 {
                 },
                 15 => return if (cli.printVersion(ctx)) 0 else 1,
                 16 => cfg.warn = true,
-                else => cfg.zero = true,
+                17 => cfg.zero = true,
+                else => cfg.json = true,
             }
             continue;
         }
@@ -193,6 +197,10 @@ pub fn main(ctx: cli.Context, tool: Tool) u8 {
         }
     }
 
+    if (cfg.json and (cfg.check or cfg.raw or cfg.base64 or cfg.tag or cfg.untagged or cfg.zero)) {
+        cli.warn(ctx, "--json cannot be combined with --check, --raw, --base64, --tag, --untagged or --zero", .{});
+        return 1;
+    }
     if (cfg.length_given and cfg.algo != .blake2b and !cfg.check) {
         cli.warn(ctx, "--length is only supported with --algorithm=blake2b", .{});
         return 1;
@@ -370,6 +378,29 @@ fn generateAll(ctx: cli.Context, cfg: *const Config, inputs: []const []const u8,
             status = 1;
             continue;
         };
+        if (cfg.json) {
+            const legacy = !cfg.algo.isDigest();
+            var aw: Io.Writer.Allocating = .init(ctx.gpa);
+            defer aw.deinit();
+            digestinfo.writeJson(&aw.writer, .{
+                .file = if (no_operands) null else name,
+                .algorithm = cfg.algo.name(),
+                .digest = if (legacy) null else d.bytes[0..d.len],
+                .checksum = if (legacy) d.n1 else null,
+                .size = switch (cfg.algo) {
+                    .crc, .crc32b => d.n2,
+                    .bsd, .sysv => d.bytes_read,
+                    else => null,
+                },
+                .blocks = switch (cfg.algo) {
+                    .bsd, .sysv => d.n2,
+                    else => null,
+                },
+            }) catch return oom(ctx);
+            out.write(aw.written());
+            if (out.failed) break;
+            continue;
+        }
         if (cfg.raw) {
             writeRaw(&out, cfg.algo, d);
         } else if (!cfg.algo.isDigest()) {

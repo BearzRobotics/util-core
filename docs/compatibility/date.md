@@ -17,6 +17,7 @@ GNU coreutils 9.7 (`/usr/bin/date --version` on the development machine, install
 - `-s, --set=STRING / MMDDhhmm[[CC]YY][.ss]`: Set the clock (clock_settime; needs privilege).
 - `+FORMAT`: strftime conversions with the GNU flags, widths, %N, %:z, %q.
 - `--help, --version`: Print help or version and exit.
+- `--json` (extension, not in GNU): one JSON object per date (one per line with `-f`) with `epoch`, `nsec`, `iso8601`, `year`, `month`, `day`, `hour`, `minute`, `second`, `weekday` (name), `weekday_number` (ISO: Monday 1, Sunday 7), `day_of_year` (1-based), `utc_offset` (seconds east of UTC), `zone` and `dst`. `-d`, `-f`, `-r` and `-u` and the TZ variable apply. Cannot be combined with a format (`+FORMAT`, `-I`, `-R`, `--rfc-3339`), `-s` or `--resolution`. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -32,6 +33,8 @@ GNU coreutils 9.7 (`/usr/bin/date --version` on the development machine, install
 ## Tests
 
 `sh test/test_date.sh`: 3755 differential cases against GNU date 9.7 in the C locale. Includes 1200 seeded random date strings in two zones and DST-boundary cases in three zones.
+
+`sh test/test_date_json.sh`: 502 checks of `--json` against GNU date, field by field, for eight instants in five zones (UTC, New York, Kolkata, Adelaide, London), the UTC offset in seconds, DST, nanoseconds, `-u`, `-f`, `-r` and the refused combinations.
 
 ## Not yet done
 

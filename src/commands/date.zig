@@ -13,6 +13,7 @@ const sys = @import("../sys.zig");
 const tzmod = @import("../tz.zig");
 const strftime = @import("../strftime.zig");
 const datetime = @import("../datetime.zig");
+const dateinfo = @import("../dateinfo.zig");
 const Io = std.Io;
 
 const help_text = @embedFile("../help/date.txt");
@@ -42,8 +43,18 @@ fn argmatch(ctx: cli.Context, opt: []const u8, value: []const u8, names: []const
     return null;
 }
 
+/// --json: print each date as one JSON object (see dateinfo.zig).
+var json_mode = false;
+
 fn showDate(ctx: cli.Context, out: *cli.Out, format: []const u8, when: datetime.Timespec, zone: *const tzmod.Zone) bool {
     const tm = tzmod.localtime(zone, when.sec);
+    if (json_mode) {
+        var aw: Io.Writer.Allocating = .init(ctx.gpa);
+        defer aw.deinit();
+        dateinfo.writeJson(&aw.writer, &tm, when.sec, when.nsec) catch return false;
+        out.write(aw.written());
+        return true;
+    }
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(ctx.gpa);
     strftime.format(&buf, ctx.gpa, format, &tm, when.sec, when.nsec) catch return false;
@@ -83,6 +94,7 @@ pub fn main(ctx: cli.Context) u8 {
         .{ .name = "uct", .id = 'u' },
         .{ .name = "utc", .id = 'u' },
         .{ .name = "universal", .id = 'u' },
+        .{ .name = "json", .id = 1103 },
     });
     defer p.deinit();
     while (true) {
@@ -96,6 +108,7 @@ pub fn main(ctx: cli.Context) u8 {
         switch (o.id) {
             'd' => datestr = o.arg,
             1100 => {},
+            1103 => json_mode = true,
             'f' => batch_file = o.arg,
             1101 => get_resolution = true,
             1102 => {
@@ -164,6 +177,10 @@ pub fn main(ctx: cli.Context) u8 {
             getopt.usageError(ctx, "the argument {f} lacks a leading '+';\nwhen using an option to specify date(s), any non-option\nargument must be a format string beginning with '+'", .{cli.quoteC(operands[0])});
             return 1;
         } else operand_date = operands[0];
+    }
+    if (json_mode and (format != null or set_date or get_resolution)) {
+        cli.warn(ctx, "--json cannot be combined with a format (+FORMAT, -I, -R, --rfc-3339), -s or --resolution", .{});
+        return 1;
     }
     if (format == null) format = if (get_resolution) "%s.%N" else "%a %b %e %H:%M:%S %Z %Y";
 

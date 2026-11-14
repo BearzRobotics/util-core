@@ -10,6 +10,7 @@ GNU coreutils 9.7 (`/usr/bin/printenv --version` on the development machine, ins
 
 - `-0, --null`: End each output line with NUL instead of newline.
 - `--help, --version`: Print help or version and exit.
+- `--json` (extension, not in GNU): one JSON object of NAME to value (every variable, or just the requested ones; a requested name that is not set is left out and the status is 1, as in the text form). A name containing `=` is never found. Values that are not valid UTF-8 are written with U+FFFD. Cannot be combined with `-0`. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -24,6 +25,8 @@ GNU coreutils 9.7 (`/usr/bin/printenv --version` on the development machine, ins
 ## Tests
 
 test/test_printenv.sh (stdout, normalised stderr and exit status compared with GNU printenv 9.7).
+
+`sh test/test_printenv_json.sh`: 15 checks of `--json` against GNU printenv for quoting, newlines, UTF-8, several names, unset names and statuses, the empty environment and the refused `-0`.
 
 ## Not yet done
 

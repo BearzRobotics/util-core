@@ -11,6 +11,9 @@ test {
     _ = @import("json.zig");
     _ = @import("fsusage.zig");
     _ = @import("diskusage.zig");
+    _ = @import("wordcount.zig");
+    _ = @import("dateinfo.zig");
+    _ = @import("digestinfo.zig");
     _ = @import("lines.zig");
     _ = @import("tabs.zig");
     _ = @import("sys.zig");
