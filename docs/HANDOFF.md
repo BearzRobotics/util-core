@@ -1,5 +1,9 @@
 # Handoff for the next Claude (updated 2026-11-08)
 
+> **Structured (JSON) output work, 2026-11-14:** see
+> `/stuff/git/dksh/docs/HANDOFF-structured-output.md` (branch `value-pipe`) for the
+> `--json` additions on the `structured-output` branch and what remains.
+
 ## What this project is
 A Zig 0.17.1 reimplementation of GNU coreutils 9.7 (plus the absorbed
 find/grep/sed/xargs/locate/updatedb/tree, all done). The owner wants drop-in
