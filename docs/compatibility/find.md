@@ -18,6 +18,7 @@ GNU findutils 4.10.0 (`/usr/bin/find --version` on the development machine). Con
 - `-exec, -execdir, -ok, -okdir (; and +), -delete, -prune, -quit`: Command, removal and control actions.
 - `( ) ! -not -a -and -o -or ,`: Operators with GNU's precedence and error messages.
 - `--help, --version`: Print help or version and exit.
+- `-json` (extension action, not in GNU find): like `-print`, but one JSON object and a newline for each file that reaches it, so output streams one object per line. The object has the fields of `ls --json` (docs/compatibility/ls.md): `dir` and `name` are the path split at its last slash (a path with no slash has a null `dir`), then type, size, mode, owner, times and `link_target`. Symbolic links follow `-H`/`-L`/`-P` as `-ls` does. It counts as an action, so no implicit `-print` is added. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -38,6 +39,8 @@ GNU findutils 4.10.0 (`/usr/bin/find --version` on the development machine). Con
 ## Tests
 
 `sh test/test_find.sh`: about 2,000 differential cases against GNU find 4.10 on a fixture tree with symlinks, loops, fifos, odd names, old timestamps and unreadable directories (tests, -printf directives, -exec/-ok with scripted answers, -delete and file-system changes compared with run_tree, error messages and exit statuses).
+
+`sh test/test_find_json.sh`: 37 checks of `-json`: the files matched and their order against GNU `find -print` for about 25 expressions (`-type`, `-name`, `-iname`, `-maxdepth`, `-mindepth`, `-depth`, `-prune`, `-size`, `-newer`, `-perm`, `-empty`, `-links`, `-path`, `-xtype`, `-not`, `-o`, several roots, `-L`, `-H`, `-P`), and size, mode, type, link count, inode, owner, link target and mtime for every file against GNU `find -printf`, with and without `-L`.
 
 ## Not yet done
 

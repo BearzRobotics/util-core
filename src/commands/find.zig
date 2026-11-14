@@ -12,6 +12,7 @@ const fnmatch = @import("../fnmatch.zig");
 const strftime = @import("../strftime.zig");
 const tzmod = @import("../tz.zig");
 const userdb = @import("../userdb.zig");
+const fileinfo = @import("../fileinfo.zig");
 const datetime = @import("../datetime.zig");
 const quotearg = @import("../quotearg.zig");
 const modemod = @import("../mode.zig");
@@ -30,7 +31,7 @@ const Kind = enum {
     nouser, nogroup, newer, atime, ctime, mtime, amin, cmin, mmin, used, empty, links, inum, samefile,
     fstype, readable, writable, executable, true_, false_,
     // actions
-    print, print0, printf, fprint, fprint0, fprintf, ls, fls, exec, delete, prune, quit,
+    print, print0, printf, fprint, fprint0, fprintf, ls, fls, json, exec, delete, prune, quit,
 };
 
 const TimeSel = enum { a, b, c, m, t };
@@ -667,6 +668,11 @@ const Parser = struct {
             st.has_action = true;
             return p.mk(.ls);
         }
+        // Extension (not in GNU find): like -print, but one JSON object per file.
+        if (eq(u8, a, "-json")) {
+            st.has_action = true;
+            return p.mk(.json);
+        }
         if (eq(u8, a, "-prune")) {
             st.saw_prune = true;
             return p.mk(.prune);
@@ -1248,6 +1254,10 @@ fn evalNode(st: *State, n: *Node) bool {
             printLs(st, null);
             return true;
         },
+        .json => {
+            printJson(st);
+            return true;
+        },
         .fls => {
             printLs(st, n.out);
             return true;
@@ -1523,6 +1533,38 @@ fn groupName(st: *State, gid: u32) []const u8 {
     loadDb(st);
     if (st.db.groupByGid(gid)) |g| return g.name;
     return std.fmt.allocPrint(st.gpa, "{d}", .{gid}) catch oom(st.ctx);
+}
+
+/// -json: one JSON object and a newline for the current file, with the same
+/// fields as `ls --json` (see fileinfo.zig): `dir` and `name` are the path split
+/// at its last slash, so `./a/b` is dir "./a", name "b", and a path with no
+/// slash has a null dir. Symbolic links follow the -H/-L/-P setting, as -ls does.
+fn printJson(st: *State) void {
+    const s = getSt(st) orelse return;
+    const path = st.cur_path;
+    var dir: ?[]const u8 = null;
+    var name: []const u8 = path;
+    if (std.mem.lastIndexOfScalar(u8, path, '/')) |i| {
+        if (path.len > 1) {
+            dir = if (i == 0) "/" else path[0..i];
+            name = path[i + 1 ..];
+            if (name.len == 0) name = path; // a trailing slash: keep the whole path
+        }
+    }
+    loadDb(st);
+    const user = if (st.db.userByUid(s.uid)) |u| u.name else null;
+    const group = if (st.db.groupByGid(s.gid)) |g| g.name else null;
+    var target_buf: [4096]u8 = undefined;
+    var target: ?[]const u8 = null;
+    if (s.isLink()) {
+        var err: LX.E = .SUCCESS;
+        if (sys.readlinkPath(path, &target_buf, &err)) |k| target = target_buf[0..k];
+    }
+    var aw: std.Io.Writer.Allocating = .init(st.gpa);
+    defer aw.deinit();
+    fileinfo.writeJsonIn(&aw.writer, dir, name, &s, target, user, group) catch return;
+    aw.writer.writeByte('\n') catch return;
+    emit(st, aw.written());
 }
 
 fn printLs(st: *State, o: ?*OutFile) void {

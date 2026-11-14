@@ -101,6 +101,16 @@ Verified: the GNU text baselines of all these commands unchanged (wc 82, printen
 14, the digest tools 116 each, cksum 556, date 3755), plus the four `--json`
 test scripts.
 
+## Sixth: find
+
+`find` is an expression evaluator, so the natural form is an action, not a
+global flag: `-json` is a primary like `-print` that prints one object per
+file, streamed, with the same fields as `ls --json` (`printJson` in
+`find.zig`, over `fileinfo`). It is the streaming form decision 0007 left open
+for `find`: one object per line, not an array. The traversal, the tests and
+the existing actions are untouched. Verified: `test/test_find.sh` 1987/1987
+before and after; `test/test_find_json.sh`.
+
 ## Consequences
 
 - Every later command adds one library module and one test script in the same
