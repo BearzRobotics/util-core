@@ -3,22 +3,20 @@
 //! Reference: GNU coreutils manual "date invocation" (9.7); POSIX.1-2024 date
 //! (output formats, -u, MMDDhhmm[[CC]YY] setting).
 //!
-//! -d/-f use src/datetime.zig (GNU's parse_datetime), output uses
-//! src/strftime.zig, zones come from src/tz.zig (TZ, /etc/localtime, TZif).
+//! Thin wrapper over `util_core.date` (decision 0004): argument parsing, the
+//! GNU diagnostics and the exit status live here; parsing, formatting and the
+//! --json output are in src/lib/date.zig.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const sys = @import("../sys.zig");
-const tzmod = @import("../tz.zig");
-const strftime = @import("../strftime.zig");
-const datetime = @import("../datetime.zig");
-const dateinfo = @import("../dateinfo.zig");
+const date = @import("../lib/date.zig");
 const Io = std.Io;
 
 const help_text = @embedFile("../help/date.txt");
 
-const rfc_email_format = "%a, %d %b %Y %H:%M:%S %z";
+const rfc_email_format = date.rfc_email_format;
 
 fn argmatch(ctx: cli.Context, opt: []const u8, value: []const u8, names: []const []const u8) ?usize {
     var found: ?usize = null;
@@ -43,24 +41,24 @@ fn argmatch(ctx: cli.Context, opt: []const u8, value: []const u8, names: []const
     return null;
 }
 
-/// --json: print each date as one JSON object (see dateinfo.zig).
-var json_mode = false;
+/// Observer for `-f` lines that are not dates: stdout first, then GNU's text.
+const BatchReport = struct {
+    ctx: cli.Context,
+    out: *Io.Writer,
 
-fn showDate(ctx: cli.Context, out: *cli.Out, format: []const u8, when: datetime.Timespec, zone: *const tzmod.Zone) bool {
-    const tm = tzmod.localtime(zone, when.sec);
-    if (json_mode) {
-        var aw: Io.Writer.Allocating = .init(ctx.gpa);
-        defer aw.deinit();
-        dateinfo.writeJson(&aw.writer, &tm, when.sec, when.nsec) catch return false;
-        out.write(aw.written());
-        return true;
+    fn report(context: ?*anyopaque, ev: date.Event) void {
+        const self: *BatchReport = @ptrCast(@alignCast(context.?));
+        self.out.flush() catch {};
+        switch (ev) {
+            .invalid_date => |line| cli.warn(self.ctx, "invalid date {f}", .{cli.quoteC(line)}),
+        }
     }
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(ctx.gpa);
-    strftime.format(&buf, ctx.gpa, format, &tm, when.sec, when.nsec) catch return false;
-    out.write(buf.items);
-    out.writeByte('\n');
-    return true;
+};
+
+/// A failed write to standard output, as `cli.finish` reports it.
+fn writeFailed(stdout: *Io.File.Writer) u8 {
+    cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+    return 1;
 }
 
 pub fn main(ctx: cli.Context) u8 {
@@ -73,7 +71,7 @@ pub fn main(ctx: cli.Context) u8 {
     var batch_file: ?[]const u8 = null;
     var reference: ?[]const u8 = null;
     var utc = false;
-    var out = cli.Out.init(ctx.io);
+    var json_mode = false;
 
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -182,34 +180,17 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "--json cannot be combined with a format (+FORMAT, -I, -R, --rfc-3339), -s or --resolution", .{});
         return 1;
     }
-    if (format == null) format = if (get_resolution) "%s.%N" else "%a %b %e %H:%M:%S %Z %Y";
+    if (format == null) format = if (get_resolution) date.resolution_format else date.default_format;
 
     // %-N becomes %9N at the clock's 1 ns resolution.
-    var fmt_buf: std.ArrayList(u8) = .empty;
-    {
-        var i: usize = 0;
-        const f = format.?;
-        while (i < f.len) {
-            if (f[i] == '%' and i + 2 < f.len + 0 and f[i + 1] == '-' and f[i + 2] == 'N') {
-                fmt_buf.appendSlice(arena, "%9N") catch return 1;
-                i += 3;
-            } else if (f[i] == '%' and i + 1 < f.len) {
-                fmt_buf.appendSlice(arena, f[i .. i + 2]) catch return 1;
-                i += 2;
-            } else {
-                fmt_buf.append(arena, f[i]) catch return 1;
-                i += 1;
-            }
-        }
-    }
-    const fmt = fmt_buf.items;
+    const fmt = date.normalizeFormat(arena, format.?) catch return 1;
 
-    const tz_env: ?[]const u8 = if (utc) "UTC0" else if (ctx.environ) |m| m.get("TZ") else null;
-    var zone = tzmod.load(gpa, ctx.io, tz_env);
-    defer zone.deinit();
-
-    const ts_now = Io.Timestamp.now(ctx.io, .real);
-    const now: datetime.Timespec = .{ .sec = @intCast(@divFloor(ts_now.nanoseconds, std.time.ns_per_s)), .nsec = @intCast(@mod(ts_now.nanoseconds, std.time.ns_per_s)) };
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: date.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+    var d = date.Date.init(env, .{ .format = fmt, .json = json_mode, .utc = utc });
+    defer d.deinit();
+    const now = d.now;
 
     var ok = true;
     if (batch_file) |bf| {
@@ -228,60 +209,52 @@ pub fn main(ctx: cli.Context) u8 {
             if (n == 0) break;
             data.appendSlice(arena, chunk[0..n]) catch return 1;
         }
-        var pos: usize = 0;
-        while (pos < data.items.len) {
-            const e = std.mem.indexOfScalarPos(u8, data.items, pos, '\n');
-            const stop = e orelse data.items.len;
-            const line = data.items[pos..stop];
-            pos = if (e) |x| x + 1 else data.items.len;
-            if (datetime.parse(gpa, ctx.io, line, now, &zone)) |when| {
-                if (!showDate(ctx, &out, fmt, when, &zone)) ok = false;
-            } else {
-                out.flush();
-                cli.warn(ctx, "invalid date {f}", .{cli.quoteC(line)});
-                ok = false;
-            }
-        }
-        out.flush();
-        return if (ok) 0 else 1;
+        var rep: BatchReport = .{ .ctx = ctx, .out = &stdout.interface };
+        const ok_all = d.showLines(&stdout.interface, data.items, .{ .context = &rep, .func = BatchReport.report }) catch |e| switch (e) {
+            error.OutOfMemory => return 1,
+            error.WriteFailed, error.FormatFailed => return writeFailed(&stdout),
+        };
+        if (!cli.flushWriter(&stdout)) return 1;
+        return if (ok_all) 0 else 1;
     }
 
-    var when: datetime.Timespec = now;
+    var when: date.Timespec = now;
     var valid_date = true;
     var shown_str: []const u8 = "";
     if (option_specified_date == 0 and !set_date) {
         if (operand_date) |od| {
             set_date = true;
             shown_str = od;
-            const cur = tzmod.localtime(&zone, now.sec);
-            if (datetime.posixTime(&zone, od, false, cur.year)) |t| when = .{ .sec = t, .nsec = 0 } else valid_date = false;
+            if (d.parsePosix(od)) |t| when = t else valid_date = false;
         }
     } else if (reference) |r| {
         var err: std.os.linux.E = .SUCCESS;
-        const st = sys.fileStat(r, true, &err) orelse {
+        when = date.fileMtime(r, &err) orelse {
             cli.warn(ctx, "{f}: {s}", .{ cli.quote(r), sys.errnoText(err) });
             return 1;
         };
-        when = .{ .sec = st.mtime_s, .nsec = st.mtime_ns };
     } else if (get_resolution) {
         when = .{ .sec = 0, .nsec = 1 };
     } else {
         const ds = set_datestr orelse datestr.?;
         shown_str = ds;
-        if (datetime.parse(gpa, ctx.io, ds, now, &zone)) |t| when = t else valid_date = false;
+        if (d.parse(ds)) |t| when = t else valid_date = false;
     }
     if (!valid_date) {
         cli.warn(ctx, "invalid date {f}", .{cli.quoteC(shown_str)});
         return 1;
     }
     if (set_date) {
-        if (sys.setRealtime(when.sec, when.nsec)) |e| {
+        if (date.setSystemTime(when)) |e| {
             cli.warn(ctx, "cannot set date: {s}", .{sys.errnoText(e)});
             ok = false;
         }
     }
-    if (!showDate(ctx, &out, fmt, when, &zone)) ok = false;
-    out.flush();
-    if (out.failed) return 1;
+    d.show(&stdout.interface, when) catch |e| switch (e) {
+        error.FormatFailed => ok = false,
+        error.OutOfMemory => ok = false,
+        error.WriteFailed => return writeFailed(&stdout),
+    };
+    if (!cli.flushWriter(&stdout)) return 1;
     return if (ok) 0 else 1;
 }
