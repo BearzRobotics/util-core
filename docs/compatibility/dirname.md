@@ -11,6 +11,14 @@ GNU coreutils 9.7 (`/usr/bin/dirname --version` on the development machine, inst
 - `-z, --zero`: End each output line with NUL instead of newline.
 - `--help, --version`: Sole argument only.
 
+## Library
+
+Module `util_core.dirname` (`src/lib/dirname.zig`); `src/commands/dirname.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Only / is a path separator, including on Windows.

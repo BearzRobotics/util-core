@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! pwd — print the working directory.
+//! pwd: thin wrapper over `util_core.pwd` (decision 0004).
 //! References: GNU coreutils manual "pwd invocation" (9.7); POSIX.1-2024 pwd.
 //!
 //! Options -L / -P (last wins). POSIX defaults to -L; GNU's standalone pwd
 //! defaults to -P unless POSIXLY_CORRECT is set. We follow GNU.
-//! -L uses $PWD only if it is absolute, has no "." or ".." component, and
-//! names the same directory as the physical working directory; otherwise it
-//! behaves like -P (both specs).
 
 const std = @import("std");
 const Io = std.Io;
 const cli = @import("../cli.zig");
+const lib = @import("../lib/pwd.zig");
 
 const long_names = [_][]const u8{ "logical", "physical", "help", "version" };
 
@@ -53,40 +51,20 @@ pub fn main(ctx: cli.Context) u8 {
     }
     if (operands > 0) cli.warn(ctx, "ignoring non-option arguments", .{});
 
-    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const n = std.process.currentPath(ctx.io, &buf) catch |e| {
-        cli.warn(ctx, "cannot get current directory: {s}", .{cli.errText(e)});
-        return 1;
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    lib.run(env, .{ .logical = logical }, &stdout.interface) catch |e| switch (e) {
+        error.WriteFailed => {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            return 1;
+        },
+        else => {
+            cli.warn(ctx, "cannot get current directory: {s}", .{cli.errText(e)});
+            return 1;
+        },
     };
-    const physical = buf[0..n];
-    var path: []const u8 = physical;
-    if (logical) if (cli.getenv(ctx, "PWD")) |env_pwd| {
-        if (pwdIsValid(ctx.io, env_pwd, physical)) path = env_pwd;
-    };
-
-    var out = cli.Out.init(ctx.io);
-    out.write(path);
-    out.writeByte('\n');
-    out.flush();
-    return if (out.failed) 1 else 0;
-}
-
-/// True when `candidate` is absolute, free of "." / ".." components, and
-/// resolves to the same directory as `physical`.
-fn pwdIsValid(io: Io, candidate: []const u8, physical: []const u8) bool {
-    if (!hasNoDotComponents(candidate)) return false;
-    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const n = Io.Dir.realPathFileAbsolute(io, candidate, &buf) catch return false;
-    return std.mem.eql(u8, buf[0..n], physical);
-}
-
-fn hasNoDotComponents(path: []const u8) bool {
-    if (path.len == 0 or path[0] != '/') return false;
-    var it = std.mem.splitScalar(u8, path, '/');
-    while (it.next()) |comp| {
-        if (std.mem.eql(u8, comp, ".") or std.mem.eql(u8, comp, "..")) return false;
-    }
-    return true;
+    return if (cli.flushWriter(&stdout)) 0 else 1;
 }
 
 fn help(ctx: cli.Context) u8 {
@@ -96,14 +74,4 @@ fn help(ctx: cli.Context) u8 {
         "  -P, --physical  avoid all symlinks (default unless POSIXLY_CORRECT is set)\n" ++
         "      --help      display this help and exit\n" ++
         "      --version   output version information and exit\n")) 0 else 1;
-}
-
-test "hasNoDotComponents" {
-    const t = std.testing;
-    try t.expect(hasNoDotComponents("/a/b"));
-    try t.expect(hasNoDotComponents("/"));
-    try t.expect(!hasNoDotComponents("a/b"));
-    try t.expect(!hasNoDotComponents("/a/./b"));
-    try t.expect(!hasNoDotComponents("/a/../b"));
-    try t.expect(!hasNoDotComponents(""));
 }

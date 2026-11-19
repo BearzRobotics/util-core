@@ -17,6 +17,14 @@ GNU coreutils 9.7 (`/usr/bin/printenv --version` on the development machine, ins
 - No operands: every NAME=value; operands: the value of each set variable, nothing for unset ones; a name containing `=` is never found.
 - -0/--null, abbreviated long options, `--`.
 
+## Library
+
+Module `util_core.printenv` (`src/lib/printenv.zig`); `src/commands/printenv.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+- `--json`: prints one JSON object of NAME: value (requested names that are not set are left out and make the exit status 1). Not a GNU option; cannot be combined with `-0` (exit 2). Library option `Options.json`, off by default. Covered by `test/test_printenv_json.sh`.
+
 ## Known deviations and gaps
 
 - Environment order is the order given by the process environment map (insertion order); verified identical to GNU for `env -i A=1 B=2`.

@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! whoami — print the user name of the effective user ID.
-//! Reference: GNU coreutils manual "whoami invocation" (9.7).
+//! whoami: thin wrapper over `util_core.whoami` (decision 0004).
 
 const std = @import("std");
+const Io = std.Io;
 const cli = @import("../cli.zig");
-const sys = @import("../sys.zig");
-const userdb = @import("../userdb.zig");
+const lib = @import("../lib/whoami.zig");
 
 pub fn main(ctx: cli.Context) u8 {
     for (ctx.args) |a_z| {
@@ -30,16 +29,21 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "extra operand '{s}'\nTry '{s} --help' for more information.", .{ a, ctx.name });
         return 1;
     }
-    var db = userdb.Db.load(ctx.gpa, ctx.io);
-    defer db.deinit();
-    const id = sys.identity();
-    const u = db.userByUid(id.euid) orelse {
-        cli.warn(ctx, "cannot find name for user ID {d}", .{id.euid});
+    var buf: [512]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const res = lib.run(env, .{}, &stdout.interface) catch {
+        cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
         return 1;
     };
-    var buf: [256]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{s}\n", .{u.name}) catch return 1;
-    return if (cli.writeStdout(ctx.io, line)) 0 else 1;
+    switch (res) {
+        .no_name => |uid| {
+            cli.warn(ctx, "cannot find name for user ID {d}", .{uid});
+            return 1;
+        },
+        .printed => {},
+    }
+    return if (cli.flushWriter(&stdout)) 0 else 1;
 }
 
 fn help(ctx: cli.Context) u8 {

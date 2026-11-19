@@ -15,6 +15,14 @@ GNU coreutils 9.7 (`/usr/bin/logname --version` on the development machine, inst
 
 - Reads /proc/self/loginuid, maps it to a name through /etc/passwd, and otherwise prints `logname: no login name` (exit 1), which is what glibc's getlogin() does first.
 
+## Library
+
+Module `util_core.logname` (`src/lib/logname.zig`); `src/commands/logname.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - The utmp fallback of getlogin() is not implemented, so a login known only to utmp is reported as `no login name`.

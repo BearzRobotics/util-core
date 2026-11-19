@@ -16,6 +16,14 @@ GNU coreutils 9.7 (`/usr/bin/users --version` on the development machine, instal
 - Reads Linux utmp records (384 bytes, type 7 = user process; name at offset 44, 32 bytes) from FILE or /var/run/utmp, sorted and space-separated.
 - A missing or unreadable file prints nothing and succeeds, as GNU 9.7 does.
 
+## Library
+
+Module `util_core.users` (`src/lib/users.zig`); `src/commands/users.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - GNU 9.7 is built with systemd and falls back to systemd-logind sessions when /var/run/utmp is absent (as on this WSL machine, where it prints the session user). logind's session files are private data and are not read, so without a utmp file this prints nothing.

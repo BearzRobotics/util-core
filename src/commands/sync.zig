@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! sync — flush file system buffers.
-//! Reference: GNU coreutils manual "sync invocation" (9.7); POSIX.1-2024 sync.
-//!
-//! No operands: sync(2). With files: fsync, or fdatasync with -d, or syncfs
-//! with -f, on each named file.
+//! sync: thin wrapper over `util_core.sync` (decision 0004). Parses options,
+//! applies GNU's option-combination rules and words the diagnostics.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const sys = @import("../sys.zig");
-const Io = std.Io;
+const lib = @import("../lib/sync.zig");
 
 const help_text = @embedFile("../help/sync.txt");
 
@@ -41,23 +38,19 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "--data needs at least one argument", .{});
         return 1;
     }
-    if (files.len == 0) {
-        _ = sys.syncFile(-1, .all);
-        return 0;
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const mode: lib.Options.Mode = if (data) .data else if (fs) .fs else .file;
+    const res = lib.run(env, .{ .mode = mode }, files, .{
+        .context = @constCast(&ctx),
+        .func = report,
+    });
+    return if (res.failed) 1 else 0;
+}
+
+fn report(context: ?*anyopaque, ev: lib.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    switch (ev) {
+        .open_failed => |e| cli.warn(ctx.*, "error opening {f}: {s}", .{ cli.quoteA(e.name), cli.errText(e.err) }),
+        .sync_failed => |e| cli.warn(ctx.*, "error syncing {f}: {s}", .{ cli.quoteA(e.name), sys.errnoText(e.errno) }),
     }
-    var status: u8 = 0;
-    for (files) |name| {
-        const f = Io.Dir.cwd().openFile(ctx.io, name, .{ .mode = .read_only, .allow_directory = true }) catch |e| {
-            cli.warn(ctx, "error opening {f}: {s}", .{ cli.quoteA(name), cli.errText(e) });
-            status = 1;
-            continue;
-        };
-        defer f.close(ctx.io);
-        const kind: sys.SyncKind = if (data) .data else if (fs) .fs else .file;
-        if (sys.syncFile(f.handle, kind)) |e| {
-            cli.warn(ctx, "error syncing {f}: {s}", .{ cli.quoteA(name), sys.errnoText(e) });
-            status = 1;
-        }
-    }
-    return status;
 }

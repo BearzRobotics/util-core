@@ -15,6 +15,14 @@ GNU coreutils 9.7 (`/usr/bin/hostid --version` on the development machine, insta
 
 - Prints 8 hexadecimal digits: the content of /etc/hostid when present, otherwise the IPv4 address of the host name in /etc/hosts with its 16-bit halves swapped (glibc `gethostid`); 0 when neither is available.
 
+## Library
+
+Module `util_core.hostid` (`src/lib/hostid.zig`); `src/commands/hostid.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Host names are resolved through /etc/hosts only, not DNS.

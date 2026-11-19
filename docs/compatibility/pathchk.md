@@ -18,6 +18,14 @@ GNU coreutils 9.7 (`/usr/bin/pathchk --version` on the development machine, inst
 - Without -p the name is examined with lstat; errors other than ENOENT are reported.
 - Exit status 1 if any NAME fails.
 
+## Library
+
+Module `util_core.pathchk` (`src/lib/pathchk.zig`); `src/commands/pathchk.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Without -p the limits are the Linux defaults (NAME_MAX 255, PATH_MAX 4096); `pathconf` of the actual file system is not consulted.

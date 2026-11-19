@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! arch — print the machine hardware name (same as uname -m).
-//! Reference: GNU coreutils manual "arch invocation" (9.7).
+//! arch: thin wrapper over `util_core.arch` (decision 0004).
 
 const std = @import("std");
+const Io = std.Io;
 const cli = @import("../cli.zig");
-const sys = @import("../sys.zig");
+const lib = @import("../lib/arch.zig");
 
 pub fn main(ctx: cli.Context) u8 {
     for (ctx.args) |a_z| {
@@ -30,10 +30,14 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         }
     }
-    const u = sys.uname();
-    var buf: [128]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{s}\n", .{u.machine()}) catch return 1;
-    return if (cli.writeStdout(ctx.io, line)) 0 else 1;
+    var buf: [256]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    lib.run(env, .{}, &stdout.interface) catch {
+        cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+        return 1;
+    };
+    return if (cli.flushWriter(&stdout)) 0 else 1;
 }
 
 fn help(ctx: cli.Context) u8 {

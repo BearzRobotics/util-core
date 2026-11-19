@@ -13,6 +13,14 @@ GNU coreutils 9.7 (`/usr/bin/basename --version` on the development machine, ins
 - `-z, --zero`: End each output line with NUL instead of newline.
 - `--help, --version`: Sole argument only.
 
+## Library
+
+Module `util_core.basename` (`src/lib/basename.zig`); `src/commands/basename.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Only / is a path separator, including on Windows.
