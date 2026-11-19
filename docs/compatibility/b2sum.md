@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU b2sum 9.7 in the C locale. Date: 2026-11-07
 
+Library: `util_core.b2sum` (src/lib/b2sum.zig), a thin preset of the shared module src/lib/hashsum.zig (`util_core.hashsum`); `src/commands/b2sum.zig` and src/hashsum.zig are the argument parser and diagnostics only.
+
 ## Reference
 
 GNU coreutils 9.7 (`/usr/bin/b2sum --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "b2sum invocation" (`info '(coreutils) b2sum invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/b2sum-invocation.html). POSIX does not specify this utility. Digest: RFC 7693. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_b2sum.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -22,6 +24,10 @@ GNU coreutils 9.7 (`/usr/bin/b2sum --version` on the development machine, instal
 
 - BLAKE2b per RFC 7693 implemented in src/hash.zig with a run-time digest length (std.crypto only offers compile-time lengths); the length goes into the parameter block, so a 128-bit digest is not a truncation of the 512-bit one.
 - Same output, escaping and check-mode behaviour as the other checksum tools; when checking, the digest length is taken from the line.
+
+## Extensions
+
+- `--json` (decision 0003, form 2 of decision 0005): one JSON object per input. Why: the checksum as data for programs. Off by default; only an explicit `--json` changes output, and GNU invocations are unaffected. Covered by `test/test_hashsum_json.sh`, which also checks the refused combinations.
 
 ## Known deviations and gaps
 

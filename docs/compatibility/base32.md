@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU base32 9.7 in the C locale. Date: 2026-11-07
 
+Library: `util_core.base32` (src/lib/base32.zig), a thin preset of the shared module src/lib/baseenc.zig (`util_core.baseenc`); `src/commands/base32.zig` and src/baseenc.zig are the argument parser and diagnostics only.
+
 ## Reference
 
 GNU coreutils 9.7 (`/usr/bin/base32 --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "base32 invocation" (`info '(coreutils) base32 invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/base32-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), base32, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/base32.html. RFC 4648 section 6. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_base32.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -19,6 +21,10 @@ GNU coreutils 9.7 (`/usr/bin/base32 --version` on the development machine, insta
 - Decoding is incremental like gnulib's: complete quanta are written at once, and when a quantum is invalid the bytes already decoded from it are still written before `invalid input` (exit 1). A final quantum without padding is accepted when its trailing bits are zero.
 - Newlines are always ignored while decoding; concatenated padded blocks decode in sequence.
 - Padding must complete a quantum of eight characters (`XX======`, `XXXX====`, `XXXXX===`, `XXXXXXX=`); a short final quantum that ends in `=` is rejected without output.
+
+## Extensions
+
+None.
 
 ## Known deviations and gaps
 

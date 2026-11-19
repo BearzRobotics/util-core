@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU sha1sum 9.7 in the C locale. Date: 2026-11-07
 
+Library: `util_core.sha1sum` (src/lib/sha1sum.zig), a thin preset of the shared module src/lib/hashsum.zig (`util_core.hashsum`); `src/commands/sha1sum.zig` and src/hashsum.zig are the argument parser and diagnostics only.
+
 ## Reference
 
 GNU coreutils 9.7 (`/usr/bin/sha1sum --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "sha1sum invocation" (`info '(coreutils) sha1sum invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/sha1sum-invocation.html). POSIX does not specify this utility. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sha1sum.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -24,6 +26,10 @@ GNU coreutils 9.7 (`/usr/bin/sha1sum --version` on the development machine, inst
 - Check mode prints `NAME: OK`, `NAME: FAILED` or `NAME: FAILED open or read`, then the same `WARNING:` summaries as GNU (computed checksums that did not match, files that could not be read, improperly formatted lines), and exits 1 on any failure; `--strict` also fails on improper lines.
 - File names in diagnostics are quoted as GNU `quotef` does (`cli.quote`).
 - `-` or no operand reads standard input.
+
+## Extensions
+
+- `--json` (decision 0003, form 2 of decision 0005): one JSON object per input. Why: the checksum as data for programs. Off by default; only an explicit `--json` changes output, and GNU invocations are unaffected. Covered by `test/test_hashsum_json.sh`, which also checks the refused combinations.
 
 ## Known deviations and gaps
 

@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU sum 9.7 in the C locale. Date: 2026-11-07
 
+Library: `util_core.sum` (src/lib/sum.zig); `src/commands/sum.zig` is the argument parser and diagnostics only.
+
 ## Reference
 
 GNU coreutils 9.7 (`/usr/bin/sum --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "sum invocation" (`info '(coreutils) sum invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/sum-invocation.html). POSIX does not specify this utility. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sum.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -15,6 +17,10 @@ GNU coreutils 9.7 (`/usr/bin/sum --version` on the development machine, installe
 ## Supported behaviour
 
 - Names are printed when at least one file operand is given (not for implicit standard input).
+
+## Extensions
+
+None.
 
 ## Known deviations and gaps
 

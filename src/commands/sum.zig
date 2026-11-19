@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! sum — checksum and block count (BSD or System V algorithm).
+//! sum: thin wrapper over `util_core.sum` (decision 0004); the checksums are
+//! in src/lib/sum.zig. Checksum and block count (BSD or System V algorithm).
 //! Reference: GNU coreutils manual "sum invocation" (9.7).
 //!
 //! Output: "SUM BLOCKS [NAME]". The BSD form (default, -r) writes the 16-bit
@@ -9,7 +10,8 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
-const hash = @import("../hash.zig");
+const Io = std.Io;
+const lib = @import("../lib/sum.zig");
 
 const long_names = [_][]const u8{ "sysv", "help", "version" };
 
@@ -54,54 +56,41 @@ pub fn main(ctx: cli.Context) u8 {
         };
     }
 
-    const stdin_only = [_][]const u8{"-"};
-    const inputs: []const []const u8 = if (files.items.len == 0) &stdin_only else files.items;
-    var out = cli.Out.init(ctx.io);
-    var buf: [64 * 1024]u8 = undefined;
-    var status: u8 = 0;
-    for (inputs) |name| {
-        const file = cli.openInput(ctx.io, name) catch |e| {
-            out.flush();
-            cli.warn(ctx, "{s}: {s}", .{ name, cli.errText(e) });
-            status = 1;
-            continue;
-        };
-        defer cli.closeInput(ctx.io, file);
-        var bsd: hash.BsdSum = .{};
-        var sys5: hash.SysvSum = .{};
-        var failed = false;
-        while (true) {
-            const n = cli.readChunk(ctx.io, file, &buf) catch |e| {
-                out.flush();
-                cli.warn(ctx, "{s}: {s}", .{ name, cli.errText(e) });
-                failed = true;
-                break;
-            };
-            if (n == 0) break;
-            if (sysv) sys5.update(buf[0..n]) else bsd.update(buf[0..n]);
-        }
-        if (failed) {
-            status = 1;
-            continue;
-        }
-        if (sysv) {
-            out.print("{d} {d}", .{ sys5.final(), (sys5.len + 511) / 512 });
-        } else {
-            out.print("{d:0>5} {d: >5}", .{ bsd.sum, (bsd.len + 1023) / 1024 });
-        }
-        if (files.items.len > 0) {
-            out.writeByte(' ');
-            out.write(name);
-        }
-        out.writeByte('\n');
-        if (out.failed) break;
+    var inputs: std.ArrayList(lib.Input) = .empty;
+    defer inputs.deinit(ctx.gpa);
+    if (files.items.len == 0) {
+        inputs.append(ctx.gpa, .{ .name = null, .source = .{ .file = Io.File.stdin() } }) catch return oom(ctx);
     }
-    out.flush();
-    if (out.failed) {
+    for (files.items) |path| {
+        const in: lib.Input = if (std.mem.eql(u8, path, "-"))
+            .{ .name = path, .source = .{ .file = Io.File.stdin() } }
+        else
+            .{ .name = path, .source = .{ .path = path } };
+        inputs.append(ctx.gpa, in) catch return oom(ctx);
+    }
+
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    var sink: Sink = .{ .ctx = &ctx, .fw = &stdout };
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = lib.run(env, .{ .sysv = sysv }, inputs.items, &stdout.interface, .{ .context = &sink, .func = report }) catch {
+        cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+        cli.writeErrorWarn(ctx);
+        return 1;
+    };
+    if (!cli.flushWriter(&stdout)) {
         cli.writeErrorWarn(ctx);
         return 1;
     }
-    return status;
+    return if (result.failed) 1 else 0;
+}
+
+const Sink = struct { ctx: *const cli.Context, fw: *Io.File.Writer };
+
+fn report(context: ?*anyopaque, ev: lib.Event) void {
+    const sink: *Sink = @ptrCast(@alignCast(context.?));
+    sink.fw.interface.flush() catch {};
+    cli.warn(sink.ctx.*, "{s}: {s}", .{ ev.name, cli.errText(ev.err) });
 }
 
 fn oom(ctx: cli.Context) u8 {

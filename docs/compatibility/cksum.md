@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU cksum 9.7 in the C locale. Date: 2026-11-07
 
+Library: `util_core.cksum` (src/lib/cksum.zig), a thin preset of the shared module src/lib/hashsum.zig (`util_core.hashsum`); `src/commands/cksum.zig` and src/hashsum.zig are the argument parser and diagnostics only.
+
 ## Reference
 
 GNU coreutils 9.7 (`/usr/bin/cksum --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "cksum invocation" (`info '(coreutils) cksum invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/cksum-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), cksum, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/cksum.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_cksum.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -24,6 +26,10 @@ GNU coreutils 9.7 (`/usr/bin/cksum --version` on the development machine, instal
 - The default prints `CRC BYTES [NAME]` using the POSIX CRC (polynomial 0x04C11DB7, length appended, complemented); `crc32b` is the zlib CRC-32.
 - `sysv` and `bsd` print the `sum` formats; they cannot be verified with `-c`.
 - SM3 (GB/T 32905-2016) and BLAKE2b are implemented in src/hash.zig; MD5, SHA-1 and SHA-2 come from std.crypto.
+
+## Extensions
+
+- `--json` (decision 0003, form 2 of decision 0005): one JSON object per input. Why: the checksum as data for programs. Off by default; only an explicit `--json` changes output, and GNU invocations are unaffected. Covered by `test/test_hashsum_json.sh`, which also checks the refused combinations.
 
 ## Known deviations and gaps
 
