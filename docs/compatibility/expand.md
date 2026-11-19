@@ -17,6 +17,14 @@ GNU coreutils 9.7 (`/usr/bin/expand --version` on the development machine, insta
 - Backspace decrements the column (not below 0). A tab beyond the last stop of a plain list becomes one space.
 - `-N` shorthand for `-t N` is accepted as in GNU.
 
+## Library
+
+Module `util_core.expand` (`src/lib/expand.zig`); `src/commands/expand.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Columns count bytes (C locale); multibyte and wide characters are not measured.

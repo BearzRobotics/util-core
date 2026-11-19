@@ -18,6 +18,14 @@ GNU coreutils 9.7 (`/usr/bin/tac --version` on the development machine, installe
 - Each file is reversed separately; `-` and no operands mean standard input.
 - Multi-byte separators are matched without overlap; the result was compared against GNU for overlapping and edge cases (separators at the start, end and doubled).
 
+## Library
+
+Module `util_core.tac` (`src/lib/tac.zig`); `src/commands/tac.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - `-r` / `--regex` is not implemented (a regex engine is available in the project; planned).

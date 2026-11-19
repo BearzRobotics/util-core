@@ -25,6 +25,14 @@ GNU coreutils 9.7 (`/usr/bin/cut --version` on the development machine, installe
 - A final line without a newline gets one.
 - Diagnostics for bad lists reproduce GNU's wording (`invalid byte/character position 'a'`, `invalid decreasing range`, `fields are numbered from 1`, ...).
 
+## Library
+
+Module `util_core.cut` (`src/lib/cut.zig`); `src/commands/cut.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Multibyte (UTF-8) characters are not interpreted: -c and -n behave as in a C locale.

@@ -20,6 +20,14 @@ GNU coreutils 9.7 (`/usr/bin/tee --version` on the development machine, installe
 - Data is copied chunk by chunk with no buffering delay (read ≤ 64 KiB, write to every destination).
 - A file that cannot be opened or written is reported; the rest continue (POSIX consequences of errors); exit status 1.
 
+## Library
+
+Module `util_core.tee` (`src/lib/tee.zig`); `src/commands/tee.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - `-a` is POSIX-only for now (Windows reports an error).

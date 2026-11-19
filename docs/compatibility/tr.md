@@ -20,6 +20,14 @@ GNU coreutils 9.7 (`/usr/bin/tr --version` on the development machine, installed
 - A short STRING2 is padded with its last byte (GNU), or string1 is truncated with -t. Case conversion `[:lower:]` <-> `[:upper:]` must be aligned as in GNU.
 - Operand-count rules and all diagnostics (including the two-line ones and the octal-escape warnings) match GNU tr 9.7.
 
+## Library
+
+Module `util_core.tr` (`src/lib/tr.zig`); `src/commands/tr.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Bytes only (C locale): no multibyte characters, no collation order, equivalence classes contain just their one character.

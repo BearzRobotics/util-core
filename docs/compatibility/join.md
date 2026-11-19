@@ -25,6 +25,14 @@ GNU coreutils 9.7 (`/usr/bin/join --version` on the development machine, install
 - Order diagnostics reproduce GNU's timing exactly (found by differential testing): each line is checked as it is read, only once an unpairable line has been recorded (the record is made after the advance that follows it), and a final `input is not in sorted order` ends the run with status 1.
 - Default output is the join field, the remaining fields of file 1, then those of file 2, separated by one space (or the -t character).
 
+## Library
+
+Module `util_core.join` (`src/lib/join.zig`); `src/commands/join.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Comparison is bytewise (C locale; -i folds ASCII only).

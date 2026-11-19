@@ -23,6 +23,14 @@ GNU coreutils 9.7 (`/usr/bin/head --version` on the development machine, install
 - POSIX 1.4: when head stops early on a seekable standard input, the file offset is left just past the last byte it output, so `(head -n1; cat) < file` works (verified against GNU).
 - Last of -c / -n wins. Unreadable files are reported and processing continues (exit 1). A directory is reported as `error reading ...: Is a directory`.
 
+## Library
+
+Module `util_core.head` (`src/lib/head.zig`); `src/commands/head.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - `-c -N` / `-n -N` hold the last N items in memory (as GNU does for non-seekable input).

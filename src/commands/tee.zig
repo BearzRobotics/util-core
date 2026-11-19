@@ -16,23 +16,14 @@ const std = @import("std");
 const Io = std.Io;
 const cli = @import("../cli.zig");
 const sys = @import("../sys.zig");
+const tee = @import("../lib/tee.zig");
 
 const long_names = [_][]const u8{ "append", "ignore-interrupts", "output-error", "help", "version" };
-
-const Mode = enum { default, warn, warn_nopipe, exit, exit_nopipe };
-
-const Output = struct {
-    file: Io.File,
-    name: []const u8,
-    /// Standard output is never closed here.
-    is_stdout: bool,
-    alive: bool = true,
-};
 
 pub fn main(ctx: cli.Context) u8 {
     var append = false;
     var ignore_int = false;
-    var mode: Mode = .default;
+    var mode: tee.Mode = .default;
     var i: usize = 0;
     while (i < ctx.args.len) : (i += 1) {
         const a: []const u8 = ctx.args[i];
@@ -48,7 +39,7 @@ pub fn main(ctx: cli.Context) u8 {
                 .found => |k| switch (k) {
                     0 => append = true,
                     1 => ignore_int = true,
-                    2 => mode = if (eq) |e| parseMode(a[e + 1 ..]) orelse {
+                    2 => mode = if (eq) |e| tee.parseMode(a[e + 1 ..]) orelse {
                         cli.warn(ctx, "invalid argument '{s}' for '--output-error'\n" ++
                             "Valid arguments are:\n  - 'warn'\n  - 'warn-nopipe'\n  - 'exit'\n  - 'exit-nopipe'\n" ++
                             "Try '{s} --help' for more information.", .{ a[e + 1 ..], ctx.name });
@@ -79,61 +70,24 @@ pub fn main(ctx: cli.Context) u8 {
     // --output-error wants to see EPIPE as an ordinary write error instead.
     if (mode != .default) sys.ignoreSignal(.pipe);
 
-    var outs: std.ArrayList(Output) = .empty;
-    defer outs.deinit(ctx.gpa);
-    outs.append(ctx.gpa, .{ .file = Io.File.stdout(), .name = "standard output", .is_stdout = true }) catch return oom(ctx);
-
-    var status: u8 = 0;
+    var dests: std.ArrayList(tee.Destination) = .empty;
+    defer dests.deinit(ctx.gpa);
+    dests.append(ctx.gpa, .{ .name = "standard output", .target = .{ .file = Io.File.stdout() } }) catch return oom(ctx);
     for (paths) |p| {
-        const file = openOutput(ctx.io, p, append) catch |e| {
-            cli.warn(ctx, "{s}: {s}", .{ p, cli.errText(e) });
-            status = 1;
-            if (mode == .exit or mode == .exit_nopipe) return 1;
-            continue;
-        };
-        outs.append(ctx.gpa, .{ .file = file, .name = p, .is_stdout = false }) catch return oom(ctx);
+        dests.append(ctx.gpa, .{ .name = p, .target = .{ .path = p } }) catch return oom(ctx);
     }
-    defer for (outs.items) |o| if (!o.is_stdout) o.file.close(ctx.io);
 
-    var live: usize = outs.items.len;
-    const stdin = Io.File.stdin();
-    var buf: [64 * 1024]u8 = undefined;
-    while (live > 0) {
-        const n = cli.readChunk(ctx.io, stdin, &buf) catch |e| {
-            cli.warn(ctx, "standard input: {s}", .{cli.errText(e)});
-            status = 1;
-            break;
-        };
-        if (n == 0) break;
-        for (outs.items) |*o| {
-            if (!o.alive) continue;
-            o.file.writeStreamingAll(ctx.io, buf[0..n]) catch |e| {
-                const pipe = e == error.BrokenPipe;
-                const quiet = pipe and (mode == .warn_nopipe or mode == .exit_nopipe);
-                if (!quiet) {
-                    cli.warn(ctx, "{s}: {s}", .{ o.name, cli.errText(e) });
-                    status = 1;
-                }
-                if (mode == .exit or (mode == .exit_nopipe and !pipe)) return 1;
-                o.alive = false;
-                live -= 1;
-            };
-        }
-    }
-    return status;
+    const env: tee.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = tee.run(env, .{ .append = append, .output_error = mode }, Io.File.stdin(), dests.items, .{
+        .context = @constCast(&ctx),
+        .func = report,
+    }) catch return oom(ctx);
+    return if (result.failed) 1 else 0;
 }
 
-fn parseMode(text: []const u8) ?Mode {
-    if (std.mem.eql(u8, text, "warn")) return .warn;
-    if (std.mem.eql(u8, text, "warn-nopipe")) return .warn_nopipe;
-    if (std.mem.eql(u8, text, "exit")) return .exit;
-    if (std.mem.eql(u8, text, "exit-nopipe")) return .exit_nopipe;
-    return null;
-}
-
-fn openOutput(io: Io, path: []const u8, append: bool) !Io.File {
-    if (append) return sys.openAppend(path);
-    return Io.Dir.cwd().createFile(io, path, .{});
+fn report(context: ?*anyopaque, ev: tee.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    cli.warn(ctx.*, "{s}: {s}", .{ ev.name, cli.errText(ev.err) });
 }
 
 fn oom(ctx: cli.Context) u8 {
@@ -153,8 +107,3 @@ fn help(ctx: cli.Context) u8 {
         "      --version             output version information and exit\n")) 0 else 1;
 }
 
-test "parseMode" {
-    try std.testing.expectEqual(Mode.warn, parseMode("warn").?);
-    try std.testing.expectEqual(Mode.exit_nopipe, parseMode("exit-nopipe").?);
-    try std.testing.expect(parseMode("x") == null);
-}
