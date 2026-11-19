@@ -7,7 +7,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const cli = @import("cli.zig");
+const common = @import("lib/common.zig");
 
 pub const Line = struct {
     /// The line without its terminator. Borrowed from the reader; valid until
@@ -64,7 +64,7 @@ pub const LineReader = struct {
                 const new_len = @max(r.buf.len * 2, 64 * 1024);
                 r.buf = try r.gpa.realloc(r.buf, new_len);
             }
-            const n = try cli.readChunk(r.io, r.file, r.buf[r.len..]);
+            const n = try common.readChunk(r.io, r.file, r.buf[r.len..]);
             if (n == 0) r.eof = true else r.len += n;
         }
     }

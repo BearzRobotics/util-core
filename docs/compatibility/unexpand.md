@@ -18,6 +18,14 @@ GNU coreutils 9.7 (`/usr/bin/unexpand --version` on the development machine, ins
 - A single space reaching a tab stop after non-blank text stays a space unless the run continues (a TAB would save nothing); matches GNU, checked with randomised differential tests.
 - Held blanks that do not reach a stop are written unchanged.
 
+## Library
+
+Module `util_core.unexpand` (`src/lib/unexpand.zig`); `src/commands/unexpand.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Columns count bytes (C locale).

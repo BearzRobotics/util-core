@@ -10,6 +10,7 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const tabs = @import("../tabs.zig");
+const lib = @import("../lib/expand.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "initial", "tabs", "help", "version" };
@@ -96,62 +97,38 @@ pub fn main(ctx: cli.Context) u8 {
     defer arena_state.deinit();
     const stops = parseTabs(ctx, arena_state.allocator(), tab_text.items) orelse return 1;
 
-    const stdin_only = [_][]const u8{"-"};
-    const inputs: []const []const u8 = if (files.items.len == 0) &stdin_only else files.items;
-    var out = cli.Out.init(ctx.io);
-    var status: u8 = 0;
-    var column: usize = 0;
-    var convert = true;
-    var buf: [64 * 1024]u8 = undefined;
-    for (inputs) |path| {
-        const file = cli.openInput(ctx.io, path) catch |e| {
-            cli.warn(ctx, "{s}: {s}", .{ path, cli.errText(e) });
-            status = 1;
-            continue;
-        };
-        defer cli.closeInput(ctx.io, file);
-        while (true) {
-            const n = cli.readChunk(ctx.io, file, &buf) catch |e| {
-                out.flush();
-                cli.warn(ctx, "{s}: {s}", .{ path, cli.errText(e) });
-                status = 1;
-                break;
-            };
-            if (n == 0) break;
-            for (buf[0..n]) |c| {
-                if (c == '\n') {
-                    out.writeByte('\n');
-                    column = 0;
-                    convert = true;
-                    continue;
-                }
-                if (!convert) {
-                    out.writeByte(c);
-                    continue;
-                }
-                if (c == '\t') {
-                    const next = stops.next(column) orelse column + 1;
-                    var k = column;
-                    while (k < next) : (k += 1) out.writeByte(' ');
-                    column = next;
-                } else {
-                    if (c == '\x08') {
-                        if (column > 0) column -= 1;
-                    } else column += 1;
-                    out.writeByte(c);
-                    if (initial_only and c != ' ') convert = false;
-                }
-            }
-            if (out.failed) break;
-        }
-        if (out.failed) break;
+    var inputs: std.ArrayList(lib.Input) = .empty;
+    defer inputs.deinit(ctx.gpa);
+    if (files.items.len == 0) {
+        inputs.append(ctx.gpa, .{ .name = "-", .source = .{ .file = Io.File.stdin() } }) catch return oom(ctx);
     }
-    out.flush();
-    if (out.failed) {
-        cli.writeErrorWarn(ctx);
-        return 1;
+    for (files.items) |path| {
+        const in: lib.Input = if (std.mem.eql(u8, path, "-"))
+            .{ .name = path, .source = .{ .file = Io.File.stdin() } }
+        else
+            .{ .name = path, .source = .{ .path = path } };
+        inputs.append(ctx.gpa, in) catch return oom(ctx);
     }
-    return status;
+
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = lib.run(env, .{ .stops = stops, .initial_only = initial_only }, inputs.items, &stdout.interface, .{
+        .context = @constCast(&ctx),
+        .func = report,
+    }) catch |e| switch (e) {
+        error.WriteFailed => {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            cli.writeErrorWarn(ctx);
+            return 1;
+        },
+    };
+    return if (result.failed) 1 else 0;
+}
+
+fn report(context: ?*anyopaque, ev: lib.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    cli.warn(ctx.*, "{s}: {s}", .{ ev.name, cli.errText(ev.err) });
 }
 
 fn addTabText(ctx: cli.Context, list: *std.ArrayList(u8), text: []const u8) !void {

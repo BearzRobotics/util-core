@@ -18,6 +18,14 @@ GNU coreutils 9.7 (`/usr/bin/fold --version` on the development machine, install
 - Column rules from POSIX: tab advances to the next multiple of 8, backspace decrements, carriage return resets to 0. A line is broken before the character that would exceed the width.
 - The break algorithm follows GNU's fold.c; results were compared over many widths, tabs, backspaces, CRs and -s cases.
 
+## Library
+
+Module `util_core.fold` (`src/lib/fold.zig`); `src/commands/fold.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Characters are bytes (C locale): wide and multibyte characters are not measured or kept whole.

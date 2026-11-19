@@ -10,26 +10,14 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
-const lines = @import("../lines.zig");
+const comm = @import("../lib/comm.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "check-order", "nocheck-order", "output-delimiter", "total", "zero-terminated", "help", "version" };
 
-const Check = enum { default, enabled, disabled };
-
-const Side = struct {
-    reader: lines.LineReader,
-    cur: std.ArrayList(u8) = .empty,
-    prev: std.ArrayList(u8) = .empty,
-    present: bool = false,
-    warned: bool = false,
-    file: Io.File,
-    is_stdin: bool,
-};
-
 pub fn main(ctx: cli.Context) u8 {
     var suppress = [3]bool{ false, false, false };
-    var check: Check = .default;
+    var check: comm.Check = .default;
     var delim: ?[]const u8 = null;
     var total = false;
     var term: u8 = '\n';
@@ -108,118 +96,45 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "extra operand '{s}'\nTry '{s} --help' for more information.", .{ operands.items[2], ctx.name });
         return 1;
     }
-    // An empty --output-delimiter means NUL (GNU).
-    const sep: []const u8 = if (delim) |d| (if (d.len == 0) "\x00" else d) else "\t";
-
-    var sides: [2]Side = undefined;
-    var opened: usize = 0;
-    defer for (sides[0..opened]) |*s| {
-        s.cur.deinit(ctx.gpa);
-        s.prev.deinit(ctx.gpa);
-        s.reader.deinit();
-        if (!s.is_stdin) s.file.close(ctx.io);
-    };
+    var ins: [2]comm.Input = undefined;
     for (operands.items, 0..) |path, k| {
-        const file = cli.openInput(ctx.io, path) catch |e| {
-            cli.warn(ctx, "{s}: {s}", .{ path, cli.errText(e) });
+        ins[k] = if (std.mem.eql(u8, path, "-"))
+            .{ .name = path, .source = .{ .file = Io.File.stdin() } }
+        else
+            .{ .name = path, .source = .{ .path = path } };
+    }
+
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: comm.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = comm.run(env, .{
+        .suppress = suppress,
+        .check_order = check,
+        .delimiter = delim orelse "\t",
+        .total = total,
+        .terminator = term,
+    }, ins[0], ins[1], &stdout.interface, .{
+        .context = @constCast(&ctx),
+        .func = report,
+    }) catch |e| switch (e) {
+        error.OutOfMemory => return oom(ctx),
+        error.WriteFailed => {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            cli.writeErrorWarn(ctx);
             return 1;
-        };
-        const is_stdin = std.mem.eql(u8, path, "-");
-        sides[k] = .{ .reader = lines.LineReader.init(ctx.gpa, ctx.io, file, term), .file = file, .is_stdin = is_stdin };
-        opened = k + 1;
-    }
-
-    var out = cli.Out.init(ctx.io);
-    const status = compare(ctx, &out, &sides, suppress, check, sep, total, term);
-    out.flush();
-    if (out.failed) {
-        cli.writeErrorWarn(ctx);
-        return 1;
-    }
-    return status;
+        },
+    };
+    return if (result.failed) 1 else 0;
 }
 
-fn advance(ctx: cli.Context, s: *Side) !void {
-    std.mem.swap(std.ArrayList(u8), &s.prev, &s.cur);
-    s.cur.clearRetainingCapacity();
-    if (try s.reader.next()) |l| {
-        try s.cur.appendSlice(ctx.gpa, l.text);
-        s.present = true;
-    } else s.present = false;
-}
-
-fn compare(ctx: cli.Context, out: *cli.Out, sides: *[2]Side, suppress: [3]bool, check: Check, sep: []const u8, total: bool, term: u8) u8 {
-    var counts = [3]u64{ 0, 0, 0 };
-    var seen_unpairable = false;
-    var disorder = false;
-    // Prime both sides; the first line of each file is never order-checked.
-    for (sides) |*s| advance(ctx, s) catch return readFail(ctx, out);
-
-    while (sides[0].present or sides[1].present) {
-        const order: i32 = if (!sides[0].present) 1 else if (!sides[1].present) -1 else switch (std.mem.order(u8, sides[0].cur.items, sides[1].cur.items)) {
-            .lt => -1,
-            .eq => 0,
-            .gt => 1,
-        };
-        if (order == 0) {
-            counts[2] += 1;
-            if (!suppress[2]) emit(out, 2, sides[0].cur.items, suppress, sep, term);
-        } else if (order < 0) {
-            seen_unpairable = true;
-            counts[0] += 1;
-            if (!suppress[0]) emit(out, 0, sides[0].cur.items, suppress, sep, term);
-        } else {
-            seen_unpairable = true;
-            counts[1] += 1;
-            if (!suppress[1]) emit(out, 1, sides[1].cur.items, suppress, sep, term);
-        }
-        const checking = check == .enabled or (check == .default and seen_unpairable);
-        for (sides, 0..) |*s, k| {
-            const move = if (k == 0) order <= 0 else order >= 0;
-            if (!move) continue;
-            advance(ctx, s) catch return readFail(ctx, out);
-            if (checking and s.present and !s.warned and std.mem.order(u8, s.prev.items, s.cur.items) == .gt) {
-                out.flush();
-                cli.warn(ctx, "file {d} is not in sorted order", .{k + 1});
-                s.warned = true;
-                disorder = true;
-                if (check == .enabled) return 1;
-            }
-        }
+fn report(context: ?*anyopaque, ev: comm.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    switch (ev.kind) {
+        .open_failed => cli.warn(ctx.*, "{s}: {s}", .{ ev.name, cli.errText(ev.err.?) }),
+        .read_failed => cli.warn(ctx.*, "read error", .{}),
+        .file_disorder => cli.warn(ctx.*, "file {d} is not in sorted order", .{ev.file}),
+        .input_disorder => cli.warn(ctx.*, "input is not in sorted order", .{}),
     }
-    if (total) {
-        var b: [64]u8 = undefined;
-        for (counts, 0..) |c, k| {
-            const t = std.fmt.bufPrint(&b, "{d}", .{c}) catch unreachable;
-            out.write(t);
-            _ = k;
-            out.write(sep);
-        }
-        out.write("total");
-        out.writeByte(term);
-    }
-    if (disorder) {
-        out.flush();
-        cli.warn(ctx, "input is not in sorted order", .{});
-        return 1;
-    }
-    return 0;
-}
-
-/// Write one output line in column `col` (0, 1 or 2).
-fn emit(out: *cli.Out, col: usize, line: []const u8, suppress: [3]bool, sep: []const u8, term: u8) void {
-    var lead: usize = 0;
-    if (col >= 1 and !suppress[0]) lead += 1;
-    if (col >= 2 and !suppress[1]) lead += 1;
-    while (lead > 0) : (lead -= 1) out.write(sep);
-    out.write(line);
-    out.writeByte(term);
-}
-
-fn readFail(ctx: cli.Context, out: *cli.Out) u8 {
-    out.flush();
-    cli.warn(ctx, "read error", .{});
-    return 1;
 }
 
 fn oom(ctx: cli.Context) u8 {

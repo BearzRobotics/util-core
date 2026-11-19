@@ -13,9 +13,11 @@
 //! unless --first-only is given. Columns count bytes (C locale).
 
 const std = @import("std");
+const Io = std.Io;
 const cli = @import("../cli.zig");
 const tabs = @import("../tabs.zig");
 const expand = @import("expand.zig");
+const lib = @import("../lib/unexpand.zig");
 
 const long_names = [_][]const u8{ "all", "first-only", "tabs", "help", "version" };
 
@@ -105,120 +107,40 @@ pub fn main(ctx: cli.Context) u8 {
     defer arena_state.deinit();
     const stops = expand.parseTabs(ctx, arena_state.allocator(), tab_text.items) orelse return 1;
 
-    const stdin_only = [_][]const u8{"-"};
-    const inputs: []const []const u8 = if (files.items.len == 0) &stdin_only else files.items;
-    var out = cli.Out.init(ctx.io);
-    var st: State = .{ .stops = stops, .all = all, .gpa = ctx.gpa, .out = &out };
-    defer st.pending.deinit(ctx.gpa);
-    var status: u8 = 0;
-    var buf: [64 * 1024]u8 = undefined;
-    for (inputs) |path| {
-        const file = cli.openInput(ctx.io, path) catch |e| {
-            cli.warn(ctx, "{s}: {s}", .{ path, cli.errText(e) });
-            status = 1;
-            continue;
-        };
-        defer cli.closeInput(ctx.io, file);
-        while (true) {
-            const n = cli.readChunk(ctx.io, file, &buf) catch |e| {
-                out.flush();
-                cli.warn(ctx, "{s}: {s}", .{ path, cli.errText(e) });
-                status = 1;
-                break;
-            };
-            if (n == 0) break;
-            for (buf[0..n]) |c| st.feed(c) catch return oom(ctx);
-            if (out.failed) break;
-        }
-        if (out.failed) break;
+    var inputs: std.ArrayList(lib.Input) = .empty;
+    defer inputs.deinit(ctx.gpa);
+    if (files.items.len == 0) {
+        inputs.append(ctx.gpa, .{ .name = "-", .source = .{ .file = Io.File.stdin() } }) catch return oom(ctx);
     }
-    // GNU flushes held blanks at end of each input; here at the very end.
-    st.flushPending();
-    out.flush();
-    if (out.failed) {
-        cli.writeErrorWarn(ctx);
-        return 1;
+    for (files.items) |path| {
+        const in: lib.Input = if (std.mem.eql(u8, path, "-"))
+            .{ .name = path, .source = .{ .file = Io.File.stdin() } }
+        else
+            .{ .name = path, .source = .{ .path = path } };
+        inputs.append(ctx.gpa, in) catch return oom(ctx);
     }
-    return status;
+
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = lib.run(env, .{ .stops = stops, .all = all }, inputs.items, &stdout.interface, .{
+        .context = @constCast(&ctx),
+        .func = report,
+    }) catch |e| switch (e) {
+        error.OutOfMemory => return oom(ctx),
+        error.WriteFailed => {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            cli.writeErrorWarn(ctx);
+            return 1;
+        },
+    };
+    return if (result.failed) 1 else 0;
 }
 
-const State = struct {
-    stops: tabs.Stops,
-    all: bool,
-    gpa: std.mem.Allocator,
-    out: *cli.Out,
-    pending: std.ArrayList(u8) = .empty,
-    col: usize = 0,
-    convert: bool = true,
-    /// A non-blank has been seen on this line.
-    seen_text: bool = false,
-    /// `pending` is one space that reached a stop; undecided until the next byte.
-    lone: bool = false,
-    /// Blanks in the current run (since the last non-blank).
-    run: usize = 0,
-
-    fn flushPending(s: *State) void {
-        s.out.write(s.pending.items);
-        s.pending.clearRetainingCapacity();
-        s.lone = false;
-    }
-
-    fn endRun(s: *State) void {
-        s.run = 0;
-    }
-
-    fn feed(s: *State, c: u8) !void {
-        if (s.lone) {
-            // The deferred single space: a following blank turns it into a TAB.
-            if (s.convert and (c == ' ' or c == '\t') and s.stops.next(s.col) != null) {
-                s.out.writeByte('\t');
-                s.pending.clearRetainingCapacity();
-                s.lone = false;
-            } else s.flushPending();
-        }
-        if (c == '\n') {
-            s.flushPending();
-            s.out.writeByte('\n');
-            s.col = 0;
-            s.convert = true;
-            s.seen_text = false;
-            s.endRun();
-            return;
-        }
-        const blank = c == ' ' or c == '\t';
-        if (s.convert and blank) {
-            const nxt = s.stops.next(s.col) orelse {
-                // Beyond the last tab stop: nothing more to convert on this line.
-                s.flushPending();
-                s.out.writeByte(c);
-                s.convert = false;
-                return;
-            };
-            try s.pending.append(s.gpa, c);
-            s.run += 1;
-            s.col = if (c == '\t') nxt else s.col + 1;
-            if (s.col == nxt) {
-                if (s.run == 1 and c == ' ' and s.seen_text) {
-                    s.lone = true;
-                } else {
-                    s.out.writeByte('\t');
-                    s.pending.clearRetainingCapacity();
-                }
-            }
-            return;
-        }
-        s.flushPending();
-        s.endRun();
-        s.seen_text = true;
-        if (s.convert) {
-            if (c == '\x08') {
-                if (s.col > 0) s.col -= 1;
-            } else s.col += 1;
-            if (!s.all) s.convert = false;
-        }
-        s.out.writeByte(c);
-    }
-};
+fn report(context: ?*anyopaque, ev: lib.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    cli.warn(ctx.*, "{s}: {s}", .{ ev.name, cli.errText(ev.err) });
+}
 
 fn addTabs(ctx: cli.Context, list: *std.ArrayList(u8), text: []const u8, all: *bool) !void {
     if (list.items.len > 0) try list.append(ctx.gpa, ',');

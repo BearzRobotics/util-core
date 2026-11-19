@@ -17,6 +17,14 @@ GNU coreutils 9.7 (`/usr/bin/tsort --version` on the development machine, instal
 - Output order reproduces GNU: nodes with no predecessors seed a FIFO queue in byte order; successors are released in reverse insertion order.
 - On a cycle: "input contains a loop:" and the nodes are printed to stderr, the closing edge is dropped, sorting resumes, exit status 1.
 
+## Library
+
+Module `util_core.tsort` (`src/lib/tsort.zig`); `src/commands/tsort.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+New option `-w` (POSIX.1-2024 tsort, absent from GNU 9.7): the exit status is the number of cycles found, at most 125. It does not change the meaning of any GNU option. Covered by the "POSIX -w" group of test/test_tsort.sh.
+
 ## Known deviations and gaps
 
 - Which cycle GNU reports, and where it starts, follows GNU's internal tree walk. This implementation models it and matches on most small graphs and always on acyclic input, but identical diagnostics for every cyclic graph are not guaranteed.

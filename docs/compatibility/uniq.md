@@ -25,6 +25,14 @@ GNU coreutils 9.7 (`/usr/bin/uniq --version` on the development machine, install
 - Option combinations (-c with -d/-u, -D with -u, --group with the others) follow GNU, including the error messages.
 - An OUTPUT operand writes to that file (`-` is standard output). The last line always gets a terminator.
 
+## Library
+
+Module `util_core.uniq` (`src/lib/uniq.zig`); `src/commands/uniq.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Comparison is bytewise (C locale); LC_COLLATE and multibyte characters are not used; -i folds ASCII only.

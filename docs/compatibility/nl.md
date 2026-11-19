@@ -25,6 +25,14 @@ GNU coreutils 9.7 (`/usr/bin/nl --version` on the development machine, installed
 - All files form one document; a section delimiter line is replaced by an empty line and restarts numbering unless -p.
 - Unnumbered lines are written as spaces of width + separator length, then the text (GNU).
 
+## Library
+
+Module `util_core.nl` (`src/lib/nl.zig`); `src/commands/nl.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - The `pBRE` style (number lines matching a basic regular expression) is rejected with an error: it needs a POSIX BRE engine, which the project's regex library does not provide yet.

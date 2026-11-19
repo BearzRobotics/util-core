@@ -20,6 +20,14 @@ GNU coreutils 9.7 (`/usr/bin/cat --version` on the development machine, installe
 - `-v, --show-nonprinting`: Use ^ and M- notation except for LF and TAB.
 - `--help, --version`: Sole-argument handling is not required; either may appear anywhere.
 
+## Library
+
+Module `util_core.cat` (`src/lib/cat.zig`); `src/commands/cat.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+Terminal view (decision 0005, presentation on a terminal): when standard output is a terminal and no GNU formatting option (-A -b -e -E -n -s -t -T -v) was given, output is a bat-style view (header, grid, line numbers, optional syntax highlighting). Switch it off with `-p`/`--plain` or `--decorations=never`; it never applies to pipes or redirects (`--decorations=always` forces it). New options with no GNU meaning: `-p`, `--plain`, `--style=LIST`, `--color=WHEN`, `--decorations=WHEN`, `-l`/`--language`, `--syntax-dir`, `--list-languages`. In the library the view is the explicit `Options.view` field, null by default (byte-exact GNU). Covered by the "bat view" group of test/test_cat.sh, which also checks that the GNU path is unchanged.
+
 ## Known deviations and gaps
 
 - Deliberate deviation from GNU: on a terminal, with no GNU formatting option, output is the bat-style view (header, grid, line numbers, tabs expanded to 4). Pipes and redirects stay byte-exact GNU.

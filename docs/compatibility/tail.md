@@ -27,6 +27,14 @@ GNU coreutils 9.7 (`/usr/bin/tail --version` on the development machine, install
 - Obsolete `-NUM[bcl][f]` as the first argument; other letters are rejected like GNU (`option used in invalid context`).
 - -f polls the file size; a shrinking file prints `FILE: file truncated` and is re-read from the start; with several files a header is printed whenever the source changes.
 
+## Library
+
+Module `util_core.tail` (`src/lib/tail.zig`); `src/commands/tail.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Not implemented: --max-unchanged-stats (rejected with an error). Following is done by polling, not inotify, so changes that happen and revert between two polls are not reported; GNU's inotify mode additionally says `has been replaced` instead of `has become inaccessible`/`has appeared` when a file that only just appeared is deleted and re-created.

@@ -20,6 +20,14 @@ GNU coreutils 9.7 (`/usr/bin/comm --version` on the development machine, install
 - Either FILE may be `-` for standard input, but not both.
 - Exit status 1 after a reported disorder ("input is not in sorted order"), as in GNU.
 
+## Library
+
+Module `util_core.comm` (`src/lib/comm.zig`); `src/commands/comm.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Comparison is bytewise (C locale); LC_COLLATE is not consulted.

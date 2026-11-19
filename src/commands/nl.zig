@@ -13,30 +13,13 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
-const lines = @import("../lines.zig");
+const nl = @import("../lib/nl.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "body-numbering", "section-delimiter", "footer-numbering", "header-numbering", "line-increment", "join-blank-lines", "number-format", "no-renumber", "number-separator", "starting-line-number", "number-width", "help", "version" };
 
-const Style = enum { all, text, none };
-const Format = enum { ln, rn, rz };
-
-const Config = struct {
-    body: Style = .text,
-    header: Style = .none,
-    footer: Style = .none,
-    delim: []const u8 = "\\:",
-    increment: i64 = 1,
-    join_blank: u64 = 1,
-    format: Format = .rn,
-    renumber: bool = true,
-    sep: []const u8 = "\t",
-    start: i64 = 1,
-    width: usize = 6,
-};
-
 pub fn main(ctx: cli.Context) u8 {
-    var cfg: Config = .{};
+    var cfg: nl.Options = .{};
     var files: std.ArrayList([]const u8) = .empty;
     defer files.deinit(ctx.gpa);
     const args = ctx.args;
@@ -118,124 +101,42 @@ pub fn main(ctx: cli.Context) u8 {
         };
     }
 
-    var delim_pair: [2]u8 = undefined;
-    if (cfg.delim.len == 1) {
-        delim_pair = .{ cfg.delim[0], ':' };
-        cfg.delim = &delim_pair;
+    var inputs: std.ArrayList(nl.Input) = .empty;
+    defer inputs.deinit(ctx.gpa);
+    if (files.items.len == 0) {
+        inputs.append(ctx.gpa, .{ .name = "-", .source = .{ .file = Io.File.stdin() } }) catch return oom(ctx);
+    }
+    for (files.items) |path| {
+        const in: nl.Input = if (std.mem.eql(u8, path, "-"))
+            .{ .name = path, .source = .{ .file = Io.File.stdin() } }
+        else
+            .{ .name = path, .source = .{ .path = path } };
+        inputs.append(ctx.gpa, in) catch return oom(ctx);
     }
 
-    // Section delimiter lines: delim x3 = header, x2 = body, x1 = footer.
-    var d3: std.ArrayList(u8) = .empty;
-    defer d3.deinit(ctx.gpa);
-    var d2: std.ArrayList(u8) = .empty;
-    defer d2.deinit(ctx.gpa);
-    if (cfg.delim.len > 0) {
-        for (0..3) |_| d3.appendSlice(ctx.gpa, cfg.delim) catch return oom(ctx);
-        for (0..2) |_| d2.appendSlice(ctx.gpa, cfg.delim) catch return oom(ctx);
-    }
-
-    const stdin_only = [_][]const u8{"-"};
-    const inputs: []const []const u8 = if (files.items.len == 0) &stdin_only else files.items;
-    var out = cli.Out.init(ctx.io);
-    var status: u8 = 0;
-
-    var section: enum { header, body, footer } = .body;
-    var number: i64 = cfg.start;
-    var blank_run: u64 = 0;
-    for (inputs) |path| {
-        const file = cli.openInput(ctx.io, path) catch |e| {
-            cli.warn(ctx, "{s}: {s}", .{ path, cli.errText(e) });
-            status = 1;
-            continue;
-        };
-        defer cli.closeInput(ctx.io, file);
-        var reader = lines.LineReader.init(ctx.gpa, ctx.io, file, '\n');
-        defer reader.deinit();
-        while (reader.next() catch |e| {
-            out.flush();
-            cli.warn(ctx, "{s}: {s}", .{ path, cli.errText(e) });
-            status = 1;
-            break;
-        }) |line| {
-            if (cfg.delim.len > 0 and (std.mem.eql(u8, line.text, d3.items) or std.mem.eql(u8, line.text, d2.items) or std.mem.eql(u8, line.text, cfg.delim))) {
-                section = if (line.text.len == d3.items.len) .header else if (line.text.len == d2.items.len) .body else .footer;
-                if (cfg.renumber) number = cfg.start;
-                blank_run = 0;
-                out.writeByte('\n');
-                continue;
-            }
-            const style = switch (section) {
-                .header => cfg.header,
-                .body => cfg.body,
-                .footer => cfg.footer,
-            };
-            var numbered = false;
-            switch (style) {
-                .none => {},
-                .text => numbered = line.text.len > 0,
-                .all => {
-                    if (line.text.len == 0) {
-                        blank_run += 1;
-                        if (blank_run >= cfg.join_blank) {
-                            numbered = true;
-                            blank_run = 0;
-                        }
-                    } else {
-                        blank_run = 0;
-                        numbered = true;
-                    }
-                },
-            }
-            if (numbered) {
-                writeNumber(&out, number, cfg);
-                number +%= cfg.increment;
-                out.write(cfg.sep);
-            } else {
-                var pad: usize = cfg.width + cfg.sep.len;
-                while (pad > 0) : (pad -= 1) out.writeByte(' ');
-            }
-            out.write(line.text);
-            out.writeByte('\n');
-            if (out.failed) break;
-        }
-        if (out.failed) break;
-    }
-    out.flush();
-    if (out.failed) {
-        cli.writeErrorWarn(ctx);
-        return 1;
-    }
-    return status;
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: nl.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = nl.run(env, cfg, inputs.items, &stdout.interface, .{
+        .context = @constCast(&ctx),
+        .func = report,
+    }) catch |e| switch (e) {
+        error.OutOfMemory => return oom(ctx),
+        error.WriteFailed => {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            cli.writeErrorWarn(ctx);
+            return 1;
+        },
+    };
+    return if (result.failed) 1 else 0;
 }
 
-fn writeNumber(out: *cli.Out, n: i64, cfg: Config) void {
-    var buf: [32]u8 = undefined;
-    const digits = std.fmt.bufPrint(&buf, "{d}", .{@abs(n)}) catch unreachable;
-    const neg = n < 0;
-    const len = digits.len + @intFromBool(neg);
-    switch (cfg.format) {
-        .ln => {
-            if (neg) out.writeByte('-');
-            out.write(digits);
-            var pad = if (cfg.width > len) cfg.width - len else 0;
-            while (pad > 0) : (pad -= 1) out.writeByte(' ');
-        },
-        .rn => {
-            var pad = if (cfg.width > len) cfg.width - len else 0;
-            while (pad > 0) : (pad -= 1) out.writeByte(' ');
-            if (neg) out.writeByte('-');
-            out.write(digits);
-        },
-        .rz => {
-            if (neg) out.writeByte('-');
-            var pad = if (cfg.width > len) cfg.width - len else 0;
-            while (pad > 0) : (pad -= 1) out.writeByte('0');
-            out.write(digits);
-        },
-    }
+fn report(context: ?*anyopaque, ev: nl.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    cli.warn(ctx.*, "{s}: {s}", .{ ev.name, cli.errText(ev.err) });
 }
 
-fn parseStyle(ctx: cli.Context, val: []const u8, what: []const u8) ?Style {
+fn parseStyle(ctx: cli.Context, val: []const u8, what: []const u8) ?nl.Style {
     if (val.len > 0) switch (val[0]) {
         'a' => return .all,
         't' => return .text,
@@ -257,14 +158,14 @@ fn parseInt(ctx: cli.Context, val: []const u8, what: []const u8) ?i64 {
     };
 }
 
-fn setOption(ctx: cli.Context, cfg: *Config, letter: u8, val: []const u8) bool {
+fn setOption(ctx: cli.Context, cfg: *nl.Options, letter: u8, val: []const u8) bool {
     switch (letter) {
         'b' => cfg.body = parseStyle(ctx, val, "body") orelse return false,
         'h' => cfg.header = parseStyle(ctx, val, "header") orelse return false,
         'f' => cfg.footer = parseStyle(ctx, val, "footer") orelse return false,
         'd' => {
             // A single character is followed by the default ':' (resolved in main).
-            cfg.delim = val;
+            cfg.delimiter = val;
         },
         'i' => cfg.increment = parseInt(ctx, val, "line number increment") orelse return false,
         'v' => cfg.start = parseInt(ctx, val, "starting line number") orelse return false,
@@ -292,7 +193,7 @@ fn setOption(ctx: cli.Context, cfg: *Config, letter: u8, val: []const u8) bool {
                 return false;
             }
         },
-        's' => cfg.sep = val,
+        's' => cfg.separator = val,
         else => unreachable,
     }
     return true;

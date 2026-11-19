@@ -20,6 +20,14 @@ GNU coreutils 9.7 (`/usr/bin/paste --version` on the development machine, instal
 - Every `-` operand reads successive lines from the one standard input; with no operand standard input is used (GNU; POSIX requires an operand).
 - A missing file stops processing before any output (exit 1), as GNU.
 
+## Library
+
+Module `util_core.paste` (`src/lib/paste.zig`); `src/commands/paste.zig` is the thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - `--help` text is shorter than GNU's; ASCII quotes in diagnostics.

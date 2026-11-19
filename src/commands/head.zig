@@ -11,23 +11,14 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const count_arg = @import("../count_arg.zig");
+const head = @import("../lib/head.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "bytes", "lines", "quiet", "silent", "verbose", "zero-terminated", "help", "version" };
 
-const Config = struct {
-    bytes: bool = false,
-    count: u64 = 10,
-    /// "all but the last `count`" instead of "the first `count`".
-    skip_last: bool = false,
-    delim: u8 = '\n',
-};
-
-const Header = enum { auto, always, never };
-
 pub fn main(ctx: cli.Context) u8 {
-    var cfg: Config = .{};
-    var header: Header = .auto;
+    var cfg: head.Options = .{};
+    var header: head.Header = .auto;
     var args = ctx.args;
 
     // Obsolete -NUM form: only as the first argument.
@@ -77,7 +68,7 @@ pub fn main(ctx: cli.Context) u8 {
                 },
                 2, 3 => header = .never,
                 4 => header = .always,
-                5 => cfg.delim = 0,
+                5 => cfg.delimiter = 0,
                 6 => return help(ctx),
                 else => return if (cli.printVersion(ctx)) 0 else 1,
             }
@@ -87,7 +78,7 @@ pub fn main(ctx: cli.Context) u8 {
         while (j < a.len) : (j += 1) switch (a[j]) {
             'q' => header = .never,
             'v' => header = .always,
-            'z' => cfg.delim = 0,
+            'z' => cfg.delimiter = 0,
             'c', 'n' => {
                 var val: []const u8 = a[j + 1 ..];
                 if (val.len == 0) {
@@ -113,138 +104,45 @@ pub fn main(ctx: cli.Context) u8 {
         };
     }
 
-    const stdin_only = [_][]const u8{"-"};
-    const inputs: []const []const u8 = if (files.items.len == 0) &stdin_only else files.items;
-    const show_header = switch (header) {
-        .always => true,
-        .never => false,
-        .auto => inputs.len > 1,
+    var inputs: std.ArrayList(head.Input) = .empty;
+    defer inputs.deinit(ctx.gpa);
+    if (files.items.len == 0) {
+        inputs.append(ctx.gpa, .{ .name = "-", .source = .{ .file = Io.File.stdin() } }) catch return oom(ctx);
+    }
+    for (files.items) |path| {
+        const in: head.Input = if (std.mem.eql(u8, path, "-"))
+            .{ .name = path, .source = .{ .file = Io.File.stdin() } }
+        else
+            .{ .name = path, .source = .{ .path = path } };
+        inputs.append(ctx.gpa, in) catch return oom(ctx);
+    }
+
+    cfg.header = header;
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: head.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = head.run(env, cfg, inputs.items, &stdout.interface, .{
+        .context = @constCast(&ctx),
+        .func = report,
+    }) catch |e| switch (e) {
+        error.OutOfMemory => return oom(ctx),
+        error.WriteFailed => {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            cli.writeErrorWarn(ctx);
+            return 1;
+        },
     };
-
-    var out = cli.Out.init(ctx.io);
-    var status: u8 = 0;
-    var first = true;
-    var buf: [64 * 1024]u8 = undefined;
-    for (inputs) |path| {
-        const file = cli.openInput(ctx.io, path) catch |e| {
-            if (e == error.IsDir) {
-                // GNU opens directories fine and fails on read.
-                if (show_header) printHeader(&out, path, &first);
-                cli.warn(ctx, "error reading '{s}': Is a directory", .{path});
-            } else cli.warn(ctx, "cannot open '{s}' for reading: {s}", .{ path, cli.errText(e) });
-            status = 1;
-            continue;
-        };
-        defer cli.closeInput(ctx.io, file);
-        if (show_header) printHeader(&out, path, &first);
-        if (head(ctx, &out, file, cfg, &buf)) |unread| {
-            cli.giveBack(ctx.io, file, unread);
-        } else |e| {
-            out.flush();
-            cli.warn(ctx, "error reading '{s}': {s}", .{ path, cli.errText(e) });
-            status = 1;
-        }
-    }
-    out.flush();
-    if (out.failed) {
-        cli.writeErrorWarn(ctx);
-        return 1;
-    }
-    return status;
+    return if (result.failed) 1 else 0;
 }
 
-fn printHeader(out: *cli.Out, path: []const u8, first: *bool) void {
-    if (!first.*) out.writeByte('\n');
-    first.* = false;
-    out.write("==> ");
-    out.write(if (std.mem.eql(u8, path, "-")) "standard input" else path);
-    out.write(" <==\n");
-}
-
-/// Copy the head of `file`. Returns how many bytes were read beyond what was
-/// output (to be given back to a seekable input, see cli.giveBack).
-fn head(ctx: cli.Context, out: *cli.Out, file: Io.File, cfg: Config, buf: []u8) !u64 {
-    if (cfg.skip_last) {
-        try headAllButLast(ctx, out, file, cfg, buf);
-        return 0;
-    }
-    var remaining = cfg.count;
-    while (remaining > 0) {
-        const n = try cli.readChunk(ctx.io, file, buf);
-        if (n == 0) return 0;
-        const chunk = buf[0..n];
-        if (cfg.bytes) {
-            const take: usize = @intCast(@min(remaining, n));
-            out.write(chunk[0..take]);
-            remaining -= take;
-            if (remaining == 0) {
-                return n - take;
-            }
-        } else {
-            var start: usize = 0;
-            while (remaining > 0) {
-                const idx = std.mem.indexOfScalarPos(u8, chunk, start, cfg.delim) orelse {
-                    start = chunk.len; // no delimiter left: the whole tail belongs to the current line
-                    break;
-                };
-                remaining -= 1;
-                start = idx + 1;
-            }
-            out.write(chunk[0..start]);
-            if (remaining == 0) return chunk.len - start;
-        }
-        if (out.failed) return 0;
-    }
-    return 0;
-}
-
-/// Everything except the last `count` bytes/lines. Holds back at most
-/// `count` items (plus one read chunk) in `pending`.
-fn headAllButLast(ctx: cli.Context, out: *cli.Out, file: Io.File, cfg: Config, buf: []u8) !void {
-    var pending: std.ArrayList(u8) = .empty;
-    defer pending.deinit(ctx.gpa);
-    var start: usize = 0; // bytes before `start` are already written
-    var delims: u64 = 0; // delimiters in pending[start..]
-    while (true) {
-        const n = try cli.readChunk(ctx.io, file, buf);
-        if (n == 0) return;
-        const chunk = buf[0..n];
-        pending.appendSlice(ctx.gpa, chunk) catch return error.OutOfMemory;
-        if (cfg.bytes) {
-            const held = pending.items.len - start;
-            if (held > cfg.count) {
-                const emit: usize = @intCast(held - cfg.count);
-                out.write(pending.items[start..][0..emit]);
-                start += emit;
-            }
-        } else {
-            for (chunk) |c| delims += @intFromBool(c == cfg.delim);
-            // Held-back lines are the complete ones (`delims`) plus an unterminated
-            // last line, which counts as a line. Release the oldest while more
-            // than `count` are held. Only count == 0 can release a partial line.
-            while (true) {
-                const partial: u64 = @intFromBool(pending.items.len > start and pending.items[pending.items.len - 1] != cfg.delim);
-                if (delims + partial <= cfg.count) break;
-                if (delims == 0) {
-                    out.write(pending.items[start..]);
-                    start = pending.items.len;
-                    break;
-                }
-                const idx = std.mem.indexOfScalarPos(u8, pending.items, start, cfg.delim).?;
-                out.write(pending.items[start .. idx + 1]);
-                start = idx + 1;
-                delims -= 1;
-            }
-        }
-        if (out.failed) return;
-        // Compact so memory stays proportional to what is held back.
-        if (start > 0 and start >= pending.items.len / 2) {
-            const rest = pending.items.len - start;
-            std.mem.copyForwards(u8, pending.items[0..rest], pending.items[start..]);
-            pending.shrinkRetainingCapacity(rest);
-            start = 0;
-        }
-    }
+fn report(context: ?*anyopaque, ev: head.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    if (ev.stage == .open and ev.err == error.IsDir) {
+        // GNU opens directories fine and fails on read.
+        cli.warn(ctx.*, "error reading '{s}': Is a directory", .{ev.name});
+    } else if (ev.stage == .open) {
+        cli.warn(ctx.*, "cannot open '{s}' for reading: {s}", .{ ev.name, cli.errText(ev.err) });
+    } else cli.warn(ctx.*, "error reading '{s}': {s}", .{ ev.name, cli.errText(ev.err) });
 }
 
 /// Obsolete `-NUM[bkm][cqv]`: '-' then at least one digit, then only letters
@@ -257,7 +155,7 @@ fn isObsolete(a: []const u8) bool {
     return true;
 }
 
-fn parseObsolete(ctx: cli.Context, a: []const u8, cfg: *Config, header: *Header) bool {
+fn parseObsolete(ctx: cli.Context, a: []const u8, cfg: *head.Options, header: *head.Header) bool {
     var i: usize = 1;
     while (i < a.len and std.ascii.isDigit(a[i])) i += 1;
     var digits_end = i;
@@ -280,7 +178,7 @@ fn parseObsolete(ctx: cli.Context, a: []const u8, cfg: *Config, header: *Header)
     return true;
 }
 
-fn setCount(ctx: cli.Context, cfg: *Config, bytes: bool, text: []const u8) bool {
+fn setCount(ctx: cli.Context, cfg: *head.Options, bytes: bool, text: []const u8) bool {
     const c = count_arg.parse(text) orelse {
         cli.warn(ctx, "invalid number of {s}: '{s}'", .{ if (bytes) "bytes" else "lines", text });
         return false;

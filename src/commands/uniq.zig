@@ -10,30 +10,14 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
-const lines = @import("../lines.zig");
+const uniq = @import("../lib/uniq.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "count", "repeated", "all-repeated", "group", "unique", "ignore-case", "skip-fields", "skip-chars", "check-chars", "zero-terminated", "help", "version" };
 
-const Delimit = enum { none, prepend, separate, append, both };
-
-const Config = struct {
-    count: bool = false,
-    output_unique: bool = true,
-    output_first_repeated: bool = true,
-    all_repeated: bool = false,
-    group: bool = false,
-    method: Delimit = .none,
-    ignore_case: bool = false,
-    skip_fields: usize = 0,
-    skip_chars: usize = 0,
-    check_chars: usize = std.math.maxInt(usize),
-    term: u8 = '\n',
-};
-
 pub fn main(ctx: cli.Context) u8 {
-    var cfg: Config = .{};
-    var group_method: ?Delimit = null;
+    var cfg: uniq.Options = .{};
+    var group_method: ?uniq.Delimit = null;
     var operands: std.ArrayList([]const u8) = .empty;
     defer operands.deinit(ctx.gpa);
     const args = ctx.args;
@@ -171,25 +155,40 @@ pub fn main(ctx: cli.Context) u8 {
         };
     }
     defer if (out_file) |f| f.close(ctx.io);
-    var out = if (out_file) |f| cli.Out.initFile(ctx.io, f) else cli.Out.init(ctx.io);
+    var buf: [8192]u8 = undefined;
+    var dest = (out_file orelse Io.File.stdout()).writerStreaming(ctx.io, &buf);
 
-    var reader = lines.LineReader.init(ctx.gpa, ctx.io, input, cfg.term);
-    defer reader.deinit();
-    const ok = run(ctx, &out, &reader, cfg);
-    out.flush();
-    if (out.failed) {
-        cli.writeErrorWarn(ctx);
-        return 1;
-    }
-    return if (ok) 0 else 1;
+    const env: uniq.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = uniq.run(env, cfg, .{ .name = in_path, .source = .{ .file = input } }, &dest.interface, .{
+        .context = @constCast(&ctx),
+        .func = report,
+    }) catch |e| switch (e) {
+        error.OutOfMemory => return oom(ctx),
+        error.WriteFailed => {
+            // Only a failure on standard output is recorded for `finish`.
+            if (out_file == null) cli.noteStdoutFailure(cli.errText(dest.err orelse error.WriteFailed));
+            cli.writeErrorWarn(ctx);
+            return 1;
+        },
+        else => {
+            cli.warn(ctx, "{s}: {s}", .{ in_path, cli.errText(e) });
+            return 1;
+        },
+    };
+    return if (result.failed) 1 else 0;
 }
 
-fn parseMethod(ctx: cli.Context, text: []const u8, option: []const u8, comptime allowed: []const Delimit) ?Delimit {
+fn report(context: ?*anyopaque, ev: uniq.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    cli.warn(ctx.*, "read error: {s}", .{cli.errText(ev.err)});
+}
+
+fn parseMethod(ctx: cli.Context, text: []const u8, option: []const u8, comptime allowed: []const uniq.Delimit) ?uniq.Delimit {
     inline for (allowed) |m| {
         if (std.mem.eql(u8, text, @tagName(m))) return m;
     }
     // GNU accepts unambiguous abbreviations.
-    var found: ?Delimit = null;
+    var found: ?uniq.Delimit = null;
     var ambiguous = false;
     inline for (allowed) |m| {
         if (text.len > 0 and std.mem.startsWith(u8, @tagName(m), text)) {
@@ -209,7 +208,7 @@ fn parseMethod(ctx: cli.Context, text: []const u8, option: []const u8, comptime 
     return null;
 }
 
-fn setNum(ctx: cli.Context, cfg: *Config, which: usize, val: []const u8) bool {
+fn setNum(ctx: cli.Context, cfg: *uniq.Options, which: usize, val: []const u8) bool {
     var v: usize = 0;
     var ok = val.len > 0;
     for (val) |c| {
@@ -234,98 +233,6 @@ fn setNum(ctx: cli.Context, cfg: *Config, which: usize, val: []const u8) bool {
         else => cfg.check_chars = v,
     }
     return true;
-}
-
-/// The part of `line` that takes part in comparisons.
-fn keyOf(line: []const u8, cfg: Config) []const u8 {
-    var p: usize = 0;
-    var f = cfg.skip_fields;
-    while (f > 0 and p < line.len) : (f -= 1) {
-        while (p < line.len and isBlank(line[p])) p += 1;
-        while (p < line.len and !isBlank(line[p])) p += 1;
-    }
-    p = @min(p +| cfg.skip_chars, line.len);
-    const rest = line[p..];
-    return rest[0..@min(rest.len, cfg.check_chars)];
-}
-
-fn isBlank(c: u8) bool {
-    return c == ' ' or c == '\t';
-}
-
-fn sameKey(a: []const u8, b: []const u8, ignore_case: bool) bool {
-    return if (ignore_case) std.ascii.eqlIgnoreCase(a, b) else std.mem.eql(u8, a, b);
-}
-
-fn run(ctx: cli.Context, out: *cli.Out, reader: *lines.LineReader, cfg: Config) bool {
-    var first_line: std.ArrayList(u8) = .empty; // copy of the current group's first line
-    defer first_line.deinit(ctx.gpa);
-    var count: u64 = 0;
-    var groups_started: u64 = 0;
-    var groups_printed: u64 = 0; // for -D separators
-    var ok = true;
-
-    while (true) {
-        const maybe = reader.next() catch |e| {
-            out.flush();
-            cli.warn(ctx, "read error: {s}", .{cli.errText(e)});
-            ok = false;
-            break;
-        };
-        const line = maybe orelse break;
-        if (count > 0 and sameKey(keyOf(first_line.items, cfg), keyOf(line.text, cfg), cfg.ignore_case)) {
-            count += 1;
-            if (cfg.all_repeated) {
-                if (count == 2) {
-                    startAllRepeated(out, cfg, &groups_printed);
-                    // -u together with -D drops the first line of each group.
-                    if (cfg.output_first_repeated) writeLine(out, first_line.items, cfg.term);
-                }
-                writeLine(out, line.text, cfg.term);
-            } else if (cfg.group) writeLine(out, line.text, cfg.term);
-            continue;
-        }
-        if (count > 0) finishGroup(out, first_line.items, count, cfg, groups_started);
-        first_line.clearRetainingCapacity();
-        first_line.appendSlice(ctx.gpa, line.text) catch return false;
-        count = 1;
-        groups_started += 1;
-        if (cfg.group) {
-            // both = a delimiter before the first group and after every group.
-            if (cfg.method == .prepend or (cfg.method == .both and groups_started == 1) or (cfg.method == .separate and groups_started > 1)) out.writeByte(cfg.term);
-            writeLine(out, line.text, cfg.term);
-        }
-        if (out.failed) return ok;
-    }
-    if (count > 0) finishGroup(out, first_line.items, count, cfg, groups_started);
-    return ok;
-}
-
-fn startAllRepeated(out: *cli.Out, cfg: Config, printed: *u64) void {
-    if (cfg.method == .prepend or (cfg.method == .separate and printed.* > 0)) out.writeByte(cfg.term);
-    printed.* += 1;
-}
-
-fn finishGroup(out: *cli.Out, first: []const u8, count: u64, cfg: Config, group_no: u64) void {
-    _ = group_no;
-    if (cfg.group) {
-        if (cfg.method == .append or cfg.method == .both) out.writeByte(cfg.term);
-        return;
-    }
-    if (cfg.all_repeated) return; // lines were written as they arrived
-    const wanted = if (count == 1) cfg.output_unique else cfg.output_first_repeated;
-    if (!wanted) return;
-    if (cfg.count) {
-        var buf: [32]u8 = undefined;
-        const s = std.fmt.bufPrint(&buf, "{d: >7} ", .{count}) catch unreachable;
-        out.write(s);
-    }
-    writeLine(out, first, cfg.term);
-}
-
-fn writeLine(out: *cli.Out, text: []const u8, term: u8) void {
-    out.write(text);
-    out.writeByte(term);
 }
 
 fn oom(ctx: cli.Context) u8 {
@@ -353,16 +260,4 @@ fn help(ctx: cli.Context) u8 {
         "  -w, --check-chars=N   compare no more than N characters in lines\n" ++
         "      --help        display this help and exit\n" ++
         "      --version     output version information and exit\n")) 0 else 1;
-}
-
-test "keyOf" {
-    const t = std.testing;
-    const c1: Config = .{ .skip_fields = 1 };
-    try t.expectEqualStrings(" b c", keyOf("a b c", c1));
-    try t.expectEqualStrings(" b c", keyOf("  a b c", c1));
-    const c2: Config = .{ .skip_fields = 1, .skip_chars = 2 };
-    try t.expectEqualStrings(" c", keyOf("a b c", c2));
-    const c3: Config = .{ .check_chars = 2 };
-    try t.expectEqualStrings("ab", keyOf("abcd", c3));
-    try t.expectEqualStrings("", keyOf("a", .{ .skip_fields = 3 }));
 }
