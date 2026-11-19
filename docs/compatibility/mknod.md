@@ -17,6 +17,14 @@ GNU coreutils 9.7 (`/usr/bin/mknod --version` on the development machine, instal
 - TYPE is b, c/u or p (only the first character is looked at, like GNU). MAJOR and MINOR accept decimal, octal (0) and hex (0x).
 - Operand-count diagnostics reproduce GNU's wording.
 
+## Library
+
+Module `util_core.mknod` (src/lib/mknod.zig); `src/commands/mknod.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - Creating block/character devices needs privilege that the development account lacks, so those paths were verified only down to the "Operation not permitted" diagnostic.

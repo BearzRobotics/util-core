@@ -5,6 +5,7 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const paths = @import("../paths.zig");
+const readlink = @import("../lib/readlink.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "canonicalize", "canonicalize-existing", "canonicalize-missing", "no-newline", "quiet", "silent", "verbose", "zero", "help", "version" };
@@ -76,44 +77,46 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "ignoring --no-newline with multiple arguments", .{});
         newline = true;
     }
-    var out = cli.Out.init(ctx.io);
-    var status: u8 = 0;
-    for (files.items) |f| {
-        var perr: paths.Error = error.NotFound;
-        const result: ?[]u8 = if (mode == .none) blk: {
-            var buf: [4096]u8 = undefined;
-            const n = Io.Dir.cwd().readLink(ctx.io, f, &buf) catch |e| {
-                if (verbose) {
-                    out.flush();
-                    cli.warn(ctx, "{f}: {s}", .{ cli.quote(f), if (e == error.NotLink) "Invalid argument" else cli.errText(e) });
-                }
-                break :blk null;
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    var rep: Report = .{ .ctx = &ctx, .out = &stdout.interface, .verbose = verbose };
+    const env: readlink.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = readlink.run(env, .{ .mode = mode, .newline = newline, .zero = zero }, files.items, &stdout.interface, .{
+        .context = &rep,
+        .func = report,
+    }) catch |e| switch (e) {
+        error.OutOfMemory => return 1,
+        error.WriteFailed => {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            return 1;
+        },
+    };
+    if (!cli.flushWriter(&stdout)) return 1;
+    return if (result.failed) 1 else 0;
+}
+
+const Report = struct {
+    ctx: *const cli.Context,
+    out: *Io.Writer,
+    verbose: bool,
+};
+
+fn report(context: ?*anyopaque, ev: readlink.Event) void {
+    const r: *Report = @ptrCast(@alignCast(context.?));
+    if (!r.verbose) return;
+    r.out.flush() catch {};
+    switch (ev.failure) {
+        .link => |e| cli.warn(r.ctx.*, "{f}: {s}", .{ cli.quote(ev.name), if (e == error.NotLink) "Invalid argument" else cli.errText(e) }),
+        .path => |e| {
+            const msg = switch (e) {
+                error.NotDir => "Not a directory",
+                error.Loop => "Too many levels of symbolic links",
+                error.NameTooLong => "File name too long",
+                else => "No such file or directory",
             };
-            break :blk ctx.gpa.dupe(u8, buf[0..n]) catch null;
-        } else paths.resolve(ctx, f, mode) catch |e| blk: {
-            perr = e;
-            break :blk null;
-        };
-        if (result) |r| {
-            defer ctx.gpa.free(r);
-            out.write(r);
-            if (newline or zero) out.writeByte(if (zero) 0 else '\n');
-        } else {
-            if (verbose and mode != .none) {
-                out.flush();
-                const msg = switch (perr) {
-                    error.NotDir => "Not a directory",
-                    error.Loop => "Too many levels of symbolic links",
-                    error.NameTooLong => "File name too long",
-                    else => "No such file or directory",
-                };
-                cli.warn(ctx, "{f}: {s}", .{ cli.quote(f), msg });
-            }
-            status = 1;
-        }
+            cli.warn(r.ctx.*, "{f}: {s}", .{ cli.quote(ev.name), msg });
+        },
     }
-    out.flush();
-    return if (out.failed) 1 else status;
 }
 
 fn help(ctx: cli.Context) u8 {

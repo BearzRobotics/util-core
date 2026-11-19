@@ -18,6 +18,14 @@ GNU coreutils 9.7 (`/usr/bin/readlink --version` on the development machine, ins
 
 - Resolution is done component by component in src/paths.zig; `-m` tolerates symlink loops and keeps them unresolved, `-f`/`-e` report `Too many levels of symbolic links`, and a trailing slash on a non-directory is `Not a directory` for `-f`/`-e`.
 
+## Library
+
+Module `util_core.readlink` (src/lib/readlink.zig); `src/commands/readlink.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - None known.

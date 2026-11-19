@@ -16,6 +16,14 @@ GNU coreutils 9.7 (`/usr/bin/nice --version` on the development machine, install
 - With no COMMAND the current niceness is printed; with an adjustment and no COMMAND it is an error.
 - If the priority cannot be changed because of permissions a warning is printed and COMMAND still runs; the result is clamped to -20..19.
 
+## Library
+
+Module `util_core.nice` (src/lib/nice.zig); `src/commands/nice.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - `--help` omits the "GNU coreutils online help" footer.

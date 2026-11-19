@@ -21,6 +21,14 @@ GNU coreutils 9.7 (`/usr/bin/timeout --version` on the development machine, inst
 - The command is started with std.process.spawn; timeout waits on a pidfd and a signalfd with a poll timeout (src/sys.zig `Watcher`), so no signal handler is installed. TERM, INT, HUP and QUIT sent to timeout are forwarded.
 - If the command dies from a signal that timeout did not send, timeout kills itself with the same signal, like GNU.
 
+## Library
+
+Module `util_core.timeout` (src/lib/timeout.zig); `src/commands/timeout.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - Requires Linux 5.3+ (pidfd_open).

@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
-const Io = std.Io;
+const unlink = @import("../lib/unlink.zig");
 
 pub fn main(ctx: cli.Context) u8 {
     var files: std.ArrayList([]const u8) = .empty;
@@ -41,7 +41,7 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "extra operand {f}\nTry '{s} --help' for more information.", .{ cli.quoteA(files.items[1]), ctx.name });
         return 1;
     }
-    Io.Dir.cwd().deleteFile(ctx.io, files.items[0]) catch |e| {
+    unlink.run(.{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ }, files.items[0]) catch |e| {
         cli.warn(ctx, "cannot unlink {f}: {s}", .{ cli.quoteA(files.items[0]), cli.errText(e) });
         return 1;
     };

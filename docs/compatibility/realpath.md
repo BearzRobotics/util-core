@@ -20,6 +20,14 @@ GNU coreutils 9.7 (`/usr/bin/realpath --version` on the development machine, ins
 
 - Same resolver as readlink (src/paths.zig).
 
+## Library
+
+Module `util_core.realpath` (src/lib/realpath.zig); `src/commands/realpath.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - `-L` is accepted and resolves like `-P` apart from its interaction with `-s`; the difference matters only when `..` follows a symbolic link.

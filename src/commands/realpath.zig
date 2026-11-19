@@ -5,6 +5,7 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const paths = @import("../paths.zig");
+const realpath = @import("../lib/realpath.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "canonicalize-existing", "canonicalize-missing", "logical", "physical", "quiet", "relative-to", "relative-base", "strip", "no-symlinks", "zero", "help", "version" };
@@ -82,76 +83,53 @@ pub fn main(ctx: cli.Context) u8 {
             },
         };
     }
-    // -L (logical) overrides -s: symlinks are expanded then.
-    if (logical and mode == .logical_only) mode = .canonical;
     if (files.items.len == 0) {
         cli.warn(ctx, "missing operand\nTry '{s} --help' for more information.", .{ctx.name});
         return 1;
     }
 
-    // --relative-to / --relative-base directories are canonicalised first.
-    var base_to: ?[]u8 = null;
-    defer if (base_to) |b| ctx.gpa.free(b);
-    var base_base: ?[]u8 = null;
-    defer if (base_base) |b| ctx.gpa.free(b);
-    if (rel_to) |d| base_to = paths.resolve(ctx, d, if (mode == .existing) .existing else .missing) catch {
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    var rep: Report = .{ .ctx = &ctx, .out = &stdout.interface, .quiet = quiet };
+    const env: realpath.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const result = realpath.run(env, .{
+        .mode = mode,
+        .logical = logical,
+        .zero = zero,
+        .relative_to = rel_to,
+        .relative_base = rel_base,
+    }, files.items, &stdout.interface, .{ .context = &rep, .func = report }) catch |e| switch (e) {
+        error.OutOfMemory => return 1,
+        error.WriteFailed => {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            return 1;
+        },
+    };
+    if (result.bad_base) |d| {
         if (!quiet) cli.warn(ctx, "{f}: No such file or directory", .{cli.quote(d)});
         return 1;
-    };
-    if (rel_base) |d| base_base = paths.resolve(ctx, d, if (mode == .existing) .existing else .missing) catch {
-        if (!quiet) cli.warn(ctx, "{f}: No such file or directory", .{cli.quote(d)});
-        return 1;
-    };
-    // A --relative-to directory outside --relative-base disables relative output.
-    if (base_to != null and base_base != null and !isBelow(base_to.?, base_base.?)) {
-        ctx.gpa.free(base_to.?);
-        base_to = null;
-        ctx.gpa.free(base_base.?);
-        base_base = null;
     }
-    // --relative-base alone makes --relative-to default to the base.
-    if (base_to == null and base_base != null) base_to = ctx.gpa.dupe(u8, base_base.?) catch return 1;
-
-    var out = cli.Out.init(ctx.io);
-    var status: u8 = 0;
-    for (files.items) |f| {
-        const r = paths.resolveLogical(ctx, f, mode, logical) catch |e| {
-            if (!quiet) {
-                out.flush();
-                const msg = switch (e) {
-                    error.NotDir => "Not a directory",
-                    error.Loop => "Too many levels of symbolic links",
-                    error.NameTooLong => "File name too long",
-                    else => "No such file or directory",
-                };
-                cli.warn(ctx, "{f}: {s}", .{ cli.quote(f), msg });
-            }
-            status = 1;
-            continue;
-        };
-        defer ctx.gpa.free(r);
-        var shown: []const u8 = r;
-        var rel_buf: ?[]u8 = null;
-        defer if (rel_buf) |b| ctx.gpa.free(b);
-        if (base_to) |to| {
-            // With --relative-base, only paths below the base are shortened.
-            const below = if (base_base) |bb| isBelow(r, bb) else true;
-            if (below) {
-                rel_buf = paths.relativeTo(ctx.gpa, r, to) catch null;
-                if (rel_buf) |b| shown = b;
-            }
-        }
-        out.write(shown);
-        out.writeByte(if (zero) 0 else '\n');
-    }
-    out.flush();
-    return if (out.failed) 1 else status;
+    if (!cli.flushWriter(&stdout)) return 1;
+    return if (result.failed) 1 else 0;
 }
 
-fn isBelow(path: []const u8, base: []const u8) bool {
-    if (std.mem.eql(u8, base, "/")) return true;
-    if (!std.mem.startsWith(u8, path, base)) return false;
-    return path.len == base.len or path[base.len] == '/';
+const Report = struct {
+    ctx: *const cli.Context,
+    out: *Io.Writer,
+    quiet: bool,
+};
+
+fn report(context: ?*anyopaque, ev: realpath.Event) void {
+    const r: *Report = @ptrCast(@alignCast(context.?));
+    if (r.quiet) return;
+    r.out.flush() catch {};
+    const msg = switch (ev.failure) {
+        error.NotDir => "Not a directory",
+        error.Loop => "Too many levels of symbolic links",
+        error.NameTooLong => "File name too long",
+        else => "No such file or directory",
+    };
+    cli.warn(r.ctx.*, "{f}: {s}", .{ cli.quote(ev.name), msg });
 }
 
 fn help(ctx: cli.Context) u8 {

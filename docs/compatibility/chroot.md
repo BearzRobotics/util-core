@@ -16,6 +16,14 @@ GNU coreutils 9.7 (`/usr/bin/chroot --version` on the development machine, insta
 
 - chroot(2), then chdir("/"), then exec COMMAND (default `$SHELL -i`).
 
+## Library
+
+Module `util_core.chroot` (src/lib/chroot.zig); `src/commands/chroot.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - `--userspec` and `--groups` are not implemented.

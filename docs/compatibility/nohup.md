@@ -16,6 +16,14 @@ GNU coreutils 9.7 (`/usr/bin/nohup --version` on the development machine, instal
 - Ignores SIGHUP. A terminal on standard input is replaced by /dev/null opened write-only; a terminal on standard output is appended to ./nohup.out (mode 0600) or $HOME/nohup.out; a terminal on standard error is sent to standard output. The notices GNU prints are reproduced.
 - Only a sole `--help`/`--version` is special; the first operand starts the command.
 
+## Library
+
+Module `util_core.nohup` (src/lib/nohup.zig); `src/commands/nohup.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - `--help` omits the "GNU coreutils online help" footer.

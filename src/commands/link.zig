@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
-const Io = std.Io;
+const link = @import("../lib/link.zig");
 
 pub fn main(ctx: cli.Context) u8 {
     var files: std.ArrayList([]const u8) = .empty;
@@ -43,8 +43,7 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "extra operand {f}\nTry '{s} --help' for more information.", .{ cli.quoteA(files.items[2]), ctx.name });
         return 1;
     }
-    const cwd = Io.Dir.cwd();
-    cwd.hardLink(files.items[0], cwd, files.items[1], ctx.io, .{}) catch |e| {
+    link.run(.{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ }, files.items[0], files.items[1]) catch |e| {
         cli.warn(ctx, "cannot create link {f} to {f}: {s}", .{ cli.quoteA(files.items[1]), cli.quoteA(files.items[0]), cli.errText(e) });
         return 1;
     };

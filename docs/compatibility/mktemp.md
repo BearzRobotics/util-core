@@ -22,6 +22,14 @@ GNU coreutils 9.7 (`/usr/bin/mktemp --version` on the development machine, insta
 - Files get mode 0600 and directories 0700, both reduced by the umask; names come from the system random source with rejection sampling to avoid bias, and EEXIST retries.
 - `-p` and `-t` handling of slashes and absolute templates follows the diagnostics GNU prints.
 
+## Library
+
+Module `util_core.mktemp` (src/lib/mktemp.zig); `src/commands/mktemp.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - `--help` omits the "GNU coreutils online help" footer.

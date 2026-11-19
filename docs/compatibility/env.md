@@ -24,6 +24,14 @@ GNU coreutils 9.7 (`/usr/bin/env --version` on the development machine, installe
 - COMMAND is searched for in the PATH of the *modified* environment, as GNU does with execvp (src/exec.zig).
 - Exit status: 125 env failed, 126 command found but not runnable, 127 not found, otherwise the command's status.
 
+## Library
+
+Module `util_core.env` (src/lib/env.zig); `src/commands/env.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - `NAME=VALUE` with an empty NAME is ignored (the environment map cannot hold it); GNU stores it.

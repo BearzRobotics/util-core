@@ -18,6 +18,14 @@ GNU coreutils 9.7 (`/usr/bin/stdbuf --version` on the development machine, insta
 - MODE is L (line buffered), 0 (unbuffered) or a size with the usual suffixes.
 - Sets _STDBUF_I/O/E and appends libstdbuf.so to LD_PRELOAD, exactly as GNU does.
 
+## Library
+
+Module `util_core.stdbuf` (src/lib/stdbuf.zig); `src/commands/stdbuf.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - We do not ship libstdbuf.so: the one installed by GNU coreutils (/usr/libexec/coreutils/libstdbuf.so) is used and stdbuf fails with "failed to find libstdbuf.so" if absent.
