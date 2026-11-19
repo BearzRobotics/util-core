@@ -41,3 +41,7 @@ pub const wordcount = @import("wordcount.zig");
 pub const dateinfo = @import("dateinfo.zig");
 /// A computed checksum as data and its `--json` form.
 pub const digestinfo = @import("digestinfo.zig");
+
+/// Command libraries (decision 0004): one namespace per command, no argument
+/// parsing and no terminal output.
+pub const wc = @import("lib/wc.zig");

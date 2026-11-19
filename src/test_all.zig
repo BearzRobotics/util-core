@@ -12,6 +12,7 @@ test {
     _ = @import("fsusage.zig");
     _ = @import("diskusage.zig");
     _ = @import("wordcount.zig");
+    _ = @import("lib/wc.zig");
     _ = @import("dateinfo.zig");
     _ = @import("digestinfo.zig");
     _ = @import("lines.zig");

@@ -462,6 +462,16 @@ pub fn giveBack(io: Io, file: Io.File, unread: u64) void {
     io.vtable.fileSeekBy(io.userdata, file, -@as(i64, @intCast(@min(unread, std.math.maxInt(i63))))) catch {};
 }
 
+/// Flush a buffered standard-output writer; false (and the failure recorded
+/// for `finish`) when the write fails.
+pub fn flushWriter(fw: *Io.File.Writer) bool {
+    fw.interface.flush() catch {
+        noteStdoutFailure(errText(fw.err orelse error.WriteFailed));
+        return false;
+    };
+    return true;
+}
+
 /// Read up to `buf.len` bytes; returns 0 at end of input.
 pub fn readChunk(io: Io, file: Io.File, buf: []u8) !usize {
     return file.readStreaming(io, &.{buf}) catch |e| switch (e) {
