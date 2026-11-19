@@ -26,6 +26,14 @@ GNU coreutils 9.7 (`/usr/bin/fmt --version` on the development machine, installe
 - Widths count bytes (C locale).
 - `--help` omits the "GNU coreutils online help" footer.
 
+## Library
+
+Module `util_core.fmt` (`src/lib/fmt.zig`); `src/commands/fmt.zig` is the argument-parsing and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Every accepted option and behaviour is GNU 9.7 (or a documented gap below); there is no `--json` and no terminal-only presentation.
+
 ## Tests
 
 `sh test/test_fmt.sh`: 278 differential cases against GNU fmt 9.7 in the C locale. Includes seeded random paragraphs and a 3000-word paragraph.

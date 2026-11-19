@@ -33,6 +33,14 @@ GNU coreutils 9.7 (`/usr/bin/split --version` on the development machine, instal
 - With `-n l/N` or `r/N` where N exceeds the input size GNU keeps creating files until the suffixes run out; we stop at N.
 - `--help` omits the "GNU coreutils online help" footer.
 
+## Library
+
+Module `util_core.split` (`src/lib/split.zig`); `src/commands/split.zig` is the argument-parsing and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Every accepted option and behaviour is GNU 9.7 (or a documented gap below); there is no `--json` and no terminal-only presentation.
+
 ## Tests
 
 `sh test/test_split.sh`: 215 differential cases against GNU split 9.7 in the C locale. Includes seeded random inputs and filters.

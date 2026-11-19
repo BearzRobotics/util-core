@@ -24,6 +24,14 @@ GNU coreutils 9.7 (`/usr/bin/csplit --version` on the development machine, insta
 - The whole input is read into memory before splitting.
 - `--help` omits the "GNU coreutils online help" footer.
 
+## Library
+
+Module `util_core.csplit` (`src/lib/csplit.zig`); `src/commands/csplit.zig` is the argument-parsing and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Every accepted option and behaviour is GNU 9.7 (or a documented gap below); there is no `--json` and no terminal-only presentation.
+
 ## Tests
 
 `sh test/test_csplit.sh`: 277 differential cases against GNU csplit 9.7 in the C locale. Compares printed counts and the name, mode and checksum of every output file, including after errors.

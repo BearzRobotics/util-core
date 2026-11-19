@@ -32,6 +32,14 @@ GNU coreutils 9.7 (`/usr/bin/od --version` on the development machine, installed
 - Multibyte characters are not interpreted.
 - `--help` omits the "GNU coreutils online help" footer.
 
+## Library
+
+Module `util_core.od` (`src/lib/od.zig`); `src/commands/od.zig` is the argument-parsing and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Every accepted option and behaviour is GNU 9.7 (or a documented gap below); there is no `--json` and no terminal-only presentation.
+
 ## Tests
 
 `sh test/test_od.sh`: 560 differential cases against GNU od 9.7 in the C locale. 
