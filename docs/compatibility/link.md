@@ -15,6 +15,14 @@ GNU coreutils 9.7 (`/usr/bin/link --version` on the development machine, install
 
 - Creates FILE2 as a hard link to FILE1 (no directory special-casing, no overwriting).
 
+## Library
+
+Module `util_core.link` (src/lib/link.zig); `src/commands/link.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - Error wording comes from the Zig error set, so rare errno values may print their Zig name.

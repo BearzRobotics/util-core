@@ -16,6 +16,14 @@ GNU coreutils 9.7 (`/usr/bin/mkfifo --version` on the development machine, insta
 
 - mknodat(2) with S_IFIFO; modes above 0777 are rejected like GNU.
 
+## Library
+
+Module `util_core.mkfifo` (src/lib/mkfifo.zig); `src/commands/mkfifo.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - `--help` omits the "GNU coreutils online help" footer.

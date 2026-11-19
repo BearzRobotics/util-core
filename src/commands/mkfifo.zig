@@ -5,9 +5,8 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
-const mode_mod = @import("../mode.zig");
 const sys = @import("../sys.zig");
-const Io = std.Io;
+const mkfifo = @import("../lib/mkfifo.zig");
 
 const help_text = @embedFile("../help/mkfifo.txt");
 
@@ -39,31 +38,22 @@ pub fn main(ctx: cli.Context) u8 {
         return 1;
     }
     const umask = sys.umask();
-    var final: ?u16 = null;
-    if (mode_text) |t| {
-        final = mode_mod.apply(t, 0o666, false, umask) orelse {
-            cli.warn(ctx, "invalid mode", .{});
-            return 1;
-        };
-        if (final.? > 0o777) {
-            cli.warn(ctx, "mode must specify only file permission bits", .{});
-            return 1;
+    const final = mkfifo.resolveMode(mode_text, umask) catch |e| {
+        switch (e) {
+            error.InvalidMode => cli.warn(ctx, "invalid mode", .{}),
+            error.NotPermissionBits => cli.warn(ctx, "mode must specify only file permission bits", .{}),
         }
+        return 1;
+    };
+    const env: mkfifo.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const ok = mkfifo.run(env, final, names, .{ .context = @constCast(&ctx), .func = report }) catch return 1;
+    return if (ok) 0 else 1;
+}
+
+fn report(context: ?*anyopaque, ev: mkfifo.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    switch (ev.failure) {
+        .create => |e| cli.warn(ctx.*, "cannot create fifo {f}: {s}", .{ cli.quoteA(ev.name), sys.errnoText(e) }),
+        .permissions => |e| cli.warn(ctx.*, "cannot set permissions of {f}: {s}", .{ cli.quoteA(ev.name), cli.errText(e) }),
     }
-    var status: u8 = 0;
-    for (names) |name| {
-        const z = ctx.gpa.dupeSentinel(u8, name, 0) catch return 1;
-        defer ctx.gpa.free(z);
-        // With -m the exact mode is set afterwards, so the umask cannot take bits away.
-        if (sys.mknod(z, 0o010000 | (final orelse 0o666), 0)) |e| {
-            cli.warn(ctx, "cannot create fifo {f}: {s}", .{ cli.quoteA(name), sys.errnoText(e) });
-            status = 1;
-            continue;
-        }
-        if (final) |m| Io.Dir.cwd().setFilePermissions(ctx.io, name, .fromMode(m), .{}) catch |e| {
-            cli.warn(ctx, "cannot set permissions of {f}: {s}", .{ cli.quoteA(name), cli.errText(e) });
-            status = 1;
-        };
-    }
-    return status;
 }

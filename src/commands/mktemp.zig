@@ -2,21 +2,14 @@
 //! mktemp — create a temporary file or directory, safely, and print its name.
 //! Reference: GNU coreutils manual "mktemp invocation" (9.7). POSIX does not
 //! specify mktemp.
-//!
-//! Template rules (probed against GNU 9.7): the last run of X characters
-//! (at least three) is replaced by random letters and digits; anything after
-//! it is a fixed suffix; `--suffix` appends one and then the template must end
-//! in X. The file is created with O_EXCL (mode 0600 minus umask) and the
-//! directory with mode 0700 minus umask; on EEXIST another name is tried.
+//! The template rules and the creation loop are in src/lib/mktemp.zig.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
-const Io = std.Io;
+const mktemp = @import("../lib/mktemp.zig");
 
 const help_text = @embedFile("../help/mktemp.txt");
-
-const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 pub fn main(ctx: cli.Context) u8 {
     var make_dir = false;
@@ -61,112 +54,42 @@ pub fn main(ctx: cli.Context) u8 {
         getopt.usageError(ctx, "too many templates", .{});
         return 1;
     }
-    var template: []const u8 = "tmp.XXXXXXXXXX";
-    if (ops.len == 0) {
-        use_tmpdir = true;
-    } else template = ops[0];
+    var template: ?[]const u8 = null;
+    if (ops.len == 1) template = ops[0];
 
-    // Split into <prefix X-run> <suffix>.
-    var suffix: []const u8 = undefined;
-    var body: []const u8 = undefined; // template without the suffix
-    if (suffix_opt) |s| {
-        if (std.mem.indexOfScalar(u8, s, '/') != null) {
-            cli.warn(ctx, "invalid suffix {f}, contains directory separator", .{cli.quoteC(s)});
-            return 1;
-        }
-        if (template.len == 0 or template[template.len - 1] != 'X') {
-            cli.warn(ctx, "with --suffix, template {f} must end in X", .{cli.quoteC(template)});
-            return 1;
-        }
-        body = template;
-        suffix = s;
-    } else {
-        const last_x = std.mem.lastIndexOfScalar(u8, template, 'X');
-        const end = if (last_x) |i| i + 1 else template.len;
-        body = template[0..end];
-        suffix = template[end..];
-        if (std.mem.indexOfScalar(u8, suffix, '/') != null) {
-            cli.warn(ctx, "invalid suffix {f}, contains directory separator", .{cli.quoteC(suffix)});
-            return 1;
-        }
-    }
-    var xs: usize = 0;
-    while (xs < body.len and body[body.len - 1 - xs] == 'X') xs += 1;
-    if (xs < 3) {
-        cli.warn(ctx, "too few X's in template {f}", .{cli.quoteC(template)});
-        return 1;
-    }
-
-    // Directory handling.
     var arena = std.heap.ArenaAllocator.init(ctx.gpa);
     defer arena.deinit();
     const a = arena.allocator();
-    var full: []u8 = undefined;
-    if (use_tmpdir) {
-        var dir: []const u8 = undefined;
-        if (tmpdir_t) {
-            dir = cli.getenv(ctx, "TMPDIR") orelse (dir_opt orelse "/tmp");
-            if (std.mem.indexOfScalar(u8, template, '/') != null) {
-                cli.warn(ctx, "invalid template, {f}, contains directory separator", .{cli.quoteC(template)});
-                return 1;
+    const opts: mktemp.Options = .{
+        .directory = make_dir,
+        .dry_run = dry_run,
+        .template = template,
+        .suffix = suffix_opt,
+        .use_tmpdir = use_tmpdir,
+        .tmpdir_t = tmpdir_t,
+        .dir = dir_opt,
+    };
+    const prepared = mktemp.prepare(a, opts, cli.getenv(ctx, "TMPDIR")) catch return 1;
+    const plan = switch (prepared) {
+        .ok => |pl| pl,
+        .bad => |problem| {
+            switch (problem) {
+                .suffix_has_slash => |s| cli.warn(ctx, "invalid suffix {f}, contains directory separator", .{cli.quoteC(s)}),
+                .suffix_needs_x => |t| cli.warn(ctx, "with --suffix, template {f} must end in X", .{cli.quoteC(t)}),
+                .too_few_x => |t| cli.warn(ctx, "too few X's in template {f}", .{cli.quoteC(t)}),
+                .template_has_slash => |t| cli.warn(ctx, "invalid template, {f}, contains directory separator", .{cli.quoteC(t)}),
+                .template_absolute => |t| cli.warn(ctx, "invalid template, {f}; with --tmpdir, it may not be absolute", .{cli.quoteC(t)}),
             }
-        } else {
-            dir = dir_opt orelse (cli.getenv(ctx, "TMPDIR") orelse "/tmp");
-            if (template.len > 0 and template[0] == '/') {
-                cli.warn(ctx, "invalid template, {f}; with --tmpdir, it may not be absolute", .{cli.quoteC(template)});
-                return 1;
-            }
-        }
-        const sep: []const u8 = if (dir.len > 0 and dir[dir.len - 1] == '/') "" else "/";
-        full = std.fmt.allocPrint(a, "{s}{s}{s}{s}", .{ dir, sep, body, suffix }) catch return 1;
-    } else {
-        full = std.fmt.allocPrint(a, "{s}{s}", .{ body, suffix }) catch return 1;
-    }
-    const x_start = full.len - suffix.len - xs;
-
-    const cwd = Io.Dir.cwd();
-    var attempts: u32 = 0;
-    while (true) : (attempts += 1) {
-        const work = a.dupe(u8, full) catch return 1;
-        fillRandom(ctx.io, work[x_start .. x_start + xs]);
-        if (dry_run) {
-            return if (cli.writeStdout(ctx.io, std.fmt.allocPrint(a, "{s}\n", .{work}) catch return 1)) 0 else 1;
-        }
-        var err_text: ?[]const u8 = null;
-        var exists = false;
-        if (make_dir) {
-            cwd.createDir(ctx.io, work, .fromMode(0o700)) catch |e| {
-                if (e == error.PathAlreadyExists) exists = true else err_text = cli.errText(e);
-            };
-        } else {
-            if (cwd.createFile(ctx.io, work, .{ .exclusive = true, .permissions = .fromMode(0o600) })) |f| {
-                f.close(ctx.io);
-            } else |e| {
-                if (e == error.PathAlreadyExists) exists = true else err_text = cli.errText(e);
-            }
-        }
-        if (exists and attempts < 238328) continue;
-        if (exists) err_text = "File exists";
-        if (err_text) |t| {
-            if (!quiet) cli.warn(ctx, "failed to create {s} via template {f}: {s}", .{ if (make_dir) "directory" else "file", cli.quoteA(full), t });
             return 1;
-        }
-        return if (cli.writeStdout(ctx.io, std.fmt.allocPrint(a, "{s}\n", .{work}) catch return 1)) 0 else 1;
-    }
-}
-
-/// Fill `out` with letters and digits, uniformly (bytes >= 248 are rejected
-/// so that 256 mod 62 does not bias the choice).
-fn fillRandom(io: Io, out: []u8) void {
-    var i: usize = 0;
-    var buf: [64]u8 = undefined;
-    while (i < out.len) {
-        io.random(&buf);
-        for (buf) |b| {
-            if (b >= 248) continue;
-            out[i] = alphabet[b % 62];
-            i += 1;
-            if (i == out.len) break;
-        }
+        },
+    };
+    const env: mktemp.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const created = mktemp.create(env, a, plan) catch return 1;
+    switch (created) {
+        .failed => |e| {
+            if (!quiet) cli.warn(ctx, "failed to create {s} via template {f}: {s}", .{ if (make_dir) "directory" else "file", cli.quoteA(plan.full), cli.errText(e) });
+            return 1;
+        },
+        .name => |name| return if (cli.writeStdout(ctx.io, std.fmt.allocPrint(a, "{s}\n", .{name}) catch return 1)) 0 else 1,
     }
 }

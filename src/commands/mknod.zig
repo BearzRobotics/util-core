@@ -6,16 +6,10 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
-const mode_mod = @import("../mode.zig");
 const sys = @import("../sys.zig");
-const Io = std.Io;
+const mknod = @import("../lib/mknod.zig");
 
 const help_text = @embedFile("../help/mknod.txt");
-
-fn parseNum(text: []const u8) ?u64 {
-    if (text.len == 0) return null;
-    return std.fmt.parseInt(u64, text, 0) catch null;
-}
 
 pub fn main(ctx: cli.Context) u8 {
     var mode_text: ?[]const u8 = null;
@@ -41,17 +35,13 @@ pub fn main(ctx: cli.Context) u8 {
     };
     const ops = p.operands.items;
     const umask = sys.umask();
-    var final: ?u16 = null;
-    if (mode_text) |t| {
-        final = mode_mod.apply(t, 0o666, false, umask) orelse {
-            cli.warn(ctx, "invalid mode", .{});
-            return 1;
-        };
-        if (final.? > 0o777) {
-            cli.warn(ctx, "mode must specify only file permission bits", .{});
-            return 1;
+    const final = mknod.resolveMode(mode_text, umask) catch |e| {
+        switch (e) {
+            error.InvalidMode => cli.warn(ctx, "invalid mode", .{}),
+            error.NotPermissionBits => cli.warn(ctx, "mode must specify only file permission bits", .{}),
         }
-    }
+        return 1;
+    };
     if (ops.len == 0) {
         getopt.usageError(ctx, "missing operand", .{});
         return 1;
@@ -64,8 +54,8 @@ pub fn main(ctx: cli.Context) u8 {
     const type_text = ops[1];
     // GNU looks only at the first character of TYPE, and checks the operand
     // count before it complains about an unknown type.
-    const kind: u8 = if (type_text.len > 0) type_text[0] else 0;
-    const is_fifo = kind == 'p';
+    const kind = mknod.kindOf(type_text);
+    const is_fifo = kind == .fifo;
     var rest = ops[2..];
     var dev: u64 = 0;
     if (is_fifo and rest.len > 0) {
@@ -90,37 +80,33 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         }
     }
-    const file_type: u32 = switch (kind) {
-        'b' => 0o060000,
-        'c', 'u' => 0o020000,
-        'p' => 0o010000,
-        else => {
-            getopt.usageError(ctx, "invalid device type {f}", .{cli.quoteC(type_text)});
-            return 1;
-        },
+    const node_kind = kind orelse {
+        getopt.usageError(ctx, "invalid device type {f}", .{cli.quoteC(type_text)});
+        return 1;
     };
     if (!is_fifo) {
-        const major = parseNum(rest[0]) orelse {
+        const major = mknod.parseNumber(rest[0]) orelse {
             cli.warn(ctx, "invalid major device number {f}", .{cli.quoteC(rest[0])});
             return 1;
         };
-        const minor = parseNum(rest[1]) orelse {
+        const minor = mknod.parseNumber(rest[1]) orelse {
             cli.warn(ctx, "invalid minor device number {f}", .{cli.quoteC(rest[1])});
             return 1;
         };
-        // glibc makedev(): split the numbers into the kernel's dev_t layout.
-        dev = ((major & 0xfffff000) << 32) | ((major & 0xfff) << 8) | ((minor & 0xffffff00) << 12) | (minor & 0xff);
+        dev = mknod.makedev(major, minor);
         rest = rest[2..];
     }
-    const z = ctx.gpa.dupeSentinel(u8, name, 0) catch return 1;
-    defer ctx.gpa.free(z);
-    if (sys.mknod(z, file_type | (final orelse 0o666), dev)) |e| {
-        cli.warn(ctx, "{f}: {s}", .{ cli.quote(name), sys.errnoText(e) });
-        return 1;
-    }
-    if (final) |m| Io.Dir.cwd().setFilePermissions(ctx.io, name, .fromMode(m), .{}) catch |e| {
-        cli.warn(ctx, "cannot set permissions of {f}: {s}", .{ cli.quoteA(name), cli.errText(e) });
-        return 1;
+    const env: mknod.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const failure = mknod.run(env, name, .{ .kind = node_kind, .dev = dev, .mode = final }) catch return 1;
+    if (failure) |fl| switch (fl) {
+        .create => |e| {
+            cli.warn(ctx, "{f}: {s}", .{ cli.quote(name), sys.errnoText(e) });
+            return 1;
+        },
+        .permissions => |e| {
+            cli.warn(ctx, "cannot set permissions of {f}: {s}", .{ cli.quoteA(name), cli.errText(e) });
+            return 1;
+        },
     };
     return 0;
 }

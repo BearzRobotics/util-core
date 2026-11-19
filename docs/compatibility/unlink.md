@@ -15,6 +15,14 @@ GNU coreutils 9.7 (`/usr/bin/unlink --version` on the development machine, insta
 
 - Removes exactly one name; a directory is refused with the system's `Is a directory`.
 
+## Library
+
+Module `util_core.unlink` (src/lib/unlink.zig); `src/commands/unlink.zig` is the argument parser and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Output, diagnostics and exit status follow GNU (decision 0005).
+
 ## Known deviations and gaps
 
 - None known.
