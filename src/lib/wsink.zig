@@ -12,6 +12,8 @@ const Io = std.Io;
 pub const Sink = struct {
     target: Target,
     failed: bool = false,
+    /// The destination file for `initFile` sinks (null for writer sinks).
+    file: ?Io.File = null,
     buf: [8192]u8 = undefined,
     len: usize = 0,
 
@@ -26,7 +28,7 @@ pub const Sink = struct {
 
     /// A sink that writes straight to `file` (output files of split/csplit).
     pub fn initFile(io: Io, file: Io.File) Sink {
-        return .{ .target = .{ .file = .{ .io = io, .file = file } } };
+        return .{ .target = .{ .file = .{ .io = io, .file = file } }, .file = file };
     }
 
     fn emit(o: *Sink, bytes: []const u8) bool {
