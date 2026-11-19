@@ -18,6 +18,14 @@ GNU coreutils 9.7 (`/usr/bin/mv --version` on the development machine, installed
 
 - `rename(2)` is tried first (RENAME_NOREPLACE); when the destination exists or the move crosses file systems the shared copy engine of cp copies the tree with attributes preserved and removes the source (`removed 'x'` is shown with -v).
 
+## Library
+
+Library: module `util_core.mv` (`src/lib/mv.zig`) over the shared copy engine `src/copy.zig`; the executable only parses arguments and words usage errors. The engine reports GNU-worded diagnostics as text events (it knows the control flow that selects the message); the wrapper routes them.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - `--exchange` is not implemented.

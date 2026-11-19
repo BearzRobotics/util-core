@@ -18,6 +18,14 @@ GNU coreutils 9.7 (`/usr/bin/truncate --version` on the development machine, ins
 
 - Files are created unless `-c`; extending leaves a sparse hole.
 
+## Library
+
+Library: module `util_core.truncate` (`src/lib/truncate.zig`); the executable only parses arguments and words the diagnostics.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - None known.

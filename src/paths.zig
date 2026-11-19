@@ -8,7 +8,6 @@
 //! levels (ELOOP, as the kernel does).
 
 const std = @import("std");
-const cli = @import("cli.zig");
 const Io = std.Io;
 
 pub const Mode = enum {
@@ -21,14 +20,15 @@ pub const Mode = enum {
 
 pub const Error = error{ NotFound, NotDir, Loop, OutOfMemory, NameTooLong };
 
-/// Absolute canonical form of `path` (caller frees).
-pub fn resolve(ctx: cli.Context, path: []const u8, mode: Mode) Error![]u8 {
+/// Absolute canonical form of `path` (caller frees). `ctx` is anything with
+/// `.io` and `.gpa` (a `cli.Context` or a `common.Env`).
+pub fn resolve(ctx: anytype, path: []const u8, mode: Mode) Error![]u8 {
     return resolveLogical(ctx, path, mode, false);
 }
 
 /// Like `resolve`; `dotdot_first` applies ".." before symlink expansion
 /// (realpath -L).
-pub fn resolveLogical(ctx: cli.Context, path: []const u8, mode: Mode, dotdot_first: bool) Error![]u8 {
+pub fn resolveLogical(ctx: anytype, path: []const u8, mode: Mode, dotdot_first: bool) Error![]u8 {
     _ = dotdot_first;
     const gpa = ctx.gpa;
     var result: std.ArrayList(u8) = .empty;

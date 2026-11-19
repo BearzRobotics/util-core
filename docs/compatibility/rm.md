@@ -23,6 +23,14 @@ GNU coreutils 9.7 (`/usr/bin/rm --version` on the development machine, installed
 - A directory whose contents could not all be removed (error or --one-file-system skip) is left in place without a further prompt; declined prompts do not block the parent's own prompt.
 - Exit status 0 when everything requested was removed (or missing with -f), 1 otherwise.
 
+## Library
+
+Library: module `util_core.rm` (`src/lib/rm.zig`); the executable only parses arguments and words the diagnostics.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - `--preserve-root=all` does not compare devices against the parent.

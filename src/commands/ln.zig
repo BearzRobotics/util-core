@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! ln — make links between files.
-//! Reference: GNU coreutils manual "ln invocation" (9.7); POSIX.1-2024 ln.
+//! ln: thin wrapper over `util_core.ln` (decision 0004). Parses arguments the
+//! way GNU ln does, decides what the destination is, asks the -i question and
+//! words the diagnostics; links are made by src/lib/ln.zig.
 //!
 //! Same-file detection compares inode numbers only (std.Io.File.Stat has no
 //! device number), so two files on different devices that share an inode
@@ -8,12 +9,12 @@
 
 const std = @import("std");
 const cli = @import("../cli.zig");
-const paths = @import("../paths.zig");
+const ln = @import("../lib/ln.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "backup", "directory", "force", "interactive", "logical", "no-dereference", "physical", "relative", "symbolic", "suffix", "target-directory", "no-target-directory", "verbose", "help", "version" };
 
-const Backup = enum { none, simple, numbered, existing };
+const Backup = ln.Backup;
 
 const Config = struct {
     symbolic: bool = false,
@@ -146,8 +147,6 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "missing file operand\nTry '{s} --help' for more information.", .{ctx.name});
         return 1;
     }
-    const cwd = Io.Dir.cwd();
-    var status: u8 = 0;
 
     var dest_dir: ?[]const u8 = null;
     var sources: []const []const u8 = files.items;
@@ -182,22 +181,61 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         }
     }
-    _ = cwd;
 
-    if (dest_dir) |d| {
-        for (sources) |src| {
-            const base = baseName(src);
-            const dest = if (std.mem.endsWith(u8, d, "/"))
-                std.fmt.allocPrint(ctx.gpa, "{s}{s}", .{ d, base }) catch return 1
+    const env: ln.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const options: ln.Options = .{
+        .symbolic = cfg.symbolic,
+        .force = cfg.force,
+        .interactive = cfg.interactive,
+        .logical = cfg.logical,
+        .relative = cfg.relative,
+        .verbose = cfg.verbose,
+        .backup = cfg.backup,
+        .suffix = cfg.suffix,
+    };
+    const target: ln.Target = if (dest_dir) |d| .{ .dir = d } else .{ .name = files.items[1] };
+    const srcs: []const []const u8 = if (dest_dir != null) sources else files.items[0..1];
+    const ok = ln.run(env, options, srcs, target, .{ .context = @constCast(&ctx), .func = report }, .{ .context = @constCast(&ctx), .func = confirm }) catch return 1;
+    return if (ok) 0 else 1;
+}
+
+/// Word one library event the way GNU ln does.
+fn report(context: ?*anyopaque, ev: ln.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    switch (ev) {
+        .linked => |l| {
+            var buf: [8192]u8 = undefined;
+            const arrow: []const u8 = if (l.symbolic) "->" else "=>";
+            const line = if (l.backup) |b|
+                std.fmt.bufPrint(&buf, "{f} ~ {f} {s} {f}\n", .{ cli.quoteA(b), cli.quoteA(l.dest), arrow, cli.quoteA(l.src) }) catch return
             else
-                std.fmt.allocPrint(ctx.gpa, "{s}/{s}", .{ d, base }) catch return 1;
-            defer ctx.gpa.free(dest);
-            if (!doLink(ctx, &cfg, src, dest)) status = 1;
-        }
-    } else {
-        if (!doLink(ctx, &cfg, files.items[0], files.items[1])) status = 1;
+                std.fmt.bufPrint(&buf, "{f} {s} {f}\n", .{ cli.quoteA(l.dest), arrow, cli.quoteA(l.src) }) catch return;
+            _ = cli.writeStdout(ctx.io, line);
+        },
+        .cannot_access => |f| cli.warn(ctx.*, "failed to access {f}: {s}", .{ cli.quoteA(f.path), cli.errText(f.err) }),
+        .directory_source => |p| cli.warn(ctx.*, "{f}: hard link not allowed for directory", .{cli.quote(p)}),
+        .exists => |f| cli.warn(ctx.*, "failed to create {s} {f}: File exists", .{ kindName(f.symbolic), cli.quoteA(f.dest) }),
+        .same_file => |f| cli.warn(ctx.*, "{f} and {f} are the same file", .{ cli.quoteA(f.src), cli.quoteA(f.dest) }),
+        .backup_failed => |f| cli.warn(ctx.*, "cannot backup {f}: {s}", .{ cli.quoteA(f.dest), cli.errText(f.err) }),
+        .remove_failed => |f| cli.warn(ctx.*, "cannot remove {f}: {s}", .{ cli.quoteA(f.dest), cli.errText(f.err) }),
+        .link_failed => |f| if (f.symbolic)
+            cli.warn(ctx.*, "failed to create {s} {f}: {s}", .{ kindName(true), cli.quoteA(f.dest), cli.errText(f.err) })
+        else
+            cli.warn(ctx.*, "failed to create {s} {f} => {f}: {s}", .{ kindName(false), cli.quoteA(f.dest), cli.quoteA(f.src), cli.errText(f.err) }),
     }
-    return status;
+}
+
+fn kindName(symbolic: bool) []const u8 {
+    return if (symbolic) "symbolic link" else "hard link";
+}
+
+/// The -i question: "ln: replace 'dest'? " on stderr, one chunk of stdin as the answer.
+fn confirm(context: ?*anyopaque, dest: []const u8) bool {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    var pbuf: [4200]u8 = undefined;
+    const prompt = std.fmt.bufPrint(&pbuf, "{s}: replace {f}? ", .{ ctx.name, cli.quoteA(dest) }) catch "";
+    Io.File.stderr().writeStreamingAll(ctx.io, prompt) catch {};
+    return answerYes(ctx.*);
 }
 
 fn parseBackup(s: []const u8) ?Backup {
@@ -215,155 +253,15 @@ fn parseBackup(s: []const u8) ?Backup {
     return found;
 }
 
-fn baseName(p: []const u8) []const u8 {
-    var end = p.len;
-    while (end > 1 and p[end - 1] == '/') end -= 1;
-    const s = p[0..end];
-    const idx = std.mem.lastIndexOfScalar(u8, s, '/') orelse return s;
-    return if (idx + 1 < s.len) s[idx + 1 ..] else s;
-}
-
 fn isDir(ctx: cli.Context, path: []const u8, follow: bool) bool {
     const st = Io.Dir.cwd().statFile(ctx.io, path, .{ .follow_symlinks = follow }) catch return false;
     return st.kind == .directory;
-}
-
-fn exists(ctx: cli.Context, path: []const u8) ?Io.File.Stat {
-    return Io.Dir.cwd().statFile(ctx.io, path, .{ .follow_symlinks = false }) catch null;
-}
-
-fn doLink(ctx: cli.Context, cfg: *const Config, src: []const u8, dest: []const u8) bool {
-    const cwd = Io.Dir.cwd();
-    const kind: []const u8 = if (cfg.symbolic) "symbolic link" else "hard link";
-
-    // Source checks for hard links.
-    var src_stat: ?Io.File.Stat = null;
-    if (!cfg.symbolic) {
-        const st = cwd.statFile(ctx.io, src, .{ .follow_symlinks = cfg.logical }) catch |e| {
-            cli.warn(ctx, "failed to access {f}: {s}", .{ cli.quoteA(src), cli.errText(e) });
-            return false;
-        };
-        if (st.kind == .directory) {
-            cli.warn(ctx, "{f}: hard link not allowed for directory", .{cli.quote(src)});
-            return false;
-        }
-        src_stat = st;
-    }
-
-    var made_backup: ?[]u8 = null;
-    defer if (made_backup) |b| ctx.gpa.free(b);
-    if (exists(ctx, dest)) |dst| {
-        if (!cfg.force and !cfg.interactive and cfg.backup == .none) {
-            cli.warn(ctx, "failed to create {s} {f}: File exists", .{ kind, cli.quoteA(dest) });
-            return false;
-        }
-        if (src_stat == null) {
-            // Symbolic links: the source need not exist, but if it does, a
-            // destination that is the same file is refused.
-            src_stat = cwd.statFile(ctx.io, src, .{ .follow_symlinks = cfg.logical }) catch null;
-        }
-        if (src_stat) |ss| {
-            if (ss.inode == dst.inode and cfg.backup == .none) {
-                cli.warn(ctx, "{f} and {f} are the same file", .{ cli.quoteA(src), cli.quoteA(dest) });
-                return false;
-            }
-        }
-        if (cfg.interactive) {
-            var pbuf: [4200]u8 = undefined;
-            const prompt = std.fmt.bufPrint(&pbuf, "{s}: replace {f}? ", .{ ctx.name, cli.quoteA(dest) }) catch "";
-            Io.File.stderr().writeStreamingAll(ctx.io, prompt) catch {};
-            if (!answerYes(ctx)) return false;
-        }
-        if (cfg.backup != .none) {
-            const bname = backupName(ctx, cfg, dest) orelse return false;
-            cwd.rename(dest, cwd, bname, ctx.io) catch |e| {
-                cli.warn(ctx, "cannot backup {f}: {s}", .{ cli.quoteA(dest), cli.errText(e) });
-                ctx.gpa.free(bname);
-                return false;
-            };
-            made_backup = bname;
-        } else {
-            if (src_stat) |ss| if (ss.inode == dst.inode) {
-                cli.warn(ctx, "{f} and {f} are the same file", .{ cli.quoteA(src), cli.quoteA(dest) });
-                return false;
-            };
-            cwd.deleteFile(ctx.io, dest) catch |e| {
-                cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(dest), cli.errText(e) });
-                return false;
-            };
-        }
-    }
-
-    if (cfg.symbolic) {
-        var target: []const u8 = src;
-        var rel: ?[]u8 = null;
-        defer if (rel) |r| ctx.gpa.free(r);
-        if (cfg.relative) {
-            rel = relativeSymlinkTarget(ctx, src, dest);
-            if (rel) |r| target = r;
-        }
-        cwd.symLink(ctx.io, target, dest, .{}) catch |e| {
-            cli.warn(ctx, "failed to create {s} {f}: {s}", .{ kind, cli.quoteA(dest), cli.errText(e) });
-            return false;
-        };
-        if (cfg.verbose) verbose(ctx, dest, target, "->", made_backup);
-    } else {
-        cwd.hardLink(src, cwd, dest, ctx.io, .{ .follow_symlinks = cfg.logical }) catch |e| {
-            cli.warn(ctx, "failed to create {s} {f} => {f}: {s}", .{ kind, cli.quoteA(dest), cli.quoteA(src), cli.errText(e) });
-            return false;
-        };
-        if (cfg.verbose) verbose(ctx, dest, src, "=>", made_backup);
-    }
-    return true;
-}
-
-fn verbose(ctx: cli.Context, dest: []const u8, src: []const u8, arrow: []const u8, backup: ?[]const u8) void {
-    var buf: [8192]u8 = undefined;
-    const line = if (backup) |b|
-        std.fmt.bufPrint(&buf, "{f} ~ {f} {s} {f}\n", .{ cli.quoteA(b), cli.quoteA(dest), arrow, cli.quoteA(src) }) catch return
-    else
-        std.fmt.bufPrint(&buf, "{f} {s} {f}\n", .{ cli.quoteA(dest), arrow, cli.quoteA(src) }) catch return;
-    _ = cli.writeStdout(ctx.io, line);
 }
 
 fn answerYes(ctx: cli.Context) bool {
     var b: [128]u8 = undefined;
     const n = cli.readChunk(ctx.io, Io.File.stdin(), &b) catch return false;
     return n > 0 and (b[0] == 'y' or b[0] == 'Y');
-}
-
-fn backupName(ctx: cli.Context, cfg: *const Config, dest: []const u8) ?[]u8 {
-    var kind = cfg.backup;
-    if (kind == .existing) {
-        // Numbered when a numbered backup of this file already exists.
-        var n: usize = 1;
-        kind = .simple;
-        while (n < 10) : (n += 1) {
-            const cand = std.fmt.allocPrint(ctx.gpa, "{s}.~{d}~", .{ dest, n }) catch return null;
-            defer ctx.gpa.free(cand);
-            if (exists(ctx, cand) != null) {
-                kind = .numbered;
-                break;
-            }
-        }
-    }
-    if (kind == .simple) return std.fmt.allocPrint(ctx.gpa, "{s}{s}", .{ dest, cfg.suffix }) catch null;
-    var n: usize = 1;
-    while (true) : (n += 1) {
-        const cand = std.fmt.allocPrint(ctx.gpa, "{s}.~{d}~", .{ dest, n }) catch return null;
-        if (exists(ctx, cand) == null) return cand;
-        ctx.gpa.free(cand);
-    }
-}
-
-/// Target of a relative symlink named `dest` pointing at `src`.
-fn relativeSymlinkTarget(ctx: cli.Context, src: []const u8, dest: []const u8) ?[]u8 {
-    const src_abs = paths.resolve(ctx, src, .missing) catch return null;
-    defer ctx.gpa.free(src_abs);
-    const dest_dir_part = if (std.mem.lastIndexOfScalar(u8, dest, '/')) |i| (if (i == 0) "/" else dest[0..i]) else ".";
-    const dir_abs = paths.resolve(ctx, dest_dir_part, .missing) catch return null;
-    defer ctx.gpa.free(dir_abs);
-    return paths.relativeTo(ctx.gpa, src_abs, dir_abs) catch null;
 }
 
 fn help(ctx: cli.Context) u8 {

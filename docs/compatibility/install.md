@@ -22,6 +22,14 @@ GNU coreutils 9.7 (`/usr/bin/install --version` on the development machine, inst
 - Files are copied with the shared engine (destination removed before opening, created `u+rw`) and then given the requested owner and mode; `install` runs with umask 0 so modes are exact.
 - `-d` creates missing parents with mode 0755 and the final directory with the requested mode.
 
+## Library
+
+Library: module `util_core.install` (`src/lib/install.zig`) over the shared copy engine `src/copy.zig`; the executable only parses arguments and words usage errors. The engine reports GNU-worded diagnostics as text events (it knows the control flow that selects the message); the wrapper routes them.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - Only the C locale; SELinux options are accepted and ignored.

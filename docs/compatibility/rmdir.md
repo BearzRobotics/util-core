@@ -18,6 +18,14 @@ GNU coreutils 9.7 (`/usr/bin/rmdir --version` on the development machine, instal
 - `rmdir -p a/b/c` removes c, b, a; `./a/b` also tries `.`, which the OS refuses (`Invalid argument`), exactly as GNU prints.
 - Trailing slashes are accepted. Failing parents are reported as `failed to remove directory 'X': ...`.
 
+## Library
+
+Library: module `util_core.rmdir` (`src/lib/rmdir.zig`); the executable only parses arguments and words the diagnostics.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - `rmdir .` is refused by our code before calling the OS (the standard library treats EINVAL from rmdir as a programmer bug and panics); the message matches GNU's.

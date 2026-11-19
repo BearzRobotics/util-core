@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! mv — move (rename) files.
-//!
-//! References, consulted 2026-11-07: GNU coreutils manual "mv invocation"
-//! (9.7), POSIX.1-2024 mv, and GNU coreutils 9.6 src/mv.c; the rename and
-//! cross-device copy logic is in src/copy.zig. `--exchange` is not
-//! implemented.
+//! mv: thin wrapper over `util_core.mv` (decision 0004). Parses arguments the
+//! way GNU mv does, decides what the destination is and words the usage
+//! diagnostics; moving is done by src/lib/mv.zig over the shared engine in
+//! src/copy.zig. `--exchange` is not implemented.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const sys = @import("../sys.zig");
 const copy = @import("../copy.zig");
-const backup = @import("../backup.zig");
+const backup_args = @import("../backup_args.zig");
+const mv = @import("../lib/mv.zig");
+const copy_cli = @import("../copy_cli.zig");
 const argmatch = @import("../argmatch.zig");
 const Io = std.Io;
 const E = std.os.linux.E;
@@ -30,101 +30,6 @@ pub fn main(ctx: cli.Context) u8 {
     const rc = run(ctx, &out);
     out.flush();
     return rc;
-}
-
-fn stripSlashes(s: []const u8) []const u8 {
-    var end = s.len;
-    while (end > 1 and s[end - 1] == '/') end -= 1;
-    return s[0..end];
-}
-
-fn lastComponent(path: []const u8) []const u8 {
-    // GNU last_component keeps trailing slashes (they are stripped later).
-    var i = path.len;
-    var trailing: usize = 0;
-    while (i > 0 and path[i - 1] == '/') {
-        i -= 1;
-        trailing += 1;
-    }
-    const start = if (std.mem.lastIndexOfScalar(u8, path[0..i], '/')) |s| s + 1 else 0;
-    return path[start..path.len];
-}
-
-/// rm -r on the source after an inter-device copy.
-fn removeTree(ctx: cli.Context, out: *cli.Out, path: []const u8, verbose: bool) bool {
-    var e: E = .SUCCESS;
-    const st = sys.fileStat(path, false, &e) orelse {
-        out.flush();
-        cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), sys.errnoText(e) });
-        return false;
-    };
-    var ok = true;
-    if (st.isDir()) {
-        var dir = Io.Dir.cwd().openDir(ctx.io, path, .{ .iterate = true }) catch |err| {
-            out.flush();
-            cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), cli.errText(err) });
-            return false;
-        };
-        var names: std.ArrayList([]u8) = .empty;
-        defer {
-            for (names.items) |n| ctx.gpa.free(n);
-            names.deinit(ctx.gpa);
-        }
-        var it = dir.iterate();
-        while (it.next(ctx.io) catch null) |entry| {
-            const dup = ctx.gpa.dupe(u8, entry.name) catch break;
-            names.append(ctx.gpa, dup) catch {
-                ctx.gpa.free(dup);
-                break;
-            };
-        }
-        dir.close(ctx.io);
-        for (names.items) |n| {
-            const child = copy.joinName(ctx.gpa, path, n) catch continue;
-            defer ctx.gpa.free(child);
-            if (!removeTree(ctx, out, child, verbose)) ok = false;
-        }
-        if (ok) {
-            if (sys.unlinkPath(path, true)) |ue| {
-                out.flush();
-                cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), sys.errnoText(ue) });
-                return false;
-            }
-            if (verbose) {
-                var b: [8200]u8 = undefined;
-                out.write(std.fmt.bufPrint(&b, "removed directory {f}\n", .{cli.quoteA(path)}) catch "");
-            }
-        }
-        return ok;
-    }
-    if (sys.unlinkPath(path, false)) |ue| {
-        out.flush();
-        cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), sys.errnoText(ue) });
-        return false;
-    }
-    if (verbose) {
-        var b: [8200]u8 = undefined;
-        out.write(std.fmt.bufPrint(&b, "removed {f}\n", .{cli.quoteA(path)}) catch "");
-    }
-    return true;
-}
-
-fn doMove(ctx: cli.Context, c: *copy.Copier, out: *cli.Out, source: []const u8, dest: []const u8) bool {
-    var into_self = false;
-    var rs: ?bool = false;
-    var ok = c.copy(source, dest, 0, &into_self, &rs);
-    if (ok) {
-        var remove = false;
-        if (into_self) {
-            ok = false;
-        } else if (rs.?) {
-            // renamed, or the user declined
-        } else remove = true;
-        if (remove) {
-            if (!removeTree(ctx, out, source, c.x.verbose)) ok = false;
-        }
-    }
-    return ok;
 }
 
 fn run(ctx: cli.Context, out: *cli.Out) u8 {
@@ -246,7 +151,7 @@ fn run(ctx: cli.Context, out: *cli.Out) u8 {
     } else {
         const last = operands[n_files - 1];
         if (n_files == 2) {
-            x.rename_errno = if (sys.renamePath(operands[0], last, sys.RENAME_NOREPLACE)) |re| @intFromEnum(re) else 0;
+            x.rename_errno = mv.probeRename(operands[0], last);
         }
         if (x.rename_errno != 0) {
             const st = sys.fileStat(last, true, &e);
@@ -271,29 +176,22 @@ fn run(ctx: cli.Context, out: *cli.Out) u8 {
         cli.warn(ctx, "cannot combine --backup with --exchange, -n, or --update=none-fail", .{});
         return usageFail(ctx);
     }
-    x.backup_type = if (make_backups) (backup.parseVersion(ctx, "backup type", version_control) orelse return 1) else .none;
-    backup.setSimpleSuffix(ctx, backup_suffix);
+    x.backup_type = if (make_backups) (backup_args.parseVersion(ctx, "backup type", version_control) orelse return 1) else .none;
+    x.backup_suffix = backup_args.simpleSuffix(ctx, backup_suffix);
+    x.umask = sys.currentUmask();
 
-    var c = copy.Copier.init(ctx, out, x);
-    defer c.deinit();
-    var ok = true;
-    if (target_directory) |td| {
-        if (n_files >= 2) c.x.track_dest = true;
-        for (operands[0..n_files], 0..) |src_in, i| {
-            c.x.last_file = i + 1 == n_files;
-            const source = if (remove_trailing_slashes) stripSlashes(src_in) else src_in;
-            const base = lastComponent(source);
-            const joined = copy.joinName(ctx.gpa, td, base) catch return 1;
-            defer ctx.gpa.free(joined);
-            const dest = stripSlashes(joined);
-            if (!doMove(ctx, &c, out, source, dest)) ok = false;
-        }
-    } else {
-        c.x.last_file = true;
-        const s0 = if (remove_trailing_slashes) stripSlashes(operands[0]) else operands[0];
-        const s1 = if (remove_trailing_slashes) stripSlashes(operands[1]) else operands[1];
-        ok = doMove(ctx, &c, out, s0, s1);
-    }
+    var routing: copy_cli.Routing = .{ .ctx = ctx, .out = out };
+    const env: mv.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const ok = if (target_directory) |td|
+        mv.run(env, x, operands[0..n_files], .{
+            .destination = .{ .directory = td },
+            .strip_trailing_slashes = remove_trailing_slashes,
+        }, routing.sink()) catch return 1
+    else
+        mv.run(env, x, operands[0..2], .{
+            .destination = .file,
+            .strip_trailing_slashes = remove_trailing_slashes,
+        }, routing.sink()) catch return 1;
     operands = &.{};
     return if (ok) 0 else 1;
 }
