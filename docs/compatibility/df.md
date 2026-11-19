@@ -6,6 +6,10 @@ Status: implemented with the gaps listed below; differential tests pass against 
 
 GNU coreutils 9.7 (`/usr/bin/df --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "df invocation" (`info '(coreutils) df invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/df-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), df, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/df.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_df.sh`). Where POSIX and GNU differ, the text below says which one we follow.
 
+## Library
+
+Module `util_core.df` (`src/lib/df.zig`); the executable `src/commands/df.zig` is a thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
 ## Supported options
 
 - `-a, --all`: Include pseudo, duplicate and inaccessible file systems.
@@ -25,6 +29,12 @@ GNU coreutils 9.7 (`/usr/bin/df --version` on the development machine, installed
 - The mount table comes from /proc/self/mountinfo and is filtered like GNU: duplicate devices are dropped in favour of the entry with a real device name or the shortest mount point, dummy file systems are hidden without -a (the dummy list is that of coreutils 9.7: autofs, devtmpfs, fuse.portal, proc, squashfs, subfs, debugfs, devpts, fusectl, mqueue, rpc_pipefs, sysfs, devfs, kernfs, ignore, none).
 - With FILE operands the file system holding each file (or the device named) is found as GNU does, including `over-mounted by another device` and the fallback that walks up to the mount point.
 - Column widths, the `1K-blocks` / `1024-blocks` / `Size` headers, the rounded-up percentage arithmetic and the negative values for over-committed file systems follow df.c.
+
+## Extensions
+
+Per decision 0005 every departure from GNU is listed here.
+
+- `--json`: a JSON array of file system entries (bytes and plain counts). A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_df_json.sh` (which also checks the GNU path through `test/test_df.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 
