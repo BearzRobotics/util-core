@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! dirname — strip the last path component. Reference: GNU coreutils
-//! dirname(1), POSIX dirname. Only '/' is a separator (see basename.zig).
+//! dirname: thin wrapper over `util_core.dirname` (decision 0004).
 
 const std = @import("std");
+const Io = std.Io;
 const cli = @import("../cli.zig");
+const lib = @import("../lib/dirname.zig");
 
 pub fn main(ctx: cli.Context) u8 {
     const args = ctx.args;
@@ -37,40 +38,12 @@ pub fn main(ctx: cli.Context) u8 {
         return 1;
     }
 
-    var out = cli.Out.init(ctx.io);
-    for (names) |n| {
-        out.write(dirName(n));
-        out.writeByte(terminator);
-    }
-    out.flush();
-    return if (out.failed) 1 else 0;
-}
-
-/// POSIX dirname. The result borrows from `path` (or is a static literal).
-pub fn dirName(path: []const u8) []const u8 {
-    if (path.len == 0) return ".";
-    var end = path.len;
-    while (end > 1 and path[end - 1] == '/') end -= 1; // trailing slashes
-    if (end == 1 and path[0] == '/') return "/";
-    // Drop the last component.
-    while (end > 0 and path[end - 1] != '/') end -= 1;
-    if (end == 0) return ".";
-    // Drop the slashes that separated it from the parent.
-    while (end > 1 and path[end - 1] == '/') end -= 1;
-    return path[0..end];
-}
-
-test "dirName" {
-    const t = std.testing;
-    try t.expectEqualStrings("/usr/bin", dirName("/usr/bin/echo"));
-    try t.expectEqualStrings("/usr", dirName("/usr/bin/"));
-    try t.expectEqualStrings(".", dirName("echo"));
-    try t.expectEqualStrings(".", dirName(""));
-    try t.expectEqualStrings("/", dirName("/"));
-    try t.expectEqualStrings("/", dirName("///"));
-    try t.expectEqualStrings("/", dirName("/a"));
-    try t.expectEqualStrings("a", dirName("a//b"));
-    try t.expectEqualStrings("a", dirName("a/b/"));
-    try t.expectEqualStrings(".", dirName("a/"));
-    try t.expectEqualStrings("..", dirName("../x"));
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    lib.run(env, .{ .terminator = terminator }, names, &stdout.interface) catch {
+        cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+        return 1;
+    };
+    return if (cli.flushWriter(&stdout)) 0 else 1;
 }

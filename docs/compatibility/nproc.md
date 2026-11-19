@@ -16,6 +16,14 @@ GNU coreutils 9.7 (`/usr/bin/nproc --version` on the development machine, instal
 
 - The default counts the CPUs the process may run on (`sched_getaffinity`), limited by `OMP_NUM_THREADS` (first comma-separated item) and `OMP_THREAD_LIMIT`, as GNU does.
 
+## Library
+
+Module `util_core.nproc` (`src/lib/nproc.zig`); `src/commands/nproc.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - `--all` counts directories under /sys/devices/system/cpu; GNU asks the C library for the configured processors, which gives the same answer on Linux.

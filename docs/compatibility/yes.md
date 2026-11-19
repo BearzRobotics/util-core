@@ -12,6 +12,14 @@ GNU coreutils 9.7 (`/usr/bin/yes --version` on the development machine, installe
 - `--version`: Print version and exit 0.
 - `--`: End option processing.
 
+## Library
+
+Module `util_core.yes` (`src/lib/yes.zig`); `src/commands/yes.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Any other argument starting with - is rejected as an invalid option (matches the system yes here; GNU yes treats only --help/--version specially, so this may differ from GNU).

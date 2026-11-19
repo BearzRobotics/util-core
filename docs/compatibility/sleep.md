@@ -16,6 +16,14 @@ GNU coreutils 9.7 (`/usr/bin/sleep --version` on the development machine, instal
 - NUMBER may be fractional, in exponent form, hexadecimal, or `inf`.
 - Negative values, NaN and empty or malformed operands are rejected with `invalid time interval`.
 
+## Library
+
+Module `util_core.sleep` (`src/lib/sleep.zig`); `src/commands/sleep.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - POSIX allows exit status 0 on SIGALRM; no special SIGALRM handling here (the default action terminates the process).

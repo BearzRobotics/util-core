@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! users — print the login names of the users currently logged in.
-//! Reference: GNU coreutils manual "users invocation" (9.7). Reads Linux
-//! utmp records (384 bytes; type 7 is a user process).
+//! users: thin wrapper over `util_core.users` (decision 0004).
 
 const std = @import("std");
-const cli = @import("../cli.zig");
 const Io = std.Io;
-
-const record_size = 384;
-const user_process = 7;
+const cli = @import("../cli.zig");
+const lib = @import("../lib/users.zig");
 
 pub fn main(ctx: cli.Context) u8 {
     var file_arg: ?[]const u8 = null;
@@ -40,44 +36,20 @@ pub fn main(ctx: cli.Context) u8 {
         cli.invalidShort(ctx, a[1]);
         return 1;
     }
-    const path = file_arg orelse "/var/run/utmp";
-    // GNU 9.7 (built with systemd) falls back to logind sessions when the
-    // utmp file cannot be read and then prints nothing for a bad file name;
-    // logind's session files are private data, so we just print nothing.
-    const f = Io.Dir.cwd().openFile(ctx.io, path, .{}) catch return 0;
-    defer f.close(ctx.io);
-    var data: std.ArrayList(u8) = .empty;
-    defer data.deinit(ctx.gpa);
-    while (true) {
-        data.ensureUnusedCapacity(ctx.gpa, 64 * 1024) catch return 1;
-        const n = cli.readChunk(ctx.io, f, data.unusedCapacitySlice()) catch return 0;
-        if (n == 0) break;
-        data.items.len += n;
-    }
-    var names: std.ArrayList([]const u8) = .empty;
-    defer names.deinit(ctx.gpa);
-    var off: usize = 0;
-    while (off + record_size <= data.items.len) : (off += record_size) {
-        const rec = data.items[off..][0..record_size];
-        const kind = std.mem.readInt(i16, rec[0..2], .little);
-        if (kind != user_process) continue;
-        const user = std.mem.sliceTo(rec[44..76], 0);
-        if (user.len == 0) continue;
-        names.append(ctx.gpa, user) catch return 1;
-    }
-    std.mem.sort([]const u8, names.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.order(u8, a, b) == .lt;
-        }
-    }.lt);
-    var out = cli.Out.init(ctx.io);
-    for (names.items, 0..) |n, i| {
-        if (i > 0) out.writeByte(' ');
-        out.write(n);
-    }
-    if (names.items.len > 0) out.writeByte('\n');
-    out.flush();
-    return if (out.failed) 1 else 0;
+    var opts: lib.Options = .{};
+    if (file_arg) |p| opts.path = p;
+
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    lib.run(env, opts, &stdout.interface) catch |e| switch (e) {
+        error.OutOfMemory => return 1,
+        error.WriteFailed => {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            return 1;
+        },
+    };
+    return if (cli.flushWriter(&stdout)) 0 else 1;
 }
 
 fn help(ctx: cli.Context) u8 {

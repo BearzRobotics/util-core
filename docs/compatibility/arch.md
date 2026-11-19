@@ -15,6 +15,14 @@ GNU coreutils 9.7 (`/usr/bin/arch --version` on the development machine, install
 
 - Same as `uname -m`.
 
+## Library
+
+Module `util_core.arch` (`src/lib/arch.zig`); `src/commands/arch.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - None known.

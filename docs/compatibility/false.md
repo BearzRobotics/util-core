@@ -11,6 +11,14 @@ GNU coreutils 9.7 (`/usr/bin/false --version` on the development machine, instal
 - `--help`: Print usage to standard output and exit 1. Sole argument only.
 - `--version`: Print version to standard output and exit 1. Sole argument only.
 
+## Library
+
+Module `util_core.false` (`src/lib/false.zig`); `src/commands/false.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Exiting 1 for --help/--version matches the system `false` here; not checked against the GNU source.

@@ -17,6 +17,14 @@ GNU coreutils 9.7 (`/usr/bin/sync --version` on the development machine, install
 - With no FILE, sync(2); with FILEs, fsync each (or fdatasync/syncfs).
 - `--data` needs at least one FILE and cannot be combined with `--file-system`.
 
+## Library
+
+Module `util_core.sync` (`src/lib/sync.zig`); `src/commands/sync.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - `--help` omits the "GNU coreutils online help" footer.

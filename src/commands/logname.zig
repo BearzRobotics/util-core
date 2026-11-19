@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! logname — print the user's login name.
-//! Reference: GNU coreutils manual "logname invocation" (9.7); POSIX.1-2024
-//! logname. glibc's getlogin() first consults /proc/self/loginuid; the utmp
-//! fallback is not implemented, so a session known only to utmp reports
-//! "no login name".
+//! logname: thin wrapper over `util_core.logname` (decision 0004).
 
 const std = @import("std");
-const cli = @import("../cli.zig");
-const userdb = @import("../userdb.zig");
 const Io = std.Io;
+const cli = @import("../cli.zig");
+const lib = @import("../lib/logname.zig");
 
 pub fn main(ctx: cli.Context) u8 {
     for (ctx.args) |a_z| {
@@ -33,27 +29,18 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "extra operand '{s}'\nTry '{s} --help' for more information.", .{ a, ctx.name });
         return 1;
     }
-    const name = loginName(ctx) orelse {
-        cli.warn(ctx, "no login name", .{});
+    var buf: [512]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const res = lib.run(env, .{}, &stdout.interface) catch {
+        cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
         return 1;
     };
-    defer ctx.gpa.free(name);
-    var buf: [512]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{s}\n", .{name}) catch return 1;
-    return if (cli.writeStdout(ctx.io, line)) 0 else 1;
-}
-
-fn loginName(ctx: cli.Context) ?[]u8 {
-    const f = Io.Dir.cwd().openFile(ctx.io, "/proc/self/loginuid", .{}) catch return null;
-    defer f.close(ctx.io);
-    var buf: [32]u8 = undefined;
-    const n = cli.readChunk(ctx.io, f, &buf) catch return null;
-    const uid = std.fmt.parseInt(u32, std.mem.trim(u8, buf[0..n], " \n\x00"), 10) catch return null;
-    if (uid == std.math.maxInt(u32)) return null; // (uid_t)-1: no login session
-    var db = userdb.Db.load(ctx.gpa, ctx.io);
-    defer db.deinit();
-    const u = db.userByUid(uid) orelse return null;
-    return ctx.gpa.dupe(u8, u.name) catch null;
+    if (res == .no_login_name) {
+        cli.warn(ctx, "no login name", .{});
+        return 1;
+    }
+    return if (cli.flushWriter(&stdout)) 0 else 1;
 }
 
 fn help(ctx: cli.Context) u8 {

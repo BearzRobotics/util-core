@@ -13,6 +13,14 @@ GNU coreutils 9.7 (`/usr/bin/echo --version` on the development machine, install
 - `-E`: Do not interpret escapes (default). Last of -e/-E wins.
 - `--help, --version`: Recognised only as the sole argument.
 
+## Library
+
+Module `util_core.echo` (`src/lib/echo.zig`); `src/commands/echo.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - POSIXLY_CORRECT / XSI behaviour (where echo interprets escapes by default) is not implemented.

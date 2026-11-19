@@ -17,6 +17,14 @@ GNU coreutils 9.7 (`/usr/bin/pwd --version` on the development machine, installe
 - -L, -P (last one wins), --logical, --physical, abbreviated long options, --help, --version.
 - $PWD validated by resolving it with realpath and comparing with the physical cwd.
 
+## Library
+
+Module `util_core.pwd` (`src/lib/pwd.zig`); `src/commands/pwd.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Default is -P as in the GNU manual; POSIX.1-2024 says the default is -L. With POSIXLY_CORRECT set we default to -L.

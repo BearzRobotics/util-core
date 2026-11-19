@@ -11,6 +11,14 @@ GNU coreutils 9.7 (`/usr/bin/true --version` on the development machine, install
 - `--help`: Print usage to standard output and exit 0. Only recognised as the sole argument.
 - `--version`: Print version to standard output and exit 0. Only recognised as the sole argument.
 
+## Library
+
+Module `util_core.true` (`src/lib/true.zig`); `src/commands/true.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - --help text is abbreviated compared with GNU's.

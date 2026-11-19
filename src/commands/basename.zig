@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! basename — strip directory and suffix. Reference: GNU coreutils basename(1),
-//! POSIX basename.
-//!
-//! Only '/' is treated as a separator (also on Windows; backslash handling is
-//! not yet specified for this command).
+//! basename: thin wrapper over `util_core.basename` (decision 0004). Parses
+//! arguments the way GNU basename does; the stripping is in
+//! src/lib/basename.zig.
 
 const std = @import("std");
+const Io = std.Io;
 const cli = @import("../cli.zig");
+const lib = @import("../lib/basename.zig");
 
 pub fn main(ctx: cli.Context) u8 {
     const args = ctx.args;
@@ -85,30 +85,14 @@ pub fn main(ctx: cli.Context) u8 {
         }
     }
 
-    var out = cli.Out.init(ctx.io);
-    for (names) |n| {
-        out.write(baseName(n, suffix));
-        out.writeByte(terminator);
-    }
-    out.flush();
-    return if (out.failed) 1 else 0;
-}
-
-/// POSIX/GNU basename of `path` with an optional suffix removed. The result
-/// borrows from `path`. A suffix equal to the whole name is not removed.
-pub fn baseName(path: []const u8, suffix: ?[]const u8) []const u8 {
-    if (path.len == 0) return path;
-    var end = path.len;
-    while (end > 1 and path[end - 1] == '/') end -= 1;
-    if (end == 1 and path[0] == '/') return path[0..1]; // all slashes -> "/"
-    const start = if (std.mem.lastIndexOfScalar(u8, path[0..end], '/')) |s| s + 1 else 0;
-    var name = path[start..end];
-    if (suffix) |suf| {
-        if (suf.len > 0 and suf.len < name.len and std.mem.endsWith(u8, name, suf)) {
-            name = name[0 .. name.len - suf.len];
-        }
-    }
-    return name;
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    lib.run(env, .{ .suffix = suffix, .terminator = terminator }, names, &stdout.interface) catch {
+        cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+        return 1;
+    };
+    return if (cli.flushWriter(&stdout)) 0 else 1;
 }
 
 fn oom(ctx: cli.Context) u8 {
@@ -124,17 +108,4 @@ fn missingArg(ctx: cli.Context, opt: []const u8) u8 {
 fn badOption(ctx: cli.Context, opt: []const u8) u8 {
     cli.warn(ctx, "invalid option -- '{s}'\nTry '{s} --help' for more information.", .{ opt, ctx.name });
     return 1;
-}
-
-test "baseName" {
-    const t = std.testing;
-    try t.expectEqualStrings("echo", baseName("/usr/bin/echo", null));
-    try t.expectEqualStrings("bin", baseName("/usr/bin/", null));
-    try t.expectEqualStrings("/", baseName("///", null));
-    try t.expectEqualStrings("", baseName("", null));
-    try t.expectEqualStrings(".", baseName(".", null));
-    try t.expectEqualStrings("script", baseName("script.sh", ".sh"));
-    try t.expectEqualStrings(".sh", baseName(".sh", ".sh")); // whole name kept
-    try t.expectEqualStrings("script.sh", baseName("script.sh", ".py"));
-    try t.expectEqualStrings("archive", baseName("a/archive.tar.gz", ".tar.gz"));
 }

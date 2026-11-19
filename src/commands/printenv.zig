@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! printenv — print environment variables.
-//! Reference: GNU coreutils manual "printenv invocation" (9.7). POSIX does not
-//! specify printenv.
-//!
-//! No operands: print every NAME=value. With operands: print the value of each
-//! variable that is set (a name containing '=' is never found). Exit status:
-//! 0 all found, 1 some not found, 2 usage or write error (as the GNU manual).
+//! printenv: thin wrapper over `util_core.printenv` (decision 0004).
+//! Exit status: 0 all found, 1 some not found, 2 usage or write error (as the
+//! GNU manual).
 
 const std = @import("std");
+const Io = std.Io;
 const cli = @import("../cli.zig");
-const json = @import("../json.zig");
+const lib = @import("../lib/printenv.zig");
 
 const long_names = [_][]const u8{ "null", "help", "version", "json" };
 
@@ -56,58 +53,14 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "--json cannot be combined with -0", .{});
         return 2;
     }
-    const env = ctx.environ orelse return if (names.len == 0) 0 else 1;
 
-    var out = cli.Out.init(ctx.io);
-    var status: u8 = 0;
-    if (as_json) {
-        // One object of NAME: value; a requested name that is not set is
-        // left out and makes the status 1, as in the text form.
-        var aw: std.Io.Writer.Allocating = .init(ctx.gpa);
-        defer aw.deinit();
-        const w = &aw.writer;
-        var first = true;
-        w.writeByte('{') catch return 2;
-        if (names.len == 0) {
-            var it = env.iterator();
-            while (it.next()) |e| {
-                if (!first) w.writeByte(',') catch return 2;
-                first = false;
-                json.writeString(w, e.key_ptr.*) catch return 2;
-                w.writeByte(':') catch return 2;
-                json.writeString(w, e.value_ptr.*) catch return 2;
-            }
-        } else for (names) |n| {
-            const v = if (std.mem.indexOfScalar(u8, n, '=') == null) env.get(n) else null;
-            if (v) |value| {
-                if (!first) w.writeByte(',') catch return 2;
-                first = false;
-                json.writeString(w, n) catch return 2;
-                w.writeByte(':') catch return 2;
-                json.writeString(w, value) catch return 2;
-            } else status = 1;
-        }
-        w.writeAll("}\n") catch return 2;
-        out.write(aw.written());
-        out.flush();
-        return if (out.failed) 2 else status;
-    }
-    if (names.len == 0) {
-        var it = env.iterator();
-        while (it.next()) |e| {
-            out.write(e.key_ptr.*);
-            out.writeByte('=');
-            out.write(e.value_ptr.*);
-            out.writeByte(term);
-        }
-    } else for (names) |n| {
-        if (std.mem.indexOfScalar(u8, n, '=') == null) if (env.get(n)) |v| {
-            out.write(v);
-            out.writeByte(term);
-            continue;
-        };
-        status = 1;
-    }
-    out.flush();
-    return if (out.failed) 2 else status;
+    var buf: [8192]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const env: lib.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const res = lib.run(env, .{ .terminator = term, .json = as_json }, names, &stdout.interface) catch {
+        cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+        return 2;
+    };
+    if (!cli.flushWriter(&stdout)) return 2;
+    return if (res.missing > 0) 1 else 0;
 }

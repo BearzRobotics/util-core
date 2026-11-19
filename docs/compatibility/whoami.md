@@ -15,6 +15,14 @@ GNU coreutils 9.7 (`/usr/bin/whoami --version` on the development machine, insta
 
 - Looks up the effective user ID in /etc/passwd; reports `cannot find name for user ID N` when absent.
 
+## Library
+
+Module `util_core.whoami` (`src/lib/whoami.zig`); `src/commands/whoami.zig` is the argument parser and diagnostic wording only (decision 0004).
+
+## Extensions
+
+None.
+
 ## Known deviations and gaps
 
 - Only /etc/passwd is consulted (no NSS), so users known only to LDAP or similar are not found.
