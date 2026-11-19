@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU factor 9.7 in the C locale. Date: 2026-11-07
 
+Library: `util_core.factor` (src/lib/factor.zig); the command is a thin wrapper (decision 0004).
+
 ## Reference
 
 GNU coreutils 9.7 (`/usr/bin/factor --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "factor invocation" (`info '(coreutils) factor invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/factor-invocation.html). POSIX does not specify this utility. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_factor.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -21,6 +23,10 @@ GNU coreutils 9.7 (`/usr/bin/factor --version` on the development machine, insta
 
 - **Hard numbers:** GNU also uses elliptic-curve factoring; this implementation does not. A number whose smallest unresolved factors are both large (for example two primes of 57 bits needs about 10 seconds; two of 64 bits or 2^128+1 is out of reach) is reported on standard error as `too hard to factor` after 2^29 rho steps, exit status 1, instead of being factored. Numbers beyond 128 bits whose remaining part is composite are limited to a few thousand big-integer rho steps.
 - `--version` prints `factor (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
+
+## Extensions
+
+None. Numbers above 2^128-1 are accepted as GNU (with GMP) does; the "too hard to factor" give-up is a deviation, see above.
 
 ## Tests
 

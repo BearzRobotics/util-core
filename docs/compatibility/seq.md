@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU seq 9.7. Date: 2026-11-04
 
+Library: `util_core.seq` (src/lib/seq.zig); the command is a thin wrapper (decision 0004).
+
 ## Reference
 
 GNU coreutils 9.7 (`/usr/bin/seq --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-04: the GNU manual node "seq invocation" (`info '(coreutils) seq invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/seq-invocation.html). POSIX does not specify `seq`. Behaviour was also checked by differential tests against the GNU binary (`sh test/test_seq.sh`).
@@ -27,6 +29,10 @@ GNU coreutils 9.7 (`/usr/bin/seq --version` on the development machine, installe
 - %a / %A in a format are rejected; locale decimal points and thousands separators are not supported (C locale only).
 - An option that follows a number-like operand is still parsed as an option (GNU stops option parsing at the first negative-number operand).
 - `--help` text is shorter than GNU's; ASCII quotes in diagnostics.
+
+## Extensions
+
+None. The decimal path computes exactly with scaled integers instead of long double; output matches GNU for the cases checked.
 
 ## Tests
 

@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU expr 9.7 in the C locale. Date: 2026-11-07
 
+Library: `util_core.expr` (src/lib/expr.zig); the command is a thin wrapper (decision 0004).
+
 ## Reference
 
 GNU coreutils 9.7 (`/usr/bin/expr --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "expr invocation" (`info '(coreutils) expr invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/expr-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), expr, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/expr.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_expr.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -28,6 +30,10 @@ GNU coreutils 9.7 (`/usr/bin/expr --version` on the development machine, install
 - Regex errors are classified into glibc's common messages (unmatched parenthesis, bracket, brace; trailing backslash); other bad patterns say `Invalid regular expression`.
 - Alternation and `*` backtracking follow the regex package (leftmost-first), not POSIX leftmost-longest, for BRE extensions such as `\\|`.
 - Locale is C only: lengths and indexes count bytes.
+
+## Extensions
+
+None.
 
 ## Tests
 
