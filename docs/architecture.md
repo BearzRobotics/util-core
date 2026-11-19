@@ -13,7 +13,7 @@ with every structural change.
   and the segfault handler (`std_options`/`panic` in exe.zig and multicall.zig),
   worth about 3 KB per binary. Stripped `true` is 233 KB in ReleaseFast and
   149 KB in ReleaseSmall (GNU's dynamically linked 35 KB excludes libc); the
-  multicall `main` holds all commands in 513 KB (ReleaseSmall).
+  multicall `util-core` holds all commands in 513 KB (ReleaseSmall).
 - Build: release modes strip command executables by default (`-Dstrip=false`
   keeps debug info); Debug builds are never stripped by default.
 - Commands implemented: 99, the full coreutils list minus the unix-only

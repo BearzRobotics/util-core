@@ -2,7 +2,7 @@
 //! Multicall entry point. Dispatch order (SPEC.md §7):
 //!   1. basename of argv[0] names an enabled command  -> run it;
 //!   2. otherwise argv[0] is the multicall binary itself and argv[1] is the
-//!      command name: `main <command> [args...]`.
+//!      command name: `util-core <command> [args...]`.
 //! Unknown commands exit 127 (matching shell "command not found"); a bare
 //! invocation or `--help` lists the enabled commands.
 
@@ -68,9 +68,9 @@ fn list(ctx: cli.Context) u8 {
 }
 
 fn usage(ctx: cli.Context, explicit: bool) u8 {
-    const text = "Usage: main <command> [arguments...]\n" ++
+    const text = "Usage: util-core <command> [arguments...]\n" ++
         "   or: <command> [arguments...]  (when invoked through a link named after a command)\n\n" ++
-        "Use 'main --list' to list the available commands.\n";
+        "Use 'util-core --list' to list the available commands.\n";
     if (explicit) return if (cli.writeStdout(ctx.io, text)) 0 else 1;
     std.Io.File.stderr().writeStreamingAll(ctx.io, text) catch {};
     return 2;

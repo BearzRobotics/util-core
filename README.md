@@ -2,12 +2,14 @@
 
 Core utilities in Zig (`ls`, `cat`, `cp`, `sort`, `date`, `find`, `sed`, ...),
 as a **library** (`util_core`) plus thin command-line wrappers, and a
-multicall binary, `main` (`main ls ...`, or invoked through a link named after
-a command; `main --list` lists the commands). Spec and rules: `ai/`; design
+multicall binary, `util-core` (`util-core ls ...`, or invoked through a link
+named after a command; `util-core --list` lists the commands). Spec and rules: `ai/`; design
 decisions and compatibility records: `docs/`.
 
 ```
-zig build              # one binary per command in zig-out/bin, plus main (multicall)
+zig build                      # everything: one binary per command, plus util-core (multicall)
+zig build -Dmode=standalone    # only the one-binary-per-command executables
+zig build -Dmode=multicall     # only the util-core multicall binary
 zig build test         # unit tests
 ```
 
