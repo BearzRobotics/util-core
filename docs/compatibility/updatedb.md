@@ -2,6 +2,8 @@
 
 Status: implemented; databases are byte-identical to GNU updatedb 4.10.0 in the tests (C locale). Date: 2026-11-07
 
+Library: `util_core.updatedb` (`src/lib/updatedb.zig`); `src/commands/updatedb.zig` is the thin wrapper (decision 0004).
+
 ## Reference
 
 GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from the findutils-4.10.0 source tarball by `tools/build-gnu-findutils.sh` into `~/.cache/util-core/findutils`; the suites skip if that is absent. Behaviour was checked against the GNU binaries run with LC_ALL=C. Where POSIX and GNU differ, the text below says which one we follow.
@@ -19,6 +21,10 @@ GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from t
 
 - Walks the tree, sorts the names bytewise, front-codes them and writes the database to FILE.n then renames it. Environment overrides: FINDOPTIONS, SEARCHPATHS, NETPATHS, PRUNEPATHS, PRUNEFS, LOCATE_DB.
 - A failing walk still produces a header-only database and exit status 0, as the GNU shell script does.
+
+## Extensions
+
+None. The executable follows the GNU updatedb script. The library (`util_core.updatedb`) adds `buildDatabase`, which returns the front-coded database bytes without writing the output file, and reports the script's messages as Observer events.
 
 ## Known deviations and gaps
 
