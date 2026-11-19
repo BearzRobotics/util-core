@@ -6,6 +6,10 @@ Status: implemented with the gaps listed below; differential tests pass against 
 
 GNU coreutils 9.7 (`/usr/bin/ls --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "ls invocation" (`info '(coreutils) ls invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/ls-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), ls, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/ls.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_ls.sh`). Where POSIX and GNU differ, the text below says which one we follow.
 
+## Library
+
+Module `util_core.ls` (`src/lib/ls.zig`); the executable `src/commands/ls.zig` is a thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
 ## Supported options
 
 - `-a, --all`: Do not ignore entries starting with `.`.
@@ -47,6 +51,12 @@ GNU coreutils 9.7 (`/usr/bin/ls --version` on the development machine, installed
 - Exit status is 0, 1 for minor problems (for example an unreadable subdirectory) and 2 for serious trouble (an unreadable command-line argument or a usage error).
 - Colours use the LS_COLORS grammar of GNU (including extension globs with case folding rules, `ln=target`, escape sequences, and the known-terminal fallback when LS_COLORS is unset). An unparsable value disables colour with `unparsable value for LS_COLORS environment variable`.
 - `dir` is `ls -C -b` and `vdir` is `ls -l -b`; they are separate commands sharing the implementation.
+
+## Extensions
+
+Per decision 0005 every departure from GNU is listed here.
+
+- `--json`: a JSON array of the listed files in the order the text form prints them (fields as for `stat --json`). A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_ls_json.sh` (which also checks the GNU path through `test/test_ls.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 

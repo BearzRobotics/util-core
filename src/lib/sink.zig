@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! A failure-remembering output helper over a caller-supplied `*Io.Writer`.
+//! A write-and-forget view of a caller-supplied `*Io.Writer` (decision 0004).
 //!
-//! Several commands (printf, seq, factor, numfmt) keep producing output and
-//! diagnostics after a write has failed and only report the failure once, at
-//! the end. `Sink` gives them that behaviour: after the first failed write
-//! nothing more is sent to the underlying writer and `failed` stays set; the
-//! caller turns it into `error.WriteFailed`.
+//! Commands that emit many small pieces (ls, du, stat, df) record the first
+//! write failure here instead of threading an error through every call; the
+//! library entry point reports it once (`error.WriteFailed`) so the caller
+//! can word the diagnostic. Nothing here touches standard output on its own.
 
 const std = @import("std");
 const Io = std.Io;
@@ -44,5 +43,10 @@ pub const Sink = struct {
         s.w.flush() catch {
             s.failed = true;
         };
+    }
+
+    /// `error.WriteFailed` when any write (or the last flush) failed.
+    pub fn check(s: *const Sink) error{WriteFailed}!void {
+        if (s.failed) return error.WriteFailed;
     }
 };

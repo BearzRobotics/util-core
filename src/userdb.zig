@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const Io = std.Io;
-const cli = @import("cli.zig");
+const common = @import("lib/common.zig");
 
 pub const User = struct { name: []const u8, uid: u32, gid: u32 };
 pub const Group = struct { name: []const u8, gid: u32, members: []const u8 };
@@ -16,7 +16,7 @@ fn slurp(gpa: std.mem.Allocator, io: Io, path: []const u8) ?[]u8 {
     var list: std.ArrayList(u8) = .empty;
     while (true) {
         list.ensureUnusedCapacity(gpa, 8192) catch return null;
-        const n = cli.readChunk(io, f, list.unusedCapacitySlice()) catch return null;
+        const n = common.readChunk(io, f, list.unusedCapacitySlice()) catch return null;
         if (n == 0) break;
         list.items.len += n;
     }

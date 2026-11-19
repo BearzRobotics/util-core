@@ -6,6 +6,10 @@ Status: implemented with the gaps listed below; differential tests pass against 
 
 GNU coreutils 9.7 (`/usr/bin/du --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "du invocation" (`info '(coreutils) du invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/du-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), du, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/du.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_du.sh`). Where POSIX and GNU differ, the text below says which one we follow.
 
+## Library
+
+Module `util_core.du` (`src/lib/du.zig`); the executable `src/commands/du.zig` is a thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
 ## Supported options
 
 - `-a, --all`: Write counts for all files, not just directories.
@@ -31,6 +35,12 @@ GNU coreutils 9.7 (`/usr/bin/du --version` on the development machine, installed
 - The traversal is a recursive walk that reproduces the per-level totals GNU du.c keeps for fts: each directory is reported after its entries, children are added to their directory unless -S is given, and the grand total counts every entry once.
 - Files with several links are counted once per run (or per `-l`), directories reached twice through several arguments are counted once, and sizes follow `st_blocks * 512` or the apparent size rules.
 - Diagnostics (`cannot access`, `cannot read directory`, `invalid maximum depth`, `invalid --threshold argument '-0'`, summarize/max-depth warnings) match GNU, including the lack of an errno text for dangling symlinks under -L.
+
+## Extensions
+
+Per decision 0005 every departure from GNU is listed here.
+
+- `--json`: a JSON array with one object per line `du` would print. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_du_json.sh` (which also checks the GNU path through `test/test_du.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 
