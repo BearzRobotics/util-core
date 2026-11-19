@@ -41,3 +41,27 @@ where the behaviour departs from GNU.
 6. Library modules (decision 0004) implement GNU behaviour; extensions are
    `Options` fields that default to GNU behaviour, so a library caller gets GNU
    unless it asks otherwise.
+
+## Update 2026-11-19: better diagnostics where GNU gives none
+
+The maintainer allows, in util-core and util-unix, error messages that are more
+helpful than GNU's where GNU leaves the user stuck (a non-zero exit with no
+message, a bare "write error" or "memory exhausted", a message that omits the
+operand or the reason, a partial success reported silently). This is a fourth
+kind of documented extension and it relaxes rule 1 for **stderr only**:
+
+- stdout bytes and the exit status stay GNU's. Only the text on stderr may
+  differ, and only where GNU's text is missing or uninformative. Where GNU's
+  message is already clear, we print it unchanged.
+- Failures are reported as errors, not crashes: out of memory, I/O errors and
+  invalid input print a diagnostic and exit with GNU's status for that
+  condition (or 1 where GNU has none), never a panic, abort or silent exit.
+- Each such case is recorded in the command's `docs/compatibility/<cmd>.md`
+  ("Extensions", entry kind "diagnostic") and in a "DIFFERENCES FROM GNU"
+  section of its man page (`docs/manpages/<cmd>.md`), with the GNU behaviour it
+  replaces. `docs/compatibility/extensions.md` lists them.
+- Each has a test that checks stdout and the exit status against GNU and the new
+  stderr text against the documented expectation, so the difference is
+  intentional and visible.
+- Library modules (decision 0004) return structured events and errors; the
+  improved wording lives in the wrapper, so a library user is not tied to it.
