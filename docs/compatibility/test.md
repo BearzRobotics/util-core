@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU test 9.7 in the C locale. Date: 2026-11-07
 
+Library: `util_core.test_cmd` (src/lib/test.zig), shared with `[` (`util_core.bracket`, src/lib/bracket.zig, which only checks the closing `]`); the command is a thin wrapper (decision 0004).
+
 ## Reference
 
 GNU coreutils 9.7 (`/usr/bin/test --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "test invocation" (`info '(coreutils) test invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/test-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), test, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/test.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_test.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -25,6 +27,10 @@ GNU coreutils 9.7 (`/usr/bin/test --version` on the development machine, install
 
 - `-v` and `-R` (bash extensions) are not GNU test operators and are rejected as GNU does.
 - `[ --version` prints a util-core banner instead of GNU's.
+
+## Extensions
+
+None. Everything `test` accepts (`-a`, `-o`, `-N`, `-O`, `-G`, `==`, `<`, `>`, `-nt`, `-ot`, `-ef`) is also accepted by GNU test 9.7. `[` is the same library with GNU's one bracket-specific diagnostic.
 
 ## Tests
 
