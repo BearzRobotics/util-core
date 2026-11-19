@@ -18,7 +18,7 @@ GNU coreutils 9.7 (`/usr/bin/chroot --version` on the development machine, insta
 
 ## Library
 
-Module `util_core.chroot` (src/lib/chroot.zig); `src/commands/chroot.zig` is the argument parser and diagnostics wrapper (decision 0004).
+Module `util_core.chroot` (src/lib/chroot.zig); `src/commands/chroot.zig` is the argument parser and diagnostics wrapper (decision 0004); the process-wide actions (descriptor, signal, niceness, chroot, chdir changes and the exec) stay in the wrapper.
 
 ## Extensions
 

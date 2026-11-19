@@ -10,7 +10,7 @@ const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const exec = @import("../exec.zig");
 const sys = @import("../sys.zig");
-const Io = std.Io;
+const chroot = @import("../lib/chroot.zig");
 
 const help_text = @embedFile("../help/chroot.txt");
 
@@ -42,10 +42,13 @@ pub fn main(ctx: cli.Context) u8 {
         return 125;
     }
     const newroot = ops[0];
-    if (skip_chdir and !std.mem.eql(u8, newroot, "/")) {
-        getopt.usageError(ctx, "option --skip-chdir only permitted if NEWROOT is old '/'", .{});
-        return 125;
-    }
+    const opts: chroot.Options = .{ .newroot = newroot, .skip_chdir = skip_chdir, .userspec = userspec, .groups = groups };
+    if (chroot.check(opts)) |problem| switch (problem) {
+        .skip_chdir_needs_root => {
+            getopt.usageError(ctx, "option --skip-chdir only permitted if NEWROOT is old '/'", .{});
+            return 125;
+        },
+    };
     const z = ctx.gpa.dupeSentinel(u8, newroot, 0) catch return 125;
     defer ctx.gpa.free(z);
     if (sys.chroot(z)) |e| {
@@ -58,18 +61,12 @@ pub fn main(ctx: cli.Context) u8 {
             return 125;
         };
     }
-    if (userspec != null or groups != null) {
+    if (chroot.unsupported(opts)) {
         cli.warn(ctx, "--userspec and --groups are not supported", .{});
         return 125;
     }
-    var argv: std.ArrayList([]const u8) = .empty;
-    defer argv.deinit(ctx.gpa);
-    if (ops.len > 1) {
-        for (ops[1..]) |a| argv.append(ctx.gpa, a) catch return 125;
-    } else {
-        const shell = cli.getenv(ctx, "SHELL");
-        argv.append(ctx.gpa, if (shell != null and shell.?.len > 0) shell.? else "/bin/sh") catch return 125;
-        argv.append(ctx.gpa, "-i") catch return 125;
-    }
-    return exec.execStyled(ctx, argv.items[0], argv.items, null, .run);
+    var arena = std.heap.ArenaAllocator.init(ctx.gpa);
+    defer arena.deinit();
+    const argv = chroot.commandLine(arena.allocator(), ops[1..], cli.getenv(ctx, "SHELL")) catch return 125;
+    return exec.execStyled(ctx, argv[0], argv, null, .run);
 }

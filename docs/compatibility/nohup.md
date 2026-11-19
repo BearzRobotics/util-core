@@ -18,7 +18,7 @@ GNU coreutils 9.7 (`/usr/bin/nohup --version` on the development machine, instal
 
 ## Library
 
-Module `util_core.nohup` (src/lib/nohup.zig); `src/commands/nohup.zig` is the argument parser and diagnostics wrapper (decision 0004).
+Module `util_core.nohup` (src/lib/nohup.zig); `src/commands/nohup.zig` is the argument parser and diagnostics wrapper (decision 0004); the process-wide actions (descriptor, signal, niceness, chroot, chdir changes and the exec) stay in the wrapper.
 
 ## Extensions
 

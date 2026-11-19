@@ -26,7 +26,7 @@ GNU coreutils 9.7 (`/usr/bin/env --version` on the development machine, installe
 
 ## Library
 
-Module `util_core.env` (src/lib/env.zig); `src/commands/env.zig` is the argument parser and diagnostics wrapper (decision 0004).
+Module `util_core.env` (src/lib/env.zig); `src/commands/env.zig` is the argument parser and diagnostics wrapper (decision 0004); the process-wide actions (descriptor, signal, niceness, chroot, chdir changes and the exec) stay in the wrapper.
 
 ## Extensions
 

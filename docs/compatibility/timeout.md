@@ -23,7 +23,7 @@ GNU coreutils 9.7 (`/usr/bin/timeout --version` on the development machine, inst
 
 ## Library
 
-Module `util_core.timeout` (src/lib/timeout.zig); `src/commands/timeout.zig` is the argument parser and diagnostics wrapper (decision 0004).
+Module `util_core.timeout` (src/lib/timeout.zig); `src/commands/timeout.zig` is the argument parser and diagnostics wrapper (decision 0004); the process-wide actions (descriptor, signal, niceness, chroot, chdir changes and the exec) stay in the wrapper.
 
 ## Extensions
 

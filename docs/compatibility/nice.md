@@ -18,7 +18,7 @@ GNU coreutils 9.7 (`/usr/bin/nice --version` on the development machine, install
 
 ## Library
 
-Module `util_core.nice` (src/lib/nice.zig); `src/commands/nice.zig` is the argument parser and diagnostics wrapper (decision 0004).
+Module `util_core.nice` (src/lib/nice.zig); `src/commands/nice.zig` is the argument parser and diagnostics wrapper (decision 0004); the process-wide actions (descriptor, signal, niceness, chroot, chdir changes and the exec) stay in the wrapper.
 
 ## Extensions
 

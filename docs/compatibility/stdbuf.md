@@ -20,7 +20,7 @@ GNU coreutils 9.7 (`/usr/bin/stdbuf --version` on the development machine, insta
 
 ## Library
 
-Module `util_core.stdbuf` (src/lib/stdbuf.zig); `src/commands/stdbuf.zig` is the argument parser and diagnostics wrapper (decision 0004).
+Module `util_core.stdbuf` (src/lib/stdbuf.zig); `src/commands/stdbuf.zig` is the argument parser and diagnostics wrapper (decision 0004); the process-wide actions (descriptor, signal, niceness, chroot, chdir changes and the exec) stay in the wrapper.
 
 ## Extensions
 

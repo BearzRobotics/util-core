@@ -4,12 +4,15 @@
 //!
 //! Options are processed in order, each acting on the environment as it stands.
 //! `-S` splits its argument like a shebang line and re-parses the result.
+//! The environment handling and the -S splitter are in src/lib/env.zig;
+//! signal dispositions, --chdir and the exec, which are process-wide, stay here.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const exec = @import("../exec.zig");
 const sys = @import("../sys.zig");
+const envlib = @import("../lib/env.zig");
 const Io = std.Io;
 const Map = std.process.Environ.Map;
 
@@ -39,11 +42,7 @@ pub fn main(ctx: cli.Context) u8 {
     defer arena.deinit();
     const a = arena.allocator();
 
-    var env = Map.init(a);
-    if (ctx.environ) |src| {
-        var it = src.iterator();
-        while (it.next()) |e| env.put(e.key_ptr.*, e.value_ptr.*) catch return bad_status;
-    }
+    var env = envlib.copyEnvironment(a, ctx.environ) catch return bad_status;
 
     var debug = false;
     var nul = false;
@@ -66,7 +65,7 @@ pub fn main(ctx: cli.Context) u8 {
             'v' => debug = true,
             'u' => {
                 const name = o.arg.?;
-                if (name.len == 0 or std.mem.indexOfScalar(u8, name, '=') != null) {
+                if (!envlib.validUnsetName(name)) {
                     cli.warn(ctx, "cannot unset {f}: Invalid argument", .{cli.quoteC(name)});
                     return bad_status;
                 }
@@ -79,16 +78,21 @@ pub fn main(ctx: cli.Context) u8 {
             'a' => argv0 = o.arg.?,
             'S' => {
                 const text = o.arg.?;
-                var pieces: std.ArrayList([:0]const u8) = .empty;
-                if (!split(ctx, a, &env, text, &pieces)) return bad_status;
+                const pieces = switch (envlib.splitString(a, &env, text) catch return bad_status) {
+                    .ok => |p| p,
+                    .bad => |problem| {
+                        splitDiagnostic(ctx, problem);
+                        return bad_status;
+                    },
+                };
                 if (debug) {
                     say(ctx, "split -S:  {f}", .{cli.quoteC(text)});
-                    for (pieces.items, 0..) |pc, i| say(ctx, "{s}{f}", .{ if (i == 0) " into:    " else "     &    ", cli.quoteC(pc) });
+                    for (pieces, 0..) |pc, i| say(ctx, "{s}{f}", .{ if (i == 0) " into:    " else "     &    ", cli.quoteC(pc) });
                 }
                 const rest = cur.args[parser.index..];
-                const joined = a.alloc([:0]const u8, pieces.items.len + rest.len) catch return bad_status;
-                @memcpy(joined[0..pieces.items.len], pieces.items);
-                @memcpy(joined[pieces.items.len..], rest);
+                const joined = a.alloc([:0]const u8, pieces.len + rest.len) catch return bad_status;
+                @memcpy(joined[0..pieces.len], pieces);
+                @memcpy(joined[pieces.len..], rest);
                 cur.args = joined;
                 parser.deinit();
                 parser = getopt.Parser.init(cur, "+iv0u:C:a:S:", &longs);
@@ -115,25 +119,18 @@ pub fn main(ctx: cli.Context) u8 {
         env.deinit();
         env = Map.init(a);
     }
-    var k: usize = 0;
-    while (k < operands.len) : (k += 1) {
-        const eq = std.mem.indexOfScalar(u8, operands[k], '=') orelse break;
-        if (eq == 0) continue; // an empty name cannot be stored; GNU sets it
-        if (debug) say(ctx, "setenv:   {s}", .{operands[k]});
-        env.put(operands[k][0..eq], operands[k][eq + 1 ..]) catch return bad_status;
-    }
-    const command = operands[k..];
+    const dbg: Debug = .{ .ctx = ctx, .on = debug };
+    const command = envlib.applyAssignments(&env, operands, .{
+        .context = @constCast(&dbg),
+        .func = onAssign,
+    }) catch return bad_status;
 
-    if (nul and command.len > 0) {
-        cli.warn(ctx, "cannot specify --null (-0) with command\nTry '{s} --help' for more information.", .{ctx.name});
-        return bad_status;
-    }
-    if (command.len == 0 and chdir != null) {
-        cli.warn(ctx, "must specify command with --chdir (-C)\nTry '{s} --help' for more information.", .{ctx.name});
-        return bad_status;
-    }
-    if (command.len == 0 and argv0 != null) {
-        cli.warn(ctx, "must specify command with --argv0 (-a)\nTry '{s} --help' for more information.", .{ctx.name});
+    if (envlib.check(command.len, nul, chdir, argv0)) |problem| {
+        switch (problem) {
+            .null_with_command => cli.warn(ctx, "cannot specify --null (-0) with command\nTry '{s} --help' for more information.", .{ctx.name}),
+            .chdir_without_command => cli.warn(ctx, "must specify command with --chdir (-C)\nTry '{s} --help' for more information.", .{ctx.name}),
+            .argv0_without_command => cli.warn(ctx, "must specify command with --argv0 (-a)\nTry '{s} --help' for more information.", .{ctx.name}),
+        }
         return bad_status;
     }
     if (chdir) |dir| {
@@ -146,29 +143,24 @@ pub fn main(ctx: cli.Context) u8 {
     if (list_signals) listSignals(ctx);
 
     if (command.len == 0) {
-        var out = cli.Out.init(ctx.io);
-        var it = env.iterator();
-        while (it.next()) |e| {
-            out.write(e.key_ptr.*);
-            out.writeByte('=');
-            out.write(e.value_ptr.*);
-            out.writeByte(if (nul) 0 else '\n');
-        }
-        out.flush();
-        return if (out.failed) bad_status else 0;
+        var buf: [8192]u8 = undefined;
+        var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+        envlib.print(&env, nul, &stdout.interface) catch {
+            cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
+            return bad_status;
+        };
+        return if (cli.flushWriter(&stdout)) 0 else bad_status;
     }
 
     if (argv0) |z| if (debug) say(ctx, "argv0:     {f}", .{cli.quoteC(z)});
-    const argv = a.alloc([]const u8, command.len) catch return bad_status;
-    for (command, 0..) |c, i| argv[i] = c;
-    if (argv0) |z| argv[0] = z;
+    const argv = envlib.commandArgv(a, command, argv0) catch return bad_status;
     if (debug) {
         say(ctx, "executing: {s}", .{command[0]});
         for (argv, 0..) |c, i| say(ctx, "   arg[{d}]= {f}", .{ i, cli.quoteC(c) });
     }
     const rc = exec.exec(ctx, command[0], argv, &env);
     // GNU hints at -S when a name with blanks was not found.
-    if (rc == 127 and std.mem.indexOfAny(u8, command[0], " \t\n\x0b\x0c\r") != null)
+    if (rc == 127 and envlib.wantsShebangHint(command[0]))
         cli.warn(ctx, "use -[v]S to pass options in shebang lines", .{});
     return rc;
 }
@@ -222,148 +214,22 @@ fn listSignals(ctx: cli.Context) void {
     }
 }
 
-/// Split a `-S` string into arguments. Rules (GNU manual, "-S/--split-string
-/// usage in scripts"): blanks separate words; '...' is literal except \\ and
-/// \'; "..." allows escapes and ${VAR}; unquoted \_ is a separator; \c ends
-/// the string; # at the start of a word starts a comment.
-fn split(ctx: cli.Context, a: std.mem.Allocator, env: *const Map, text: []const u8, out: *std.ArrayList([:0]const u8)) bool {
-    var word: std.ArrayList(u8) = .empty;
-    var in_word = false;
-    var i: usize = 0;
-    const blanks = " \t\n\x0b\x0c\r";
-    while (i < text.len) {
-        const c = text[i];
-        if (std.mem.indexOfScalar(u8, blanks, c) != null) {
-            if (in_word) flush(a, out, &word, &in_word);
-            i += 1;
-            continue;
-        }
-        if (c == '#' and !in_word) break;
-        in_word = true;
-        switch (c) {
-            '\'' => {
-                i += 1;
-                while (true) {
-                    if (i >= text.len) {
-                        cli.warn(ctx, "no terminating quote in -S string", .{});
-                        return false;
-                    }
-                    const d = text[i];
-                    if (d == '\'') break;
-                    if (d == '\\' and i + 1 < text.len and (text[i + 1] == '\'' or text[i + 1] == '\\')) {
-                        word.append(a, text[i + 1]) catch return false;
-                        i += 2;
-                        continue;
-                    }
-                    word.append(a, d) catch return false;
-                    i += 1;
-                }
-                i += 1;
-            },
-            '"' => {
-                i += 1;
-                while (true) {
-                    if (i >= text.len) {
-                        cli.warn(ctx, "no terminating quote in -S string", .{});
-                        return false;
-                    }
-                    const d = text[i];
-                    if (d == '"') break;
-                    if (d == '\\') {
-                        i += 1;
-                        if (i >= text.len) {
-                            cli.warn(ctx, "invalid backslash at end of string in -S", .{});
-                            return false;
-                        }
-                        const e = text[i];
-                        switch (e) {
-                            '"', '\\', '$' => word.append(a, e) catch return false,
-                            '_' => word.append(a, ' ') catch return false,
-                            'c' => {
-                                flush(a, out, &word, &in_word);
-                                return true;
-                            },
-                            'f' => word.append(a, 12) catch return false,
-                            'n' => word.append(a, 10) catch return false,
-                            'r' => word.append(a, 13) catch return false,
-                            't' => word.append(a, 9) catch return false,
-                            'v' => word.append(a, 11) catch return false,
-                            else => {
-                                cli.warn(ctx, "invalid sequence '\\{c}' in -S", .{e});
-                                return false;
-                            },
-                        }
-                        i += 1;
-                        continue;
-                    }
-                    if (d == '$') {
-                        i = expand(ctx, a, env, text, i, &word) orelse return false;
-                        continue;
-                    }
-                    word.append(a, d) catch return false;
-                    i += 1;
-                }
-                i += 1;
-            },
-            '$' => i = expand(ctx, a, env, text, i, &word) orelse return false,
-            '\\' => {
-                i += 1;
-                if (i >= text.len) {
-                    cli.warn(ctx, "invalid backslash at end of string in -S", .{});
-                    return false;
-                }
-                const e = text[i];
-                switch (e) {
-                    '_' => flush(a, out, &word, &in_word),
-                    'c' => {
-                        if (in_word and word.items.len > 0) flush(a, out, &word, &in_word);
-                        return true;
-                    },
-                    '#', '$', '"', '\'', '\\' => word.append(a, e) catch return false,
-                    'f' => word.append(a, 12) catch return false,
-                    'n' => word.append(a, 10) catch return false,
-                    'r' => word.append(a, 13) catch return false,
-                    't' => word.append(a, 9) catch return false,
-                    'v' => word.append(a, 11) catch return false,
-                    else => {
-                        cli.warn(ctx, "invalid sequence '\\{c}' in -S", .{e});
-                        return false;
-                    },
-                }
-                i += 1;
-            },
-            else => {
-                word.append(a, c) catch return false;
-                i += 1;
-            },
-        }
+const Debug = struct { ctx: cli.Context, on: bool };
+
+fn onAssign(context: ?*anyopaque, ev: envlib.Event) void {
+    const d: *const Debug = @ptrCast(@alignCast(context.?));
+    switch (ev) {
+        .setenv => |text| if (d.on) say(d.ctx, "setenv:   {s}", .{text}),
     }
-    if (in_word) flush(a, out, &word, &in_word);
-    return true;
 }
 
-fn flush(a: std.mem.Allocator, out: *std.ArrayList([:0]const u8), word: *std.ArrayList(u8), in_word: *bool) void {
-    const z = a.dupeSentinel(u8, word.items, 0) catch return;
-    out.append(a, z) catch {};
-    word.clearRetainingCapacity();
-    in_word.* = false;
-}
-
-/// `${NAME}` at text[i]; returns the index after it.
-fn expand(ctx: cli.Context, a: std.mem.Allocator, env: *const Map, text: []const u8, i: usize, word: *std.ArrayList(u8)) ?usize {
-    const bad = struct {
-        fn f(c: cli.Context, t: []const u8, at: usize) ?usize {
-            cli.warn(c, "only ${{VARNAME}} expansion is supported, error at: {s}", .{t[at..]});
-            return null;
-        }
-    }.f;
-    if (i + 1 >= text.len or text[i + 1] != '{') return bad(ctx, text, i);
-    var j = i + 2;
-    if (j >= text.len or !(std.ascii.isAlphabetic(text[j]) or text[j] == '_')) return bad(ctx, text, i);
-    while (j < text.len and (std.ascii.isAlphanumeric(text[j]) or text[j] == '_')) j += 1;
-    if (j >= text.len or text[j] != '}') return bad(ctx, text, i);
-    if (env.get(text[i + 2 .. j])) |v| word.appendSlice(a, v) catch return null;
-    return j + 1;
+fn splitDiagnostic(ctx: cli.Context, problem: envlib.SplitProblem) void {
+    switch (problem) {
+        .no_terminating_quote => cli.warn(ctx, "no terminating quote in -S string", .{}),
+        .backslash_at_end => cli.warn(ctx, "invalid backslash at end of string in -S", .{}),
+        .invalid_sequence => |c| cli.warn(ctx, "invalid sequence '\\{c}' in -S", .{c}),
+        .bad_expansion => |rest| cli.warn(ctx, "only ${{VARNAME}} expansion is supported, error at: {s}", .{rest}),
+    }
 }
 
 const help_text =

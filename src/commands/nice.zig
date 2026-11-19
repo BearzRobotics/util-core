@@ -10,6 +10,7 @@ const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const exec = @import("../exec.zig");
 const sys = @import("../sys.zig");
+const nice = @import("../lib/nice.zig");
 
 const help_text = @embedFile("../help/nice.txt");
 
@@ -18,15 +19,9 @@ pub fn main(ctx: cli.Context) u8 {
     // Obsolete "-N" / "--N" forms (adjustment N / -N) are recognised only as
     // the first argument, before getopt sees them.
     var args = ctx.args;
-    if (args.len > 0) {
-        const a: []const u8 = args[0];
-        if (a.len >= 2 and a[0] == '-' and std.ascii.isDigit(a[1])) {
-            adjustment = a[1..];
-            args = args[1..];
-        } else if (a.len >= 3 and a[0] == '-' and a[1] == '-' and std.ascii.isDigit(a[2])) {
-            adjustment = a[1..];
-            args = args[1..];
-        }
+    if (nice.obsoleteAdjustment(args)) |ob| {
+        adjustment = ob.adjustment;
+        args = ob.rest;
     }
     var c2 = ctx;
     c2.args = args;
@@ -52,21 +47,19 @@ pub fn main(ctx: cli.Context) u8 {
         const s = std.fmt.bufPrint(&buf, "{d}\n", .{sys.getNice()}) catch unreachable;
         return if (cli.writeStdout(ctx.io, s)) 0 else 125;
     }
-    var delta: i64 = 10;
+    var delta: i64 = nice.default_adjustment;
     if (adjustment) |t| {
-        delta = std.fmt.parseInt(i64, if (t.len > 0 and t[0] == '+') t[1..] else t, 10) catch |e| switch (e) {
-            error.Overflow => if (t.len > 0 and t[0] == '-') std.math.minInt(i32) else std.math.maxInt(i32),
-            else => {
-                cli.warn(ctx, "invalid adjustment {f}", .{cli.quoteC(t)});
-                return 125;
-            },
+        delta = nice.parseAdjustment(t) catch {
+            cli.warn(ctx, "invalid adjustment {f}", .{cli.quoteC(t)});
+            return 125;
         };
     }
-    const target: i32 = @intCast(std.math.clamp(@as(i64, sys.getNice()) + delta, -20, 19));
+    // Changing the niceness is process-wide, so it happens here, not in the library.
+    const target = nice.targetNice(sys.getNice(), delta);
     if (sys.setNice(target)) |e| {
         // The kernel clamps; EPERM/EACCES are only a warning, as in GNU.
         cli.warn(ctx, "cannot set niceness: {s}", .{sys.errnoText(e)});
-        if (e != .PERM and e != .ACCES) return 125;
+        if (!nice.isOnlyWarning(e)) return 125;
     }
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(ctx.gpa);
