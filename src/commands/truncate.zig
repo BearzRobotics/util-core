@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! truncate — shrink or extend the size of a file.
-//! Reference: GNU coreutils manual "truncate invocation" (9.7).
+//! truncate: thin wrapper over `util_core.truncate` (decision 0004). Parses
+//! the arguments and the SIZE operand and words the diagnostics.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
@@ -9,7 +9,8 @@ const Io = std.Io;
 
 const long_names = [_][]const u8{ "no-create", "io-blocks", "reference", "size", "help", "version" };
 
-const Rel = enum { none, extend, reduce, at_most, at_least, round_down, round_up };
+const truncate = @import("../lib/truncate.zig");
+const Rel = truncate.Rel;
 
 pub fn main(ctx: cli.Context) u8 {
     var no_create = false;
@@ -141,58 +142,28 @@ pub fn main(ctx: cli.Context) u8 {
         }
     }
 
-    var status: u8 = 0;
-    for (files.items) |name| {
-        // -c never creates: it opens only files that already exist.
-        const file: ?Io.File = if (no_create)
-            (cwd.openFile(ctx.io, name, .{ .mode = .write_only }) catch |e| blk: {
-                if (e != error.FileNotFound) {
-                    cli.warn(ctx, "cannot open {f} for writing: {s}", .{ cli.quoteA(name), cli.errText(e) });
-                    status = 1;
-                }
-                break :blk null;
-            })
+    const env: truncate.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const ok = truncate.run(env, .{
+        .no_create = no_create,
+        .io_blocks = io_blocks,
+        .rel = rel,
+        .amount = amount,
+        .ref_size = ref_size,
+        .have_size = size_text != null,
+    }, files.items, .{ .context = @constCast(&ctx), .func = report });
+    return if (ok) 0 else 1;
+}
+
+fn report(context: ?*anyopaque, ev: truncate.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    switch (ev) {
+        .open_failed => |f| cli.warn(ctx.*, "cannot open {f} for writing: {s}", .{ cli.quoteA(f.path), cli.errText(f.err) }),
+        .size_failed => |f| if (f.err) |e|
+            cli.warn(ctx.*, "cannot get the size of {f}: {s}", .{ cli.quoteA(f.path), cli.errText(e) })
         else
-            (cwd.createFile(ctx.io, name, .{ .truncate = false }) catch |e| blk: {
-                cli.warn(ctx, "cannot open {f} for writing: {s}", .{ cli.quoteA(name), cli.errText(e) });
-                status = 1;
-                break :blk null;
-            });
-        const f = file orelse continue;
-        defer f.close(ctx.io);
-        // -c must not create: re-open check handled above by not creating?
-        const cur = f.length(ctx.io) catch |e| {
-            cli.warn(ctx, "cannot get the size of {f}: {s}", .{ cli.quoteA(name), cli.errText(e) });
-            status = 1;
-            continue;
-        };
-        var amt: u64 = amount;
-        if (io_blocks) {
-            const st = f.stat(ctx.io) catch {
-                cli.warn(ctx, "cannot get the size of {f}", .{cli.quoteA(name)});
-                status = 1;
-                continue;
-            };
-            amt = amount *| st.block_size;
-        }
-        const target: u64 = if (rel == .none) (if (ref_size != null and size_text == null) ref_size.? else amt) else blk: {
-            const base: u64 = if (ref_size) |r| r else cur;
-            break :blk switch (rel) {
-                .extend => base +| amt,
-                .reduce => base -| amt,
-                .at_most => @min(base, amt),
-                .at_least => @max(base, amt),
-                .round_down => if (amt == 0) base else base - base % amt,
-                .round_up => if (amt == 0) base else (base +| (amt - 1)) / amt * amt,
-                .none => unreachable,
-            };
-        };
-        f.setLength(ctx.io, target) catch |e| {
-            cli.warn(ctx, "failed to truncate {f} at {d} bytes: {s}", .{ cli.quoteA(name), target, cli.errText(e) });
-            status = 1;
-        };
+            cli.warn(ctx.*, "cannot get the size of {f}", .{cli.quoteA(f.path)}),
+        .truncate_failed => |f| cli.warn(ctx.*, "failed to truncate {f} at {d} bytes: {s}", .{ cli.quoteA(f.path), f.size, cli.errText(f.err) }),
     }
-    return status;
 }
 
 fn help(ctx: cli.Context) u8 {

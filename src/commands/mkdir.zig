@@ -1,19 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! mkdir — make directories.
-//! References: GNU coreutils manual "mkdir invocation" (9.7); POSIX.1-2024
-//! mkdir.
-//!
-//! -m MODE sets the final mode exactly (relative to a=rwx; src/mode.zig). The
-//! directory is created with MODE masked to rwx bits and then chmod'ed, so it
-//! is never less restrictive than MODE (POSIX requirement). -p creates missing
-//! parents with the umask-modified mode plus u+wx (GNU: "=rwx,u+wx") and
-//! ignores existing directories. -Z/--context are accepted and ignored: no
-//! SELinux/SMACK support.
+//! mkdir: thin wrapper over `util_core.mkdir` (decision 0004). Parses
+//! arguments the way GNU mkdir does and words the diagnostics; -Z/--context
+//! are accepted and ignored.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
 const sys = @import("../sys.zig");
 const mode_mod = @import("../mode.zig");
+const mkdir = @import("../lib/mkdir.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "mode", "parents", "verbose", "context", "help", "version" };
@@ -106,74 +100,24 @@ pub fn main(ctx: cli.Context) u8 {
         return 1;
     }
 
-    var status: u8 = 0;
-    for (dirs.items) |d| {
-        if (!makeOne(ctx, d, parents, verbose, final_mode, umask)) status = 1;
-    }
-    return status;
+    const env: mkdir.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const ok = mkdir.run(env, .{ .parents = parents, .mode = final_mode, .verbose = verbose, .umask = umask }, dirs.items, .{
+        .context = @constCast(&ctx),
+        .func = report,
+    });
+    return if (ok) 0 else 1;
 }
 
-/// Create `path` (and with `parents` its missing ancestors). Returns false
-/// after reporting an error.
-fn makeOne(ctx: cli.Context, path: []const u8, parents: bool, verbose: bool, mode: ?u16, umask: u16) bool {
-    if (parents) {
-        // Walk the prefixes of the path, creating the missing ones.
-        const trimmed = trimSlashes(path);
-        var idx: usize = 0;
-        while (idx < trimmed.len) {
-            // End of the next component (skip leading slashes first).
-            while (idx < trimmed.len and trimmed[idx] == '/') idx += 1;
-            while (idx < trimmed.len and trimmed[idx] != '/') idx += 1;
-            const prefix = trimmed[0..idx];
-            const is_last = idx >= trimmed.len;
-            if (is_last) break;
-            const st = Io.Dir.cwd().statFile(ctx.io, prefix, .{});
-            if (st) |s| {
-                if (s.kind == .directory) continue;
-                cli.warn(ctx, "cannot create directory '{s}': Not a directory", .{prefix});
-                return false;
-            } else |_| {}
-            // Parent mode: umask-modified rwx plus u+wx.
-            const pmode: u16 = (0o777 & ~umask) | 0o300;
-            Io.Dir.cwd().createDir(ctx.io, prefix, .fromMode(pmode)) catch |e| {
-                if (e == error.PathAlreadyExists) continue;
-                cli.warn(ctx, "cannot create directory '{s}': {s}", .{ prefix, cli.errText(e) });
-                return false;
-            };
-            if (pmode != (pmode & ~umask)) chmod(ctx, prefix, pmode);
-            if (verbose) cli.say(ctx, "created directory '{s}'", .{prefix});
-        }
-        // Final component: an existing directory is not an error with -p.
-        if (Io.Dir.cwd().statFile(ctx.io, trimmed, .{})) |s| {
-            if (s.kind == .directory) return true;
-            cli.warn(ctx, "cannot create directory '{s}': File exists", .{path});
-            return false;
-        } else |_| {}
+/// Word one library event the way GNU mkdir does.
+fn report(context: ?*anyopaque, ev: mkdir.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    switch (ev) {
+        .created => |p| cli.say(ctx.*, "created directory '{s}'", .{p}),
+        .not_a_directory => |p| cli.warn(ctx.*, "cannot create directory '{s}': Not a directory", .{p}),
+        .exists => |p| cli.warn(ctx.*, "cannot create directory '{s}': File exists", .{p}),
+        .create_failed => |f| cli.warn(ctx.*, "cannot create directory '{s}': {s}", .{ f.path, cli.errText(f.err) }),
+        .chmod_failed => |f| cli.warn(ctx.*, "cannot set permissions of '{s}': {s}", .{ f.path, cli.errText(f.err) }),
     }
-    const create_mode: u16 = if (mode) |m| m & 0o777 else 0o777;
-    Io.Dir.cwd().createDir(ctx.io, path, .fromMode(create_mode)) catch |e| {
-        cli.warn(ctx, "cannot create directory '{s}': {s}", .{ path, cli.errText(e) });
-        return false;
-    };
-    if (verbose) cli.say(ctx, "created directory '{s}'", .{path});
-    if (mode) |m| {
-        // The kernel applied the umask at creation; set the exact mode now.
-        Io.Dir.cwd().setFilePermissions(ctx.io, path, .fromMode(m), .{}) catch |e| {
-            cli.warn(ctx, "cannot set permissions of '{s}': {s}", .{ path, cli.errText(e) });
-            return false;
-        };
-    }
-    return true;
-}
-
-fn chmod(ctx: cli.Context, path: []const u8, mode: u16) void {
-    Io.Dir.cwd().setFilePermissions(ctx.io, path, .fromMode(mode), .{}) catch {};
-}
-
-fn trimSlashes(p: []const u8) []const u8 {
-    var end = p.len;
-    while (end > 1 and p[end - 1] == '/') end -= 1;
-    return p[0..end];
 }
 
 fn oom(ctx: cli.Context) u8 {
@@ -190,10 +134,4 @@ fn help(ctx: cli.Context) u8 {
         "  -Z                set SELinux security context (ignored)\n" ++
         "      --help        display this help and exit\n" ++
         "      --version     output version information and exit\n")) 0 else 1;
-}
-
-test "trimSlashes" {
-    try std.testing.expectEqualStrings("a/b", trimSlashes("a/b//"));
-    try std.testing.expectEqualStrings("/", trimSlashes("///"));
-    try std.testing.expectEqualStrings("a", trimSlashes("a"));
 }

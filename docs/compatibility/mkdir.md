@@ -20,6 +20,14 @@ GNU coreutils 9.7 (`/usr/bin/mkdir --version` on the development machine, instal
 - The directory is created with MODE & 0777 (masked further by the umask) and then chmod'ed to the exact mode, so it is never less restrictive than MODE (POSIX).
 - Errors as GNU: `cannot create directory 'X': File exists / No such file or directory / Not a directory`. Processing continues after an error (exit 1).
 
+## Library
+
+Library: module `util_core.mkdir` (`src/lib/mkdir.zig`); the executable only parses arguments and words the diagnostics.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - GNU 9.7 creates `-m +t` (also `o+t`, `a+t`) as 1755; we create 1777. The rule behind GNU's result was not determined, so it is not emulated.

@@ -21,6 +21,14 @@ GNU coreutils 9.7 (`/usr/bin/touch --version` on the development machine, instal
 
 - `-` touches standard output. With neither -a nor -m, "-d now" behaves like no -d, as in GNU. Times are set with utimensat(2) to nanosecond precision.
 
+## Library
+
+Library: module `util_core.touch` (`src/lib/touch.zig`); the executable only parses arguments and words the diagnostics.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - The obsolete `touch MMDDhhmm file` form is not supported (GNU 9.7 itself only enables it for POSIX2 versions before 200112).

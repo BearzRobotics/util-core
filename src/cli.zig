@@ -228,150 +228,16 @@ pub fn say(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
     _ = writeStdout(ctx.io, msg);
 }
-
-/// A file name as GNU `quotef` prints it in diagnostics (shell-escape quoting
-/// with ':' treated as special): plain when safe, otherwise in single quotes
-/// (double quotes when the name contains only a ' as the problem), and
-/// $'...' runs for control and non-ASCII bytes. Derived by probing GNU
-/// coreutils 9.7 (`md5sum NAME` on every ASCII character).
-/// Use with `{f}`: `cli.warn(ctx, "{f}: {s}", .{ cli.quote(name), msg })`.
-pub const Quoted = struct {
-    name: []const u8,
-    /// GNU `quoteaf`: quote even when nothing needs it.
-    always: bool = false,
-
-    pub fn format(q: Quoted, w: *Io.Writer) Io.Writer.Error!void {
-        const name = q.name;
-        if (name.len == 0) return w.writeAll("''");
-        var has_ctl = false;
-        var needs = false;
-        var has_squote = false;
-        var has_other = false; // specials other than the single quote
-        for (name, 0..) |c, i| {
-            if (c < 0x20 or c >= 0x7f) {
-                has_ctl = true;
-                continue;
-            }
-            switch (c) {
-                '\'' => has_squote = true,
-                ' ', '!', '"', '$', '&', '(', ')', '*', ';', '<', '=', '>', '?', '[', '\\', '^', '`', '|', ':' => has_other = true,
-                '#', '~' => if (i == 0) {
-                    has_other = true;
-                },
-                '{', '}' => if (name.len == 1) {
-                    has_other = true;
-                },
-                else => {},
-            }
-        }
-        needs = has_ctl or has_squote or has_other;
-        if (!needs) {
-            if (!q.always) return w.writeAll(name);
-            try w.writeByte('\'');
-            try w.writeAll(name);
-            return w.writeByte('\'');
-        }
-        if (!has_ctl and has_squote and !has_other and std.mem.indexOfAny(u8, name, "\"$`\\") == null) {
-            try w.writeByte('"');
-            try w.writeAll(name);
-            return w.writeByte('"');
-        }
-        // Printable runs in '...' (a ' becomes '\''), other runs in $'...'.
-        var i: usize = 0;
-        var first = true;
-        while (i < name.len) {
-            const ctl = name[i] < 0x20 or name[i] >= 0x7f;
-            var j = i;
-            while (j < name.len and ((name[j] < 0x20 or name[j] >= 0x7f) == ctl)) j += 1;
-            if (ctl) {
-                if (first) try w.writeAll("''");
-                try w.writeAll("$'");
-                for (name[i..j]) |c| switch (c) {
-                    7 => try w.writeAll("\\a"),
-                    8 => try w.writeAll("\\b"),
-                    9 => try w.writeAll("\\t"),
-                    10 => try w.writeAll("\\n"),
-                    11 => try w.writeAll("\\v"),
-                    12 => try w.writeAll("\\f"),
-                    13 => try w.writeAll("\\r"),
-                    else => try w.print("\\{o:0>3}", .{c}),
-                };
-                try w.writeByte('\'');
-            } else {
-                try w.writeByte('\'');
-                for (name[i..j]) |c| {
-                    if (c == '\'') try w.writeAll("'\\''") else try w.writeByte(c);
-                }
-                try w.writeByte('\'');
-            }
-            first = false;
-            i = j;
-        }
-    }
-};
-
-pub fn quote(name: []const u8) Quoted {
-    return .{ .name = name };
-}
-
-/// Like `quote`, but a name that needs no quoting is still put in single
-/// quotes (GNU `quoteaf`, used in "cannot remove 'x'" style messages).
-pub fn quoteA(name: []const u8) Quoted {
-    return .{ .name = name, .always = true };
-}
-
-/// A string as GNU `quote()` prints it in messages such as "'abc' is not a
-/// valid number": single-quoted with C escapes (\\ for a backslash, \' for a
-/// quote, \a \b \t \n \v \f \r, and three-digit octal for other control
-/// and non-ASCII bytes). Use with `{f}`.
-pub const QuotedC = struct {
-    text: []const u8,
-
-    pub fn format(q: QuotedC, w: *Io.Writer) Io.Writer.Error!void {
-        try w.writeByte('\'');
-        for (q.text) |c| switch (c) {
-            '\\' => try w.writeAll("\\\\"),
-            '\'' => try w.writeAll("\\'"),
-            7 => try w.writeAll("\\a"),
-            8 => try w.writeAll("\\b"),
-            9 => try w.writeAll("\\t"),
-            10 => try w.writeAll("\\n"),
-            11 => try w.writeAll("\\v"),
-            12 => try w.writeAll("\\f"),
-            13 => try w.writeAll("\\r"),
-            else => if (c < 0x20 or c >= 0x7f) try w.print("\\{o:0>3}", .{c}) else try w.writeByte(c),
-        };
-        try w.writeByte('\'');
-    }
-};
-
-pub fn quoteC(text: []const u8) QuotedC {
-    return .{ .text = text };
-}
+const quote_impl = @import("quote.zig");
+pub const Quoted = quote_impl.Quoted;
+pub const QuotedC = quote_impl.QuotedC;
+pub const quote = quote_impl.quote;
+pub const quoteA = quote_impl.quoteA;
+pub const quoteC = quote_impl.quoteC;
 
 /// Human-readable text for common file errors, matching strerror() wording
 /// that GNU tools print. Falls back to the Zig error name.
-pub fn errText(err: anyerror) []const u8 {
-    return switch (err) {
-        error.FileNotFound => "No such file or directory",
-        error.AccessDenied => "Permission denied",
-        error.PermissionDenied => "Operation not permitted",
-        error.IsDir => "Is a directory",
-        error.NotDir => "Not a directory",
-        error.BrokenPipe => "Broken pipe",
-        error.NameTooLong => "File name too long",
-        error.SymLinkLoop => "Too many levels of symbolic links",
-        error.PathAlreadyExists => "File exists",
-        error.DirNotEmpty => "Directory not empty",
-        error.ReadOnlyFileSystem => "Read-only file system",
-        error.NoSpaceLeft => "No space left on device",
-        error.DiskQuota => "Disk quota exceeded",
-        error.FileBusy => "Device or resource busy",
-        error.LinkQuotaExceeded => "Too many links",
-        error.SystemResources => "Cannot allocate memory",
-        else => @errorName(err),
-    };
-}
+pub const errText = @import("errtext.zig").errText;
 
 /// Buffered stdout. Not thread-safe. Failures are sticky: after the first
 /// failed write `failed` is set and further writes are dropped, so callers

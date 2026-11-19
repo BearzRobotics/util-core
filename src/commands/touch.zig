@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! touch — change file timestamps.
-//! Reference: GNU coreutils manual "touch invocation" (9.7); POSIX.1-2024
-//! touch (-a -c -d -m -r -t). Times are set with utimensat(2) through
-//! src/sys.zig; -d uses the GNU date parser (src/datetime.zig).
+//! touch: thin wrapper over `util_core.touch` (decision 0004). Parses the
+//! arguments, resolves -d/-t/-r into concrete times (GNU date parser,
+//! src/datetime.zig) and words the diagnostics; the library applies the times.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
@@ -14,8 +13,9 @@ const Io = std.Io;
 
 const help_text = @embedFile("../help/touch.txt");
 
-const ch_atime = 1;
-const ch_mtime = 2;
+const touch = @import("../lib/touch.zig");
+const ch_atime = touch.ch_atime;
+const ch_mtime = touch.ch_mtime;
 
 pub fn main(ctx: cli.Context) u8 {
     const gpa = ctx.gpa;
@@ -161,51 +161,21 @@ pub fn main(ctx: cli.Context) u8 {
         getopt.usageError(ctx, "missing file operand", .{});
         return 1;
     }
-    var ok = true;
-    for (files) |file| {
-        if (!touchOne(ctx, file, &newtime, change_times, no_create, no_deref, amtime_now)) ok = false;
-    }
+    const env: touch.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+    const ok = touch.run(env, .{
+        .change_times = change_times,
+        .no_create = no_create,
+        .no_deref = no_deref,
+        .times = newtime,
+        .now = amtime_now,
+    }, files, .{ .context = @constCast(&ctx), .func = report });
     return if (ok) 0 else 1;
 }
 
-fn touchOne(ctx: cli.Context, file: []const u8, newtime_in: *const [2]sys.TimeSpec, change_times: u8, no_create: bool, no_deref: bool, amtime_now: bool) bool {
-    var open_errno: ?std.os.linux.E = null;
-    const is_stdout = std.mem.eql(u8, file, "-");
-    var times = newtime_in.*;
-    if (change_times != (ch_atime | ch_mtime)) {
-        if (change_times == ch_mtime) times[0].nsec = sys.TimeSpec.omit_ns else times[1].nsec = sys.TimeSpec.omit_ns;
+fn report(context: ?*anyopaque, ev: touch.Event) void {
+    const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
+    switch (ev) {
+        .cannot_touch => |f| cli.warn(ctx.*, "cannot touch {f}: {s}", .{ cli.quoteA(f.path), sys.errnoText(f.errno) }),
+        .set_times_failed => |f| cli.warn(ctx.*, "setting times of {f}: {s}", .{ cli.quoteA(f.path), sys.errnoText(f.errno) }),
     }
-    if (!is_stdout and !(no_create or no_deref)) {
-        // Create the file if needed (mode 0666 & ~umask), like open(O_CREAT).
-        if (Io.Dir.cwd().createFile(ctx.io, file, .{ .truncate = false })) |f| {
-            f.close(ctx.io);
-        } else |e| {
-            open_errno = switch (e) {
-                error.AccessDenied, error.PermissionDenied => .ACCES,
-                error.FileNotFound => .NOENT,
-                error.IsDir => .ISDIR,
-                error.NotDir => .NOTDIR,
-                error.ReadOnlyFileSystem => .ROFS,
-                error.NameTooLong => .NAMETOOLONG,
-                error.SymLinkLoop => .LOOP,
-                error.NoSpaceLeft => .NOSPC,
-                else => .IO,
-            };
-        }
-    }
-    const t: ?[2]sys.TimeSpec = if (amtime_now) null else times;
-    const uerr = if (is_stdout) sys.setTimes(null, 1, t, false) else sys.setTimes(file, -1, t, no_deref);
-    if (uerr) |ue| {
-        if (is_stdout and ue == .BADF and no_create) return true;
-        if (open_errno) |oe| {
-            if (oe != .ISDIR) {
-                cli.warn(ctx, "cannot touch {f}: {s}", .{ cli.quoteA(file), sys.errnoText(oe) });
-                return false;
-            }
-        }
-        if (no_create and ue == .NOENT) return true;
-        cli.warn(ctx, "setting times of {f}: {s}", .{ cli.quoteA(file), sys.errnoText(ue) });
-        return false;
-    }
-    return true;
 }

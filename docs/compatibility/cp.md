@@ -25,6 +25,14 @@ GNU coreutils 9.7 (`/usr/bin/cp --version` on the development machine, installed
 - Directory entries are copied in inode order, like gnulib's `savedir(SAVEDIR_SORT_FASTREAD)`.
 - `-n` prints GNU 9.7's warning about its non-portable behaviour; an interactive refusal makes the exit status 1.
 
+## Library
+
+Library: module `util_core.cp` (`src/lib/cp.zig`) over the shared copy engine `src/copy.zig`; the executable only parses arguments and words usage errors. The engine reports GNU-worded diagnostics as text events (it knows the control flow that selects the message); the wrapper routes them.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - Only the C locale: names, quotes and messages are the English/ASCII ones.

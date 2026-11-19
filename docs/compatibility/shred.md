@@ -20,6 +20,14 @@ GNU coreutils 9.7 (`/usr/bin/shred --version` on the development machine, instal
 
 - The pass layout (random first and last, the fixed-pattern groups of GNU shred.c shuffled in between), the small-file double pass, size rounding, file-name wiping and the verbose messages follow shred.c.
 
+## Library
+
+Library: module `util_core.shred` (`src/lib/shred.zig`); the executable parses arguments and opens the --random-source file. The library reports GNU-worded diagnostics and progress as text events.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - Random data and the order of the fixed patterns come from the operating system's generator, not GNU's ISAAC stream: `--random-source` supplies the bytes but the resulting passes differ from GNU's for the same file.

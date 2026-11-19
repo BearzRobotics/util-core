@@ -1,36 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! rm — remove files or directories.
-//! References: GNU coreutils manual "rm invocation" (9.7); POSIX.1-2024 rm.
+//! rm: thin wrapper over `util_core.rm` (decision 0004). Parses arguments the
+//! way GNU rm does, asks the questions and words the diagnostics; the removal
+//! walk is in src/lib/rm.zig.
 //!
 //! Deviations: --preserve-root=all is treated as plain --preserve-root.
 
 const std = @import("std");
 const cli = @import("../cli.zig");
-const sys = @import("../sys.zig");
+const rm = @import("../lib/rm.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "force", "interactive", "one-file-system", "no-preserve-root", "preserve-root", "recursive", "dir", "verbose", "help", "version" };
 
-const Interactive = enum { never, once, always, default };
-
-const Config = struct {
-    force: bool = false,
-    interactive: Interactive = .default,
-    recursive: bool = false,
-    dirs: bool = false, // -d
-    verbose: bool = false,
-    preserve_root: bool = true,
-    one_fs: bool = false,
-    stdin_tty: bool = false,
-};
+const Interactive = rm.Interactive;
+const Config = rm.Options;
 
 const State = struct {
     ctx: cli.Context,
-    cfg: *const Config,
     out: *cli.Out,
-    ok: bool = true,
-    root_dev: u64 = 0, // device of the current command-line argument (--one-file-system)
-    nerr: usize = 0, // hard failures so far (declined prompts do not count)
 };
 
 pub fn main(ctx: cli.Context) u8 {
@@ -82,7 +69,7 @@ pub fn main(ctx: cli.Context) u8 {
                     }
                     cfg.force = false;
                 },
-                2 => cfg.one_fs = true,
+                2 => cfg.one_file_system = true,
                 3 => cfg.preserve_root = false,
                 4 => {
                     if (value) |v| {
@@ -134,7 +121,7 @@ pub fn main(ctx: cli.Context) u8 {
     cfg.stdin_tty = Io.File.stdin().isTty(ctx.io) catch false;
 
     var out = cli.Out.init(ctx.io);
-    var st: State = .{ .ctx = ctx, .cfg = &cfg, .out = &out };
+    var st: State = .{ .ctx = ctx, .out = &out };
 
     // -I: a single prompt for more than three files or for recursion.
     if (cfg.interactive == .once and (files.items.len > 3 or cfg.recursive)) {
@@ -144,10 +131,38 @@ pub fn main(ctx: cli.Context) u8 {
         if (!ask(ctx, msg)) return 0;
     }
 
-    for (files.items) |f| removeArg(&st, f);
+    const env: rm.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    const ok = rm.run(env, cfg, files.items, .{ .context = &st, .func = report }, .{ .context = &st, .func = confirm });
     out.flush();
     if (out.failed) return 1;
-    return if (st.ok) 0 else 1;
+    return if (ok) 0 else 1;
+}
+
+/// Word one library event the way GNU rm does.
+fn report(context: ?*anyopaque, ev: rm.Event) void {
+    const st: *State = @ptrCast(@alignCast(context.?));
+    const ctx = st.ctx;
+    switch (ev) {
+        .removed => |r| st.out.print("{s} {f}\n", .{ if (r.dir) "removed directory" else "removed", cli.quoteA(r.path) }),
+        .failed => |f| cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(f.path), cli.errText(f.err) }),
+        .refuse_dot => |p| cli.warn(ctx, "refusing to remove '.' or '..' directory: skipping {f}", .{cli.quoteA(p)}),
+        .refuse_root => |r| {
+            cli.warn(ctx, "it is dangerous to operate recursively on {f}{s}", .{ cli.quoteA(r.path), if (r.literal) "" else " (same as '/')" });
+            cli.warn(ctx, "use --no-preserve-root to override this failsafe", .{});
+        },
+        .other_device => |p| cli.warn(ctx, "skipping {f}, since it's on a different device", .{cli.quoteA(p)}),
+    }
+}
+
+/// Ask the question GNU rm would ask for this removal.
+fn confirm(context: ?*anyopaque, p: rm.Prompt) bool {
+    const st: *State = @ptrCast(@alignCast(context.?));
+    var buf: [4400]u8 = undefined;
+    const q = switch (p.action) {
+        .descend => std.fmt.bufPrint(&buf, "descend into directory {f}? ", .{cli.quoteA(p.path)}) catch return false,
+        .remove => std.fmt.bufPrint(&buf, "remove {s}{s} {f}? ", .{ if (p.write_protected) "write-protected " else "", kindWords(p.kind, p.size), cli.quoteA(p.path) }) catch return false,
+    };
+    return ask(st.ctx, q);
 }
 
 fn matchWord(w: []const u8, options: []const []const u8) bool {
@@ -176,36 +191,6 @@ fn ask(ctx: cli.Context, text: []const u8) bool {
     return line[0] == 'y' or line[0] == 'Y';
 }
 
-fn removeArg(st: *State, path: []const u8) void {
-    const ctx = st.ctx;
-    const cfg = st.cfg;
-    // "." and ".." as the last component are never removed.
-    const trimmed = std.mem.trimEnd(u8, path, "/");
-    const last = if (std.mem.lastIndexOfScalar(u8, trimmed, '/')) |i| trimmed[i + 1 ..] else trimmed;
-    if (cfg.recursive and (std.mem.eql(u8, last, ".") or std.mem.eql(u8, last, ".."))) {
-        cli.warn(ctx, "refusing to remove '.' or '..' directory: skipping {f}", .{cli.quoteA(path)});
-        st.ok = false;
-        st.nerr += 1;
-        return;
-    }
-    if (cfg.preserve_root and cfg.recursive and isRoot(ctx, path)) {
-        const literal = std.mem.eql(u8, path, "/");
-        cli.warn(ctx, "it is dangerous to operate recursively on {f}{s}", .{ cli.quoteA(path), if (literal) "" else " (same as '/')" });
-        cli.warn(ctx, "use --no-preserve-root to override this failsafe", .{});
-        st.ok = false;
-        st.nerr += 1;
-        return;
-    }
-    _ = remove(st, path, true);
-}
-
-fn isRoot(ctx: cli.Context, p: []const u8) bool {
-    if (p.len > 0 and std.mem.indexOfNone(u8, p, "/") == null) return true;
-    var buf: [4096]u8 = undefined;
-    const n = Io.Dir.cwd().realPathFile(ctx.io, p, &buf) catch return false;
-    return std.mem.eql(u8, buf[0..n], "/");
-}
-
 fn kindWords(kind: Io.File.Kind, size: u64) []const u8 {
     return switch (kind) {
         .file => if (size == 0) "regular empty file" else "regular file",
@@ -217,137 +202,6 @@ fn kindWords(kind: Io.File.Kind, size: u64) []const u8 {
         .character_device => "character special file",
         else => "file",
     };
-}
-
-/// Remove `path` (recursively when asked). Returns true when it is gone.
-fn remove(st: *State, path: []const u8, is_arg: bool) bool {
-    const ctx = st.ctx;
-    const cfg = st.cfg;
-    const cwd = Io.Dir.cwd();
-    const lst = cwd.statFile(ctx.io, path, .{ .follow_symlinks = false }) catch |e| {
-        if (cfg.force and e == error.FileNotFound) return true;
-        cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), cli.errText(e) });
-        st.ok = false;
-        st.nerr += 1;
-        return false;
-    };
-    var buf: [4400]u8 = undefined;
-
-    if (lst.kind == .directory) {
-        if (!cfg.recursive) {
-            if (cfg.dirs) return removeEmptyDir(st, path, lst, is_arg);
-            cli.warn(ctx, "cannot remove {f}: Is a directory", .{cli.quoteA(path)});
-            st.ok = false;
-        st.nerr += 1;
-            return false;
-        }
-        if (cfg.one_fs) {
-            var de: std.os.linux.E = .SUCCESS;
-            if (sys.fileStat(path, false, &de)) |fs| {
-                const dev = (@as(u64, fs.dev_major) << 32) | fs.dev_minor;
-                if (is_arg) {
-                    st.root_dev = dev;
-                } else if (dev != st.root_dev) {
-                    cli.warn(ctx, "skipping {f}, since it's on a different device", .{cli.quoteA(path)});
-                    st.ok = false;
-                    st.nerr += 1;
-                    return false;
-                }
-            }
-        }
-        if (cfg.interactive == .always) {
-            const q = std.fmt.bufPrint(&buf, "descend into directory {f}? ", .{cli.quoteA(path)}) catch return false;
-            if (!ask(ctx, q)) return false;
-        }
-        var dir = cwd.openDir(ctx.io, path, .{ .iterate = true }) catch |e| {
-            cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), cli.errText(e) });
-            st.ok = false;
-        st.nerr += 1;
-            return false;
-        };
-        var names: std.ArrayList([]u8) = .empty;
-        defer {
-            for (names.items) |n| ctx.gpa.free(n);
-            names.deinit(ctx.gpa);
-        }
-        var it = dir.iterate();
-        while (it.next(ctx.io) catch null) |entry| {
-            const dup = ctx.gpa.dupe(u8, entry.name) catch break;
-            names.append(ctx.gpa, dup) catch {
-                ctx.gpa.free(dup);
-                break;
-            };
-        }
-        dir.close(ctx.io);
-        const errs_before = st.nerr;
-        for (names.items) |n| {
-            const child = if (std.mem.endsWith(u8, path, "/"))
-                std.fmt.allocPrint(ctx.gpa, "{s}{s}", .{ path, n }) catch return false
-            else
-                std.fmt.allocPrint(ctx.gpa, "{s}/{s}", .{ path, n }) catch return false;
-            defer ctx.gpa.free(child);
-            _ = remove(st, child, false);
-        }
-        if (st.nerr != errs_before) return false; // a child failed: leave the directory, as GNU does
-        return removeEmptyDir(st, path, lst, is_arg);
-    }
-
-    // Anything that is not a directory.
-    switch (cfg.interactive) {
-        .always => {
-            const q = std.fmt.bufPrint(&buf, "remove {s}{s} {f}? ", .{ writeProtectedWord(ctx, path, lst), kindWords(lst.kind, lst.size), cli.quoteA(path) }) catch return false;
-            if (!ask(ctx, q)) return false;
-        },
-        .default => if (cfg.stdin_tty and lst.kind != .sym_link and !writable(ctx, path)) {
-            const q = std.fmt.bufPrint(&buf, "remove write-protected {s} {f}? ", .{ kindWords(lst.kind, lst.size), cli.quoteA(path) }) catch return false;
-            if (!ask(ctx, q)) return false;
-        },
-        else => {},
-    }
-    cwd.deleteFile(ctx.io, path) catch |e| {
-        cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), cli.errText(e) });
-        st.ok = false;
-        st.nerr += 1;
-        return false;
-    };
-    if (cfg.verbose) st.out.print("removed {f}\n", .{cli.quoteA(path)});
-    return true;
-}
-
-/// "write-protected " when -i would say so (not for symlinks), else "".
-fn writeProtectedWord(ctx: cli.Context, path: []const u8, lst: Io.File.Stat) []const u8 {
-    if (lst.kind == .sym_link) return "";
-    return if (writable(ctx, path)) "" else "write-protected ";
-}
-
-fn writable(ctx: cli.Context, path: []const u8) bool {
-    Io.Dir.cwd().access(ctx.io, path, .{ .write = true }) catch return false;
-    return true;
-}
-
-fn removeEmptyDir(st: *State, path: []const u8, lst: Io.File.Stat, is_arg: bool) bool {
-    _ = is_arg;
-    const ctx = st.ctx;
-    const cfg = st.cfg;
-    var buf: [4400]u8 = undefined;
-    if (cfg.interactive == .always) {
-        const q = std.fmt.bufPrint(&buf, "remove {s}{s} {f}? ", .{ writeProtectedWord(ctx, path, lst), kindWords(lst.kind, lst.size), cli.quoteA(path) }) catch return false;
-        if (!ask(ctx, q)) return false;
-    } else if (cfg.interactive == .default and cfg.stdin_tty and !writable(ctx, path)) {
-        const q = std.fmt.bufPrint(&buf, "remove write-protected directory {f}? ", .{cli.quoteA(path)}) catch return false;
-        if (!ask(ctx, q)) return false;
-    }
-    Io.Dir.cwd().deleteDir(ctx.io, path) catch |e| {
-        // rmdir("/") says EBUSY; GNU's message is the one for a non-empty directory.
-        // Likewise "." (EINVAL) is reported as a non-empty directory.
-        const busy_root = (e == error.FileBusy and isRoot(ctx, path)) or (e == error.Unexpected and std.mem.endsWith(u8, std.mem.trimEnd(u8, path, "/"), "."));
-        cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(path), if (busy_root) "Directory not empty" else cli.errText(e) });
-        st.ok = false;
-        st.nerr += 1;
-        return false;
-    };
-    if (cfg.verbose) st.out.print("removed directory {f}\n", .{cli.quoteA(path)});
-    return true;
 }
 
 fn help(ctx: cli.Context) u8 {

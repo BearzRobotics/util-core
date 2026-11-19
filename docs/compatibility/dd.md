@@ -21,6 +21,14 @@ GNU coreutils 9.7 (`/usr/bin/dd --version` on the development machine, installed
 - Operand parsing, the copy loop (partial reads, `conv=sync`, `noerror`, `swab`, `block`/`unblock`), the character-set tables and the statistics lines follow dd.c; the transfer summary uses the same SI/IEC wording and rate arithmetic.
 - Only `--help` and `--version` are options.
 
+## Library
+
+Library: module `util_core.dd` (`src/lib/dd.zig`); the executable parses the operands. The library reports GNU-worded diagnostics and the statistics as text events.
+
+## Extensions
+
+None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
+
 ## Known deviations and gaps
 
 - SIGUSR1 does not print statistics.
