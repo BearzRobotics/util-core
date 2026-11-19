@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU sed 4.9 in the C locale. Date: 2026-11-07
 
+Library: `util_core.sed` (src/lib/sed.zig): `compile` turns script text (`-e` and `-f` chunks) into a `Program` or a structured `CompileError` (kind, chunk, position or line, message); `run` executes a `Program` over inputs and writes to an `Io.Writer`, so one script can be compiled once and run many times. `src/commands/sed.zig` only parses arguments, reads `-f` files and words the diagnostics (decision 0004).
+
 ## Reference
 
 GNU sed 4.9 (`/usr/bin/sed --version` on the development machine). Consulted 2026-11-07: the GNU sed manual (https://www.gnu.org/software/sed/manual/sed.html) and POSIX.1-2024 sed, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sed.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sed.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -31,6 +33,10 @@ GNU sed 4.9 (`/usr/bin/sed --version` on the development machine). Consulted 202
 - A missing newline at the end of the last line is preserved; `w /dev/stdout` and `/dev/stderr` are special.
 - `#n` on the first line of the script acts as `-n`.
 - Input files are read whole into memory before processing.
+
+## Extensions
+
+None. Every option and command is GNU sed 4.9's (including `--debug`, `--sandbox`, `-z` and the `e`, `F`, `z`, `W`, `R`, `T`, `v` commands); the only departures from GNU are listed under the deviations below (leftmost-longest emulation, UTF-8 tables, abbreviated `--version`).
 
 ## Known deviations and gaps
 

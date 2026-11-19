@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU grep 3.12. Date: 2026-11-07
 
+Library: `util_core.grep` (src/lib/grep.zig): `Matcher.compile` builds a compiled pattern list usable on any buffer (`isMatch`, `find`); `run` walks files, directories and standard input and writes to an `Io.Writer`; non-fatal problems go to an `Observer(Event)`. `src/commands/grep.zig` only parses arguments and words the diagnostics (decision 0004).
+
 ## Reference
 
 GNU grep 3.12 (`/usr/bin/grep --version` on the development machine). Consulted 2026-11-07: the GNU grep manual (https://www.gnu.org/software/grep/manual/grep.html) and POSIX.1-2024 grep, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/grep.html. Behaviour was checked by differential tests against the GNU binary (`sh test/test_grep.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -28,6 +30,10 @@ GNU grep 3.12 (`/usr/bin/grep --version` on the development machine). Consulted 
 - Binary files print `grep: FILE: binary file matches` to standard error after the first match; lines that are not valid UTF-8 are skipped individually in UTF-8 locales.
 - ERE leniency of GNU grep: leading `*`, `+`, `?` and `{n}` are ignored with a warning, an unmatched `)` and a `{` that does not start an interval are literals.
 - Leftmost-longest matching for alternation is emulated (see sed); `-w` and `-x` are implemented with look-around, so they pick the same match GNU's retry loop does.
+
+## Extensions
+
+None. No ripgrep- or FreeBSD-derived option is implemented; every option in the table above is GNU grep 3.12's (including the obsolete `-y` and `-u`, and GNU's undocumented `-X MATCHER`). The one place the behaviour differs from GNU is `-P`, which is regex-zig's Perl dialect rather than PCRE2 (see the deviations below). The library `Options` fields all default to GNU behaviour (decision 0005, rule 6).
 
 ## Known deviations and gaps
 

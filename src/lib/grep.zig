@@ -1118,3 +1118,22 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
 }
 
 // ---------------------------------------------------------------- patterns
+
+test "matcher on a buffer" {
+    var diag: CompileError = .{};
+    var m = try Matcher.compile(std.testing.allocator, .{ .syntax = .extended }, "fo+\nba[rz]", .none, &diag);
+    defer m.deinit();
+    try std.testing.expect(m.isMatch("xxfooyy"));
+    try std.testing.expect(m.isMatch("bar"));
+    try std.testing.expect(!m.isMatch("bat"));
+    const sp = m.find("a fooo b", 0).?;
+    try std.testing.expectEqual(@as(usize, 2), sp.start);
+    try std.testing.expectEqual(@as(usize, 6), sp.end);
+}
+
+test "bad pattern reports a structured error" {
+    var diag: CompileError = .{};
+    try std.testing.expectError(error.BadPattern, Matcher.compile(std.testing.allocator, .{ .syntax = .extended }, "a(", .none, &diag));
+    try std.testing.expectEqual(CompileError.Kind.syntax, diag.kind);
+    try std.testing.expect(diag.extended);
+}
