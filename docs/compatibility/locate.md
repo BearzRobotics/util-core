@@ -2,6 +2,8 @@
 
 Status: implemented; differential tests pass against GNU locate 4.10.0 (C locale). Date: 2026-11-07
 
+Library: `util_core.locate` (`src/lib/locate.zig`); `src/commands/locate.zig` is the thin wrapper (decision 0004).
+
 ## Reference
 
 GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from the findutils-4.10.0 source tarball by `tools/build-gnu-findutils.sh` into `~/.cache/util-core/findutils`; the suites skip if that is absent. Behaviour was checked against the GNU binaries run with LC_ALL=C. Where POSIX and GNU differ, the text below says which one we follow.
@@ -23,6 +25,10 @@ GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from t
 
 - Reads LOCATE02 and slocate databases (front-coded names) and prints matching entries; glob patterns use fnmatch, other patterns are substring matches.
 - Exit status 0 when something matched (or with -c/-S/--limit=0), 1 otherwise.
+
+## Extensions
+
+None. The executable is GNU locate 4.10 behaviour. In the library (`util_core.locate`) database problems are Observer events, `-` (standard input) is a caller-supplied `Options.stdin`, and a failed write to the output writer is dropped (`Result.write_failed` reports it), as the executable always did.
 
 ## Known deviations and gaps
 

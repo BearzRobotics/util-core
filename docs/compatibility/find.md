@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU find 4.10. Date: 2026-11-07
 
+Library: `util_core.find` (`src/lib/find.zig`); `src/commands/find.zig` is the thin wrapper (decision 0004).
+
 ## Reference
 
 GNU findutils 4.10.0 (`/usr/bin/find --version` on the development machine). Consulted 2026-11-07: the GNU find manual (https://www.gnu.org/software/findutils/manual/html_mono/find.html) and POSIX.1-2024 find, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/find.html. Behaviour was checked by differential tests against the GNU binary (`sh test/test_find.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -27,6 +29,11 @@ GNU findutils 4.10.0 (`/usr/bin/find --version` on the development machine). Con
 - `-exec ... +` batches arguments (about 100 KB per command line) and runs the rest at the end; `-execdir` runs in the file's directory with a `./name` argument.
 - Symbolic-link loops under -L are reported like GNU (`File system loop detected`).
 - The minute tests (-amin/-cmin/-mmin/-used) round up and the day tests round down, as GNU's pred_timewindow does.
+
+## Extensions
+
+- `-json` action (not in GNU find): one JSON object per file, see "Supported options" above. Applies only when the action is given; absent from `--help`; the GNU path is unchanged. Covered by `test/test_find_json.sh` (which also compares the matched files with GNU `-print`).
+- Library only (`util_core.find`): `find.walk` calls a visitor for every entry without any expression; `Expr.run` takes a `Confirm` callback for `-ok`/`-okdir` instead of reading the terminal. The executable never uses these differently from GNU.
 
 ## Known deviations and gaps
 

@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against GNU xargs 9.7 in the C locale. Date: 2026-11-07
 
+Library: `util_core.xargs` (`src/lib/xargs.zig`); `src/commands/xargs.zig` is the thin wrapper (decision 0004).
+
 ## Reference
 
 GNU findutils xargs 4.10.0 (`/usr/bin/xargs --version` on the development machine). Consulted 2026-11-07: the findutils manual "xargs invocation"; POSIX.1-2024 xargs, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/xargs.html. Behaviour was checked by differential tests against the installed binary run with LC_ALL=C (`sh test/test_xargs.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -25,6 +27,10 @@ GNU findutils xargs 4.10.0 (`/usr/bin/xargs --version` on the development machin
 - A NUL byte in the input is kept in the item and cuts the argument that contains it, after one warning, as GNU does.
 - Exit status: 0 on success, 123 when a command exited with 1-125, 124 when one exited with 255 (xargs stops), 125 when one was killed by a signal, 126/127 when it could not be run, 1 for xargs's own errors.
 - Conflicting -I/-L/-n options warn and the later one wins; `--show-limits` follows the arithmetic of ARG_MAX, the environment size and the 128 KiB buffer.
+
+## Extensions
+
+None. The executable is GNU xargs 4.10 behaviour. In the library (`util_core.xargs`) the `-p` question is asked through a `Confirm` callback supplied by the caller (the executable answers it on /dev/tty) and the `-t` trace and every diagnostic are `Observer` events.
 
 ## Known deviations and gaps
 
