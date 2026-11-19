@@ -2,6 +2,8 @@
 
 Status: implemented with the gaps listed below; differential tests pass against tree 2.3.1 (C and UTF-8 locales). Date: 2026-11-07
 
+Library: `util_core.tree` (`src/lib/tree.zig`); `src/commands/tree.zig` is the thin wrapper (decision 0004).
+
 ## Reference
 
 tree 2.3.1 by Steve Baker, Thomas Moore, Francesc Rocher, Florian Sesser and Kyosuke Tokoro (`/usr/bin/tree --version` on the development machine). tree has no specification beyond its manual page; the behaviour was taken from the installed binary and checked with differential tests (`sh test/test_tree.sh`). Where POSIX and GNU differ, the text below says which one we follow.
@@ -24,6 +26,10 @@ tree 2.3.1 by Steve Baker, Thomas Moore, Francesc Rocher, Florian Sesser and Kyo
 - Output follows tree 2.3.1: `|--`/`` `-- `` lines in the C locale and box-drawing characters in UTF-8 locales, `name -> target` for links, and the `N directories, M files` report (the start directory counts only when something is listed).
 - Names are escaped as tree does for the locale (octal escapes, `\\` and `\ ` in the C locale).
 - Directories that cannot be opened get an inline `[error opening dir]` note and exit status 2; link loops get `[recursive, not followed]`.
+
+## Extensions
+
+None added by util-core: tree is not a GNU program and its own options (`-J`, `-X`, `--du`, ...) are tree 2.3.1 behaviour. The differences from tree 2.3.1 are listed under "Known deviations and gaps". The library (`util_core.tree`) reports unreadable directories as Observer events in addition to the inline `[error opening dir]` note.
 
 ## Known deviations and gaps
 
