@@ -6,6 +6,10 @@ Status: implemented with the gaps listed below; differential tests pass against 
 
 GNU coreutils 9.7 (`/usr/bin/stat --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "stat invocation" (`info '(coreutils) stat invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/stat-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), stat, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/stat.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_stat.sh`). Where POSIX and GNU differ, the text below says which one we follow.
 
+## Library
+
+Module `util_core.stat` (`src/lib/stat.zig`); the executable `src/commands/stat.zig` is a thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
 ## Supported options
 
 - `-L, --dereference`: Follow symbolic links.
@@ -20,6 +24,12 @@ GNU coreutils 9.7 (`/usr/bin/stat --version` on the development machine, install
 
 - File data comes from statx(2) (including birth time); `-f` uses statfs(2) with GNU's file-system type table.
 - Directives, printf-style flags/width/precision, `%N` quoting (QUOTING_STYLE honoured when a format is given) and the `%X`-style fractional seconds follow GNU stat.c.
+
+## Extensions
+
+Per decision 0005 every departure from GNU is listed here.
+
+- `--json`: one JSON object per operand. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_stat_json.sh` (which also checks the GNU path through `test/test_stat.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 
