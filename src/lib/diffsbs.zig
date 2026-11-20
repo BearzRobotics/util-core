@@ -41,17 +41,19 @@ fn tabFromTo(w: *Io.Writer, expand: bool, tabsize: usize, from_in: usize, to: us
 }
 
 /// Print one half line, at most `out_bound` columns; returns the column reached.
+/// GNU's print_half_line, for the C locale: every byte but tab, CR, backspace
+/// and newline is one column wide, except the controls, which have none.
 fn printHalf(w: *Io.Writer, o: diff.Options, text: []const u8, out_bound: usize, indent: usize) Io.Writer.Error!usize {
-    var cr_seen = false;
     var in_pos: usize = 0;
     var out_pos: usize = 0;
     for (text) |c| {
         switch (c) {
             '\t' => {
                 const spaces = o.tab_size - in_pos % o.tab_size;
+                var tabstop = in_pos + spaces;
                 if (in_pos == out_pos) {
-                    var tabstop = out_pos + spaces;
                     if (o.expand_tabs) {
+                        // GNU clamps the stop itself, so the input column is clamped too.
                         if (out_bound < tabstop) tabstop = out_bound;
                         while (out_pos < tabstop) : (out_pos += 1) try w.writeByte(' ');
                     } else if (tabstop < out_bound) {
@@ -59,35 +61,38 @@ fn printHalf(w: *Io.Writer, o: diff.Options, text: []const u8, out_bound: usize,
                         try w.writeByte(c);
                     }
                 }
-                in_pos += spaces;
+                in_pos = tabstop;
             },
             '\r' => {
                 try w.writeByte(c);
+                _ = try tabFromTo(w, o.expand_tabs, o.tab_size, 0, indent);
                 in_pos = 0;
-                cr_seen = true;
                 out_pos = 0;
             },
             '\x08' => {
                 if (in_pos != 0) {
-                    const was = in_pos;
                     in_pos -= 1;
-                    if (was == out_pos) {
-                        out_pos -= 1;
-                        try w.writeByte(c);
+                    if (in_pos < out_bound) {
+                        if (out_pos <= in_pos) {
+                            while (out_pos < in_pos) : (out_pos += 1) try w.writeByte(' ');
+                        } else {
+                            out_pos = in_pos;
+                            try w.writeByte(c);
+                        }
                     }
                 }
             },
+            '\n' => return out_pos,
             else => {
-                if (!isPrint(c)) continue;
-                if (in_pos < out_bound) {
-                    in_pos += 1;
-                    out_pos = in_pos;
+                const width: usize = if (c < 32 or c == 127) 0 else 1;
+                in_pos += width;
+                if (in_pos <= out_bound) {
+                    if (!(c == 0 or c == 7 or c == 11 or c == 12)) out_pos = in_pos;
                     try w.writeByte(c);
-                } else in_pos += 1;
+                }
             },
         }
     }
-    if (cr_seen and out_pos < indent) return try tabFromTo(w, o.expand_tabs, o.tab_size, out_pos, indent);
     return out_pos;
 }
 
@@ -386,11 +391,11 @@ fn printLines(p: anytype, fmt: []const u8, g: Group) !void {
                 },
                 'l' => {
                     i += 1;
-                    try p.outputLine(lines.body(k));
+                    try p.outputLine(lines.body(k), null);
                 },
                 'L' => {
                     i += 1;
-                    try p.outputLine(lines.raw(k));
+                    try p.outputLine(lines.raw(k), null);
                 },
                 else => {
                     if (try printfSpec(p.w, fmt, i - 1, k + 1, null, true)) |e| i = e else try p.w.writeByte('%');

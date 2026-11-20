@@ -31,6 +31,7 @@ const Ext = struct {
     program: []const u8,
     text: bool,
     strip_cr: bool,
+    common_middle: bool,
     /// Paths handed to the program for MYFILE, OLDFILE, YOURFILE.
     paths: [3][]const u8,
     /// Set when the comparison failed; the message has been printed.
@@ -43,7 +44,9 @@ const Ext = struct {
         try argv.append(gpa, x.program);
         if (x.text) try argv.append(gpa, "-a");
         if (x.strip_cr) try argv.append(gpa, "--strip-trailing-cr");
-        try argv.appendSlice(gpa, &.{ "--horizon-lines=100", "---no-directory", "--", x.paths[1], x.paths[if (pair == 0) 0 else 2] });
+        const common: usize = if (x.common_middle) 1 else 2;
+        const other: usize = if (x.common_middle) (if (pair == 0) 0 else 2) else pair;
+        try argv.appendSlice(gpa, &.{ "--horizon-lines=100", "---no-directory", "--", x.paths[other], x.paths[common] });
         const env: subprog.Env = .{ .io = x.ctx.io, .gpa = gpa, .environ = x.ctx.environ };
         const res = try subprog.capture(env, argv.items);
         defer gpa.free(res.output);
@@ -194,15 +197,22 @@ pub fn main(ctx: cli.Context) u8 {
     }
     const external = !std.mem.eql(u8, program, "diff");
     if (external and as_json) return usage(ctx, "option --json is incompatible with --diff-program", .{});
-    if (!text and !external) for (0..3) |i| {
-        if (std.mem.indexOfScalar(u8, data[i][0..@min(data[i].len, 4096)], 0) != null) {
-            const first: usize = if (std.mem.indexOfScalar(u8, data[0][0..@min(data[0].len, 4096)], 0) != null) 0 else 1;
-            cli.warn(ctx, "diff failed: Binary files {s} and {s} differ", .{ ops[first], ops[2] });
-            return 2;
+    if (!text and !external) {
+        // GNU diff3 compares the second and third files first, then the first and third;
+        // the first of those that is binary and differs is named.
+        const pairs = if (letter != null or merge) [2][2]usize{ .{ 2, 1 }, .{ 0, 1 } } else [2][2]usize{ .{ 1, 2 }, .{ 0, 2 } };
+        for (pairs) |pr| {
+            const bin = for (pr) |i| {
+                if (std.mem.indexOfScalar(u8, data[i][0..@min(data[i].len, 4096)], 0) != null) break true;
+            } else false;
+            if (bin and !std.mem.eql(u8, data[pr[0]], data[pr[1]])) {
+                cli.warn(ctx, "diff failed: Binary files {s} and {s} differ", .{ ops[pr[0]], ops[pr[1]] });
+                return 2;
+            }
         }
-    };
+    }
 
-    var ext: Ext = .{ .ctx = ctx, .program = program, .text = text, .strip_cr = strip_cr, .paths = .{ ops[0], ops[1], ops[2] } };
+    var ext: Ext = .{ .ctx = ctx, .program = program, .text = text, .strip_cr = strip_cr, .common_middle = letter != null or merge, .paths = .{ ops[0], ops[1], ops[2] } };
     var tmp_paths: [3]?[]u8 = .{ null, null, null };
     defer for (tmp_paths) |tp| if (tp) |pth| {
         Io.Dir.cwd().deleteFile(ctx.io, pth) catch {};
@@ -227,6 +237,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
     var res = diff3.merge3(gpa, data[0], data[1], data[2], .{
         .strip_trailing_cr = strip_cr,
+        .common_middle = letter != null or merge,
         .external = if (external) .{ .context = &ext, .func = Ext.run } else null,
     }) catch |e| {
         if (ext.failed) return 2;

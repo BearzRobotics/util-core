@@ -1,15 +1,16 @@
 # diff: compatibility record
 
-Status: partial (see gaps); verified against GNU diffutils 3.12. Date: 2026-11-20
+Status: complete for the GNU options except `--diff-program` (which diff does not have) and locale collation; verified against GNU diffutils 3.12. Date: 2026-11-20
 
 ## Reference
 
-GNU diffutils 3.12 (`/usr/bin/diff --version` on the development machine). Consulted: the GNU manual chapters "Comparing and Merging Files" (normal, context, unified, ed, RCS, side by side, if-then-else formats, directories, options) and POSIX.1-2024 diff. The installed binary was probed for stdout, stderr and exit status; the FreeBSD diff (`tools/bsdrun.sh diff`) was looked at for ideas only.
+GNU diffutils 3.12 (`/usr/bin/diff --version` on the development machine). Consulted: the GNU manual chapters "Comparing and Merging Files" (normal, context, unified, ed, RCS, side by side, if-then-else formats, directories, options) and POSIX.1-2024 diff. The installed binary was probed for stdout, stderr and exit status; the FreeBSD diff (`tools/bsdrun.sh diff`) was looked at for ideas only. Behaviour was verified against the GNU binary (and, for algorithms, by reading the 3.12 sources for understanding only); no GNU code or text is copied: this project is GPL-2.0-or-later and independent.
 
 ## Supported options
 
 - Styles: `--normal`, `-c/-C NUM/--context[=NUM]`, `-u/-U NUM/--unified[=NUM]`, `-NUM`, `-e/--ed`, `-f`, `-n/--rcs`, `-y/--side-by-side` with `-W`, `--left-column`, `--suppress-common-lines`, `--tabsize`, `-D/--ifdef`, `--line-format`, `--old/new/unchanged-line-format`, `--old/new/unchanged/changed-group-format` (all `%` directives of the manual).
 - Content options: `-i -E -Z -b -w -B -I RE -a --strip-trailing-cr -d -H --horizon-lines`, `-p -F RE`, `--label`, `-t -T --suppress-blank-empty`, `--color[=WHEN] --palette` (default colours; the palette keys ad, de, hd, ln).
+- Pagination: `-l/--paginate` passes each file's output through the project's own `pr` library (in process) with the title `diff OPTIONS NAME1 NAME2`, matching GNU's `pr -h` pipe including the header page layout.
 - Reporting: `-q -s`, "Binary files differ" (NUL in the first 4096 bytes), "No newline at end of file", exit status 0/1/2.
 - Directories: `-r -N --unidirectional-new-file --no-dereference -x -X -S --ignore-file-name-case --from-file --to-file`, "Only in", "Common subdirectories", file-type mismatch messages, "Symbolic links ... differ", the `diff -r ...` line before each file, labels replacing the first name.
 - Diagnostics worded as GNU's, including the option errors with the "Try" line as its own diagnostic and the ed-style "No newline at end of file" warning (status 2).
@@ -28,10 +29,9 @@ Generated file pairs (random vocabulary, random edits, repeated and blank lines,
 
 ## Known deviations and gaps
 
-- `-l/--paginate` is accepted and ignored (no `pr` pipe). The "diff -l" header page is not produced.
-- `--diff-program` does not exist; file names are ordered bytewise (C locale), not by locale collation.
-- `-B` with some patterns of ignorable blank lines groups hunks differently from GNU in rare cases (one generated pair in 60).
-- A few `%` directive corner cases of the group formats with a missing final newline.
+- `-l` uses the built-in page formatter, not a `pr` found on the path.
+- File names are ordered bytewise (C locale), not by locale collation.
+- Non-C locales are not modelled (character width, collation, the context-diff date format of a non-C `LC_TIME`).
 - Files that are not regular (FIFOs, sockets, devices) inside a directory comparison are treated as identical when both sides have the same type.
 - Time stamps in headers use the TZ rules of `tz.zig`; a non-regular standard input uses the current time, as GNU.
 - Not run on Windows or macOS (the code uses `std.Io` only; no raw descriptors).

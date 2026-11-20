@@ -35,7 +35,7 @@ At each group of differences sdiff prints `%` and reads a command from standard 
 : Treat files as text; strip carriage returns; try harder for a smaller set of changes; assume large files.
 
 --diff-program=PROGRAM
-: Only `diff` is accepted.
+: Run PROGRAM instead of the built-in comparison. Without `-o` it is run with the translated options and `-y -- FILE1 FILE2` in place of sdiff and its status is returned; with `-o` it is run with `--sdiff-merge-assist` and its output drives the interactive merge. The default `diff` stays in process.
 
 --json
 : The aligned rows as one JSON object: `files` and `rows`, each row with `marker` (`equal`, `changed`, `left_only`, `right_only`), `left_line`, `left`, `right_line`, `right`. Refused with -o and the layout options. Not in GNU sdiff.
@@ -53,8 +53,8 @@ At each group of differences sdiff prints `%` and reads a command from standard 
 
 # DIFFERENCES FROM GNU
 
-- The comparison is built in (`--diff-program` other than `diff` is refused).
-- The text of the headers written by the `ed` command is this implementation's.
+- The comparison is built in unless `--diff-program` names another program.
+- The headers written by the `ed` command (`--- FILE N` or `--- FILE N,M`, none for an empty range) and all other prompt behaviour were verified against GNU with scripted sessions over single-line, multi-line and empty ranges.
 - `--json` is an extension.
 
 # SEE ALSO

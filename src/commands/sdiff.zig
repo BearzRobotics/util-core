@@ -289,7 +289,7 @@ pub fn main(ctx: cli.Context) u8 {
             if (same) return 0;
             const msg = std.fmt.allocPrint(arena, "Binary files {s} and {s} differ\n", .{ ops[0], ops[1] }) catch return 2;
             _ = cli.writeStdout(ctx.io, msg);
-            return 2;
+            return 1;
         }
     };
 

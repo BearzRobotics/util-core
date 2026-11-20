@@ -52,6 +52,9 @@ pub const External = struct {
 
 pub const Flags = struct {
     strip_trailing_cr: bool = false,
+    /// Compare with the middle file (ed scripts and merges) instead of the
+    /// third (the default report), as GNU does.
+    common_middle: bool = false,
     external: ?External = null,
 };
 
@@ -209,88 +212,92 @@ pub fn merge3(gpa: std.mem.Allocator, mine: []const u8, older: []const u8, yours
         ls[i] = try diffcore.splitLines(gpa, data[i]);
         made += 1;
     }
-    const ea = if (flags.external) |x| try x.func(x.context, gpa, 0) else try diffcore.compare(gpa, ls[1], ls[0], .{});
-    defer gpa.free(ea);
-    const eb = if (flags.external) |x| try x.func(x.context, gpa, 1) else try diffcore.compare(gpa, ls[1], ls[2], .{});
-    defer gpa.free(eb);
-    if (flags.external != null) {
-        if (!editsFit(ea, ls[1].count(), ls[0].count()) or !editsFit(eb, ls[1].count(), ls[2].count())) return error.InvalidEdits;
+    // GNU diff3 compares each of two files with a common file: the third
+    // for the default report, the middle one for ed scripts and merges. The
+    // comparison runs from the other file to the common one (thread 1 first).
+    const c: usize = if (flags.common_middle) 1 else 2;
+    const others: [2]usize = if (flags.common_middle) .{ 0, 2 } else .{ 0, 1 };
+    var raw: [2][]diffcore.Edit = .{ &.{}, &.{} };
+    defer for (raw) |r| gpa.free(r);
+    var tn: usize = 2;
+    while (tn > 0) {
+        tn -= 1;
+        raw[tn] = if (flags.external) |x| try x.func(x.context, gpa, @intCast(tn)) else try diffcore.compare(gpa, ls[others[tn]], ls[c], .{ .horizon_lines = 100 });
+        if (flags.external != null and !editsFit(raw[tn], ls[others[tn]].count(), ls[c].count())) return error.InvalidEdits;
     }
+    // Changes in terms of the common file: `cs`/`cc` its range, `os`/`oc` the other file's.
+    const Chg = struct { cs: usize, cc: usize, os: usize, oc: usize };
+    var th: [2][]Chg = .{ &.{}, &.{} };
+    defer for (th) |r| gpa.free(r);
+    for (0..2) |k| {
+        th[k] = try gpa.alloc(Chg, raw[k].len);
+        for (raw[k], th[k]) |e, *ch| ch.* = .{ .cs = e.line1, .cc = e.inserted, .os = e.line0, .oc = e.deleted };
+    }
+    const odd = [3]Kind{ .only_first, .only_second, .only_third };
 
     var blocks: std.ArrayList(Block) = .empty;
     errdefer blocks.deinit(gpa);
-    var ia: usize = 0;
-    var ib: usize = 0;
-    var delta_a: isize = 0; // lines MYFILE is ahead of OLDFILE before the current block
-    var delta_b: isize = 0;
-    while (ia < ea.len or ib < eb.len) {
+    var idx: [2]usize = .{ 0, 0 };
+    var delta: [2]isize = .{ 0, 0 }; // lines the other file is ahead of the common file
+    while (idx[0] < th[0].len or idx[1] < th[1].len) {
         // Start with the earlier block.
-        const take_a = ib >= eb.len or (ia < ea.len and ea[ia].line0 <= eb[ib].line0);
-        const first = if (take_a) ea[ia] else eb[ib];
-        var lo = first.line0;
-        var hi = first.line0 + first.deleted; // exclusive end in OLDFILE
-        var has_a = false;
-        var has_b = false;
-        var da: isize = 0;
-        var db: isize = 0;
+        const take0 = idx[1] >= th[1].len or (idx[0] < th[0].len and th[0][idx[0]].cs <= th[1][idx[1]].cs);
+        const first = if (take0) th[0][idx[0]] else th[1][idx[1]];
+        const lo = first.cs;
+        var hi = first.cs + first.cc; // exclusive end in the common file
+        var has: [2]bool = .{ false, false };
+        var dd: [2]isize = .{ 0, 0 };
         // Absorb every block of either thread that touches [lo, hi].
         var changed = true;
         while (changed) {
             changed = false;
-            if (ia < ea.len and ea[ia].line0 <= hi) {
-                const e = ea[ia];
-                hi = @max(hi, e.line0 + e.deleted);
-                da += @as(isize, @intCast(e.inserted)) - @as(isize, @intCast(e.deleted));
-                has_a = true;
-                ia += 1;
-                changed = true;
-            }
-            if (ib < eb.len and eb[ib].line0 <= hi) {
-                const e = eb[ib];
-                hi = @max(hi, e.line0 + e.deleted);
-                db += @as(isize, @intCast(e.inserted)) - @as(isize, @intCast(e.deleted));
-                has_b = true;
-                ib += 1;
-                changed = true;
+            for (0..2) |k| {
+                if (idx[k] < th[k].len and th[k][idx[k]].cs <= hi) {
+                    const e = th[k][idx[k]];
+                    hi = @max(hi, e.cs + e.cc);
+                    dd[k] += @as(isize, @intCast(e.oc)) - @as(isize, @intCast(e.cc));
+                    has[k] = true;
+                    idx[k] += 1;
+                    changed = true;
+                }
             }
         }
-        const a_lo: usize = @intCast(@as(isize, @intCast(lo)) + delta_a);
-        const b_lo: usize = @intCast(@as(isize, @intCast(lo)) + delta_b);
-        const a_cnt: usize = @intCast(@as(isize, @intCast(hi - lo)) + da);
-        const b_cnt: usize = @intCast(@as(isize, @intCast(hi - lo)) + db);
-        delta_a += da;
-        delta_b += db;
+        var rs: [2]usize = undefined;
+        var rc: [2]usize = undefined;
+        for (0..2) |k| {
+            rs[k] = @intCast(@as(isize, @intCast(lo)) + delta[k]);
+            rc[k] = @intCast(@as(isize, @intCast(hi - lo)) + dd[k]);
+            delta[k] += dd[k];
+        }
         var kind: Kind = undefined;
-        if (has_a and !has_b) kind = .only_first else if (has_b and !has_a) kind = .only_third else {
-            var same = a_cnt == b_cnt;
+        if (has[0] and !has[1]) kind = odd[others[0]] else if (has[1] and !has[0]) kind = odd[others[1]] else {
+            var same = rc[0] == rc[1];
             if (same) {
                 var k: usize = 0;
-                while (k < a_cnt) : (k += 1) {
-                    if (!std.mem.eql(u8, ls[0].raw(a_lo + k), ls[2].raw(b_lo + k))) {
+                while (k < rc[0]) : (k += 1) {
+                    if (!std.mem.eql(u8, ls[others[0]].raw(rs[0] + k), ls[others[1]].raw(rs[1] + k))) {
                         same = false;
                         break;
                     }
                 }
             }
-            kind = if (same) .only_second else .overlap;
+            kind = if (same) odd[c] else .overlap;
         }
-        try blocks.append(gpa, .{ .kind = kind, .ranges = .{
-            .{ .start = a_lo, .count = a_cnt },
-            .{ .start = lo, .count = hi - lo },
-            .{ .start = b_lo, .count = b_cnt },
-        } });
-        lo = hi;
+        var ranges: [3]Range = undefined;
+        ranges[c] = .{ .start = lo, .count = hi - lo };
+        ranges[others[0]] = .{ .start = rs[0], .count = rc[0] };
+        ranges[others[1]] = .{ .start = rs[1], .count = rc[1] };
+        try blocks.append(gpa, .{ .kind = kind, .ranges = ranges });
     }
+    // One note per "\ No newline" marker the comparison programs would print.
     var missing: u8 = 0;
-    for ([2]struct { e: []const diffcore.Edit, other: usize }{ .{ .e = ea, .other = 0 }, .{ .e = eb, .other = 2 } }) |pair| {
-        var hit = false;
-        for (pair.e) |e| {
-            const n_old = ls[1].count();
-            const n_oth = ls[pair.other].count();
-            if (e.deleted > 0 and e.line0 + e.deleted == n_old and !ls[1].terminated(n_old - 1)) hit = true;
-            if (e.inserted > 0 and e.line1 + e.inserted == n_oth and !ls[pair.other].terminated(n_oth - 1)) hit = true;
+    for (0..2) |k| {
+        const n_oth = ls[others[k]].count();
+        const n_com = ls[c].count();
+        for (raw[k]) |e| {
+            if (e.deleted > 0 and e.line0 + e.deleted == n_oth and !ls[others[k]].terminated(n_oth - 1)) missing += 1;
+            if (e.inserted > 0 and e.line1 + e.inserted == n_com and !ls[c].terminated(n_com - 1)) missing += 1;
         }
-        if (hit) missing += 1;
     }
     return .{ .gpa = gpa, .lines = ls, .blocks = try blocks.toOwnedSlice(gpa), .owned = owned, .missing_newline = missing };
 }

@@ -482,7 +482,7 @@ pub const Printer = struct {
                 if (!omit) try p.w.writeByte(if (o.initial_tab) '\t' else ' ');
             }
         }
-        try p.outputLine(text);
+        try p.outputLine(text, if (flag.len > 0) flag else null);
         if ((flag.len > 0 or true) and (text.len == 0 or text[text.len - 1] != '\n') and flag.len > 0) {
             try p.w.writeAll("\n\\ No newline at end of file\n");
         }
@@ -493,12 +493,14 @@ pub const Printer = struct {
         return true;
     }
 
-    /// The text of a line, expanding tabs for -t.
-    pub fn outputLine(p: *Printer, text: []const u8) Io.Writer.Error!void {
+    /// The text of a line, expanding tabs for -t (GNU's output_1_line). After
+    /// a carriage return inside the line the flag is printed again when `flag`
+    /// is given, so that tab stops keep lining up.
+    pub fn outputLine(p: *Printer, text: []const u8, flag: ?[]const u8) Io.Writer.Error!void {
         const o = p.options;
         if (!o.expand_tabs) return p.w.writeAll(text);
         var col: usize = 0;
-        for (text) |ch| {
+        for (text, 0..) |ch, idx| {
             switch (ch) {
                 '\t' => {
                     const n = o.tab_size - col % o.tab_size;
@@ -507,15 +509,23 @@ pub const Printer = struct {
                 },
                 '\r' => {
                     try p.w.writeByte(ch);
+                    if (flag) |f| {
+                        if (idx + 1 < text.len and text[idx + 1] != '\n') {
+                            try p.w.writeAll(f);
+                            try p.w.writeByte(if (o.initial_tab) '\t' else ' ');
+                        }
+                    }
                     col = 0;
                 },
                 '\x08' => {
-                    try p.w.writeByte(ch);
-                    if (col > 0) col -= 1;
+                    if (col > 0) {
+                        col -= 1;
+                        try p.w.writeByte(ch);
+                    }
                 },
                 else => {
                     try p.w.writeByte(ch);
-                    col += 1;
+                    if (ch >= 32 and ch != 127) col += 1;
                 },
             }
         }
@@ -693,7 +703,7 @@ pub const Printer = struct {
                 j += 1;
                 const blank = text.len == 1 and text[0] == '\n';
                 if (!(o.suppress_blank_empty and blank)) try p.w.writeByte(if (o.initial_tab) '\t' else ' ');
-                try p.outputLine(text);
+                try p.outputLine(text, null);
                 try p.noteIfMissing(text);
             } else {
                 const e = hunk[next].edit;
@@ -703,8 +713,8 @@ pub const Printer = struct {
                     i += 1;
                     if (color) try p.sgr(o.palette.delete);
                     try p.w.writeByte('-');
-                    if (o.initial_tab and !(text.len == 1 and text[0] == '\n')) try p.w.writeByte('\t');
-                    try p.outputLine(text);
+                    if (o.initial_tab and !(o.suppress_blank_empty and text.len == 1 and text[0] == '\n')) try p.w.writeByte('\t');
+                    try p.outputLine(text, null);
                     if (color) try p.reset();
                     try p.noteIfMissing(text);
                 }
@@ -714,8 +724,8 @@ pub const Printer = struct {
                     j += 1;
                     if (color) try p.sgr(o.palette.add);
                     try p.w.writeByte('+');
-                    if (o.initial_tab and !(text.len == 1 and text[0] == '\n')) try p.w.writeByte('\t');
-                    try p.outputLine(text);
+                    if (o.initial_tab and !(o.suppress_blank_empty and text.len == 1 and text[0] == '\n')) try p.w.writeByte('\t');
+                    try p.outputLine(text, null);
                     if (color) try p.reset();
                     try p.noteIfMissing(text);
                 }
