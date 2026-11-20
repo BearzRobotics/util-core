@@ -103,6 +103,22 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    // Fuzz tests (src/fuzz/): `zig build fuzz` runs them once on their corpus, and
+    // `zig build fuzz --fuzz` fuzzes continuously. `zig build test` runs them once too.
+    {
+        const fuzz_t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/fuzz.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "regex", .module = regex_mod }},
+            }),
+        });
+        const run = b.addRunArtifact(fuzz_t);
+        b.step("fuzz", "Run the fuzz tests (add --fuzz to fuzz continuously)").dependOn(&run.step);
+        test_step.dependOn(&run.step);
+    }
+
     // Syntax-highlighting modules (they depend on the regex-zig package).
     const syntax_unit = b.addTest(.{
         .root_module = b.createModule(.{
