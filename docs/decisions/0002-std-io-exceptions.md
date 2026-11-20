@@ -20,10 +20,13 @@ Not convertible: five facilities for which that standard library has no
 
 ## Decision
 
-Keep these as exceptions, collected in **`src/sys.zig`**, the only file allowed
+Keep these as exceptions, collected in **`src/sys.zig`** (and its non-Linux half `src/sys/other.zig`), the only files allowed
 to use `std.posix` / `std.os`. Commands call `sys.*`; none imports a POSIX
-module. Every function is a no-op or returns a safe default on Windows and
-WASI.
+module. Linux code is in `sys.zig`; every other OS (macOS, Windows) is served by
+`src/sys/other.zig` behind the same signatures, dispatched with a comptime
+`builtin.os.tag` check. Where a facility cannot exist on the platform the
+function returns `E.NOSYS` / `E.OPNOTSUPP` (or a documented neutral value) so
+the command prints a one-line diagnostic. See `docs/portability.md`.
 
 | `sys` function | Used by | What it does | Why `std.Io` cannot |
 |---|---|---|---|
@@ -67,4 +70,31 @@ reaches into the vtable because `Io.File` has no public seek method.
   probing, append-mode `createFile`). When `std.Io` gains one, replace the
   `sys` function and delete its row. The expectation is that this table shrinks
   over time.
-- Ports to Windows and WASI keep working but without those features.
+- Windows and macOS builds exist (`docs/portability.md`); where a facility is
+  missing the command fails with a diagnostic rather than pretending.
+
+## Portable-OS additions (2026-11-19)
+
+All of these are in `src/sys/other.zig`, reached through the `sys.*` function of
+the same name. "Io" rows use the single-threaded `std.Io` instance
+(`Io.Threaded.global_single_threaded`) because `sys` functions carry no `io`.
+
+| `sys` function(s) | macOS | Windows | Why `sys` and not the caller's `std.Io` |
+|---|---|---|---|
+| `fileStat`, `fstatFd` | libc `fstatat`/`fstat` (owner, device, blocks) | `Io` `statFile`/`stat`; ids and devices read 0 | `Io.File.Stat` lacks owner/device/blocks; the `FileStat` shape is shared with Linux |
+| `openFd`, `readFd`, `writeAllFd`, `writeFd`, `closeFd`, `ftruncateFd`, `fchmodFd`, `setTimes`, `mkdirPath`, `unlinkPath`, `renamePath`, `linkPath`, `symlinkPath`, `readlinkPath`, `chmodPath`, `accessPath`, `readDirRaw` | `Io` | `Io` | errno-faithful results (`E`) and the descriptor-level calling convention cp, mv, install, sed, grep, find use |
+| `seekFd` | libc `lseek` (SEEK_DATA/HOLE swapped) | `Io` seek vtable; no SEEK_DATA/HOLE | `Io.File` has no public seek |
+| `fchownFd`, `chownAt` | libc | succeeds only for owner 0/unchanged, else `E.PERM` | no owner API |
+| `openAppend`, `openAppendMode` | libc `open(O_APPEND)` | open, then seek to end (not atomic) | no append mode |
+| `getStatusFlags`, `setStatusFlags` | 0 / no-op | 0 / no-op | `fcntl` flags (dd, shred) |
+| `umask`, `setUmask` | libc | fixed 022 | no query API |
+| `terminalColumns` | `ioctl(TIOCGWINSZ)` | `GetConsoleScreenBufferInfo` | tty size |
+| `processAlive`, `sendSignal`, `waitPid` | `kill`, `waitpid` | `OpenProcess`/`WaitForSingleObject`/`TerminateProcess`/`GetExitCodeProcess` | `Child.wait` has no timeout |
+| `Watcher` (`timeout`) | `kqueue` (EVFILT_PROC, EVFILT_SIGNAL) | `WaitForSingleObject` with a timeout; no signal events | pidfd/signalfd are Linux |
+| `setSignal`, `unblockSignal`, `signalState`, `catchSignals`, `signalOwnGroup`, `raiseSelf` | `sigaction`, `sigprocmask` | `E.NOSYS` / false (no signals) | no signal API |
+| `identity`, `supplementaryGroups` | libc `getuid` ... `getgroups` | all ids 0, no groups | no identity API |
+| `uname` | libc `uname` | `RtlGetVersion`, `GetComputerNameA` | no host info API |
+| `getNice`, `setNice`, `becomeGroupLeader`, `parentPid`, `chrootPath`, `mknodPath`, `syncFile(.all)`, `setRealtime` | libc | `E.NOSYS` | no such API |
+| `statfs` | libc `statfs` (`$INODE64` on x86_64) | `GetDiskFreeSpaceExW` | no filesystem-statistics API |
+| `getXattr` | `E.OPNOTSUPP` | `E.OPNOTSUPP` | SELinux/xattr contexts are Linux |
+| `monotonicNs`, `permissionsFromMode`, `handleFromFd`, `signo`, `Handle`, `Pid` | portable | portable | helpers that hide the `Io.File.Handle` (pointer on Windows) and `Child.Id` types |

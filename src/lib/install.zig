@@ -165,7 +165,7 @@ fn sameContent(a: []const u8, b: []const u8) bool {
     }
 }
 
-fn readFull(fd: i32, buf: []u8) ?usize {
+fn readFull(fd: sys.Handle, buf: []u8) ?usize {
     var e: E = .SUCCESS;
     var n: usize = 0;
     while (n < buf.len) {
@@ -224,7 +224,7 @@ fn stripFile(s: *St, name: []const u8) bool {
         s.warnNoFlush("strip process terminated abnormally", .{});
         return false;
     };
-    const pid: i32 = @intCast(child.id.?);
+    const pid = child.id.?;
     switch (sys.waitPid(pid, true)) {
         .exited => |c| if (c == 0) return true,
         else => {},
@@ -262,7 +262,7 @@ fn installFileInFile(s: *St, c: *copy.Copier, from: []const u8, to: []const u8) 
     }
     if (c.x.preserve_timestamps and (s.o.strip_files or !from_sb.isReg())) {
         const ts = [2]sys.TimeSpec{ .{ .sec = from_sb.atime_s, .nsec = from_sb.atime_ns }, .{ .sec = from_sb.mtime_s, .nsec = from_sb.mtime_ns } };
-        if (sys.setTimes(to, -1, ts, false)) |te| {
+        if (sys.setTimes(to, sys.invalid_handle, ts, false)) |te| {
             s.warn("cannot set timestamps for {f}: {s}", .{ quote.quoteA(to), sys.errnoText(te) });
             return false;
         }

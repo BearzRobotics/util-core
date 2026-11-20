@@ -19,7 +19,7 @@ fn usage(ctx: cli.Context, to_stderr: bool, status: u8) u8 {
     defer ctx.gpa.free(text);
     if (to_stderr) {
         const mail = std.mem.indexOf(u8, text, "E-mail bug reports") orelse text.len;
-        _ = sys.writeAllFd(2, text[0..mail]);
+        _ = sys.writeAllFd(std.Io.File.stderr().handle, text[0..mail]);
     } else if (!cli.writeStdout(ctx.io, text)) return 4;
     return status;
 }
@@ -90,7 +90,7 @@ pub fn main(ctx: cli.Context) u8 {
                 const name = o.arg.?;
                 var data: std.ArrayList(u8) = .empty;
                 var err: LX.E = .SUCCESS;
-                const fd: i32 = if (std.mem.eql(u8, name, "-")) 0 else sys.openFd(name, sys.O.RDONLY, 0, &err) orelse {
+                const fd: sys.Handle = if (std.mem.eql(u8, name, "-")) std.Io.File.stdin().handle else sys.openFd(name, sys.O.RDONLY, 0, &err) orelse {
                     cli.warn(ctx, "couldn't open file {s}: {s}", .{ name, sys.errnoText(err) });
                     return 4;
                 };
@@ -100,7 +100,7 @@ pub fn main(ctx: cli.Context) u8 {
                     if (n == 0) break;
                     data.appendSlice(arena, buf[0..n]) catch return 4;
                 }
-                if (fd != 0) _ = sys.closeFd(fd);
+                if (fd != std.Io.File.stdin().handle) _ = sys.closeFd(fd);
                 var text = data.items;
                 if (text.len > 0 and text[text.len - 1] == '\n') text = text[0 .. text.len - 1];
                 n_e += 1;

@@ -1018,9 +1018,7 @@ const Stats = struct {
 const IgnLevel = struct { prefix_len: usize, pats: []ign.Pattern, data: []u8 };
 
 fn nowNs() i128 {
-    var ts: LX.timespec = undefined;
-    _ = LX.clock_gettime(.MONOTONIC, &ts);
-    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+    return sys.monotonicNs();
 }
 
 const CtxLine = struct { text: []u8, no: u64, off: u64 };
@@ -1587,7 +1585,7 @@ fn validUtf8(s: []const u8) bool {
 }
 
 /// Search one open descriptor. Returns the number of selected lines.
-fn grepFd(g: *G, fd: i32, seekable_stdin: bool) Err!u64 {
+fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
     const o = &g.o;
     g.cur_noeol = false;
     var mem_pos: usize = 0;
@@ -1797,7 +1795,7 @@ fn finishFile(g: *G, count: u64) Err!bool {
     return status_matched;
 }
 
-fn grepOpened(g: *G, fd: i32, name: []const u8, is_stdin: bool, seekable_stdin: bool) Err!bool {
+fn grepOpened(g: *G, fd: sys.Handle, name: []const u8, is_stdin: bool, seekable_stdin: bool) Err!bool {
 
     _ = is_stdin;
     g.fname = name;
@@ -1970,7 +1968,7 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
     }
     if (in_dir and !rgFileOk(g, display, false)) return false;
     var oerr: LX.E = .SUCCESS;
-    const fd = sys.openFd(path, sys.O.RDONLY | 0o4000, 0, &oerr) orelse {
+    const fd = sys.openFd(path, sys.O.RDONLY | sys.O.NONBLOCK, 0, &oerr) orelse {
         g.obs.emit(.{ .read_error = .{ .name = display, .errno = oerr } });
         g.errseen = true;
         return false;

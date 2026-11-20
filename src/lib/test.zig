@@ -241,7 +241,7 @@ const Parser = struct {
             't' => {
                 const fd = parseInt(arg) orelse return p.fail(.{ .invalid_integer = arg });
                 if (fd.big or fd.value < 0 or fd.value > std.math.maxInt(i32)) return false;
-                const f: Io.File = .{ .handle = @intCast(fd.value), .flags = .{ .nonblocking = false } };
+                const f: Io.File = .{ .handle = sys.handleFromFd(@intCast(fd.value)) orelse return false, .flags = .{ .nonblocking = false } };
                 return f.isTty(p.io) catch false;
             },
             'r', 'w', 'x' => {

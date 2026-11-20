@@ -204,7 +204,7 @@ const FmtPart = struct {
 
 const OutFile = struct {
     path: []const u8,
-    fd: i32,
+    fd: sys.Handle,
     /// Opened by the expression (closed with it); fds 1 and 2 are not.
     owned: bool = false,
     buf: std.ArrayList(u8) = .empty,
@@ -841,11 +841,11 @@ const Parser = struct {
             if (std.mem.eql(u8, o.path, name)) return o;
         }
         const o = st.gpa.create(OutFile) catch return error.OutOfMemory;
-        o.* = .{ .path = name, .fd = -1 };
+        o.* = .{ .path = name, .fd = sys.invalid_handle };
         if (std.mem.eql(u8, name, "/dev/stdout")) {
-            o.fd = 1;
+            o.fd = std.Io.File.stdout().handle;
         } else if (std.mem.eql(u8, name, "/dev/stderr")) {
-            o.fd = 2;
+            o.fd = std.Io.File.stderr().handle;
         } else {
             var err: LX.E = .SUCCESS;
             o.fd = sys.openFd(name, sys.O.WRONLY | sys.O.CREAT | sys.O.TRUNC, 0o666, &err) orelse return fail(st, "{s}: {s}", .{ try quoteInner(st, name), sys.errnoText(err) });
@@ -1334,17 +1334,17 @@ fn dirIsEmpty(st: *State, path: []const u8) bool {
 }
 
 fn outWrite(st: *State, o: *OutFile, bytes: []const u8) void {
-    if (o.fd == 1) {
+    if (o.fd == std.Io.File.stdout().handle) {
         emit(st, bytes);
         return;
     }
     o.buf.appendSlice(st.gpa, bytes) catch st.nomem();
-    if (o.buf.items.len > 65536 or o.fd == 2) flushFile(st, o);
+    if (o.buf.items.len > 65536 or o.fd == std.Io.File.stderr().handle) flushFile(st, o);
 }
 
 fn flushFile(st: *State, o: *OutFile) void {
     if (o.buf.items.len > 0) {
-        if (o.fd == 2) {
+        if (o.fd == std.Io.File.stderr().handle) {
             // -fprint /dev/stderr goes to the caller's stderr writer.
             if (st.stderr) |w| {
                 w.writeAll(o.buf.items) catch {};
@@ -1402,7 +1402,7 @@ fn runCommand(st: *State, argv: []const []const u8, cwd: ?[]const u8) bool {
         return false;
     };
     _ = &child;
-    const pid: i32 = @intCast(child.id.?);
+    const pid = child.id.?;
     switch (sys.waitPid(pid, true)) {
         .exited => |c| return c == 0,
         else => return false,
@@ -2070,7 +2070,7 @@ pub const Expr = struct {
     pub fn deinit(e: *Expr) void {
         const gpa = e.arena.child_allocator;
         for (e.st.outs.items) |o| {
-            if (o.owned and o.fd >= 0) _ = sys.closeFd(o.fd);
+            if (o.owned and o.fd != sys.invalid_handle) _ = sys.closeFd(o.fd);
         }
         e.arena.deinit();
         gpa.destroy(e.arena);

@@ -190,7 +190,7 @@ fn genPattern(dest: []i32, rng: *Rng) Fail!void {
     }
 }
 
-fn doSync(ctx: *Ctx, fd: i32, qname: []const u8) bool {
+fn doSync(ctx: *Ctx, fd: sys.Handle, qname: []const u8) bool {
     if (sys.syncFile(fd, .data)) |e| {
         if (!(e == .INVAL or e == .BADF or e == .ISDIR)) {
             warn(ctx, "{s}: fdatasync failed: {s}", .{ qname, sys.errnoText(e) });
@@ -209,7 +209,7 @@ fn doSync(ctx: *Ctx, fd: i32, qname: []const u8) bool {
 
 const PassResult = enum { ok, write_error, other_error };
 
-fn doPass(ctx: *Ctx, rng: *Rng, fd: i32, st: sys.FileStat, qname: []const u8, sizep: *i64, ptype: i32, k: u64, n: u64) Fail!PassResult {
+fn doPass(ctx: *Ctx, rng: *Rng, fd: sys.Handle, st: sys.FileStat, qname: []const u8, sizep: *i64, ptype: i32, k: u64, n: u64) Fail!PassResult {
     var size = sizep.*;
     const output_size: usize = if (periodic(ptype)) 60 * 1024 else 64 * 1024;
     const fill_size = ((output_size + 2) / 3) * 3;
@@ -250,9 +250,8 @@ fn doPass(ctx: *Ctx, rng: *Rng, fd: i32, st: sys.FileStat, qname: []const u8, si
         if (ptype < 0) try rng.bytes(pbuf[0..lim]);
         var soff: usize = 0;
         while (soff < lim) {
-            const rc = std.os.linux.write(fd, pbuf.ptr + soff, lim - soff);
-            const we = std.os.linux.errno(rc);
-            if (we == .INTR) continue;
+            var we: E = .SUCCESS;
+            const rc = sys.writeFd(fd, pbuf[soff..lim], &we) orelse 0;
             if (we != .SUCCESS or rc == 0) {
                 if (size < 0 and (rc == 0 or we == .NOSPC)) {
                     size = offset + @as(i64, @intCast(soff));
@@ -302,7 +301,7 @@ fn doPass(ctx: *Ctx, rng: *Rng, fd: i32, st: sys.FileStat, qname: []const u8, si
     return if (write_error) .write_error else .ok;
 }
 
-fn doWipeFd(ctx: *Ctx, rng: *Rng, fd: i32, qname: []const u8, o: Options) Fail!bool {
+fn doWipeFd(ctx: *Ctx, rng: *Rng, fd: sys.Handle, qname: []const u8, o: Options) Fail!bool {
     var e: E = .SUCCESS;
     var n: u64 = 0;
     if (o.verbose) n = o.n_iterations + @intFromBool(o.zero_fill);
@@ -311,7 +310,7 @@ fn doWipeFd(ctx: *Ctx, rng: *Rng, fd: i32, qname: []const u8, o: Options) Fail!b
         return false;
     };
     const ftype = st.mode & 0o170000;
-    if ((ftype == 0o020000 and (Io.File.stdout().isTty(ctx.io) catch false) and fd == 1) or ftype == 0o010000 or ftype == 0o140000) {
+    if ((ftype == 0o020000 and (Io.File.stdout().isTty(ctx.io) catch false) and fd == Io.File.stdout().handle) or ftype == 0o010000 or ftype == 0o140000) {
         warn(ctx, "{s}: invalid file type", .{qname});
         return false;
     }
@@ -392,9 +391,9 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
     const base_off = if (slash) |s| s + 1 else 0;
     var cur = ctx.gpa.dupe(u8, oldname) catch return false;
     defer ctx.gpa.free(cur);
-    var dir_fd: i32 = -1;
+    var dir_fd: sys.Handle = sys.invalid_handle;
     var e: E = .SUCCESS;
-    if (o.remove == .wipesync) dir_fd = sys.openFd(dir, sys.O.RDONLY | sys.O.DIRECTORY | sys.O.NOCTTY | sys.O.NONBLOCK, 0, &e) orelse -1;
+    if (o.remove == .wipesync) dir_fd = sys.openFd(dir, sys.O.RDONLY | sys.O.DIRECTORY | sys.O.NOCTTY | sys.O.NONBLOCK, 0, &e) orelse sys.invalid_handle;
     if (o.verbose) warn(ctx, "{s}: removing", .{qoldname});
     var first = true;
     if (o.remove != .unlink) {
@@ -413,7 +412,7 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
                 break;
             }
             if (rename_ok) {
-                if (dir_fd >= 0 and !doSync(ctx, dir_fd, dir)) ok = false;
+                if (dir_fd != sys.invalid_handle and !doSync(ctx, dir_fd, dir)) ok = false;
                 if (o.verbose) {
                     warn(ctx, "{s}: renamed to {s}", .{ if (first) qoldname else cur, next });
                     first = false;
@@ -427,7 +426,7 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
         warn(ctx, "{s}: failed to remove: {s}", .{ qoldname, sys.errnoText(ue) });
         ok = false;
     } else if (o.verbose) warn(ctx, "{s}: removed", .{qoldname});
-    if (dir_fd >= 0) {
+    if (dir_fd != sys.invalid_handle) {
         if (!doSync(ctx, dir_fd, dir)) ok = false;
         if (sys.closeFd(dir_fd)) |ce| {
             warn(ctx, "{s}: failed to close: {s}", .{ dir, sys.errnoText(ce) });
@@ -469,14 +468,16 @@ pub fn run(env: Env, options: Options, names: []const []const u8, observer: Obse
         const qname = std.fmt.allocPrint(env.gpa, "{f}", .{quote.quote(name)}) catch return error.OutOfMemory;
         defer env.gpa.free(qname);
         if (std.mem.eql(u8, name, "-")) {
-            const fl = std.os.linux.fcntl(1, std.os.linux.F.GETFL, 0);
-            if (std.os.linux.errno(fl) != .SUCCESS) {
-                warn(&ctx, "{s}: fcntl failed: {s}", .{ qname, sys.errnoText(std.os.linux.errno(fl)) });
+            var fe: E = .SUCCESS;
+            const stdout_h = std.Io.File.stdout().handle;
+            const fl = sys.getStatusFlags(stdout_h, &fe);
+            if (fl == null) {
+                warn(&ctx, "{s}: fcntl failed: {s}", .{ qname, sys.errnoText(fe) });
                 ok = false;
-            } else if (fl & 0o2000 != 0) {
+            } else if (fl.? & 0o2000 != 0) {
                 warn(&ctx, "{s}: cannot shred append-only file descriptor", .{qname});
                 ok = false;
-            } else if (!(doWipeFd(&ctx, &rng, 1, qname, options) catch return error.RandomSourceExhausted)) ok = false;
+            } else if (!(doWipeFd(&ctx, &rng, stdout_h, qname, options) catch return error.RandomSourceExhausted)) ok = false;
         } else if (!(wipeFile(&ctx, &rng, name, qname, options) catch return error.RandomSourceExhausted)) ok = false;
     }
     return ok;

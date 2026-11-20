@@ -178,8 +178,9 @@ pub const Job = struct {
     env: common.Env,
     observer: Observer,
     /// Descriptors the job reads from and writes to; it closes both when done.
-    in_fd: i32 = 0,
-    out_fd: i32 = 1,
+    /// Standard input / output unless `input_file` / `output_file` is set.
+    in_fd: sys.Handle = sys.invalid_handle,
+    out_fd: sys.Handle = sys.invalid_handle,
     last_errno: E = .SUCCESS,
     input_file: ?[]const u8 = null,
     output_file: ?[]const u8 = null,
@@ -387,8 +388,8 @@ fn iwrite(d: *Job, buf: []const u8) usize {
     var total: usize = 0;
     // A partial final block cannot be written with O_DIRECT: drop the flag (as GNU does).
     if (d.oflags & O_DIRECT != 0 and buf.len > 0 and buf.len < d.output_blocksize) {
-        const old = std.os.linux.fcntl(d.out_fd, std.os.linux.F.GETFL, 0);
-        if (std.os.linux.errno(old) == .SUCCESS) _ = std.os.linux.fcntl(d.out_fd, std.os.linux.F.SETFL, old & ~@as(usize, O_DIRECT));
+        var fe: E = .SUCCESS;
+        if (sys.getStatusFlags(d.out_fd, &fe)) |old| _ = sys.setStatusFlags(d.out_fd, old & ~@as(usize, O_DIRECT));
         d.oflags &= ~@as(@TypeOf(d.oflags), O_DIRECT);
     }
     while (total < buf.len) {
@@ -404,13 +405,11 @@ fn iwrite(d: *Job, buf: []const u8) usize {
             }
         }
         if (nwritten == 0) {
-            const rc = std.os.linux.write(d.out_fd, buf.ptr + total, buf.len - total);
-            const e = std.os.linux.errno(rc);
-            if (e == .INTR) continue;
-            if (e != .SUCCESS) {
+            var e: E = .SUCCESS;
+            const rc = sys.writeFd(d.out_fd, buf[total..], &e) orelse {
                 d.last_errno = e;
                 break;
-            }
+            };
             if (rc == 0) {
                 d.last_errno = .NOSPC;
                 break;
@@ -586,14 +585,14 @@ fn skipInput(d: *Job, records_in: i64, bytes: *i64) Fail!i64 {
     return remaining;
 }
 
-fn setFdFlags(d: *Job, fd: i32, add: u32, name: []const u8) Fail!void {
+fn setFdFlags(d: *Job, fd: sys.Handle, add: u32, name: []const u8) Fail!void {
     const flags = add & ~(O_NOCTTY | O_NOFOLLOW);
     if (flags == 0) return;
-    const old = std.os.linux.fcntl(fd, std.os.linux.F.GETFL, 0);
-    if (std.os.linux.errno(old) != .SUCCESS) {
-        diagnose(d, std.os.linux.errno(old), "setting flags for {f}", .{quote.quoteA(name)});
+    var ge: E = .SUCCESS;
+    const old = sys.getStatusFlags(fd, &ge) orelse {
+        diagnose(d, ge, "setting flags for {f}", .{quote.quoteA(name)});
         return error.Abort;
-    }
+    };
     var new: usize = old | flags;
     if (new != old) {
         if (new & O_DIRECTORY != 0) {
@@ -608,9 +607,8 @@ fn setFdFlags(d: *Job, fd: i32, add: u32, name: []const u8) Fail!void {
             }
             new &= ~@as(usize, O_DIRECTORY);
         }
-        const rc = std.os.linux.fcntl(fd, std.os.linux.F.SETFL, new);
-        if (std.os.linux.errno(rc) != .SUCCESS) {
-            diagnose(d, std.os.linux.errno(rc), "setting flags for {f}", .{quote.quoteA(name)});
+        if (sys.setStatusFlags(fd, new)) |se| {
+            diagnose(d, se, "setting flags for {f}", .{quote.quoteA(name)});
             return error.Abort;
         }
     }
@@ -792,6 +790,8 @@ fn ddCopy(d: *Job) Fail!u8 {
 
 /// Run the copy described by `d`; returns the exit status.
 pub fn run(d: *Job) u8 {
+    if (d.in_fd == sys.invalid_handle) d.in_fd = std.Io.File.stdin().handle;
+    if (d.out_fd == sys.invalid_handle) d.out_fd = std.Io.File.stdout().handle;
     applyTranslations(d);
     var e: E = .SUCCESS;
     if (d.input_file) |inf| {
@@ -813,7 +813,7 @@ pub fn run(d: *Job) u8 {
         if (d.conv & C_EXCL != 0) opts |= sys.O.EXCL;
         if (!(d.seek_records != 0 or d.conv & C_NOTRUNC != 0)) opts |= sys.O.TRUNC;
         const size: i64 = d.seek_records * @as(i64, @intCast(d.output_blocksize)) + d.seek_bytes;
-        var fd: ?i32 = null;
+        var fd: ?sys.Handle = null;
         if (d.seek_records != 0) fd = sys.openFd(outf, sys.O.RDWR | opts, 0o666, &e);
         if (fd == null) fd = sys.openFd(outf, sys.O.WRONLY | opts, 0o666, &e);
         const ofd = fd orelse {

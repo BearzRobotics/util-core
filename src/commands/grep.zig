@@ -239,7 +239,7 @@ pub fn main(ctx: cli.Context) u8 {
                 'f' => {
                     const name = opt.arg.?;
                     var err: LX.E = .SUCCESS;
-                    const fd: i32 = if (std.mem.eql(u8, name, "-")) 0 else sys.openFd(name, sys.O.RDONLY, 0, &err) orelse {
+                    const fd: sys.Handle = if (std.mem.eql(u8, name, "-")) std.Io.File.stdin().handle else sys.openFd(name, sys.O.RDONLY, 0, &err) orelse {
                         cli.warn(ctx, "{s}: {s}", .{ name, sys.errnoText(err) });
                         return 2;
                     };
@@ -253,7 +253,7 @@ pub fn main(ctx: cli.Context) u8 {
                         if (n == 0) break;
                         data.appendSlice(gpa, buf[0..n]) catch return oom(ctx);
                     }
-                    if (fd != 0) _ = sys.closeFd(fd);
+                    if (fd != std.Io.File.stdin().handle) _ = sys.closeFd(fd);
                     have_keys = true;
                     if (data.items.len > 0) {
                         keys.appendSlice(gpa, data.items) catch return oom(ctx);

@@ -858,13 +858,13 @@ pub const Copier = struct {
 
         if (x.preserve_timestamps) {
             const ts = [2]sys.TimeSpec{ .{ .sec = src_sb.atime_s, .nsec = src_sb.atime_ns }, .{ .sec = src_sb.mtime_s, .nsec = src_sb.mtime_ns } };
-            if (sys.setTimes(drelname, -1, ts, dest_is_symlink)) |te| {
+            if (sys.setTimes(drelname, sys.invalid_handle, ts, dest_is_symlink)) |te| {
                 c.errno("preserving times for {f}", .{quote.quoteA(dst_name)}, te);
                 if (x.require_preserve) return false;
             }
         }
         if (!dest_is_symlink and x.preserve_ownership and (new_dst or src_sb.uid != dst_sb.uid or src_sb.gid != dst_sb.gid)) {
-            switch (c.setOwner(dst_name, -1, src_sb, new_dst, dst_sb)) {
+            switch (c.setOwner(dst_name, sys.invalid_handle, src_sb, new_dst, dst_sb)) {
                 -1 => return false,
                 0 => src_mode &= ~@as(u32, 0o7000),
                 else => {},
@@ -943,25 +943,25 @@ pub const Copier = struct {
     }
 
     /// set_owner(); returns 1 on success, 0 when ignorable failure, -1 on error.
-    fn setOwner(c: *Copier, dst_name: []const u8, dest_desc: i32, src_sb: sys.FileStat, new_dst: bool, dst_sb: sys.FileStat) i32 {
+    fn setOwner(c: *Copier, dst_name: []const u8, dest_desc: sys.Handle, src_sb: sys.FileStat, new_dst: bool, dst_sb: sys.FileStat) i32 {
         const x = &c.x;
         if (!new_dst and (x.preserve_mode or x.move_mode or x.set_mode)) {
             const old_mode = dst_sb.mode;
             const new_mode = if (x.preserve_mode or x.move_mode) src_sb.mode else x.mode;
             const temp = old_mode & new_mode & 0o700;
             if ((old_mode & 0o7777 & (~new_mode | 0o7000)) != 0) {
-                const err = if (dest_desc >= 0) sys.fchmodFd(dest_desc, temp) else sys.chmodPath(dst_name, temp, false);
+                const err = if (dest_desc != sys.invalid_handle) sys.fchmodFd(dest_desc, temp) else sys.chmodPath(dst_name, temp, false);
                 if (err) |ce| {
                     if (!c.ownerFailureOk(ce)) c.errno("clearing permissions for {f}", .{quote.quoteA(dst_name)}, ce);
                     return -@as(i32, @intFromBool(x.require_preserve));
                 }
             }
         }
-        const err = if (dest_desc >= 0) sys.fchownFd(dest_desc, src_sb.uid, src_sb.gid) else sys.chownAt(dst_name, src_sb.uid, src_sb.gid, true);
+        const err = if (dest_desc != sys.invalid_handle) sys.fchownFd(dest_desc, src_sb.uid, src_sb.gid) else sys.chownAt(dst_name, src_sb.uid, src_sb.gid, true);
         if (err == null) return 1;
         const ce = err.?;
         if (c.chownFailureOk(ce)) {
-            _ = if (dest_desc >= 0) sys.fchownFd(dest_desc, std.math.maxInt(u32), src_sb.gid) else sys.chownAt(dst_name, std.math.maxInt(u32), src_sb.gid, true);
+            _ = if (dest_desc != sys.invalid_handle) sys.fchownFd(dest_desc, std.math.maxInt(u32), src_sb.gid) else sys.chownAt(dst_name, std.math.maxInt(u32), src_sb.gid, true);
         } else {
             c.errno("failed to preserve ownership for {f}", .{quote.quoteA(dst_name)}, ce);
             if (x.require_preserve) return -1;
@@ -986,7 +986,7 @@ pub const Copier = struct {
         var it = dir.iterate();
         while (it.next(ctx.io) catch null) |entry| {
             const dup = ctx.gpa.dupe(u8, entry.name) catch break;
-            names.append(ctx.gpa, .{ .name = dup, .ino = entry.inode }) catch {
+            names.append(ctx.gpa, .{ .name = dup, .ino = @intCast(entry.inode) }) catch {
                 ctx.gpa.free(dup);
                 break;
             };
@@ -1058,14 +1058,14 @@ pub const Copier = struct {
         src_sb.* = open_sb;
         const src_mode = open_sb.mode;
 
-        var dest_fd: i32 = -1;
+        var dest_fd: sys.Handle = sys.invalid_handle;
         var dest_errno: E = .SUCCESS;
         if (!new_dst.*) {
             const flags = sys.O.WRONLY | (if (data_copy_required) sys.O.TRUNC else 0);
             if (sys.openFd(drelname, flags, 0, &e)) |fd| {
                 dest_fd = fd;
             } else dest_errno = e;
-            if (dest_fd < 0 and dest_errno != .NOENT and x.unlink_dest_after_failed_open) {
+            if (dest_fd == sys.invalid_handle and dest_errno != .NOENT and x.unlink_dest_after_failed_open) {
                 if (sys.unlinkPath(drelname, false)) |ue| {
                     if (ue != .NOENT) {
                         c.errno("cannot remove {f}", .{quote.quoteA(dst_name)}, ue);
@@ -1074,7 +1074,7 @@ pub const Copier = struct {
                 } else if (x.verbose) c.say("removed {f}\n", .{quote.quoteA(dst_name)});
                 dest_errno = .NOENT;
             }
-            if (dest_fd < 0 and dest_errno == .NOENT) new_dst.* = true;
+            if (dest_fd == sys.invalid_handle and dest_errno == .NOENT) new_dst.* = true;
         }
         if (new_dst.*) {
             const open_mode = dst_mode & ~omitted;
@@ -1083,7 +1083,7 @@ pub const Copier = struct {
                 dest_fd = fd;
                 dest_errno = .SUCCESS;
             } else dest_errno = e;
-            if (dest_fd < 0 and dest_errno == .EXIST and !x.move_mode) {
+            if (dest_fd == sys.invalid_handle and dest_errno == .EXIST and !x.move_mode) {
                 var dummy: [1]u8 = undefined;
                 var le: E = .SUCCESS;
                 if (sys.readlinkPath(drelname, &dummy, &le) != null) {
@@ -1098,12 +1098,12 @@ pub const Copier = struct {
                     }
                 }
             }
-            if (dest_fd < 0 and dest_errno == .ISDIR and dst_name.len > 0 and dst_name[dst_name.len - 1] == '/') dest_errno = .NOTDIR;
+            if (dest_fd == sys.invalid_handle and dest_errno == .ISDIR and dst_name.len > 0 and dst_name[dst_name.len - 1] == '/') dest_errno = .NOTDIR;
         } else {
             omitted = 0;
             extra = 0;
         }
-        if (dest_fd < 0) {
+        if (dest_fd == sys.invalid_handle) {
             c.errno("cannot create regular file {f}", .{quote.quoteA(dst_name)}, dest_errno);
             return false;
         }
@@ -1192,7 +1192,7 @@ pub const Copier = struct {
         return ok;
     }
 
-    fn copyData(c: *Copier, src_fd: i32, dest_fd: i32, src_sb: sys.FileStat, src_name: []const u8, dst_name: []const u8, dest_is_reg: bool, force_zero_holes: bool, src_sparse: bool) bool {
+    fn copyData(c: *Copier, src_fd: sys.Handle, dest_fd: sys.Handle, src_sb: sys.FileStat, src_name: []const u8, dst_name: []const u8, dest_is_reg: bool, force_zero_holes: bool, src_sparse: bool) bool {
         const buf = c.gpa.alloc(u8, 128 * 1024) catch {
             c.errPrint("memory exhausted", .{});
             return false;
@@ -1295,7 +1295,7 @@ pub const Copier = struct {
         return true;
     }
 
-    fn plainCopy(c: *Copier, src_fd: i32, dest_fd: i32, buf: []u8, src_name: []const u8, dst_name: []const u8) bool {
+    fn plainCopy(c: *Copier, src_fd: sys.Handle, dest_fd: sys.Handle, buf: []u8, src_name: []const u8, dst_name: []const u8) bool {
         var e: E = .SUCCESS;
         var se: E = .SUCCESS;
         _ = sys.seekFd(src_fd, 0, 0, &se);

@@ -15,7 +15,10 @@
 //!              a link named after a command          (-Dmode=multicall, all)
 //!
 //! Nothing here depends on the host OS, so cross-compilation works with
-//! -Dtarget=.
+//! -Dtarget=. Supported targets: Linux (x86_64, aarch64; run and tested),
+//! macOS (aarch64-macos, x86_64-macos; compile-checked only) and Windows
+//! (x86_64-windows, aarch64-windows; x86_64 run natively). See
+//! docs/portability.md.
 
 const std = @import("std");
 const commands = @import("src/commands.zig");
@@ -103,8 +106,11 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // Fuzz tests (src/fuzz/): `zig build fuzz` runs them once on their corpus, and
-    // `zig build fuzz --fuzz` fuzzes continuously. `zig build test` runs them once too.
+    // Fuzz tests (src/fuzz/, decision 0007): ordinary tests driven by our own mutation
+    // engine (src/fuzz/engine.zig; Zig 0.17.1's built-in fuzzer does not run). `zig build
+    // test` runs them as short regression tests; `zig build fuzz` is the campaign and is
+    // meant to be started through tools/fuzz.sh, which sets the iteration count and caps
+    // memory and time.
     {
         const fuzz_t = b.addTest(.{
             .root_module = b.createModule(.{
@@ -114,9 +120,10 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{.{ .name = "regex", .module = regex_mod }},
             }),
         });
-        const run = b.addRunArtifact(fuzz_t);
-        b.step("fuzz", "Run the fuzz tests (add --fuzz to fuzz continuously)").dependOn(&run.step);
-        test_step.dependOn(&run.step);
+        test_step.dependOn(&b.addRunArtifact(fuzz_t).step);
+        const campaign = b.addRunArtifact(fuzz_t);
+        campaign.has_side_effects = true; // never cached: every campaign really runs
+        b.step("fuzz", "Run the fuzz campaign (use tools/fuzz.sh)").dependOn(&campaign.step);
     }
 
     // Syntax-highlighting modules (they depend on the regex-zig package).
