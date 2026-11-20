@@ -56,6 +56,7 @@ const Report = struct {
             },
             .already_listed => |name| cli.warn(ctx, "{f}: not listing already-listed directory", .{cli.quote(name)}),
             .unrecognized_prefix => |lab| cli.warn(ctx, "unrecognized prefix: {f}", .{cli.quoteC(&lab)}),
+            .out_of_memory => cli.warn(ctx, "memory exhausted: the listing is incomplete", .{}),
             .unparsable_ls_colors => cli.warn(ctx, "unparsable value for LS_COLORS environment variable", .{}),
         }
     }
@@ -512,6 +513,7 @@ fn realMain(ctx: cli.Context, mode: Mode) u8 {
         style = style;
     }
 
+    opts.restore_color_on_signal = true;
     opts.ignore_patterns = ignore_list.items;
     opts.hide_patterns = hide_list.items;
 
