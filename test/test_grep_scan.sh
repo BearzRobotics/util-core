@@ -43,7 +43,7 @@ run() {
 }
 TOTAL=0 PASS=0 FAIL=0
 for f in text long; do
-    for pat in zqxjv the two foo 'fo*' 'foo\|zqxjv' 'the$' '^the' '^$' 'a.b' 'x_y' 'k' 'ss' 'end' '[0-9][0-9]*' '007' 'zq.*v' 'e\{2\}' 'o\+' 'x*' '' 'xx*y' 'Foo\|foo'; do
+    for pat in zqxjv the two foo 'fo*' 'foo\|zqxjv' 'the$' '^the' '^foo' '^the$' 'end$' '^Foo$' '^foo\|end$' '^$' 'a.b' 'x_y' 'k' 'ss' 'end' '[0-9][0-9]*' '007' 'zq.*v' 'e\{2\}' 'o\+' 'x*' '' 'xx*y' 'Foo\|foo'; do
         for opts in "" -n -c -v -vc -vn -i -ic -w -wc -x -xc -o -on -b -bo -m3 -nm3 -A1 -B1 -C1 -nA2 -l -L -q -z -zc -Fc; do
             case $f$opts in long*-[AoBCbn]*|long*-i|long*-z*) continue ;; esac
             run "$opts '$pat' $f" $opts -e "$pat" $f

@@ -29,6 +29,9 @@ pub const Info = struct {
     lit: []u8 = &.{},
     exact: bool = false,
     scannable: bool = false,
+    /// The pattern is `^LIT`, `LIT$` or `^LIT$`; `exact` then describes LIT.
+    anchor_start: bool = false,
+    anchor_end: bool = false,
 
     pub fn deinit(i: *Info, gpa: std.mem.Allocator) void {
         gpa.free(i.lit);
@@ -80,14 +83,28 @@ fn groupEnd(b: []const u8, i: usize) ?usize {
     return null;
 }
 
-pub fn analyze(gpa: std.mem.Allocator, body: []const u8, o: Opts) std.mem.Allocator.Error!Info {
+pub fn analyze(gpa: std.mem.Allocator, whole_body: []const u8, o: Opts) std.mem.Allocator.Error!Info {
+    var body = whole_body;
+    var a_start = false;
+    var a_end = false;
+    if (std.mem.startsWith(u8, body, "\\A")) {
+        body = body[2..];
+        a_start = true;
+    }
+    if (std.mem.endsWith(u8, body, "\\z")) {
+        body = body[0 .. body.len - 2];
+        a_end = true;
+    } else if (body.len > 0 and body[body.len - 1] == '$' and !(body.len > 1 and body[body.len - 2] == '\\')) {
+        body = body[0 .. body.len - 1];
+        a_end = true;
+    }
     var run: std.ArrayList(u8) = .empty;
     defer run.deinit(gpa);
     var best: std.ArrayList(u8) = .empty;
     errdefer best.deinit(gpa);
     var other: usize = 0; // elements that are not plain literal bytes
     var alt = false;
-    var scannable = true;
+    var scannable = !a_start and !a_end;
     var i: usize = 0;
     while (i < body.len) {
         const c = body[i];
@@ -182,7 +199,7 @@ pub fn analyze(gpa: std.mem.Allocator, body: []const u8, o: Opts) std.mem.Alloca
     }
     const whole = run.items.len;
     flush(gpa, &run, &best);
-    var info: Info = .{ .scannable = scannable };
+    var info: Info = .{ .scannable = scannable, .anchor_start = a_start, .anchor_end = a_end };
     if (!alt) info.lit = try best.toOwnedSlice(gpa) else best.deinit(gpa);
     info.exact = !alt and other == 0 and whole == info.lit.len and whole > 0;
     return info;
@@ -230,8 +247,10 @@ test "analyze finds required literals" {
     try expectInfo("abc*d", o, "ab", false, true);
     try expectInfo("(two|the)s?", o, "", false, true);
     try expectInfo("x(?:ab)y", o, "x", false, true);
+    try expectInfo("\\Athe", o, "the", true, false);
+    try expectInfo("e$", o, "e", true, false);
+    try expectInfo("\\Ae\\z", o, "e", true, false);
     try expectInfo("^the", o, "the", false, false);
-    try expectInfo("e$", o, "e", false, false);
     try expectInfo("a|b", o, "", false, true);
     try expectInfo("(?<!x)abc", o, "", false, false);
     try expectInfo("(^a)", o, "", false, false);

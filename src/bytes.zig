@@ -108,6 +108,12 @@ pub const Needle = struct {
         return v == cv;
     }
 
+    /// Does the needle occur at `hay[at..]`?
+    pub fn matchesAt(self: *const Needle, hay: []const u8, at: usize) bool {
+        if (at > hay.len or hay.len - at < self.bytes.len) return false;
+        return self.same(hay[at..][0..self.bytes.len], self.bytes);
+    }
+
     inline fn same(self: *const Needle, h: []const u8, n: []const u8) bool {
         if (!self.fold) return std.mem.eql(u8, h, n);
         for (h, n) |a, b| if (std.ascii.toLower(a) != b) return false;

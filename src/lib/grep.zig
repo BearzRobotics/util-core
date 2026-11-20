@@ -290,7 +290,7 @@ pub const Matcher = struct {
     pre_exact: bool = false,
     /// The only pattern is one literal and -w / -x applies: `isMatch` checks
     /// the literal's neighbours (or the line length) without a regex.
-    lit_mode: enum { none, word, line } = .none,
+    lit_mode: enum { none, word, line, start, end, both } = .none,
 
     pub const Error = error{ OutOfMemory, BadPattern };
 
@@ -345,14 +345,15 @@ pub const Matcher = struct {
         for (m.staged.items, 0..) |st, k| {
             var info = scan.analyze(gpa, st.body, ao) catch return;
             if (!info.scannable) all_scan = false;
-            if (!info.exact) all_exact = false;
+            if (!info.exact or info.anchor_start or info.anchor_end) all_exact = false;
             if (k == 0) first = info else info.deinit(gpa);
         }
         if (m.staged.items.len == 1) {
             const lit = first.lit;
-            const exact = first.exact and !options.word and !options.line;
-            const whole = first.exact and (options.word or options.line) and !(options.word and options.line);
-            const use_lit = lit.len > 0 and (exact or whole or lit.len >= 3 or !(all_scan and !options.line));
+            const exact = first.exact and !first.anchor_start and !first.anchor_end and !options.word and !options.line;
+            const anchored = first.exact and (first.anchor_start or first.anchor_end) and !options.word and !options.line and !options.null_data;
+            const whole = ((first.exact and !first.anchor_start and !first.anchor_end) and (options.word or options.line) and !(options.word and options.line)) or anchored;
+            const use_lit = lit.len > 0 and (exact or whole or lit.len >= 2 or !(all_scan and !options.line));
             if (use_lit) {
                 const text = gpa.dupe(u8, lit) catch return;
                 var store: []u8 = &.{};
@@ -365,7 +366,9 @@ pub const Matcher = struct {
                 m.pre_needle = vec.Needle.init(text, options.icase, store);
                 m.pre_kind = .lit;
                 m.pre_exact = exact;
-                if (whole) m.lit_mode = if (options.line) .line else .word;
+                if (whole) m.lit_mode = if (anchored)
+                    (if (first.anchor_start and first.anchor_end) .both else if (first.anchor_start) .start else .end)
+                else if (options.line) .line else .word;
                 return;
             }
         }
@@ -515,7 +518,13 @@ pub const Matcher = struct {
     /// neighbour byte is part of a multibyte character).
     fn litCheck(m: *const Matcher, line: []const u8) ?bool {
         const n = m.pre_needle.bytes.len;
-        if (m.lit_mode == .line) return line.len == n and m.pre_needle.find(line, 0) != null;
+        switch (m.lit_mode) {
+            .line => return line.len == n and m.pre_needle.find(line, 0) != null,
+            .start => return m.pre_needle.matchesAt(line, 0),
+            .end => return line.len >= n and m.pre_needle.matchesAt(line, line.len - n),
+            .both => return line.len == n and m.pre_needle.matchesAt(line, 0),
+            else => {},
+        }
         var from: usize = 0;
         while (m.pre_needle.find(line, from)) |p| {
             const before: ?u8 = if (p > 0) line[p - 1] else null;
