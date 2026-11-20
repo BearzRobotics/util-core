@@ -241,6 +241,13 @@ const set_limits: regex.Limits = blk: {
     break :blk l;
 };
 
+/// Cache cap of the combined DFA for fewer than `set_threshold` patterns.
+const small_set_limits: regex.Limits = blk: {
+    var l = posixre.big_limits;
+    l.max_dfa_cache = 16 << 20;
+    break :blk l;
+};
+
 const Pat = struct {
     re: regex.Regex,
     longest: ?*regex.Regex,
@@ -717,7 +724,7 @@ pub const Matcher = struct {
             src.append(m.gpa, ')') catch return;
         }
         const re = m.gpa.create(regex.Regex) catch return;
-        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = set_limits, .engine = if (small) .dfa else .auto }, null) catch {
+        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = if (small) small_set_limits else set_limits, .engine = if (small) .dfa else .auto }, null) catch {
             m.gpa.destroy(re);
             return;
         };
@@ -1862,9 +1869,14 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
     var known_match = false;
     var total_read: u64 = 0;
     var size_reached = false;
+    // A DFA scan whose hits are dense only doubles the work (each hit line is
+    // checked again): give it up for the rest of the file.
+    var scan_calls: u32 = 0;
+    var scan_gap: u64 = 0;
+    var scan_off = false;
     while (!stopped) {
         known_match = false;
-        if (can_skip and !extra_nul_split and g.outleft != 0 and g.pending <= 0 and pos < buf.items.len and g.m.pre_kind != .none) skip: {
+        if (can_skip and !extra_nul_split and g.outleft != 0 and g.pending <= 0 and pos < buf.items.len and g.m.pre_kind != .none and !scan_off) skip: {
             const rest = buf.items[pos..];
             const limit = if (eof) buf.items.len else if (vec.lastIndexOf(rest, g.eol)) |k| pos + k + 1 else break :skip;
             if (limit <= pos) break :skip;
@@ -1885,6 +1897,15 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                     g.line_no += vec.count(hay[pos..start], g.eol);
                     g.offset += start - pos;
                     consumed_total += start - pos;
+                    if (g.m.pre_kind == .scan and !g.m.pre_exact) {
+                        scan_calls += 1;
+                        scan_gap += start - pos;
+                        if (scan_calls == 64) {
+                            if (scan_gap < 64 * 512) scan_off = true;
+                            scan_calls = 0;
+                            scan_gap = 0;
+                        }
+                    }
                     pos = start;
                     known_match = g.m.pre_exact;
                 },
