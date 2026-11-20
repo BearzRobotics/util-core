@@ -54,7 +54,7 @@ t "missing operand: status 1, no entries for it" sh -c "out=\$('$BIN/df' --json 
 for o in -h -H -k -m -i -P -T "-B1" --output; do
     t "--json with $o is refused" sh -c "! '$BIN/df' --json $o"
 done
-t "--json is not in --help" sh -c "! '$BIN/df' --help | grep -q json"
+t "--json is listed in --help as a non-GNU line" sh -c "'$BIN/df' --help | grep -q -e '--json .*not in GNU' -e '-json .*JSON'"
 t "inode counts are plain numbers" sh -c "'$BIN/df' --json / | python3 -c 'import json,sys;e=json.load(sys.stdin)[0];assert isinstance(e[\"inodes\"],int) and isinstance(e[\"inodes_used\"],int)'"
 
 echo "Summary: $pass passed, $fail failed"

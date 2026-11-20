@@ -106,6 +106,7 @@ Mandatory arguments to long options are mandatory for short options too.
   -Z, --context              print any security context of each file
       --zero                 end each output line with NUL, not newline
   -1                         list one file per line
+      --json        print the result as JSON (not in GNU)
       --help        display this help and exit
       --version     output version information and exit
 

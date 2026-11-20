@@ -29,6 +29,7 @@ Actions:
       -fprint0 FILE -fprint FILE -ls -fls FILE -prune -quit
       -exec COMMAND ; -exec COMMAND {} + -ok COMMAND ;
       -execdir COMMAND ; -execdir COMMAND {} + -okdir COMMAND ;
+Actions (not in GNU): -json  print each match as a JSON object
 
 Other common options:
       --help                   display this help and exit

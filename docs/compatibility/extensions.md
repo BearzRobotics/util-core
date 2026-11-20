@@ -7,7 +7,10 @@ opt-in or terminal-only departure. Per-command detail is in each
 | Command | Extension | Applies when | Turn off |
 |---|---|---|---|
 | cat | bat-style view (header, grid, line numbers, syntax highlighting) | stdout is a terminal and no GNU formatting option is given | pipe/redirect, or any GNU formatting option |
-| ls, dir, vdir, stat, df, du, wc, date, printenv, checksum tools, find, tree | `--json` / `-json` structured output | the option is given | do not pass it |
+| ls, dir, vdir, stat, df, du, wc, date, printenv, md5sum..b2sum, cksum | `--json` structured output (listed in `--help` and the man page as "not in GNU") | the option is given | do not pass it |
+| find | `-json` action (listed in `--help`) | the action is given | do not pass it |
+| tree | `-J` is tree's own JSON output (not an extension) | n/a | n/a |
+| cat (and others, see their records) | see Extensions in each `docs/compatibility/<cmd>.md` | | |
 | grep | none yet (ripgrep- and FreeBSD-derived options are planned, not implemented) | n/a | n/a |
 
 TODO (audit in progress): complete this table from the per-command records;

@@ -40,7 +40,7 @@ Module `util_core.ls` (`src/lib/ls.zig`); the executable `src/commands/ls.zig` i
 - `-Z, --context`: Security context (read from the `security.selinux` attribute; `?` when absent).
 - `--zero`: End lines with NUL.
 - `--help, --version`: Print help or version and exit.
-- `--json` (extension, not in GNU; also `dir` and `vdir`): one JSON array of every listed file, one object per line, in the order the text form would print them. Each object has the `stat --json` fields (docs/compatibility/stat.md) preceded by `dir`, the directory the entry was listed in (null for a command-line operand); an entry whose metadata could not be read has only `dir`, `name` and a `type` of "unknown". It behaves like `-l` for stat purposes: symbolic links are not followed unless `-L`/`-H` is given, so a symlink to a directory is listed as a link, not descended into. Sorting, `-a`/`-A`, `-d`, `-R`, `-I`/`--hide`, `-B`, `-L`/`-H` and `--time` apply as usual. Layout, quoting, colour, indicator, size-unit and `--dired` options have no effect on the JSON. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
+- `--json` (extension, not in GNU; also `dir` and `vdir`): one JSON array of every listed file, one object per line, in the order the text form would print them. Each object has the `stat --json` fields (docs/compatibility/stat.md) preceded by `dir`, the directory the entry was listed in (null for a command-line operand); an entry whose metadata could not be read has only `dir`, `name` and a `type` of "unknown". It behaves like `-l` for stat purposes: symbolic links are not followed unless `-L`/`-H` is given, so a symlink to a directory is listed as a link, not descended into. Sorting, `-a`/`-A`, `-d`, `-R`, `-I`/`--hide`, `-B`, `-L`/`-H` and `--time` apply as usual. Layout, quoting, colour, indicator, size-unit and `--dired` options have no effect on the JSON. Listed in `--help` as a non-GNU line. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -56,7 +56,7 @@ Module `util_core.ls` (`src/lib/ls.zig`); the executable `src/commands/ls.zig` i
 
 Per decision 0005 every departure from GNU is listed here.
 
-- `--json`: a JSON array of the listed files in the order the text form prints them (fields as for `stat --json`). A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_ls_json.sh` (which also checks the GNU path through `test/test_ls.sh`). Rules: `docs/decisions/0003-json-output.md`.
+- `--json`: a JSON array of the listed files in the order the text form prints them (fields as for `stat --json`). A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is listed in `--help` as a non-GNU line. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_ls_json.sh` (which also checks the GNU path through `test/test_ls.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 

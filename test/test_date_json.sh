@@ -51,7 +51,7 @@ t "--json with +FORMAT is refused" sh -c "! '$BIN/date' --json +%s"
 t "--json with -I is refused" sh -c "! '$BIN/date' --json -I"
 t "--json with -R is refused" sh -c "! '$BIN/date' --json -R"
 t "--json with --resolution is refused" sh -c "! '$BIN/date' --json --resolution"
-t "--json is not in --help" sh -c "! '$BIN/date' --help | grep -q json"
+t "--json is listed in --help as a non-GNU line" sh -c "'$BIN/date' --help | grep -q -e '--json .*not in GNU' -e '-json .*JSON'"
 t "text output is unchanged" sh -c "[ \"\$(TZ=UTC '$BIN/date' -d @1234567890)\" = \"\$(TZ=UTC date -d @1234567890)\" ]"
 echo "Summary: $pass passed, $fail failed"
 [ "$fail" = 0 ]

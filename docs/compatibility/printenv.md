@@ -10,7 +10,7 @@ GNU coreutils 9.7 (`/usr/bin/printenv --version` on the development machine, ins
 
 - `-0, --null`: End each output line with NUL instead of newline.
 - `--help, --version`: Print help or version and exit.
-- `--json` (extension, not in GNU): one JSON object of NAME to value (every variable, or just the requested ones; a requested name that is not set is left out and the status is 1, as in the text form). A name containing `=` is never found. Values that are not valid UTF-8 are written with U+FFFD. Cannot be combined with `-0`. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
+- `--json` (extension, not in GNU): one JSON object of NAME to value (every variable, or just the requested ones; a requested name that is not set is left out and the status is 1, as in the text form). A name containing `=` is never found. Values that are not valid UTF-8 are written with U+FFFD. Cannot be combined with `-0`. Listed in `--help` as a non-GNU line. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 

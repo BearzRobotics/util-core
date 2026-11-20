@@ -30,6 +30,7 @@ pub fn main(ctx: cli.Context) u8 {
                         "Print the values of the specified environment VARIABLE(s).\n" ++
                         "If no VARIABLE is specified, print name and value pairs for them all.\n\n" ++
                         "  -0, --null     end each output line with NUL, not newline\n" ++
+                        "      --json     print the result as JSON (not in GNU)\n" ++
                         "      --help     display this help and exit\n" ++
                         "      --version  output version information and exit\n")) 0 else 2,
                     3 => as_json = true,

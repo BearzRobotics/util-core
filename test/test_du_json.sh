@@ -69,7 +69,7 @@ t "valid JSON for a name with a quote" sh -c "mkdir 'q\"d' && '$BIN/du' --json '
 for o in -h --si -k -m -B1 -0 --time-style=iso; do
     t "--json with $o is refused" sh -c "! '$BIN/du' --json $o tree"
 done
-t "--json is not in --help" sh -c "! '$BIN/du' --help | grep -q json"
+t "--json is listed in --help as a non-GNU line" sh -c "'$BIN/du' --help | grep -q -e '--json .*not in GNU' -e '-json .*JSON'"
 chmod 700 tree/noaccess
 echo "Summary: $pass passed, $fail failed"
 [ "$fail" = 0 ]

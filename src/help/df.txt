@@ -23,6 +23,7 @@ Mandatory arguments to long options are mandatory for short options too.
   -T, --print-type      print file system type
   -x, --exclude-type=TYPE   limit listing to file systems not of type TYPE
   -v                    (ignored)
+      --json        print the result as JSON (not in GNU)
       --help        display this help and exit
       --version     output version information and exit
 

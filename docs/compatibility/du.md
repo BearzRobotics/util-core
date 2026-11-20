@@ -28,7 +28,7 @@ Module `util_core.du` (`src/lib/du.zig`); the executable `src/commands/du.zig` i
 - `-0, --null, --files0-from=F`: NUL-terminated output and input lists.
 - `--help, --version`: Print help or version and exit.
 
-- `--json` (extension, not in GNU): one JSON array, one object per line, for every line `du` would print: `path`, `size` (bytes, null on overflow), `inodes`, `time` and `time_nsec` (the latest time under the path, per `--time`), `time_kind` and `total` (true for the `--total` line). Cannot be combined with `-h`, `--si`, `-k`, `-m`, `-B`, `-0` or `--time-style` (fixed units and format). `--threshold`, `-d`, `-s`, `-a`, `-S`, `-c`, `-x`, `-L`, `--exclude` and `--apparent-size`/`-b` apply as usual. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
+- `--json` (extension, not in GNU): one JSON array, one object per line, for every line `du` would print: `path`, `size` (bytes, null on overflow), `inodes`, `time` and `time_nsec` (the latest time under the path, per `--time`), `time_kind` and `total` (true for the `--total` line). Cannot be combined with `-h`, `--si`, `-k`, `-m`, `-B`, `-0` or `--time-style` (fixed units and format). `--threshold`, `-d`, `-s`, `-a`, `-S`, `-c`, `-x`, `-L`, `--exclude` and `--apparent-size`/`-b` apply as usual. Listed in `--help` as a non-GNU line. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -40,7 +40,7 @@ Module `util_core.du` (`src/lib/du.zig`); the executable `src/commands/du.zig` i
 
 Per decision 0005 every departure from GNU is listed here.
 
-- `--json`: a JSON array with one object per line `du` would print. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_du_json.sh` (which also checks the GNU path through `test/test_du.sh`). Rules: `docs/decisions/0003-json-output.md`.
+- `--json`: a JSON array with one object per line `du` would print. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is listed in `--help` as a non-GNU line. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_du_json.sh` (which also checks the GNU path through `test/test_du.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 

@@ -37,6 +37,9 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
+--json
+: Print one JSON object per input: file, algorithm, digest or checksum, size. Cannot be combined with the check options. Not in GNU b2sum.
+
 EXIT STATUS
 Status	Meaning
 0	Success.

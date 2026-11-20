@@ -19,6 +19,9 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
+--json
+: As for ls: one JSON array of the listed files. Not in GNU vdir.
+
 EXIT STATUS
 Status	Meaning
 0	Success.

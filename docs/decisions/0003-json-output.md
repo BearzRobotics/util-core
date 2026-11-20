@@ -24,8 +24,11 @@ meaningful", not for every command.
   (stat: `sys.FileStat`, `sys.StatFs`) the library module consumes it. If it
   does not (ls, df, du, find), the command is split first, behind its GNU
   differential suite, before any JSON is added.
-- `--json` is a long option only and is absent from `--help`, whose text is
-  compared with GNU's.
+- `--json` is a long option only. It was first kept out of `--help`; since
+  2026-11-19 it is listed there on one line marked "(not in GNU)" (find lists
+  `-json` on an "Actions (not in GNU)" line) and in each man page. The
+  differential `--help` tests drop exactly those lines before comparing with
+  GNU's text (`help_cmp` in test/testlib.sh, `help_cmp_find`).
 - `src/json.zig` is a copy of util-unix `src/lib/json.zig`. Two small copies
   are cheaper than a package for one 70-line file; revisit if a third
   consumer appears.

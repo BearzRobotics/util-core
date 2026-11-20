@@ -17,7 +17,7 @@ GNU coreutils 9.7 (`/usr/bin/sha384sum --version` on the development machine, in
 - `-z, --zero`: End lines with NUL and do not escape file names.
 - `--ignore-missing, --quiet, --status, --strict, -w/--warn`: Check-mode controls, as GNU.
 - `--help, --version`: Print help or version and exit.
-- `--json` (extension, not in GNU): one JSON object per input, one per line: `file` (null for standard input read without an operand), `algorithm`, `digest` (lowercase hex; null for the numeric algorithms), `checksum` (the number for crc, crc32b, bsd and sysv; null for digests), `size` (bytes, for crc, crc32b, bsd and sysv; null otherwise) and `blocks` (bsd and sysv). Cannot be combined with `--check`, `--raw`, `--base64`, `--tag`, `--untagged` or `--zero`. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
+- `--json` (extension, not in GNU): one JSON object per input, one per line: `file` (null for standard input read without an operand), `algorithm`, `digest` (lowercase hex; null for the numeric algorithms), `checksum` (the number for crc, crc32b, bsd and sysv; null for digests), `size` (bytes, for crc, crc32b, bsd and sysv; null otherwise) and `blocks` (bsd and sysv). Cannot be combined with `--check`, `--raw`, `--base64`, `--tag`, `--untagged` or `--zero`. Listed in `--help` as a non-GNU line. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 

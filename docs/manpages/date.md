@@ -40,6 +40,9 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
+--json
+: Print one JSON object per date (epoch, nsec, iso8601, calendar fields, weekday, utc_offset, zone, dst). Cannot be combined with a format. Not in GNU date.
+
 EXIT STATUS
 Status	Meaning
 0	Success.

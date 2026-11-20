@@ -24,7 +24,7 @@ Module `util_core.ls` (`src/lib/ls.zig`); the executable `src/commands/vdir.zig`
 
 Per decision 0005 every departure from GNU is listed here.
 
-- `--json`: as for ls. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_ls_json.sh` (which also checks the GNU path through `test/test_vdir.sh`). Rules: `docs/decisions/0003-json-output.md`.
+- `--json`: as for ls. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is listed in `--help` as a non-GNU line. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_ls_json.sh` (which also checks the GNU path through `test/test_vdir.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 

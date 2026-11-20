@@ -493,7 +493,7 @@ run_tree_t 'sorted many' "$SET; mkdir many; for i in 1 2 3 4 5 6 7 8 9 10 11 12 
 
 help_cmp_find() {
     exp=$(LC_ALL=C /usr/bin/find --help | sed 's#/usr/bin/find#find#')
-    act=$(ours --help | sed 's#^Usage: [^ ]*#Usage: find#')
+    act=$(ours --help | grep -v '^Actions (not in GNU):' | sed 's#^Usage: [^ ]*#Usage: find#')
     if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); printf "PASS --help text\n"
     else FAIL=$((FAIL + 1)); printf "FAIL --help text\n"; fi
 }

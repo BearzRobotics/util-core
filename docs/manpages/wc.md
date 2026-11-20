@@ -28,6 +28,9 @@ OPTIONS
 -L, --max-line-length
 : Longest line: tabs advance to multiples of 8; printable ASCII has width 1, all other bytes width 0 (C-locale behaviour).
 
+--json
+: Print one JSON object per input and, with more than one input, a last object with `total: true`; only the selected counts are present. Not in GNU wc.
+
 EXIT STATUS
 Status	Meaning
 0	Success.

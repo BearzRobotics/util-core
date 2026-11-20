@@ -22,7 +22,7 @@ t "same status as GNU for an unset name" sh -c "'$BIN/printenv' --json NO_SUCH_V
 t "name containing = is never found" sh -c "'$BIN/printenv' --json DKT_PLAIN=plain; [ \$? = 1 ]"
 t "empty environment is {}" sh -c "[ \"\$(env -i '$BIN/printenv' --json)\" = '{}' ]"
 t "--json with -0 is refused" sh -c "! '$BIN/printenv' --json -0"
-t "--json is not in --help" sh -c "! '$BIN/printenv' --help | grep -q json"
+t "--json is listed in --help as a non-GNU line" sh -c "'$BIN/printenv' --help | grep -q -e '--json .*not in GNU' -e '-json .*JSON'"
 t "all variables match GNU printenv" sh -c "[ \"\$('$BIN/printenv' --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')\" = \"\$(printenv | grep -c '^[A-Za-z_][A-Za-z0-9_]*=')\" ]"
 echo "Summary: $pass passed, $fail failed"
 [ "$fail" = 0 ]

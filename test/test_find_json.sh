@@ -105,7 +105,7 @@ t "dangling link is listed with its target" sh -c "'$BIN/find' top -name danglin
 t "-L follows links (dlnk is a directory)" sh -c "'$BIN/find' -L top -name dlnk -json | python3 -c 'import json,sys;assert json.loads(sys.stdin.readline())[\"type\"]==\"directory\"'"
 t "missing root: status 1, others listed" sh -c "out=\$('$BIN/find' nofile top/b.h -json 2>/dev/null); rc=\$?; [ \$rc = 1 ] && [ \$(echo \"\$out\" | wc -l) = 1 ]"
 t "-prune with -json" sh -c "[ \"\$('$BIN/find' top -name sub -prune -o -json | wc -l)\" = \"\$(find top -name sub -prune -o -print | wc -l)\" ]"
-t "-json is not in --help" sh -c "! '$BIN/find' --help | grep -q json"
+t "-json is listed in --help as a non-GNU line" sh -c "'$BIN/find' --help | grep -q -e '--json .*not in GNU' -e '-json .*JSON'"
 t "text output is unchanged" sh -c "[ \"\$('$BIN/find' top -type f | sort)\" = \"\$(find top -type f | sort)\" ]"
 echo "Summary: $pass passed, $fail failed"
 [ "$fail" = 0 ]

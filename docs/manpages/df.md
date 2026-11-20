@@ -43,6 +43,9 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
+--json
+: Print one JSON array of file system entries (sizes in bytes). Cannot be combined with `-B`, `-h`, `-H`, `-k`, `-m`, `-i`, `-P`, `-T` or `--output`. Not in GNU df.
+
 EXIT STATUS
 Status	Meaning
 0	Success.

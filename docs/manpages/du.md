@@ -59,6 +59,9 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
+--json
+: Print one JSON array with one object per line du would print (`path`, `size` in bytes, `inodes`, `time`, `total`). Cannot be combined with `-h`, `--si`, `-k`, `-m`, `-B`, `-0` or `--time-style`. Not in GNU du.
+
 EXIT STATUS
 Status	Meaning
 0	Success.

@@ -97,6 +97,9 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
+--json
+: Print one JSON array of every listed file, one object per line, in the order the text form would print them (fields as for `stat --json`, plus `dir`). Rejected with options that define text layout or units. Not in GNU ls.
+
 EXIT STATUS
 Status	Meaning
 0	Success.

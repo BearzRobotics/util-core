@@ -101,7 +101,8 @@ fn help(ctx: cli.Context) u8 {
         "  -m, --chars            print the character counts\n" ++
         "  -l, --lines            print the newline counts\n" ++
         "  -L, --max-line-length  print the maximum display width\n" ++
-        "  -w, --words            print the word counts\n")) 0 else 1;
+        "  -w, --words            print the word counts\n" ++
+        "      --json             print one JSON object per input (not in GNU)\n")) 0 else 1;
 }
 
 fn oom(ctx: cli.Context) u8 {

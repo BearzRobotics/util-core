@@ -31,6 +31,9 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
+--json
+: Print one JSON object per operand, one per line (file-system fields with `-f`). Cannot be combined with `-c`, `--printf` or `-t`. Not in GNU stat.
+
 EXIT STATUS
 Status	Meaning
 0	Success.

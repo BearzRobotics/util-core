@@ -21,7 +21,7 @@ Module `util_core.date` (`src/lib/date.zig`); the executable `src/commands/date.
 - `-s, --set=STRING / MMDDhhmm[[CC]YY][.ss]`: Set the clock (clock_settime; needs privilege).
 - `+FORMAT`: strftime conversions with the GNU flags, widths, %N, %:z, %q.
 - `--help, --version`: Print help or version and exit.
-- `--json` (extension, not in GNU): one JSON object per date (one per line with `-f`) with `epoch`, `nsec`, `iso8601`, `year`, `month`, `day`, `hour`, `minute`, `second`, `weekday` (name), `weekday_number` (ISO: Monday 1, Sunday 7), `day_of_year` (1-based), `utc_offset` (seconds east of UTC), `zone` and `dst`. `-d`, `-f`, `-r` and `-u` and the TZ variable apply. Cannot be combined with a format (`+FORMAT`, `-I`, `-R`, `--rfc-3339`), `-s` or `--resolution`. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
+- `--json` (extension, not in GNU): one JSON object per date (one per line with `-f`) with `epoch`, `nsec`, `iso8601`, `year`, `month`, `day`, `hour`, `minute`, `second`, `weekday` (name), `weekday_number` (ISO: Monday 1, Sunday 7), `day_of_year` (1-based), `utc_offset` (seconds east of UTC), `zone` and `dst`. `-d`, `-f`, `-r` and `-u` and the TZ variable apply. Cannot be combined with a format (`+FORMAT`, `-I`, `-R`, `--rfc-3339`), `-s` or `--resolution`. Listed in `--help` as a non-GNU line. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -32,7 +32,7 @@ Module `util_core.date` (`src/lib/date.zig`); the executable `src/commands/date.
 
 Per decision 0005 every departure from GNU is listed here.
 
-- `--json`: one JSON object per date. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_date_json.sh` (which also checks the GNU path through `test/test_date.sh`). Rules: `docs/decisions/0003-json-output.md`.
+- `--json`: one JSON object per date. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is listed in `--help` as a non-GNU line. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_date_json.sh` (which also checks the GNU path through `test/test_date.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 

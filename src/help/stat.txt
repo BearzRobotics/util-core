@@ -12,6 +12,7 @@ Mandatory arguments to long options are mandatory for short options too.
                           and do not output a mandatory trailing newline;
                           if you want a newline, include \n in FORMAT
   -t, --terse           print the information in terse form
+      --json        print the result as JSON (not in GNU)
       --help        display this help and exit
       --version     output version information and exit
 

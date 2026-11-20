@@ -135,7 +135,7 @@ t "operand dir is null for files" sh -c "'$BIN/ls' --json top/big | python3 -c '
 t "empty directory is []" sh -c "[ \"\$('$BIN/ls' --json top/emptydir)\" = '[]' ]"
 t "missing operand: status 2, others listed" sh -c "out=\$('$BIN/ls' --json nofile top/big 2>/dev/null); rc=\$?; [ \$rc = 2 ] && echo \"\$out\" | python3 -c 'import json,sys;assert len(json.load(sys.stdin))==1'"
 t "valid JSON for a name with a quote and space" sh -c "'$BIN/ls' --json top | python3 -c 'import json,sys;n=[e[\"name\"] for e in json.load(sys.stdin)];assert \"q\x27uote\" in n and \"we ird\" in n'"
-t "--json is not in --help" sh -c "! '$BIN/ls' --help | grep -q json"
+t "--json is listed in --help as a non-GNU line" sh -c "'$BIN/ls' --help | grep -q -e '--json .*not in GNU' -e '-json .*JSON'"
 t "no --json: text output unchanged (no brackets)" sh -c "! '$BIN/ls' top | grep -q '^\\['"
 
 echo "Summary: $pass passed, $fail failed"

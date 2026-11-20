@@ -13,7 +13,7 @@ GNU coreutils 9.7 (`/usr/bin/wc --version` on the development machine, installed
 - `-m, --chars`: UTF-8 code-point count (bytes that are not continuation bytes), independent of locale.
 - `-c, --bytes`: Byte count. Used alone on a regular file with a nonzero size it is taken from the file size without reading (GNU does the same). `-l` alone counts newlines with a vector loop. A directory operand prints a line of zeros plus the "Is a directory" error, as GNU does.
 - `-L, --max-line-length`: Longest line: tabs advance to multiples of 8; printable ASCII has width 1, all other bytes width 0 (C-locale behaviour).
-- `--json` (extension, not in GNU): one JSON object per input and a last one with `total: true` when there is more than one, one per line. `file` is null for standard input read without an operand. Only the selected counts are present (`lines`, `words`, `chars`, `bytes`, `max_line_length`); with no selection, lines, words and bytes. The counts are this wc's (see its deviations): `-m` counts UTF-8 code points and words split on ASCII whitespace, whatever the locale. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
+- `--json` (extension, not in GNU): one JSON object per input and a last one with `total: true` when there is more than one, one per line. `file` is null for standard input read without an operand. Only the selected counts are present (`lines`, `words`, `chars`, `bytes`, `max_line_length`); with no selection, lines, words and bytes. The counts are this wc's (see its deviations): `-m` counts UTF-8 code points and words split on ASCII whitespace, whatever the locale. Listed in `--help` as a non-GNU line. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 

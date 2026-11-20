@@ -20,7 +20,7 @@ GNU findutils 4.10.0 (`/usr/bin/find --version` on the development machine). Con
 - `-exec, -execdir, -ok, -okdir (; and +), -delete, -prune, -quit`: Command, removal and control actions.
 - `( ) ! -not -a -and -o -or ,`: Operators with GNU's precedence and error messages.
 - `--help, --version`: Print help or version and exit.
-- `-json` (extension action, not in GNU find): like `-print`, but one JSON object and a newline for each file that reaches it, so output streams one object per line. The object has the fields of `ls --json` (docs/compatibility/ls.md): `dir` and `name` are the path split at its last slash (a path with no slash has a null `dir`), then type, size, mode, owner, times and `link_target`. Symbolic links follow `-H`/`-L`/`-P` as `-ls` does. It counts as an action, so no implicit `-print` is added. Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
+- `-json` (extension action, not in GNU find): like `-print`, but one JSON object and a newline for each file that reaches it, so output streams one object per line. The object has the fields of `ls --json` (docs/compatibility/ls.md): `dir` and `name` are the path split at its last slash (a path with no slash has a null `dir`), then type, size, mode, owner, times and `link_target`. Symbolic links follow `-H`/`-L`/`-P` as `-ls` does. It counts as an action, so no implicit `-print` is added. Listed in `--help` as a non-GNU line. Rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -32,7 +32,7 @@ GNU findutils 4.10.0 (`/usr/bin/find --version` on the development machine). Con
 
 ## Extensions
 
-- `-json` action (not in GNU find): one JSON object per file, see "Supported options" above. Applies only when the action is given; absent from `--help`; the GNU path is unchanged. Covered by `test/test_find_json.sh` (which also compares the matched files with GNU `-print`).
+- `-json` action (not in GNU find): one JSON object per file, see "Supported options" above. Applies only when the action is given; listed in `--help` as a non-GNU line; the GNU path is unchanged. Covered by `test/test_find_json.sh` (which also compares the matched files with GNU `-print`).
 - Library only (`util_core.find`): `find.walk` calls a visitor for every entry without any expression; `Expr.run` takes a `Confirm` callback for `-ok`/`-okdir` instead of reading the terminal. The executable never uses these differently from GNU.
 
 ## Known deviations and gaps

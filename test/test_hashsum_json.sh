@@ -49,7 +49,7 @@ for o in -c --check --raw --base64 --tag -z --zero; do
     t "--json with $o is refused" sh -c "! '$BIN/sha256sum' --json $o a 2>/dev/null"
 done
 t "--json --untagged refused for cksum" sh -c "! '$BIN/cksum' --json --untagged a"
-t "--json is not in --help" sh -c "! '$BIN/md5sum' --help | grep -q json"
+t "--json is listed in --help as a non-GNU line" sh -c "'$BIN/md5sum' --help | grep -q -e '--json .*not in GNU' -e '-json .*JSON'"
 t "text output is unchanged" sh -c "[ \"\$('$BIN/sha256sum' a rnd)\" = \"\$(sha256sum a rnd)\" ]"
 echo "Summary: $pass passed, $fail failed"
 [ "$fail" = 0 ]

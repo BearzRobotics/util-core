@@ -16,6 +16,9 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
+--json
+: Print one JSON object of NAME to value for the requested (or all) variables. Cannot be combined with `-0`. Not in GNU printenv.
+
 EXIT STATUS
 Status	Meaning
 0	All named variables were found (or no operands).

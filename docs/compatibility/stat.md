@@ -18,7 +18,7 @@ Module `util_core.stat` (`src/lib/stat.zig`); the executable `src/commands/stat.
 - `-t, --terse`: Terse form.
 - `--cached=MODE`: Accepted (statx sync flags are not passed on).
 - `--help, --version`: Print help or version and exit.
-- `--json` (extension, not in GNU): one JSON object per operand, one per line; with `-f`, the file-system fields. Cannot be combined with `-c`, `--printf` or `-t`. Not listed in `--help`. Keys and value rules: `docs/decisions/0003-json-output.md`.
+- `--json` (extension, not in GNU): one JSON object per operand, one per line; with `-f`, the file-system fields. Cannot be combined with `-c`, `--printf` or `-t`. Listed in `--help` as a non-GNU line. Keys and value rules: `docs/decisions/0003-json-output.md`.
 
 ## Supported behaviour
 
@@ -29,7 +29,7 @@ Module `util_core.stat` (`src/lib/stat.zig`); the executable `src/commands/stat.
 
 Per decision 0005 every departure from GNU is listed here.
 
-- `--json`: one JSON object per operand. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_stat_json.sh` (which also checks the GNU path through `test/test_stat.sh`). Rules: `docs/decisions/0003-json-output.md`.
+- `--json`: one JSON object per operand. A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is listed in `--help` as a non-GNU line. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_stat_json.sh` (which also checks the GNU path through `test/test_stat.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 

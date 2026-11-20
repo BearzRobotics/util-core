@@ -56,7 +56,7 @@ t "missing operand: others still printed, status 1" sh -c "out=\$('$BIN/stat' --
 t "-f parses and matches block counts" sh -c "[ \"\$('$BIN/stat' --json -f / | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"block_size\"])')\" = \"\$(stat -f -c %s /)\" ]"
 t "--json with -c is refused" sh -c "! '$BIN/stat' --json -c %n file"
 t "--json with -t is refused" sh -c "! '$BIN/stat' --json -t file"
-t "--json is not in --help" sh -c "! '$BIN/stat' --help | grep -q json"
+t "--json is listed in --help as a non-GNU line" sh -c "'$BIN/stat' --help | grep -q -e '--json .*not in GNU' -e '-json .*JSON'"
 
 echo "Summary: $pass passed, $fail failed"
 [ "$fail" = 0 ]

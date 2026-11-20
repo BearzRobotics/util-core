@@ -48,7 +48,7 @@ t "total equals GNU total" sh -c "[ \"\$('$BIN/wc' --json -lwc a empty utf8 | ta
 t "total max_line_length is the maximum" sh -c "'$BIN/wc' --json -L a odd | tail -1 | python3 -c 'import json,sys;d=json.load(sys.stdin);assert d[\"total\"] and d[\"max_line_length\"]==max($(wc -L < a),$(wc -L < odd))'"
 t "missing file: others counted, status 1" sh -c "out=\$('$BIN/wc' --json nofile a 2>/dev/null); rc=\$?; [ \$rc = 1 ] && echo \"\$out\" | head -1 | python3 -c 'import json,sys;assert json.load(sys.stdin)[\"file\"]==\"a\"'"
 t "directory: zero counts like GNU" sh -c "'$BIN/wc' --json -c dir 2>/dev/null | python3 -c 'import json,sys;assert json.load(sys.stdin)[\"bytes\"]==0'"
-t "--json is not in --help" sh -c "! '$BIN/wc' --help | grep -q json"
+t "--json is listed in --help as a non-GNU line" sh -c "'$BIN/wc' --help | grep -q -e '--json .*not in GNU' -e '-json .*JSON'"
 t "text output is unchanged" sh -c "[ \"\$('$BIN/wc' a utf8)\" = \"\$(wc a utf8)\" ]"
 echo "Summary: $pass passed, $fail failed"
 [ "$fail" = 0 ]

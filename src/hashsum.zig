@@ -331,6 +331,7 @@ fn help(ctx: cli.Context, tool: Tool) u8 {
         "      --status          don't output anything, status code shows success\n" ++
         "      --strict          exit non-zero for improperly formatted checksum lines\n" ++
         "  -w, --warn            warn about improperly formatted checksum lines\n\n" ++
+        "      --json        print the result as JSON (not in GNU)\n" ++
         "      --help        display this help and exit\n" ++
         "      --version     output version information and exit\n", .{name}) catch return 1;
     return if (cli.writeStdout(ctx.io, text)) 0 else 1;

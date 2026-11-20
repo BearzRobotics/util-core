@@ -21,7 +21,7 @@ Module `util_core.df` (`src/lib/df.zig`); the executable `src/commands/df.zig` i
 - `--sync, --no-sync`: Accepted; sync(2) is not needed on Linux.
 - `--total`: Produce a grand total.
 - `-t, --type=TYPE, -x, --exclude-type=TYPE, -T, --print-type`: Select, exclude and show file system types.
-- `--json` (extension, not in GNU): one JSON array of file system entries, one object per line. Sizes are always bytes and counts plain numbers; unknown values are null; `--total` adds a last entry with `total: true`. Cannot be combined with `-B`, `-h`, `-H`, `-k`, `-m`, `-i`, `-P`, `-T` or `--output` (it has fixed fields and units). Not listed in `--help`. Rules: `docs/decisions/0003-json-output.md`.
+- `--json` (extension, not in GNU): one JSON array of file system entries, one object per line. Sizes are always bytes and counts plain numbers; unknown values are null; `--total` adds a last entry with `total: true`. Cannot be combined with `-B`, `-h`, `-H`, `-k`, `-m`, `-i`, `-P`, `-T` or `--output` (it has fixed fields and units). Listed in `--help` as a non-GNU line. Rules: `docs/decisions/0003-json-output.md`.
 - `--help, --version`: Print help or version and exit.
 
 ## Supported behaviour
@@ -34,7 +34,7 @@ Module `util_core.df` (`src/lib/df.zig`); the executable `src/commands/df.zig` i
 
 Per decision 0005 every departure from GNU is listed here.
 
-- `--json`: a JSON array of file system entries (bytes and plain counts). A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is absent from `--help`. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_df_json.sh` (which also checks the GNU path through `test/test_df.sh`). Rules: `docs/decisions/0003-json-output.md`.
+- `--json`: a JSON array of file system entries (bytes and plain counts). A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is listed in `--help` as a non-GNU line. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_df_json.sh` (which also checks the GNU path through `test/test_df.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
 ## Known deviations and gaps
 
