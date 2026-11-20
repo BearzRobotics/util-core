@@ -13,6 +13,7 @@
 //! `buildDatabase` returns the encoded database without touching the output.
 
 const std = @import("std");
+const rx = @import("../regexutil.zig");
 const LX = std.os.linux;
 const common = @import("common.zig");
 const fu = @import("fu_common.zig");
@@ -102,7 +103,7 @@ fn pruned(u: *U, display: []const u8, s: sys.FileStat) Error!bool {
     }
     if (s.isDir()) {
         if (u.prune_re) |re| {
-            var sr = try re.searcher(u.gpa);
+            var sr = try rx.searcher(re, u.gpa);
             defer sr.deinit();
             if ((sr.find(display, 0) catch null) != null) return true;
         }

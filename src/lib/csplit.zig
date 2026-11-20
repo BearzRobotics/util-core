@@ -15,6 +15,7 @@
 //! 8 KiB blocks, which does not change observable behaviour.
 
 const std = @import("std");
+const rx = @import("../regexutil.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const wsink = @import("wsink.zig");
@@ -309,7 +310,7 @@ const State = struct {
     fn matches(s: *State, p: *Control, l: Line) Stop!bool {
         var len = l.len;
         if (len > 0 and s.data[l.start + len - 1] == '\n') len -= 1;
-        var searcher = p.re.?.re.searcher(s.gpa) catch return s.fatal();
+        var searcher = rx.searcher(p.re.?.re, s.gpa) catch return s.fatal();
         defer searcher.deinit();
         return (searcher.find(s.data[l.start .. l.start + len], 0) catch null) != null;
     }

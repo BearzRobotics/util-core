@@ -14,6 +14,7 @@
 //! `Result.write_failed` tells the caller.
 
 const std = @import("std");
+const rx = @import("../regexutil.zig");
 const Io = std.Io;
 const LX = std.os.linux;
 const common = @import("common.zig");
@@ -182,7 +183,7 @@ fn matchOne(l: *L, m: Matcher, name: []const u8) Error!bool {
         .glob => |g| return fnmatch.match(g, name, .{ .casefold = l.o.ignore_case }),
         .sub => |s| return if (l.o.ignore_case) containsCase(name, s) else std.mem.indexOf(u8, name, s) != null,
         .re => |re| {
-            var sr = try re.searcher(l.gpa);
+            var sr = try rx.searcher(re, l.gpa);
             defer sr.deinit();
             return (sr.find(name, 0) catch null) != null;
         },

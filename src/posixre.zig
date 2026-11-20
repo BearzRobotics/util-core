@@ -11,6 +11,7 @@
 //! "Regular Expressions".
 
 const std = @import("std");
+const rx = @import("regexutil.zig");
 const regex = @import("regex");
 const unicode = @import("unicode.zig");
 
@@ -614,10 +615,10 @@ pub const Finder = struct {
     }
 
     pub fn initParts(gpa: std.mem.Allocator, re: *const regex.Regex, longest: ?*const regex.Regex) !Finder {
-        var sr = try re.searcher(gpa);
+        var sr = try rx.searcher(re, gpa);
         errdefer sr.deinit();
         var sr2: ?regex.Searcher = null;
-        if (longest) |l| sr2 = try l.searcher(gpa);
+        if (longest) |l| sr2 = try rx.searcher(l, gpa);
         return .{ .sr = sr, .sr2 = sr2 };
     }
 

@@ -183,7 +183,7 @@ pub const Registry = struct {
             if (s.first_line_match.len == 0) continue;
             var re = regex.Regex.compile(r.gpa, s.first_line_match, .{ .dialect = .oniguruma }, null) catch continue;
             defer re.deinit(r.gpa);
-            var se = re.searcher(r.gpa) catch continue;
+            var se = searcherOf(re, r.gpa) catch continue;
             defer se.deinit();
             const m = se.find(first_line, 0) catch continue;
             if (m != null) return s;
@@ -426,7 +426,7 @@ pub const Registry = struct {
             },
         };
         errdefer re.deinit(r.gpa);
-        var s = try re.searcher(r.gpa);
+        var s = try searcherOf(re, r.gpa);
         errdefer s.deinit();
         const regs = try r.gpa.alloc(usize, 2 * (re.groupCount() + 1));
         rule.rt = .{
@@ -439,3 +439,9 @@ pub const Registry = struct {
         return true;
     }
 };
+
+/// regex-zig 0.3.0's `searcher` can report `error.GaveUp` (DFA cache exhausted);
+/// creating one failing means no working memory, i.e. out of memory.
+fn searcherOf(re: anytype, gpa: std.mem.Allocator) error{OutOfMemory}!@import("regex").Searcher {
+    return re.searcher(gpa) catch error.OutOfMemory;
+}

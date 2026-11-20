@@ -21,6 +21,7 @@
 //! Extensions (docs/compatibility/find.md): the `-json` action.
 
 const std = @import("std");
+const rx = @import("../regexutil.zig");
 const Io = std.Io;
 const LX = std.os.linux;
 const common = @import("common.zig");
@@ -1158,7 +1159,7 @@ fn evalNode(st: *State, n: *Node) bool {
             return fnmatch.match(n.str, buf[0..k], .{});
         },
         .regex_ => {
-            var sr = n.re.?.searcher(st.gpa) catch {
+            var sr = rx.searcher(n.re.?, st.gpa) catch {
                 st.nomem();
                 return false;
             };

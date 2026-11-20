@@ -15,6 +15,7 @@
 //! behave differently from glibc's matcher.
 
 const std = @import("std");
+const rx = @import("../regexutil.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const wsink = @import("wsink.zig");
@@ -157,7 +158,7 @@ const Ptx = struct {
     fn skipSomething(p: *Ptx, buf: []const u8, cursor: usize, limit: usize) usize {
         if (cursor >= limit) return cursor + 1;
         if (p.word_re_anch) |*re| {
-            var s = re.re.searcher(p.gpa) catch return cursor + 1;
+            var s = rx.searcher(re.re, p.gpa) catch return cursor + 1;
             defer s.deinit();
             const m = (s.find(buf[cursor..limit], 0) catch null) orelse return cursor + 1;
             return cursor + m.end();
@@ -224,7 +225,7 @@ const Ptx = struct {
             return null;
         }
         if (p.context_re) |*re| {
-            var s = try re.re.searcher(p.gpa);
+            var s = try rx.searcher(re.re, p.gpa);
             defer s.deinit();
             const m = (try s.find(buf[cursor..], 0)) orelse return null;
             if (m.start() == 0) return p.contextZero();
@@ -257,7 +258,7 @@ const Ptx = struct {
                 var word_end: usize = undefined;
                 if (p.word_re) |*re| {
                     if (cursor > context_end) break;
-                    var s = try re.re.searcher(p.gpa);
+                    var s = try rx.searcher(re.re, p.gpa);
                     defer s.deinit();
                     const m = (try s.find(buf[cursor..context_end], 0)) orelse break;
                     word_start = cursor + m.start();

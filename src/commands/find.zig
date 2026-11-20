@@ -13,7 +13,6 @@ const LX = std.os.linux;
 const Io = std.Io;
 
 /// find has always used the general-purpose allocator without leak checking.
-const gpa = std.heap.smp_allocator;
 
 const help_text = @embedFile("../help/find.txt");
 
@@ -21,20 +20,33 @@ const Ui = struct {
     ctx: cli.Context,
     utf8: bool,
 
-    fn q(u: *const Ui, text: []const u8) []const u8 {
-        return find.quoteMsg(gpa, text, u.utf8) catch text;
+    fn q(u: *const Ui, text: []const u8) Quoted {
+        return .{ .text = text, .utf8 = u.utf8, .gpa = u.ctx.gpa };
     }
+
+    /// GNU find's message quoting, formatted on demand so nothing is left allocated.
+    const Quoted = struct {
+        text: []const u8,
+        utf8: bool,
+        gpa: std.mem.Allocator,
+
+        pub fn format(self: Quoted, w: *std.Io.Writer) std.Io.Writer.Error!void {
+            const s = find.quoteMsg(self.gpa, self.text, self.utf8) catch return w.writeAll(self.text);
+            defer self.gpa.free(s);
+            try w.writeAll(s);
+        }
+    };
 };
 
 fn report(context: ?*anyopaque, ev: find.Event) void {
     const u: *const Ui = @ptrCast(@alignCast(context.?));
     const ctx = u.ctx;
     switch (ev) {
-        .path_error => |e| cli.warn(ctx, "{s}: {s}", .{ u.q(e.path), e.text }),
-        .loop => |e| cli.warn(ctx, "File system loop detected; {s} is part of the same file system loop as {s}.", .{ u.q(e.path), u.q(e.ancestor) }),
-        .delete_failed => |e| cli.warn(ctx, "cannot delete {s}: {s}", .{ u.q(e.path), e.text }),
-        .exec_failed => |e| cli.warn(ctx, "{s}: {s}", .{ u.q(e.program), e.text }),
-        .no_security_context => |p| cli.warn(ctx, "getfilecon failed: {s}: No data available", .{u.q(p)}),
+        .path_error => |e| cli.warn(ctx, "{f}: {s}", .{ u.q(e.path), e.text }),
+        .loop => |e| cli.warn(ctx, "File system loop detected; {f} is part of the same file system loop as {f}.", .{ u.q(e.path), u.q(e.ancestor) }),
+        .delete_failed => |e| cli.warn(ctx, "cannot delete {f}: {s}", .{ u.q(e.path), e.text }),
+        .exec_failed => |e| cli.warn(ctx, "{f}: {s}", .{ u.q(e.program), e.text }),
+        .no_security_context => |p| cli.warn(ctx, "getfilecon failed: {f}: No data available", .{u.q(p)}),
         .warning => |t| cli.warn(ctx, "{s}", .{t}),
     }
 }
@@ -65,7 +77,7 @@ fn debugFlags(u: *const Ui, list: []const u8) void {
         for (known) |k| {
             if (std.mem.eql(u8, k, f)) ok = true;
         }
-        if (!ok) cli.warn(u.ctx, "Ignoring unrecognised debug flag {s}", .{u.q(f)});
+        if (!ok) cli.warn(u.ctx, "Ignoring unrecognised debug flag {f}", .{u.q(f)});
     }
 }
 
@@ -76,12 +88,12 @@ fn looksLikeExpr(a: []const u8) bool {
 }
 
 pub fn main(ctx: cli.Context) u8 {
-    const env: find.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+    const env: find.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
     const ui: Ui = .{ .ctx = ctx, .utf8 = find.localeIsUtf8(env) };
     var follow: find.Follow = .physical;
     var args_list: std.ArrayList([]const u8) = .empty;
-    defer args_list.deinit(gpa);
-    for (ctx.args) |a| args_list.append(gpa, a) catch return oom(ctx);
+    defer args_list.deinit(ctx.gpa);
+    for (ctx.args) |a| args_list.append(ctx.gpa, a) catch return oom(ctx);
     const args = args_list.items;
     var i: usize = 0;
     // leading options
@@ -136,7 +148,8 @@ pub fn main(ctx: cli.Context) u8 {
     }
     if (args.len >= 1) {
         if (std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-help")) {
-            const text = std.mem.replaceOwned(u8, gpa, help_text, "@NAME@", ctx.name) catch return 1;
+            const text = std.mem.replaceOwned(u8, ctx.gpa, help_text, "@NAME@", ctx.name) catch return 1;
+            defer ctx.gpa.free(text);
             return if (cli.writeStdout(ctx.io, text)) 0 else 1;
         }
         if (std.mem.eql(u8, args[0], "--version") or std.mem.eql(u8, args[0], "-version")) {
@@ -156,14 +169,14 @@ pub fn main(ctx: cli.Context) u8 {
     }
     // start points
     var starts: std.ArrayList([]const u8) = .empty;
-    defer starts.deinit(gpa);
+    defer starts.deinit(ctx.gpa);
     while (i < args.len and !looksLikeExpr(args[i])) : (i += 1) {
-        starts.append(gpa, args[i]) catch return oom(ctx);
+        starts.append(ctx.gpa, args[i]) catch return oom(ctx);
     }
 
     const observer: find.Observer = .{ .context = @constCast(&ui), .func = report };
     var diag: find.Diagnostic = .{};
-    defer diag.deinit(gpa);
+    defer diag.deinit(ctx.gpa);
     var expr = find.compile(env, args[i..], .{
         .follow = follow,
         .no_starts = starts.items.len == 0,

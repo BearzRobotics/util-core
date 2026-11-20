@@ -12,12 +12,11 @@ const Io = std.Io;
 
 /// These commands have always used the general-purpose allocator without
 /// leak checking (their results live until exit).
-const gpa = std.heap.smp_allocator;
 
 pub const default_db = locate.default_db;
 
-fn q(_: cli.Context, text: []const u8) []const u8 {
-    return std.fmt.allocPrint(gpa, "{f}", .{cli.quoteC(text)}) catch "";
+fn q(_: cli.Context, text: []const u8) cli.QuotedC {
+    return cli.quoteC(text);
 }
 
 fn usageText(ctx: cli.Context) []const u8 {
@@ -42,16 +41,16 @@ fn usageText(ctx: cli.Context) []const u8 {
 fn report(context: ?*anyopaque, ev: locate.Event) void {
     const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
     switch (ev) {
-        .open_failed => |e| cli.warn(ctx.*, "{s}: {s}", .{ q(ctx.*, e.name), e.text }),
-        .stat_failed => |e| cli.warn(ctx.*, "{s}: {s}", .{ q(ctx.*, e.name), e.text }),
+        .open_failed => |e| cli.warn(ctx.*, "{f}: {s}", .{ q(ctx.*, e.name), e.text }),
+        .stat_failed => |e| cli.warn(ctx.*, "{f}: {s}", .{ q(ctx.*, e.name), e.text }),
         .stdin_twice => cli.warn(ctx.*, "warning: the locate database can only be read from stdin once.", .{}),
-        .database_old => |e| cli.warn(ctx.*, "warning: database {s} is more than {d} days old (actual age is {d:.1} days)", .{ q(ctx.*, e.name), e.max_days, e.age_days }),
-        .unsupported_slocate_level => |e| cli.warn(ctx.*, "{s} is an slocate database of unsupported security level {d}; skipping it.", .{ q(ctx.*, e.name), e.level }),
+        .database_old => |e| cli.warn(ctx.*, "warning: database {f} is more than {d} days old (actual age is {d:.1} days)", .{ q(ctx.*, e.name), e.max_days, e.age_days }),
+        .unsupported_slocate_level => |e| cli.warn(ctx.*, "{f} is an slocate database of unsupported security level {d}; skipping it.", .{ q(ctx.*, e.name), e.level }),
         .slocate_non_existing_unsupported => cli.warn(ctx.*, "You specified the -E option, but that option cannot be used with slocate-format databases with a non-zero security level.  No results will be generated for this database.\n", .{}),
-        .slocate_existing_forced => |n| cli.warn(ctx.*, "{s} is an slocate database.  Turning on the '-e' option.", .{q(ctx.*, n)}),
-        .old_format_too_short => |n| cli.warn(ctx.*, "Old-format locate database {s} is too short to be valid", .{q(ctx.*, n)}),
-        .old_format => |n| cli.warn(ctx.*, "old-format locate database {s} is not supported", .{q(ctx.*, n)}),
-        .corrupt => |n| cli.warn(ctx.*, "locate database {s} is corrupt or invalid", .{q(ctx.*, n)}),
+        .slocate_existing_forced => |n| cli.warn(ctx.*, "{f} is an slocate database.  Turning on the '-e' option.", .{q(ctx.*, n)}),
+        .old_format_too_short => |n| cli.warn(ctx.*, "Old-format locate database {f} is too short to be valid", .{q(ctx.*, n)}),
+        .old_format => |n| cli.warn(ctx.*, "old-format locate database {f} is not supported", .{q(ctx.*, n)}),
+        .corrupt => |n| cli.warn(ctx.*, "locate database {f} is corrupt or invalid", .{q(ctx.*, n)}),
         .bad_regex => |t| cli.warn(ctx.*, "{s}", .{t}),
     }
 }
@@ -110,11 +109,11 @@ pub fn main(ctx: cli.Context) u8 {
                 var dend: usize = 0;
                 while (dend < a.len and std.ascii.isDigit(a[dend])) dend += 1;
                 if (dend == 0) {
-                    if (opt.is_long) cli.warn(ctx, "invalid --limit argument {s}", .{q(ctx, a)}) else cli.warn(ctx, "invalid -l argument {s}", .{q(ctx, a)});
+                    if (opt.is_long) cli.warn(ctx, "invalid --limit argument {f}", .{q(ctx, a)}) else cli.warn(ctx, "invalid -l argument {f}", .{q(ctx, a)});
                     return 1;
                 }
                 const v = std.fmt.parseInt(u64, a[0..dend], 10) catch {
-                    if (opt.is_long) cli.warn(ctx, "--limit argument {s} too large", .{q(ctx, a)}) else cli.warn(ctx, "-l argument {s} too large", .{q(ctx, a)});
+                    if (opt.is_long) cli.warn(ctx, "--limit argument {f} too large", .{q(ctx, a)}) else cli.warn(ctx, "-l argument {f} too large", .{q(ctx, a)});
                     return 1;
                 };
                 o.limit = v;
@@ -122,7 +121,7 @@ pub fn main(ctx: cli.Context) u8 {
             },
             2000 => {
                 o.regex_syntax = fu.RegexSyntax.parse(opt.arg.?) orelse {
-                    cli.warn(ctx, "Unknown regular expression type {s}; valid types are 'findutils-default', 'ed', 'emacs', 'gnu-awk', 'grep', 'posix-awk', 'awk', 'posix-basic', 'posix-egrep', 'egrep', 'posix-extended', 'posix-minimal-basic', 'sed'.", .{q(ctx, opt.arg.?)});
+                    cli.warn(ctx, "Unknown regular expression type {f}; valid types are 'findutils-default', 'ed', 'emacs', 'gnu-awk', 'grep', 'posix-awk', 'awk', 'posix-basic', 'posix-egrep', 'egrep', 'posix-extended', 'posix-minimal-basic', 'sed'.", .{q(ctx, opt.arg.?)});
                     return 1;
                 };
             },
@@ -133,13 +132,14 @@ pub fn main(ctx: cli.Context) u8 {
                     return 1;
                 }
                 o.max_age_days = std.fmt.parseInt(u64, a, 10) catch {
-                    cli.warn(ctx, "Invalid argument {s} for option --max-database-age", .{q(ctx, a)});
+                    cli.warn(ctx, "Invalid argument {f} for option --max-database-age", .{q(ctx, a)});
                     return 1;
                 };
             },
             getopt.help_id => {
                 const t = usageText(ctx);
-                const a1 = std.mem.replaceOwned(u8, gpa, t, "%s", ctx.name) catch return 1;
+                const a1 = std.mem.replaceOwned(u8, ctx.gpa, t, "%s", ctx.name) catch return 1;
+                defer ctx.gpa.free(a1);
                 return if (cli.writeStdout(ctx.io, a1)) 0 else 1;
             },
             getopt.version_id => {
@@ -171,7 +171,7 @@ pub fn main(ctx: cli.Context) u8 {
 
     var buf: [8192]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
-    const env: locate.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+    const env: locate.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
     const result = locate.run(env, o, patterns, &stdout.interface, .{ .context = @constCast(&ctx), .func = report }) catch |e| switch (e) {
         error.OutOfMemory => {
             cli.warn(ctx, "memory exhausted", .{});

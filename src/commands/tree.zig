@@ -13,7 +13,6 @@ const Io = std.Io;
 
 /// These commands have always used the general-purpose allocator without
 /// leak checking (their results live until exit).
-const gpa = std.heap.smp_allocator;
 
 const help_text = @embedFile("../help/tree.txt");
 
@@ -23,12 +22,12 @@ fn oom(ctx: cli.Context) u8 {
 }
 
 pub fn main(ctx: cli.Context) u8 {
-    const env: tree.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+    const env: tree.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
     var o: tree.Options = .{};
     var patterns: std.ArrayList([]const u8) = .empty;
-    defer patterns.deinit(gpa);
+    defer patterns.deinit(ctx.gpa);
     var ignores: std.ArrayList([]const u8) = .empty;
-    defer ignores.deinit(gpa);
+    defer ignores.deinit(ctx.gpa);
     var out_file: ?[]const u8 = null;
     var charset: ?[]const u8 = null;
     o.utf8_locale = tree.localeIsUtf8(env);
@@ -107,8 +106,8 @@ pub fn main(ctx: cli.Context) u8 {
                 }
                 o.max_level = v;
             },
-            'P' => patterns.append(gpa, opt.arg.?) catch return oom(ctx),
-            'I' => ignores.append(gpa, opt.arg.?) catch return oom(ctx),
+            'P' => patterns.append(ctx.gpa, opt.arg.?) catch return oom(ctx),
+            'I' => ignores.append(ctx.gpa, opt.arg.?) catch return oom(ctx),
             'o' => out_file = opt.arg.?,
             'q' => o.q = true,
             'N' => o.raw = true,
@@ -142,7 +141,8 @@ pub fn main(ctx: cli.Context) u8 {
             },
             2001 => {
                 if (o.utf8_locale) {
-                    const h = std.mem.replaceOwned(u8, gpa, help_text, "(c)", "\u{a9}") catch return 1;
+                    const h = std.mem.replaceOwned(u8, ctx.gpa, help_text, "(c)", "\u{a9}") catch return 1;
+                    defer ctx.gpa.free(h);
                     return if (cli.writeStdout(ctx.io, h)) 0 else 1;
                 }
                 return if (cli.writeStdout(ctx.io, help_text)) 0 else 1;

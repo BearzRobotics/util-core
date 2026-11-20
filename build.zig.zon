@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.17.1",
     .dependencies = .{
         .regex = .{
-            .url = "git+https://github.com/BearzRobotics/regex-zig#d5a8c4b10a84549f5403aa4ad9afcacc9a5bfab9",
-            .hash = "regex-0.0.0-bWvIn4QIAQDLngzt940mRx47iJYcfkX0bWIPjScNXlAb",
+            .url = "https://github.com/BearzRobotics/regex-zig/archive/refs/tags/v0.3.0.tar.gz",
+            .hash = "regex-0.3.0-bWvIn7D8CgBvfUhlJMp4nIRpRPYTsf6XVlcsRyHxS8bu",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE", "README.md" },

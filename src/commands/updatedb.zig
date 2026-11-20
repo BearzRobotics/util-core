@@ -81,7 +81,8 @@ pub fn main(ctx: cli.Context) u8 {
                 \\
                 \\
             ;
-            const out = std.mem.replaceOwned(u8, gpa, t, "%s", ctx.name) catch return 1;
+            const out = std.mem.replaceOwned(u8, ctx.gpa, t, "%s", ctx.name) catch return 1;
+            defer ctx.gpa.free(out);
             return if (cli.writeStdout(ctx.io, out)) 0 else 1;
         } else {
             stderrLine(ctx, "updatedb: invalid option {s}\nTry '{s} --help' for more information.\n", .{ opt, ctx.name });
@@ -95,7 +96,7 @@ pub fn main(ctx: cli.Context) u8 {
         }
     }
 
-    const env: updatedb.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+    const env: updatedb.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
     const result = updatedb.run(env, o, .{ .context = @constCast(&ctx), .func = report }) catch return 1;
     return result.status;
 }
