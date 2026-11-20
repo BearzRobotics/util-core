@@ -5,8 +5,13 @@
 UTIL="sync"
 . "$(dirname "$0")/testlib.sh"
 help_cmp
-W="$(mktemp -d)"; cd "$W"; echo x > file; mkdir dir; touch 'we ird'
-run_cmp "no args"
+# With no operand sync flushes EVERY mounted file system, which can block for many
+# minutes on a busy disk. Those cases ("no args", "-f no args") run only when
+# SYNC_GLOBAL=1. The scratch files live on tmpfs (/dev/shm) so fsync/syncfs on
+# them are free.
+W="$(mktemp -d -p /dev/shm 2>/dev/null || mktemp -d)"; cd "$W"
+global() { [ -n "${SYNC_GLOBAL:-}" ]; }; echo x > file; mkdir dir; touch 'we ird'
+global && run_cmp "no args"
 run_cmp "file"                 file
 run_cmp "directory"            dir
 run_cmp "several"              file dir 'we ird'
@@ -20,7 +25,7 @@ run_cmp "--data no args"       --data
 run_cmp "-f file"              -f file
 run_cmp "--file-system file"   --file-system file
 run_cmp "-f dir"               -f dir
-run_cmp "-f no args"           -f
+global && run_cmp "-f no args"           -f
 run_cmp "-d -f"                -d -f file
 run_cmp "-df"                  -df file
 run_cmp "-d missing"           -d nofile
@@ -31,5 +36,6 @@ run_cmp "-- -dash"             -- -x
 run_cmp "bad option"           -x
 run_cmp "long abbrev"          --da file
 run_cmp "stdin dash"           -
+cd /; rm -rf "$W"
 print_summary
 [ "$FAIL" -eq 0 ]

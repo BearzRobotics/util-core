@@ -32,12 +32,11 @@ C-locale only everywhere.
 
 ## Come back to
 
-- **`sync` differential suite (`test/test_sync.sh`) was not run on the converted
-  build.** It calls GNU `sync -f`, which blocks for tens of minutes on the
-  development drive, and the maintainer asked not to run it there (2026-11-19).
-  Old and new `sync` binaries were compared on 18 invocations (identical stdout,
-  stderr and status). Run the suite on a machine or drive where `sync` is
-  cheap, then delete this item. Do not run it on the development drive.
+- **`sync` suite: 24/24 pass without the two global-flush cases** ("no args" and
+  "-f no args"; with no operand sync flushes every mounted file system and can
+  block for many minutes). Those two run only with `SYNC_GLOBAL=1`; run them on an
+  idle machine or drive, never on the development drive (maintainer's instruction,
+  2026-11-19). The scratch files now live on tmpfs.
 - `shred`: `test_shred.sh` hangs at its `/dev/full` test (before and after the
   library conversion); check whether GNU `shred /dev/full` hangs too.
 - `ls` library returns formatted text and `--json` only, not structured entries.
