@@ -13,7 +13,7 @@ failure status; it never silently succeeds. WASI is not supported.
 | Target | Compiles (multicall and standalone) | Run | Test status |
 |---|---|---|---|
 | x86_64-linux-musl, aarch64-linux-musl | yes | yes | every `test/test_*.sh` suite (differential against GNU coreutils) |
-| x86_64-windows | yes | smoke only (see below) | `test/test_windows_vm.sh` written, native run pending; a few commands run under wine as a quick smoke only |
+| x86_64-windows | yes | under wine only | `test/test_windows_wine.sh`: 79 cases over 27 commands pass under wine 10.0; not yet run on real Windows |
 | aarch64-windows | yes | no | compiled only |
 | aarch64-macos, x86_64-macos | yes | no | compiled only; no Mac was available. The libc code in `src/sys/other.zig` is unexecuted |
 
@@ -62,19 +62,19 @@ given. Text is never translated (no CRLF conversion).
 
 * Linux: the whole suite (`test/run_all_tests.sh`), unchanged by the portable
   work. The suites run against the Linux build only.
-* Windows: `test/test_windows_vm.sh` copies a Windows build to a real Windows
-  machine over SSH (host, user and the password helper `SSH_ASKPASS` come from
-  the environment; no credentials in the repository), runs 80 small cases for
-  cat, wc, sort, ls, cp, rm, mkdir, date, find, grep, sed, printf, test, env,
-  seq, md5sum, tr, cut, uniq, tee, head, tail, du, stat, basename and readlink
-  there, and compares standard output and exit status with the Linux build. It
-  skips cleanly when the helper, the machine or a build is missing. It removes
-  no carriage returns from command output; only the markers cmd.exe prints
-  itself are normalised.
-  **Result so far: not run.** Access to the Windows machine was refused in the
-  session that wrote this, so no command has been verified natively on Windows.
-  As a quick smoke only (not evidence), cat, sort, cp, mkdir, sed, stat, rm,
-  tail, du and `ls -l` / `ls -1R` produced correct output under wine 10.0, which
-  found and led to the fix of `ls` on directories.
+* Windows: `test/test_windows_wine.sh` runs the x86_64-windows build under
+  wine 10.0 (in a private wine prefix) and compares standard output and exit
+  status of 79 small cases with the Linux build. The commands covered are cat,
+  wc, sort, ls, cp, rm, mkdir, date, find, grep, sed, printf, test, env, seq,
+  md5sum, tr, cut, uniq, tee, head, tail, du, stat, basename and readlink. It
+  skips cleanly when wine or either build is missing. Standard error is not
+  compared. Result: **79 passed, 0 failed.** Differences found while writing
+  it and kept out of the comparison on purpose: directory sizes (`ls -S`
+  sorts a directory by 4096 on Linux, 0 on Windows).
+  **This is wine, not Windows.** Wine runs the same PE binaries against its own
+  reimplementation of the Windows API, so it shows the programs start, parse
+  arguments, read and write files and pipes, and walk directories, but not how
+  real Windows file systems, permissions, symbolic links or console behave. A
+  run on a real Windows machine is planned before release.
 * macOS: compile-checked only. The libc paths (stat, chown, signals, kqueue
   watcher, statfs) have never been executed; treat them as untested.

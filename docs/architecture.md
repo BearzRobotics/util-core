@@ -121,8 +121,8 @@ csplit, expr, ptx, locate and updatedb. Zig-native; no C FFI.
 
 ## Known gaps
 
-- No CI; macOS is compile-checked only and Windows runs only the smoke test in
-  `test/test_windows_vm.sh`.
+- No CI; macOS is compile-checked only and Windows is only checked under wine by
+  `test/test_windows_wine.sh`.
 - Only the minimal `--help`/`--version` text exists; the version string is
   `0.0.0-dev`.
 

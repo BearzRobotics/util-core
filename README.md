@@ -17,7 +17,7 @@ Platforms: Linux (x86_64, aarch64), macOS (aarch64, x86_64) and Windows
 (x86_64, aarch64) are built from any host with `-Dtarget=`, for example
 `zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall`. Linux is the
 reference platform and the only one the full test suites run on; macOS is
-compile-checked only and Windows has a native smoke test. What works where is
+compile-checked only and Windows is checked under wine (a real Windows run is planned before release). What works where is
 in `docs/portability.md`.
 
 ## License

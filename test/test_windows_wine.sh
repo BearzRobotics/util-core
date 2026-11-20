@@ -1,7 +1,8 @@
 #!/bin/sh
-# Run a representative set of the Windows (x86_64-windows) builds natively on a
-# Windows machine reached over SSH, and compare their standard output and exit
-# status with the Linux build of the same command.
+# Run a representative set of the Windows (x86_64-windows) builds under wine
+# and compare their standard output and exit status with the Linux build of
+# the same command. Wine is a quick check, not proof of behaviour on Windows
+# (see docs/portability.md).
 #
 # Build both sets first (standalone binaries):
 #
@@ -9,35 +10,31 @@
 #   zig build -Doptimize=ReleaseSafe -Dcommands=$CMDS -Dmode=standalone -Dman=false --prefix zig-out-linux
 #   zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSafe -Dcommands=$CMDS -Dmode=standalone -Dman=false --prefix zig-out-win
 #
-# Environment (no credentials live in the repository):
-#   WIN_VM_HOST   host name or address of the Windows machine   (default 192.168.122.202)
-#   WIN_VM_USER   account on it                                  (default aimgr)
-#   SSH_ASKPASS   executable that prints the account password; required
-#                 (SSH_ASKPASS_REQUIRE=force and DISPLAY are set here)
-#   LINUX_BIN     Linux binaries   (default <repo>/zig-out-linux/bin)
-#   WIN_BIN       NAME.exe files   (default <repo>/zig-out-win/bin)
+# Environment:
+#   LINUX_BIN  Linux binaries   (default <repo>/zig-out-linux/bin)
+#   WIN_BIN    NAME.exe files   (default <repo>/zig-out-win/bin)
+#   WINE       wine launcher    (default wine64, then wine)
 #
-# Everything is copied to and run in %USERPROFILE%\utilcore on the machine; no
-# setting of the machine is changed. All tests of one run go in a single batch
-# file, so there is one copy and one ssh session. Standard error is not
-# compared (program names and Windows error texts differ legitimately).
-# Output is compared byte for byte; the only carriage returns removed are those
-# cmd.exe adds to its own "echo" marker lines.
+# All tests of one run go in one batch file run by wine's cmd.exe, in a
+# private wine prefix and a temporary directory. Standard error is not
+# compared. Output is compared byte for byte; the only carriage returns
+# removed are those cmd.exe adds to its own "echo" marker lines.
 #
-# Exit status 0 when every comparison passed or when the test was skipped.
+# Exit status 0 when every comparison passed or when the test was skipped
+# (no wine, or no build).
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LINUX_BIN=${LINUX_BIN:-$ROOT/zig-out-linux/bin}
 WIN_BIN=${WIN_BIN:-$ROOT/zig-out-win/bin}
-HOST=${WIN_VM_HOST:-192.168.122.202}
-USER_=${WIN_VM_USER:-aimgr}
 
-if [ -z "$SSH_ASKPASS" ] || [ ! -x "$SSH_ASKPASS" ]; then
-    echo "SKIP: SSH_ASKPASS is not set to an executable password helper"
-    exit 0
+WINE=${WINE:-}
+if [ -z "$WINE" ]; then
+    if command -v wine64 >/dev/null 2>&1; then WINE=wine64
+    elif command -v wine >/dev/null 2>&1; then WINE=wine
+    fi
 fi
-if ! command -v ssh >/dev/null 2>&1 || ! command -v scp >/dev/null 2>&1; then
-    echo "SKIP: ssh/scp not installed"
+if [ -z "$WINE" ] || ! command -v "$WINE" >/dev/null 2>&1; then
+    echo "SKIP: wine is not installed"
     exit 0
 fi
 if [ ! -f "$WIN_BIN/cat.exe" ]; then
@@ -49,18 +46,10 @@ if [ ! -x "$LINUX_BIN/cat" ]; then
     exit 0
 fi
 
-export SSH_ASKPASS SSH_ASKPASS_REQUIRE=force
-export DISPLAY=${DISPLAY:-:0}
-SSHOPTS="-o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=15"
-vm() { ssh $SSHOPTS "$USER_@$HOST" "$@"; }
-
-if [ "$(vm 'echo reachable' 2>/dev/null | tr -d '\r')" != "reachable" ]; then
-    echo "SKIP: cannot reach $USER_@$HOST over ssh"
-    exit 0
-fi
-
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/ucvm.XXXXXX") || exit 1
+export WINEDEBUG=-all
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/ucwine.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
+export WINEPREFIX=${WINEPREFIX:-$TMP/prefix}
 
 mkfixture() {
     rm -rf "$1"
@@ -97,7 +86,7 @@ t "sort -t, -k2n" 'sort -t, -k2n c.csv'
 t "ls -1" 'ls -1'
 t "ls -1a dir" 'ls -1a dir'
 t "ls -R" 'ls -R dir'
-t "ls -1S" 'ls -1S'
+t "ls -1S files" 'ls -1S a.txt b.txt c.csv'
 t "ls missing" 'ls nosuchfile'
 t "cp file" 'cp a.txt copy.txt && cat copy.txt'
 t "cp -r tree" 'cp -r dir dir2 && find dir2 -type f | sort'
@@ -176,33 +165,30 @@ while IFS= read -r line; do
     (cd "$TMP/lw" && PATH="$LINUX_BIN:$PATH" sh -c "$line" 2>/dev/null </dev/null; echo "status=$?") >> "$LOUT"
 done < "$TMP/tests"
 
-# ---- Windows side: one batch file
+# ---- Windows side (wine): one batch file
+WBIN=$("$WINE" winepath -w "$WIN_BIN" 2>/dev/null | tr -d '\r')
+mkfixture "$TMP/win-fix"
+WFIX=$("$WINE" winepath -w "$TMP/win-fix" | tr -d '\r')
+WWORK=$("$WINE" winepath -w "$TMP" | tr -d '\r')'\w'
 BAT="$TMP/run.bat"
 {
     printf '@echo off\r\n'
-    printf 'set PATH=%%USERPROFILE%%\\utilcore\\bin;%%PATH%%\r\n'
+    printf 'set PATH=%s;%%PATH%%\r\n' "$WBIN"
     i=0
     while IFS= read -r line; do
         i=$((i + 1))
-        esc=$(printf '%s' "$line" | sed 's/%/%%/g')
+        # cmd.exe has internal date and mkdir (and would run its own sort/find
+        # first on a real Windows PATH): name the programs explicitly.
+        esc=$(printf '%s' "$line" | sed -e 's/%/%%/g' -E -e 's/(^|\| |&& )([a-z0-9]+) /\1\2.exe /g')
         printf 'echo ===T %d\r\n' "$i"
-        printf 'rd /s /q %%USERPROFILE%%\\utilcore\\w 2>nul\r\n'
-        printf 'xcopy /e /i /q /y %%USERPROFILE%%\\utilcore\\fix %%USERPROFILE%%\\utilcore\\w >nul\r\n'
-        printf 'cd /d %%USERPROFILE%%\\utilcore\\w\r\n'
-        printf '%s 2>nul <nul\r\n' "$esc"
+        printf 'rd /s /q %s 2>nul\r\n' "$WWORK"
+        printf 'xcopy /e /i /q /y %s %s >nul\r\n' "$WFIX" "$WWORK"
+        printf 'cd /d %s\r\n' "$WWORK"
+        printf '%s\r\n' "$esc"
         printf 'echo status=%%errorlevel%%\r\n'
     done < "$TMP/tests"
 } > "$BAT"
-
-vm 'mkdir utilcore\bin' >/dev/null 2>&1
-vm 'rd /s /q utilcore\fix' >/dev/null 2>&1
-if ! scp $SSHOPTS -q "$WIN_BIN"/*.exe "$USER_@$HOST:utilcore/bin/" ||
-    ! scp $SSHOPTS -q -r "$TMP/lin-fix" "$USER_@$HOST:utilcore/fix" ||
-    ! scp $SSHOPTS -q "$BAT" "$USER_@$HOST:utilcore/run.bat"; then
-    echo "SKIP: copying to $USER_@$HOST failed"
-    exit 0
-fi
-vm 'utilcore\run.bat' 2>/dev/null | sed -E '/^(===T|status=)/s/\r$//' > "$TMP/windows.out"
+"$WINE" cmd /c "$("$WINE" winepath -w "$BAT" | tr -d '\r')" 2>/dev/null </dev/null | sed -E '/^(===T|status=)/s/\r$//' > "$TMP/windows.out"
 
 # ---- compare section by section
 PASS=0
@@ -223,5 +209,5 @@ while [ "$i" -lt "$NTESTS" ]; do
         printf '  windows: %s\n' "$(head -c 300 "$TMP/w.sec" | tr '\n' '|' | tr '\r' '~')"
     fi
 done
-printf '\n%d passed, %d failed (native Windows via %s)\n' "$PASS" "$FAIL" "$HOST"
+printf '\n%d passed, %d failed (Windows build under wine)\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
