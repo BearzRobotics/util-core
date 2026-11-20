@@ -1,6 +1,6 @@
 # grep: compatibility record
 
-Status: implemented with the gaps listed below; differential tests pass against GNU grep 3.12. Date: 2026-11-07
+Status: implemented with the gaps listed below; differential tests pass against GNU grep 3.12; extensions per decision 0006 implemented and tested. Date: 2026-11-19
 
 Library: `util_core.grep` (src/lib/grep.zig): `Matcher.compile` builds a compiled pattern list usable on any buffer (`isMatch`, `find`); `run` walks files, directories and standard input and writes to an `Io.Writer`; non-fatal problems go to an `Observer(Event)`. `src/commands/grep.zig` only parses arguments and words the diagnostics (decision 0004).
 
@@ -33,17 +33,70 @@ GNU grep 3.12 (`/usr/bin/grep --version` on the development machine). Consulted 
 
 ## Extensions
 
-None. No ripgrep- or FreeBSD-derived option is implemented; every option in the table above is GNU grep 3.12's (including the obsolete `-y` and `-u`, and GNU's undocumented `-X MATCHER`). The one place the behaviour differs from GNU is `-P`, which is regex-zig's Perl dialect rather than PCRE2 (see the deviations below). The library `Options` fields all default to GNU behaviour (decision 0005, rule 6).
+Every extension is opt-in and leaves GNU behaviour unchanged when not used (decisions 0005 and 0006). Library `Options` fields default to GNU behaviour; the wrapper flags are long options except FreeBSD's `-O`, `-p`, `-S` (letters GNU does not use). Each is listed in `--help` on a line ending in "(not in GNU)". Tests: `sh test/test_grep_ext.sh` (oracle in the "Test" column). Where the oracles disagree with GNU on a meaning, GNU wins.
+
+| Option | Kind | Why / semantics | Test oracle |
+|---|---|---|---|
+| `--json` | ripgrep | JSON Lines, ripgrep's schema (begin, match, context, end, summary; `{"bytes": base64}` for non-UTF-8). Searches every file as text; `-o`, `--replace` do not change the messages. | `rg --json`, timings normalised |
+| `--smart-case` | ripgrep | Case-insensitive unless a pattern has an uppercase letter; escapes (`\S`) do not count; `-i` wins. | `rg --smart-case` |
+| `--glob=GLOB` | ripgrep | Include/exclude (`!`) with gitignore-style globs, later wins, only while walking (command-line files are never filtered, as in rg). | `rg -g` |
+| `--hidden`, `--no-hidden` | ripgrep | GNU `-r` already searches hidden files, so `--hidden` is the default spelled out and `--no-hidden` skips dot names. rg's default (hidden skipped) is `--no-hidden`. | `rg --hidden`, `rg` |
+| `--ignore-vcs`, `--no-ignore` | ripgrep | `.gitignore` / `.ignore` honoured only when asked (GNU does not read them); `--no-ignore` is the default. Only files inside the searched directories are read (no parent, global or `.git/info/exclude` files; rg reads those). | `rg --no-require-git` |
+| `--replace=TEXT` | ripgrep | Replacement with `$N`, `${name}`, `$name`, `$$`; whole line or, with `-o`, each match. | `rg -r` |
+| `--count-matches` | ripgrep | Matches per file; files with none are omitted (rg's rule, unlike GNU `-c`). | `rg --count-matches` |
+| `--stats` | ripgrep | Statistics block after the results. | `rg --stats`, times normalised |
+| `--type`, `--type-not`, `--type-list` | ripgrep | Built-in table: 31 names copied from rg's (c, cpp, py, rust, zig, js, ts, md, sh, ...); not all 218. | `rg -t/-T`, every table line is in `rg --type-list` |
+| `--max-columns`, `--max-columns-preview` | ripgrep | Omit (or cut) lines of NUM bytes or more including the terminator. | `rg --max-columns` |
+| `--sort=KEY`, `--sortr=KEY` | ripgrep, ugrep | Directory entries in `path`/`name`, `modified`, `accessed`, `created`, `size` order, or `none`. | `rg --sort`, `--sortr` |
+| `--and`, `--andnot`, `--not`, `--bool` | ugrep | Boolean queries on a line. Pattern syntax is the -E/-F/-G/-P choice, default -G (ugrep's default is -E). | `ugrep` |
+| `-O`, `-p`, `-S` | FreeBSD | Symbolic links with `-r`: command line only, never, all (`-S` is GNU's `-R` behaviour). `-O`/`-p` read links to files met while walking; GNU `-r` skips them. FreeBSD's default (`-R` follows all links) is not adopted: GNU wins. | FreeBSD grep |
+| `--include-dir=GLOB` | FreeBSD | Descend only into matching directories (also tested on the starting directory). | FreeBSD grep |
+| `--mmap` | FreeBSD | Accepted, ignored. | FreeBSD grep |
+| `--decompress` | FreeBSD (`-Z`/`-z`/`-J`...) | gzip, zlib, xz, zstd by magic number, through std.compress. bzip2 is detected and reported, searched raw; lzma/lz4/brotli/zip unsupported. Not applied to standard input. FreeBSD's short letters clash with GNU (`-Z`, `-z`, `-X`) and are not provided. | `ugrep -z` (same formats) |
+
+Better diagnostics (kind "diagnostic"; stdout and exit status are GNU's, only stderr text differs; tests check status and the text):
+
+| Case | GNU | Ours |
+|---|---|---|
+| invalid `-P` pattern | PCRE's message | `invalid Perl regular expression: REASON (at offset N in 'PATTERN')` |
+| search gives up on a line (backtracking/stack limit) | -P: `exceeded PCRE's backtracking limit`, status 2 | `FILE: regular expression search exceeded its limits near line N; lines it gave up on were treated as not matching`, status 2 (before this change the line silently counted as no match) |
+| memory exhausted | `memory exhausted` | plus the usual cause |
+| `--decompress` damaged or unsupported data | n/a | named per file |
+| bad `--bool` query, `--type`, `--sort`, `--max-columns` | n/a | says what is wrong |
+
+Behaviour that is not an option:
+
+- Pattern lists of four or more patterns are searched with one lazily built DFA (regex-zig 0.3.0 `Regex` over `(?:p1)|(?:p2)|...`) for line selection; leftmost-longest `-o` output, colours and `--replace` still use the per-pattern search, compiled on first use. Patterns with back-references are not combined. Output is byte-identical (baseline suite). A 3000-word `-f` list over a 3 MB file went from 16.4 s to 1.6 s (see Performance).
+- `-q`, and output to `/dev/null`, stop at the first selected line and exit 0 even after earlier errors, as GNU does.
+- A getopt change: an abbreviation of a long option that fits a GNU option and an extension means the GNU option (`--cou` is `--count`), so no GNU invocation becomes ambiguous.
+- `--color=BOGUS` prints GNU's help without the extension lines.
+
+## Performance
+
+Measured with `crap` (cycles, instructions, wall time; stdout piped through `cat` because GNU and ours exit at the first match when stdout is /dev/null). Input: a 10.4 MB, 200000-line file of random words; `-f` with 3000 random 5-6 letter words (300 matching lines); 4 cores busy with other work, so wall times are noisy.
+
+| command | wall | cycles | instructions |
+|---|---|---|---|
+| GNU grep 3.12 `-c -f words big` | 172 ms | 901 M | 574 M |
+| ripgrep 15.1 | 56 ms | 279 M | 480 M |
+| ugrep 7.5 | 41 ms | 188 M | 411 M |
+| ours | 1.99 s | 10.4 G | 39.4 G |
+| ours before this change (3 MB prefix, wall clock only) | 16.4 s | | |
+
+The 16.4 s figure is the 3 MB prefix of the file, so the full file would have been about 55 s: the change is roughly a 27x speed-up on this case, but a 3000-word list is still 12x slower than GNU, 35x slower than rg. Most of the 2 s is the lazy DFA being built state by state. Single pattern `-c two` over the file: GNU 8.0 ms, rg 3.1 ms, ugrep 3.6 ms, ours 23.6 ms (that path is the pre-existing one-regex search; the DFA is only used from four patterns).
 
 ## Known deviations and gaps
 
 - `-P` uses the Perl dialect of regex-zig, not PCRE2: features such as recursion, conditionals and Unicode properties are missing and error messages differ (`invalid Perl regular expression`).
-- Every line is searched with one backtracking regex per pattern (no DFA, no Boyer-Moore): very large pattern lists (`-f` with thousands of words) are slow.
+- Large pattern lists use the combined DFA only for line selection and only without back-references; `-o`, colour and `--replace` with thousands of patterns compile each pattern on first use and are slow. Cold DFA construction for several thousand patterns costs about a second; GNU grep (Aho-Corasick/DFA) is still faster on such lists.
+- Not adopted: regex-zig's native POSIX BRE (the BRE/ERE-to-Perl translation in posixre.zig carries GNU's leniency rules and diagnostics, and was not re-verified against 7049 cases with the native parser).
 - Binary detection looks at each 96 KiB read rather than at GNU's buffer boundaries, so a NUL byte appearing far into a large file may switch to binary mode at a slightly different line.
-- The `-q`/`/dev/null` shortcut that makes GNU exit 0 on the first match even after earlier errors is implemented only for `-q`.
+- Binary detection at GNU's exact buffer boundaries is not matched (kept above); the `-q`/`/dev/null` early exit gap is closed.
 - UTF-8 character classes use Unicode 16 tables and may differ from glibc's C.UTF-8 for rare code points; other locales are treated as C.
 
 ## Tests
+
+`sh test/test_grep_ext.sh`: the extensions against `rg`, `ugrep`, FreeBSD grep (tools/bsdrun.sh) and GNU grep for the unchanged paths.
 
 `sh test/test_grep.sh`: about 7000 differential cases against GNU grep 3.12 (options crossed with inputs, regex syntax for BRE/ERE/fixed/Perl, context, colours with GREP_COLORS, binary and encoding handling, recursion with include/exclude, UTF-8 locale, error messages and exit statuses).
 

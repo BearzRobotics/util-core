@@ -25,6 +25,7 @@ const regex = @import("regex");
 const sys = @import("../sys.zig");
 const unicode = @import("../unicode.zig");
 const fnmatch = @import("../fnmatch.zig");
+const ign = @import("grep_ignore.zig");
 
 pub const Env = common.Env;
 pub const Input = common.Input;
@@ -62,6 +63,25 @@ pub const Colors = struct {
 };
 
 pub const Glob = struct { pat: []const u8, include: bool };
+
+/// How recursion treats symbolic links (FreeBSD -O, -p, -S).
+pub const Symlinks = enum {
+    /// GNU: -r follows command-line links only and skips links met while
+    /// walking; -R (`deref_recursive`) follows all.
+    gnu,
+    /// -O: directory links are followed only on the command line; links to
+    /// files met while walking are read.
+    cmdline,
+    /// -p: directory links are never followed; links to files are read.
+    none,
+};
+
+/// `--sort` / `--sortr` keys.
+pub const SortKey = enum { none, path, modified, accessed, created, size };
+
+/// One term of a boolean query (--and, --not, --andnot): patterns separated
+/// by newlines, ORed with each other.
+pub const BoolTerm = struct { keys: []const u8, negate: bool = false, and_next: bool = false };
 
 pub const Options = struct {
     syntax: Syntax = .basic,
@@ -105,6 +125,39 @@ pub const Options = struct {
     /// names are printed without the "./" prefix.
     implicit_dot: bool = false,
 
+    // ---- extensions (decision 0006); every default is GNU behaviour.
+    /// --smart-case: ignore case when no pattern has an uppercase letter.
+    smart_case: bool = false,
+    /// --json: ripgrep's JSON Lines messages instead of text.
+    json: bool = false,
+    /// --stats: print search statistics after the results.
+    stats: bool = false,
+    /// --count-matches: per file, the number of matches (not lines); files
+    /// without matches are not listed.
+    count_matches: bool = false,
+    /// --replace: output with every match replaced (groups `$1`, `${name}`).
+    replace: ?[]const u8 = null,
+    /// --max-columns: omit longer lines (0 = off); --max-columns-preview
+    /// shows their start.
+    max_columns: usize = 0,
+    max_columns_preview: bool = false,
+    /// GNU grep -r searches hidden files; --no-hidden skips them.
+    search_hidden: bool = true,
+    /// --ignore-vcs: honour .gitignore and .ignore files while recursing.
+    ignore_vcs: bool = false,
+    /// --glob (ripgrep rules: later globs win, `!` excludes).
+    rg_globs: []const ign.Pattern = &.{},
+    /// --type / --type-not: glob lists (file names).
+    type_include: []const []const u8 = &.{},
+    type_exclude: []const []const u8 = &.{},
+    sort: SortKey = .none,
+    sort_reverse: bool = false,
+    symlinks: Symlinks = .gnu,
+    /// --include-dir (FreeBSD): descend only into directories matching.
+    include_dirs: []const []const u8 = &.{},
+    /// --decompress: read gzip, zlib, xz and zstd input decompressed.
+    decompress: bool = false,
+
     /// Fold an empty pattern list into the options the way GNU does and
     /// report whether nothing can possibly match (the caller then skips the
     /// search and exits 1). `keys_len` is the length of the pattern list
@@ -135,6 +188,14 @@ pub const Event = union(enum) {
     leading_operator: u8,
     /// GREP_COLOR is set (deprecated); the payload is its value.
     deprecated_grep_color: []const u8,
+    /// --decompress met a format it cannot read (bzip2); the file is searched
+    /// as is.
+    unsupported_compression: struct { name: []const u8, format: []const u8 },
+    /// --decompress: the compressed data is damaged.
+    decompress_failed: []const u8,
+    /// A regex search gave up on a line (backtracking or stack limit). GNU
+    /// -P reports this as an error; the line counts as not matching.
+    search_limit: struct { name: []const u8, line: u64 },
 };
 pub const Observer = common.Observer(Event);
 
@@ -144,14 +205,19 @@ pub const CompileError = struct {
     pattern: []const u8 = "",
     /// Was it compiled as an ERE (for posixre.diagnoseGrep).
     extended: bool = false,
+    /// regex-zig's explanation and its position in the pattern (-P).
+    detail: []const u8 = "",
+    offset: usize = 0,
 
     pub const Kind = enum {
         /// Invalid regular expression syntax; use `posixre.diagnoseGrep`.
         syntax,
         /// "[:space:]" outside a bracket expression.
         bare_class,
-        /// -P pattern regex-zig rejects.
+        /// -P pattern regex-zig rejects (`detail` says why).
         invalid_perl,
+        /// Malformed --bool query; `offset` is where parsing stopped.
+        bool_syntax,
     };
 };
 
@@ -164,6 +230,14 @@ pub fn localeIsUtf8(env: Env) bool {
     return false;
 }
 
+/// Pattern count from which `Matcher` builds the combined search set.
+const set_threshold = 4;
+const set_limits: regex.Limits = blk: {
+    var l = posixre.big_limits;
+    l.max_dfa_cache = 256 << 20;
+    break :blk l;
+};
+
 const Pat = struct {
     re: regex.Regex,
     longest: ?*regex.Regex,
@@ -173,24 +247,65 @@ const Pat = struct {
 
 /// A compiled pattern list. Safe to use on many buffers; not thread-safe
 /// (searchers keep scratch state).
+pub const BoolNode = union(enum) {
+    leaf: usize,
+    not: usize,
+    both: [2]usize,
+    either: [2]usize,
+};
+
 pub const Matcher = struct {
     gpa: std.mem.Allocator,
     pats: std.ArrayList(*Pat) = .empty,
     utf8: bool = false,
+    /// Translated patterns, compiled one by one only when a match position
+    /// is needed (see `ensure`).
+    staged: std.ArrayList(Staged) = .empty,
+    /// All patterns as one DFA-backed search: answers "does any pattern match
+    /// this line" without trying each pattern (large -f lists).
+    set: ?*regex.Regex = null,
+    set_sr: ?regex.Searcher = null,
+    options: Options = .{},
+    /// Searches that hit a regex limit (the line was treated as no match).
+    limit_hits: u64 = 0,
+    /// Boolean query (--and, --not, --bool): leaves and expression.
+    bool_nodes: []BoolNode = &.{},
+    bool_root: usize = 0,
+    bool_subs: std.ArrayList(*Matcher) = .empty,
 
     pub const Error = error{ OutOfMemory, BadPattern };
 
     /// Compile `keys` (patterns separated by '\n') under `options` (syntax,
     /// icase, word, line, utf8). On `error.BadPattern`, `diag` says why.
     pub fn compile(gpa: std.mem.Allocator, options: Options, keys: []const u8, observer: Observer, diag: *CompileError) Error!Matcher {
-        var m: Matcher = .{ .gpa = gpa, .utf8 = options.utf8 };
+        var opts = options;
+        if (opts.smart_case and !opts.icase and !hasUpper(keys, opts.syntax)) opts.icase = true;
+        var m: Matcher = .{ .gpa = gpa, .utf8 = opts.utf8, .options = opts };
         errdefer m.deinit();
         var it = std.mem.splitScalar(u8, keys, '\n');
-        while (it.next()) |pt| try m.add(options, pt, observer, diag);
+        while (it.next()) |pt| try m.stage(opts, pt, observer, diag);
+        m.buildSet(opts);
+        if (m.set == null) try m.realize(diag);
         return m;
     }
 
     pub fn deinit(m: *Matcher) void {
+        if (m.set_sr) |*x| x.deinit();
+        if (m.set) |st| {
+            st.deinit(m.gpa);
+            m.gpa.destroy(st);
+        }
+        for (m.bool_subs.items) |sub| {
+            sub.deinit();
+            m.gpa.destroy(sub);
+        }
+        m.bool_subs.deinit(m.gpa);
+        m.gpa.free(m.bool_nodes);
+        for (m.staged.items) |x| {
+            m.gpa.free(x.inner);
+            m.gpa.free(x.body);
+        }
+        m.staged.deinit(m.gpa);
         for (m.pats.items) |p| {
             p.fin.deinit();
             p.re.deinit(m.gpa);
@@ -203,11 +318,67 @@ pub const Matcher = struct {
         m.pats.deinit(m.gpa);
     }
 
+    /// A boolean query from --and/--not/--andnot terms: the groups (a term
+    /// with `and_next` starts a new one) are ANDed, the terms inside a group
+    /// are ORed.
+    pub fn compileTerms(gpa: std.mem.Allocator, options: Options, terms: []const BoolTerm, observer: Observer, diag: *CompileError) Error!Matcher {
+        var b = BoolBuilder{ .m = .{ .gpa = gpa, .utf8 = options.utf8, .options = options }, .options = options, .observer = observer, .diag = diag };
+        errdefer b.m.deinit();
+        var nodes: std.ArrayList(BoolNode) = .empty;
+        errdefer nodes.deinit(gpa);
+        b.nodes = &nodes;
+        var group: ?usize = null;
+        var root: ?usize = null;
+        for (terms) |t| {
+            if (t.and_next and group != null) {
+                root = if (root) |r| try b.add(.{ .both = .{ r, group.? } }) else group;
+                group = null;
+            }
+            var leaf = try b.leaf(t.keys);
+            if (t.negate) leaf = try b.add(.{ .not = leaf });
+            group = if (group) |g| try b.add(.{ .either = .{ g, leaf } }) else leaf;
+        }
+        if (group) |g| root = if (root) |r| try b.add(.{ .both = .{ r, g } }) else g;
+        b.m.bool_root = root orelse return error.BadPattern;
+        b.m.bool_nodes = try nodes.toOwnedSlice(gpa);
+        return b.m;
+    }
+
+    /// A --bool query: terms separated by spaces (AND), `|` or OR, `-` or
+    /// NOT, parentheses, and "quoted" literals. A syntax error is reported
+    /// as `error.BadPattern` with `diag.kind == .bool_syntax`.
+    pub fn compileQuery(gpa: std.mem.Allocator, options: Options, query: []const u8, observer: Observer, diag: *CompileError) Error!Matcher {
+        var b = BoolBuilder{ .m = .{ .gpa = gpa, .utf8 = options.utf8, .options = options }, .options = options, .observer = observer, .diag = diag };
+        errdefer b.m.deinit();
+        var nodes: std.ArrayList(BoolNode) = .empty;
+        errdefer nodes.deinit(gpa);
+        b.nodes = &nodes;
+        var ps = QueryParser{ .b = &b, .src = query };
+        const root = try ps.expr();
+        ps.skipSpace();
+        if (ps.pos < query.len) return ps.fail();
+        b.m.bool_root = root;
+        b.m.bool_nodes = try nodes.toOwnedSlice(gpa);
+        return b.m;
+    }
+
+    /// Compile the individual patterns if only the combined set exists.
+    fn ensure(m: *Matcher) void {
+        if (m.pats.items.len == m.staged.items.len) return;
+        var diag: CompileError = .{};
+        m.realize(&diag) catch {};
+    }
+
     /// Leftmost-longest match over all patterns starting at or after `from`.
     pub fn find(m: *Matcher, line: []const u8, from: usize) ?Span {
         var best: ?Span = null;
+        m.ensure();
+        if (m.bool_nodes.len > 0) return m.boolFind(line, from);
         for (m.pats.items) |p| {
-            const mm = (p.fin.find(line, from) catch null) orelse continue;
+            const mm = (p.fin.find(line, from) catch {
+                m.noteLimit();
+                continue;
+            }) orelse continue;
             const sp = Span{ .start = mm.start(), .end = mm.end() };
             if (best == null or sp.start < best.?.start or (sp.start == best.?.start and sp.end > best.?.end)) best = sp;
         }
@@ -216,10 +387,127 @@ pub const Matcher = struct {
 
     /// Does any pattern match somewhere in `line`?
     pub fn isMatch(m: *Matcher, line: []const u8) bool {
+        if (m.bool_nodes.len > 0) return m.boolEval(m.bool_root, line);
+        if (m.set_sr) |*sr| return sr.matchesAnywhere(line) catch {
+            m.noteLimit();
+            return false;
+        };
         for (m.pats.items) |p| {
-            if ((p.fin.find(line, 0) catch null) != null) return true;
+            if (p.fin.find(line, 0) catch {
+                m.noteLimit();
+                return false;
+            }) |_| return true;
         }
         return false;
+    }
+
+    /// Find the leftmost-longest match at or after `at` (it must start at
+    /// `at`) and append the --replace template expanded for it to `out`.
+    /// Returns the matched span.
+    pub fn replaceAt(m: *Matcher, gpa: std.mem.Allocator, line: []const u8, at: usize, tmpl: []const u8, out: *std.ArrayList(u8)) ?Span {
+        if (m.bool_nodes.len > 0) {
+            var best: ?*Matcher = null;
+            var bsp: Span = undefined;
+            for (m.bool_subs.items, 0..) |sub, k| {
+                if (!m.leafPositive(k)) continue;
+                const sp = sub.find(line, at) orelse continue;
+                if (best == null or sp.start < bsp.start or (sp.start == bsp.start and sp.end > bsp.end)) {
+                    best = sub;
+                    bsp = sp;
+                }
+            }
+            if (best) |b| return b.replaceAt(gpa, line, at, tmpl, out);
+            return null;
+        }
+        m.ensure();
+        var bi: ?usize = null;
+        var bsp: Span = undefined;
+        for (m.pats.items, 0..) |p, i| {
+            const mm = (p.fin.find(line, at) catch continue) orelse continue;
+            const sp = Span{ .start = mm.start(), .end = mm.end() };
+            if (bi == null or sp.start < bsp.start or (sp.start == bsp.start and sp.end > bsp.end)) {
+                bi = i;
+                bsp = sp;
+            }
+        }
+        const i = bi orelse return null;
+        const p = m.pats.items[i];
+        const mm = (p.fin.find(line, at) catch return null) orelse return null;
+        expandTemplate(gpa, tmpl, line, mm, &p.re, out);
+        return bsp;
+    }
+
+    fn noteLimit(m: *Matcher) void {
+        m.limit_hits += 1;
+    }
+
+    /// Total limit hits including sub-matchers of a boolean query.
+    pub fn limitHits(m: *const Matcher) u64 {
+        var n = m.limit_hits;
+        for (m.bool_subs.items) |sub| n += sub.limit_hits;
+        return n;
+    }
+
+    fn boolEval(m: *Matcher, idx: usize, line: []const u8) bool {
+        const n = m.bool_nodes[idx];
+        return switch (n) {
+            .leaf => |k| m.bool_subs.items[k].isMatch(line),
+            .not => |a| !m.boolEval(a, line),
+            .both => |ab| m.boolEval(ab[0], line) and m.boolEval(ab[1], line),
+            .either => |ab| m.boolEval(ab[0], line) or m.boolEval(ab[1], line),
+        };
+    }
+
+    /// Leftmost-longest match over the positive leaves of a boolean query.
+    fn boolFind(m: *Matcher, line: []const u8, from: usize) ?Span {
+        var best: ?Span = null;
+        for (m.bool_subs.items, 0..) |sub, k| {
+            if (!m.leafPositive(k)) continue;
+            const sp = sub.find(line, from) orelse continue;
+            if (best == null or sp.start < best.?.start or (sp.start == best.?.start and sp.end > best.?.end)) best = sp;
+        }
+        return best;
+    }
+
+    /// A leaf is shown as a match unless every path to it is negated.
+    fn leafPositive(m: *const Matcher, leaf: usize) bool {
+        return m.positiveIn(m.bool_root, leaf, true);
+    }
+
+    fn positiveIn(m: *const Matcher, idx: usize, leaf: usize, pos: bool) bool {
+        return switch (m.bool_nodes[idx]) {
+            .leaf => |k| k == leaf and pos,
+            .not => |a| m.positiveIn(a, leaf, !pos),
+            .both, .either => |ab| m.positiveIn(ab[0], leaf, pos) or m.positiveIn(ab[1], leaf, pos),
+        };
+    }
+
+    /// With many patterns, compile them as one alternation (a lazy DFA runs
+    /// it); any failure (back references, limits) leaves the per-pattern
+    /// search in place.
+    fn buildSet(m: *Matcher, options: Options) void {
+        if (m.staged.items.len < set_threshold) return;
+        var src: std.ArrayList(u8) = .empty;
+        defer src.deinit(m.gpa);
+        src.appendSlice(m.gpa, "(?s)") catch return;
+        for (m.staged.items, 0..) |st, i| {
+            if (hasBackref(st.inner)) return;
+            if (i > 0) src.append(m.gpa, '|') catch return;
+            src.appendSlice(m.gpa, "(?:") catch return;
+            src.appendSlice(m.gpa, st.inner) catch return;
+            src.append(m.gpa, ')') catch return;
+        }
+        const re = m.gpa.create(regex.Regex) catch return;
+        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = set_limits }, null) catch {
+            m.gpa.destroy(re);
+            return;
+        };
+        m.set_sr = re.searcher(m.gpa) catch {
+            re.deinit(m.gpa);
+            m.gpa.destroy(re);
+            return;
+        };
+        m.set = re;
     }
 
     fn translate(m: *Matcher, options: Options, pat: []const u8, flags_out: *posixre.Flags, observer: Observer, diag: *CompileError) Error![]u8 {
@@ -275,14 +563,13 @@ pub const Matcher = struct {
         }
     }
 
-    fn add(m: *Matcher, options: Options, pat: []const u8, observer: Observer, diag: *CompileError) Error!void {
+    fn stage(m: *Matcher, options: Options, pat: []const u8, observer: Observer, diag: *CompileError) Error!void {
         const gpa = m.gpa;
         var flags: posixre.Flags = .{};
         const body = try m.translate(options, pat, &flags, observer, diag);
-        defer gpa.free(body);
+        errdefer gpa.free(body);
         var src: std.ArrayList(u8) = .empty;
         defer src.deinit(gpa);
-        try src.appendSlice(gpa, "(?s)");
         if (options.line) {
             try src.print(gpa, "\\A(?:{s})\\z", .{body});
         } else if (options.word and options.utf8) {
@@ -300,8 +587,38 @@ pub const Matcher = struct {
         } else if (options.word) {
             try src.print(gpa, "(?<![A-Za-z0-9_])(?:{s})(?![A-Za-z0-9_])", .{body});
         } else try src.appendSlice(gpa, body);
-        const re = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = posixre.big_limits }, null) catch {
-            diag.* = .{ .kind = if (options.syntax == .perl) .invalid_perl else .syntax, .pattern = pat, .extended = options.syntax == .extended };
+        const inner = try src.toOwnedSlice(gpa);
+        errdefer gpa.free(inner);
+        try m.staged.append(gpa, .{ .pat = pat, .body = body, .inner = inner, .flags = flags });
+    }
+
+    /// Compile every staged pattern separately (the search for match
+    /// positions, and the whole search when there is no combined set).
+    fn realize(m: *Matcher, diag: *CompileError) Error!void {
+        for (m.pats.items) |p| {
+            p.fin.deinit();
+            p.re.deinit(m.gpa);
+            if (p.longest) |l| {
+                l.deinit(m.gpa);
+                m.gpa.destroy(l);
+            }
+            m.gpa.destroy(p);
+        }
+        m.pats.clearRetainingCapacity();
+        for (m.staged.items) |st| try m.addOne(m.options, st, diag);
+    }
+
+    fn addOne(m: *Matcher, options: Options, st: Staged, diag: *CompileError) Error!void {
+        const gpa = m.gpa;
+        const body = st.body;
+        const flags = st.flags;
+        var src: std.ArrayList(u8) = .empty;
+        defer src.deinit(gpa);
+        try src.appendSlice(gpa, "(?s)");
+        try src.appendSlice(gpa, st.inner);
+        var rd: regex.Diagnostic = .{};
+        const re = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = posixre.big_limits }, &rd) catch {
+            diag.* = .{ .kind = if (options.syntax == .perl) .invalid_perl else .syntax, .pattern = st.pat, .extended = options.syntax == .extended, .detail = rd.message, .offset = rd.pos -| 4 };
             return error.BadPattern;
         };
         const p = try gpa.create(Pat);
@@ -328,6 +645,205 @@ pub const Matcher = struct {
         try m.pats.append(gpa, p);
     }
 };
+
+/// Append `tmpl` with `$N`, `${name}` and `$name` expanded (names take the
+/// longest run of letters, digits and underscores, as in Rust's regex);
+/// `$$` is a dollar sign; an unknown group is empty.
+fn expandTemplate(gpa: std.mem.Allocator, tmpl: []const u8, line: []const u8, mm: regex.Match, re: *const regex.Regex, out: *std.ArrayList(u8)) void {
+    var i: usize = 0;
+    while (i < tmpl.len) {
+        const c = tmpl[i];
+        if (c != '$') {
+            out.append(gpa, c) catch return;
+            i += 1;
+            continue;
+        }
+        if (i + 1 < tmpl.len and tmpl[i + 1] == '$') {
+            out.append(gpa, '$') catch return;
+            i += 2;
+            continue;
+        }
+        var name: []const u8 = "";
+        var next = i + 1;
+        if (i + 1 < tmpl.len and tmpl[i + 1] == '{') {
+            if (std.mem.indexOfScalarPos(u8, tmpl, i + 2, '}')) |close| {
+                name = tmpl[i + 2 .. close];
+                next = close + 1;
+            }
+        } else {
+            var j = i + 1;
+            while (j < tmpl.len and (std.ascii.isAlphanumeric(tmpl[j]) or tmpl[j] == '_')) j += 1;
+            name = tmpl[i + 1 .. j];
+            next = j;
+        }
+        if (name.len == 0) {
+            out.append(gpa, '$') catch return;
+            i += 1;
+            continue;
+        }
+        i = next;
+        var idx: ?u32 = null;
+        if (std.fmt.parseInt(u32, name, 10)) |n| {
+            idx = n;
+        } else |_| {
+            for (re.prog.names) |nm| if (std.mem.eql(u8, nm.name, name)) {
+                idx = nm.index;
+            };
+        }
+        const gi = idx orelse continue;
+        if (gi > re.prog.group_count) continue;
+        if (mm.group(gi)) |sp| out.appendSlice(gpa, line[sp[0]..sp[1]]) catch return;
+    }
+}
+
+const BoolBuilder = struct {
+    m: Matcher,
+    options: Options,
+    observer: Observer,
+    diag: *CompileError,
+    nodes: *std.ArrayList(BoolNode) = undefined,
+
+    fn add(b: *BoolBuilder, n: BoolNode) Matcher.Error!usize {
+        try b.nodes.append(b.m.gpa, n);
+        return b.nodes.items.len - 1;
+    }
+
+    fn leafWith(b: *BoolBuilder, keys: []const u8, opts: Options) Matcher.Error!usize {
+        const sub = try b.m.gpa.create(Matcher);
+        errdefer b.m.gpa.destroy(sub);
+        sub.* = try Matcher.compile(b.m.gpa, opts, keys, b.observer, b.diag);
+        errdefer sub.deinit();
+        try b.m.bool_subs.append(b.m.gpa, sub);
+        return try b.add(.{ .leaf = b.m.bool_subs.items.len - 1 });
+    }
+
+    fn leaf(b: *BoolBuilder, keys: []const u8) Matcher.Error!usize {
+        return b.leafWith(keys, b.options);
+    }
+};
+
+const QueryParser = struct {
+    b: *BoolBuilder,
+    src: []const u8,
+    pos: usize = 0,
+
+    fn fail(p: *QueryParser) Matcher.Error {
+        p.b.diag.* = .{ .kind = .bool_syntax, .pattern = p.src, .offset = p.pos };
+        return error.BadPattern;
+    }
+
+    fn skipSpace(p: *QueryParser) void {
+        while (p.pos < p.src.len and (p.src[p.pos] == ' ' or p.src[p.pos] == '\t')) p.pos += 1;
+    }
+
+    fn word(p: *QueryParser) ?[]const u8 {
+        p.skipSpace();
+        const start = p.pos;
+        while (p.pos < p.src.len and p.src[p.pos] != ' ' and p.src[p.pos] != '\t' and p.src[p.pos] != '(' and p.src[p.pos] != ')' and p.src[p.pos] != '|') p.pos += 1;
+        if (p.pos == start) return null;
+        return p.src[start..p.pos];
+    }
+
+    fn keyword(p: *QueryParser, kw: []const u8) bool {
+        p.skipSpace();
+        const rest = p.src[p.pos..];
+        if (rest.len < kw.len or !std.mem.eql(u8, rest[0..kw.len], kw)) return false;
+        if (rest.len > kw.len and rest[kw.len] != ' ' and rest[kw.len] != '\t' and rest[kw.len] != '(') return false;
+        p.pos += kw.len;
+        return true;
+    }
+
+    fn expr(p: *QueryParser) Matcher.Error!usize {
+        var left = try p.orExpr();
+        while (true) {
+            p.skipSpace();
+            if (p.pos >= p.src.len or p.src[p.pos] == ')') return left;
+            _ = p.keyword("AND");
+            const right = try p.orExpr();
+            left = try p.b.add(.{ .both = .{ left, right } });
+        }
+    }
+
+    fn orExpr(p: *QueryParser) Matcher.Error!usize {
+        var left = try p.unary();
+        while (true) {
+            p.skipSpace();
+            if (p.pos < p.src.len and p.src[p.pos] == '|') {
+                p.pos += 1;
+            } else if (!p.keyword("OR")) return left;
+            const right = try p.unary();
+            left = try p.b.add(.{ .either = .{ left, right } });
+        }
+    }
+
+    fn unary(p: *QueryParser) Matcher.Error!usize {
+        p.skipSpace();
+        if (p.pos >= p.src.len) return p.fail();
+        const c = p.src[p.pos];
+        if (c == '-' and p.pos + 1 < p.src.len and p.src[p.pos + 1] != ' ') {
+            p.pos += 1;
+            return try p.b.add(.{ .not = try p.unary() });
+        }
+        if (p.keyword("NOT")) return try p.b.add(.{ .not = try p.unary() });
+        if (c == '(') {
+            p.pos += 1;
+            const e = try p.expr();
+            p.skipSpace();
+            if (p.pos >= p.src.len or p.src[p.pos] != ')') return p.fail();
+            p.pos += 1;
+            return e;
+        }
+        if (c == '"') {
+            const start = p.pos + 1;
+            const end = std.mem.indexOfScalarPos(u8, p.src, start, '"') orelse return p.fail();
+            p.pos = end + 1;
+            var o = p.b.options;
+            o.syntax = .fixed;
+            return try p.b.leafWith(p.src[start..end], o);
+        }
+        const w = p.word() orelse return p.fail();
+        return try p.b.leaf(w);
+    }
+};
+
+/// Does the pattern list contain an uppercase letter that counts for
+/// --smart-case? Escaped characters (`\S`, `\W`) do not, as in ripgrep.
+fn hasUpper(keys: []const u8, syntax: Syntax) bool {
+    var i: usize = 0;
+    while (i < keys.len) : (i += 1) {
+        const c = keys[i];
+        if (c == '\\' and syntax != .fixed) {
+            i += 1;
+            continue;
+        }
+        if (c >= 0x80) {
+            const d = unicode.decode(keys, i);
+            if (d.valid) {
+                if (unicode.toLower(d.cp) != d.cp) return true;
+                i += d.len - 1;
+            }
+            continue;
+        }
+        if (std.ascii.isUpper(c)) return true;
+    }
+    return false;
+}
+
+const Staged = struct { pat: []const u8, body: []u8, inner: []u8, flags: posixre.Flags };
+
+/// A back-reference (\1..\9, \k<..>, (?P=..)) would be renumbered when
+/// patterns are joined.
+fn hasBackref(src: []const u8) bool {
+    var i: usize = 0;
+    while (i + 1 < src.len) : (i += 1) {
+        if (src[i] == '\\') {
+            const c = src[i + 1];
+            if ((c >= '1' and c <= '9') or c == 'k' or c == 'g') return true;
+            i += 1;
+        } else if (src[i] == '(' and std.mem.startsWith(u8, src[i..], "(?P=")) return true;
+    }
+    return false;
+}
 
 /// PCRE2 in UTF mode: `.` and negated bracket expressions match characters.
 fn perlUtf8(gpa: std.mem.Allocator, pat: []const u8) ![]u8 {
@@ -475,7 +991,37 @@ const G = struct {
     enc_error_suppressed: bool = false,
     implicit_dot: bool = false,
     offset_width: usize = 0,
+    // extensions
+    t0_ns: i128 = 0,
+    tfile_ns: i128 = 0,
+    tot: Stats = .{},
+    fstat: Stats = .{}, // current file
+    file_printed: u64 = 0,
+    json_begun: bool = false,
+    cur_noeol: bool = false,
+    json_printed: u64 = 0,
+    is_stdin: bool = false,
+    ign_stack: std.ArrayList(IgnLevel) = .empty,
+    file_mem: ?[]const u8 = null,
 };
+
+const Stats = struct {
+    matches: u64 = 0,
+    matched_lines: u64 = 0,
+    files_with: u64 = 0,
+    files: u64 = 0,
+    bytes_searched: u64 = 0,
+    bytes_printed: u64 = 0,
+    elapsed_ns: i128 = 0,
+};
+
+const IgnLevel = struct { prefix_len: usize, pats: []ign.Pattern, data: []u8 };
+
+fn nowNs() i128 {
+    var ts: LX.timespec = undefined;
+    _ = LX.clock_gettime(.MONOTONIC, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+}
 
 const CtxLine = struct { text: []u8, no: u64, off: u64 };
 
@@ -493,10 +1039,28 @@ pub fn run(env: Env, options: Options, matcher: *Matcher, inputs: []const Input,
         g.out.deinit(g.gpa);
     }
     g.eol = if (g.o.null_data) 0 else '\n';
+    g.t0_ns = nowNs();
+    if (g.o.json) g.o.binary_files = .text;
+    defer {
+        for (g.ign_stack.items) |lv| {
+            g.gpa.free(lv.pats);
+            g.gpa.free(lv.data);
+        }
+        g.ign_stack.deinit(g.gpa);
+    }
     g.colors = g.o.colors;
-    g.exit_on_match = g.o.quiet;
+    // GNU: -q, or output to /dev/null, stops at the first selected line and
+    // exits 0 even if an earlier file could not be read.
+    var to_dev_null = false;
+    if (g.o.output_file) |f| {
+        var nerr: LX.E = .SUCCESS;
+        if (sys.fstatFd(f.handle, &nerr)) |fs| {
+            to_dev_null = fs.mode & 0o170000 == 0o020000 and fs.rdev_major == 1 and fs.rdev_minor == 3;
+        }
+    }
+    g.exit_on_match = g.o.quiet or to_dev_null;
     g.done_on_match = g.exit_on_match or g.o.list != .none;
-    g.out_quiet = g.o.count or g.done_on_match;
+    g.out_quiet = g.o.count or g.o.count_matches or g.done_on_match;
     if (g.exit_on_match) g.out_quiet = true;
     if (g.o.list != .none) g.out_quiet = true;
     // -q with -c / -l: quiet output wins
@@ -528,16 +1092,21 @@ pub fn run(env: Env, options: Options, matcher: *Matcher, inputs: []const Input,
             .file => |f| {
                 g.show_name = g.out_file == 1;
                 var serr: LX.E = .SUCCESS;
+                g.is_stdin = true;
                 const seekable = sys.seekFd(f.handle, 0, 1, &serr) != null;
                 if (try grepOpened(&g, f.handle, g.o.label, true, seekable)) any = true;
             },
             .path => |p| {
+                g.is_stdin = false;
                 if (try grepFile(&g, p, p, true, false)) any = true;
             },
         }
         if (g.early) break;
     }
+    if (g.o.json) try jsonSummary(&g);
+    if (g.o.stats and !g.exit_on_match) try printStats(&g);
     try flushOut(&g);
+    if (matcher.limitHits() > 0 and !g.early) g.errseen = true;
     return .{ .matched = any, .errors = g.errseen, .early_exit = g.early };
 }
 
@@ -551,11 +1120,15 @@ fn flushOut(g: *G) Err!void {
 }
 
 fn emit(g: *G, bytes: []const u8) Err!void {
+    g.tot.bytes_printed += bytes.len;
+    g.file_printed += bytes.len;
     try g.out.appendSlice(g.gpa, bytes);
     if (g.out.items.len > 65536) try flushOut(g);
 }
 
 fn emitByte(g: *G, b: u8) Err!void {
+    g.tot.bytes_printed += 1;
+    g.file_printed += 1;
     try g.out.append(g.gpa, b);
 }
 
@@ -633,8 +1206,27 @@ fn encFail(g: *G, text: []const u8) bool {
 
 fn prline(g: *G, text: []const u8, no: u64, off: u64, sep: u8) Err!bool {
     const o = &g.o;
+    if (o.json) {
+        try jsonLine(g, text, no, off, sep);
+        return true;
+    }
     if (!o.only and encFail(g, text)) return false;
     if (!o.only) try printLineHead(g, no, off, text.len, sep);
+    if (!o.only and o.max_columns > 0 and text.len + 1 > o.max_columns) {
+        if (o.max_columns_preview) {
+            try emit(g, text[0..o.max_columns]);
+            try emit(g, " [... omitted end of long line]");
+        } else try emit(g, if (sep == ':') "[Omitted long matching line]" else "[Omitted long context line]");
+        try emitByte(g, g.eol);
+        if (o.line_buffered) try flushOut(g);
+        return true;
+    }
+    if (!o.only and o.replace != null and (sep == ':') != o.invert) {
+        try printReplaced(g, text);
+        try emitByte(g, g.eol);
+        if (o.line_buffered) try flushOut(g);
+        return true;
+    }
     const matching = (sep == ':') != o.invert;
     var line_color: []const u8 = "";
     var match_color: []const u8 = "";
@@ -691,6 +1283,21 @@ fn printLineMiddle(g: *G, text: []const u8, no: u64, off: u64, line_color: []con
         if (g.o.only) {
             const sep: u8 = if (g.o.invert) '-' else ':';
             try printLineHead(g, no, off + b, size, sep);
+            if (g.o.max_columns > 0 and size + 1 > g.o.max_columns) {
+                try emit(g, "[Omitted long matching line]");
+                try emitByte(g, g.eol);
+                cur = b + size;
+                continue;
+            }
+            if (g.o.replace) |tmpl| {
+                var rep_out: std.ArrayList(u8) = .empty;
+                defer rep_out.deinit(g.gpa);
+                _ = g.m.replaceAt(g.gpa, text, b, tmpl, &rep_out);
+                try emit(g, rep_out.items);
+                try emitByte(g, g.eol);
+                cur = b + size;
+                continue;
+            }
         } else {
             try sgrStart(g, line_color);
             if (mid) |md| {
@@ -708,6 +1315,161 @@ fn printLineMiddle(g: *G, text: []const u8, no: u64, off: u64, line_color: []con
     if (g.o.only) return text.len;
     if (mid) |md| return md;
     return cur;
+}
+
+/// The line with every match replaced by the --replace template.
+fn printReplaced(g: *G, text: []const u8) Err!void {
+    const tmpl = g.o.replace.?;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(g.gpa);
+    var cur: usize = 0;
+    var from: usize = 0;
+    while (from <= text.len) {
+        const sp = g.m.find(text, from) orelse break;
+        if (sp.end == sp.start) {
+            if (sp.start >= text.len) break;
+            from = sp.start + 1;
+            continue;
+        }
+        try out.appendSlice(g.gpa, text[cur..sp.start]);
+        _ = g.m.replaceAt(g.gpa, text, sp.start, tmpl, &out);
+        cur = sp.end;
+        from = sp.end;
+    }
+    try out.appendSlice(g.gpa, text[cur..]);
+    try emit(g, out.items);
+}
+
+/// Number of non-empty matches in `text`.
+fn countMatches(g: *G, text: []const u8) u64 {
+    var n: u64 = 0;
+    var from: usize = 0;
+    while (from <= text.len) {
+        const sp = g.m.find(text, from) orelse break;
+        if (sp.end == sp.start) {
+            from = sp.start + 1;
+            continue;
+        }
+        n += 1;
+        from = sp.end;
+    }
+    return n;
+}
+
+// ------------------------------------------------------------------- JSON
+
+fn jsonName(g: *const G) []const u8 {
+    return if (g.is_stdin) "<stdin>" else g.fname;
+}
+
+fn jsonBegin(g: *G) Err!void {
+    if (g.json_begun) return;
+    g.json_begun = true;
+    var aw: Io.Writer.Allocating = .init(g.gpa);
+    defer aw.deinit();
+    const w = &aw.writer;
+    jsonBeginMsg(w, jsonName(g)) catch return error.OutOfMemory;
+    try emit(g, aw.written());
+}
+
+fn jsonBeginMsg(w: *Io.Writer, name: []const u8) Io.Writer.Error!void {
+    try w.writeAll("{\"type\":\"begin\",\"data\":{\"path\":");
+    try ign.jsonData(w, name);
+    try w.writeAll("}}\n");
+}
+
+fn jsonLine(g: *G, text: []const u8, no: u64, off: u64, sep: u8) Err!void {
+    try jsonBegin(g);
+    var aw: Io.Writer.Allocating = .init(g.gpa);
+    defer aw.deinit();
+    const w = &aw.writer;
+    const is_match = sep == ':';
+    w.writeAll(if (is_match) "{\"type\":\"match\",\"data\":{\"path\":" else "{\"type\":\"context\",\"data\":{\"path\":") catch return error.OutOfMemory;
+    ign.jsonData(w, jsonName(g)) catch return error.OutOfMemory;
+    w.writeAll(",\"lines\":") catch return error.OutOfMemory;
+    const eol: []const u8 = if (g.cur_noeol) "" else if (g.eol == 0) "\x00" else "\n";
+    var full: std.ArrayList(u8) = .empty;
+    defer full.deinit(g.gpa);
+    try full.appendSlice(g.gpa, text);
+    try full.appendSlice(g.gpa, eol);
+    ign.jsonData(w, full.items) catch return error.OutOfMemory;
+    w.print(",\"line_number\":{d},\"absolute_offset\":{d},\"submatches\":[", .{ no, off }) catch return error.OutOfMemory;
+    if (is_match and !g.o.invert) {
+        var from: usize = 0;
+        var first = true;
+        while (from <= text.len) {
+            const sp = g.m.find(text, from) orelse break;
+            if (sp.end == sp.start) {
+                from = sp.start + 1;
+                continue;
+            }
+            if (!first) w.writeByte(',') catch return error.OutOfMemory;
+            first = false;
+            w.writeAll("{\"match\":") catch return error.OutOfMemory;
+            ign.jsonData(w, text[sp.start..sp.end]) catch return error.OutOfMemory;
+            w.print(",\"start\":{d},\"end\":{d}}}", .{ sp.start, sp.end }) catch return error.OutOfMemory;
+            from = sp.end;
+        }
+    }
+    w.writeAll("]}}\n") catch return error.OutOfMemory;
+    try emit(g, aw.written());
+}
+
+fn writeElapsed(w: *Io.Writer, ns: i128, sorted: bool) Io.Writer.Error!void {
+    const n: u64 = @intCast(@max(ns, 0));
+    const secs = n / 1_000_000_000;
+    const nanos = n % 1_000_000_000;
+    if (sorted) {
+        try w.print("{{\"human\":\"{d}.{d:0>6}s\",\"nanos\":{d},\"secs\":{d}}}", .{ secs, nanos / 1000, nanos, secs });
+    } else {
+        try w.print("{{\"secs\":{d},\"nanos\":{d},\"human\":\"{d}.{d:0>6}s\"}}", .{ secs, nanos, secs, nanos / 1000 });
+    }
+}
+
+fn jsonEnd(g: *G, matched: bool) Err!void {
+    if (!g.json_begun) return;
+    var aw: Io.Writer.Allocating = .init(g.gpa);
+    defer aw.deinit();
+    const w = &aw.writer;
+    const el = nowNs() - g.tfile_ns;
+    g.fstat.elapsed_ns = el;
+    // bytes_printed counts what was written for this file before the end message
+    const printed = g.file_printed;
+    g.json_printed += printed;
+    w.writeAll("{\"type\":\"end\",\"data\":{\"path\":") catch return error.OutOfMemory;
+    ign.jsonData(w, jsonName(g)) catch return error.OutOfMemory;
+    w.writeAll(",\"binary_offset\":null,\"stats\":{\"elapsed\":") catch return error.OutOfMemory;
+    writeElapsed(w, el, false) catch return error.OutOfMemory;
+    w.print(",\"searches\":1,\"searches_with_match\":{d},\"bytes_searched\":{d},\"bytes_printed\":{d},\"matched_lines\":{d},\"matches\":{d}}}}}}}\n", .{ @intFromBool(matched), g.fstat.bytes_searched, printed, g.fstat.matched_lines, g.fstat.matches }) catch return error.OutOfMemory;
+    try emit(g, aw.written());
+}
+
+fn jsonSummary(g: *G) Err!void {
+    var aw: Io.Writer.Allocating = .init(g.gpa);
+    defer aw.deinit();
+    const w = &aw.writer;
+    const total = nowNs() - g.t0_ns;
+    w.writeAll("{\"data\":{\"elapsed_total\":") catch return error.OutOfMemory;
+    writeElapsed(w, total, true) catch return error.OutOfMemory;
+    w.print(",\"stats\":{{\"bytes_printed\":{d},\"bytes_searched\":{d},\"elapsed\":", .{ g.json_printed, g.tot.bytes_searched }) catch return error.OutOfMemory;
+    writeElapsed(w, g.tot.elapsed_ns, true) catch return error.OutOfMemory;
+    w.print(",\"matched_lines\":{d},\"matches\":{d},\"searches\":{d},\"searches_with_match\":{d}}}}},\"type\":\"summary\"}}\n", .{ g.tot.matched_lines, g.tot.matches, g.tot.files, g.tot.files_with }) catch return error.OutOfMemory;
+    try emit(g, aw.written());
+}
+
+fn printStats(g: *G) Err!void {
+    var aw: Io.Writer.Allocating = .init(g.gpa);
+    defer aw.deinit();
+    const w = &aw.writer;
+    const total: u64 = @intCast(@max(nowNs() - g.t0_ns, 0));
+    const spent: u64 = @intCast(@max(g.tot.elapsed_ns, 0));
+    w.print("\n{d} matches\n{d} matched lines\n{d} files contained matches\n{d} files searched\n{d} bytes printed\n{d} bytes searched\n{d}.{d:0>6} seconds spent searching\n{d}.{d:0>6} seconds total\n", .{
+        g.tot.matches,         g.tot.matched_lines,       g.tot.files_with, g.tot.files,
+        g.tot.bytes_printed,   g.tot.bytes_searched,      spent / 1_000_000_000, (spent % 1_000_000_000) / 1000,
+        total / 1_000_000_000, (total % 1_000_000_000) / 1000,
+    }) catch return error.OutOfMemory;
+    // the byte count in the report excludes the report itself
+    try emit(g, aw.written());
 }
 
 fn flushBefore(g: *G) void {
@@ -742,6 +1504,10 @@ fn doLine(g: *G, text: []const u8) Err!Stop {
 
     if (selected) {
         g.nlines += 1;
+        if (o.count_matches or o.stats or o.json) {
+            g.fstat.matched_lines += 1;
+            g.fstat.matches += if (o.invert) 0 else countMatches(g, text);
+        }
         if (!g.out_quiet) {
             if (g.binary and o.binary_files == .binary) {
                 // matches in a binary file are not printed
@@ -823,6 +1589,16 @@ fn validUtf8(s: []const u8) bool {
 /// Search one open descriptor. Returns the number of selected lines.
 fn grepFd(g: *G, fd: i32, seekable_stdin: bool) Err!u64 {
     const o = &g.o;
+    g.cur_noeol = false;
+    var mem_pos: usize = 0;
+    const hits_before = g.m.limitHits();
+    defer {
+        const now_hits = g.m.limitHits();
+        if (now_hits > hits_before) {
+            g.obs.emit(.{ .search_limit = .{ .name = g.fname, .line = g.line_no } });
+            g.errseen = true;
+        }
+    }
     g.totalnl = 0;
     g.lastout_line = -1;
     g.pending = 0;
@@ -832,6 +1608,10 @@ fn grepFd(g: *G, fd: i32, seekable_stdin: bool) Err!u64 {
     g.nlines = 0;
     g.nlines_first_null = -1;
     g.enc_error_suppressed = false;
+    g.fstat = .{};
+    g.file_printed = 0;
+    g.json_begun = false;
+    g.tfile_ns = nowNs();
     g.done_on_match = g.exit_on_match or g.o.list != .none;
     g.outleft = o.max_count;
     flushBefore(g);
@@ -862,6 +1642,7 @@ fn grepFd(g: *G, fd: i32, seekable_stdin: bool) Err!u64 {
                     const text = buf.items[pos..];
                     consumed_total += text.len;
                     pos = buf.items.len;
+                    g.cur_noeol = true;
                     if (try doLine(g, text) == .stop) stopped = true;
                 }
                 break;
@@ -875,7 +1656,12 @@ fn grepFd(g: *G, fd: i32, seekable_stdin: bool) Err!u64 {
                 pos = 0;
             }
             var err: LX.E = .SUCCESS;
-            const n = sys.readFd(fd, &chunk, &err) orelse {
+            const n = if (g.file_mem) |mem| blk: {
+                const k = @min(chunk.len, mem.len - mem_pos);
+                @memcpy(chunk[0..k], mem[mem_pos .. mem_pos + k]);
+                mem_pos += k;
+                break :blk k;
+            } else sys.readFd(fd, &chunk, &err) orelse {
                 g.obs.emit(.{ .read_error = .{ .name = g.fname, .errno = err } });
                 g.errseen = true;
                 break;
@@ -907,6 +1693,7 @@ fn grepFd(g: *G, fd: i32, seekable_stdin: bool) Err!u64 {
         if (try doLine(g, text) == .stop) stopped = true;
     }
     _ = base_quiet;
+    g.fstat.bytes_searched = consumed_total;
     // restore stdin position when stopped early on a seekable stdin
     if (seekable_stdin and stopped and pos < buf.items.len + 0) {
         const unread: i64 = @intCast(buf.items.len - pos);
@@ -974,7 +1761,26 @@ fn finishFile(g: *G, count: u64) Err!bool {
         try emit(g, std.fmt.bufPrint(&b, "{d}\n", .{count}) catch unreachable);
         if (o.line_buffered) try flushOut(g);
     }
+    if (o.count_matches and g.fstat.matches > 0) {
+        if (g.show_name) {
+            try printFilename(g);
+            if (o.null_after_name) try emitByte(g, 0) else try printSep(g, ':');
+        }
+        var b: [24]u8 = undefined;
+        try emit(g, std.fmt.bufPrint(&b, "{d}\n", .{g.fstat.matches}) catch unreachable);
+    }
     const status_matched = count > 0;
+    if (o.json) {
+        try jsonEnd(g, status_matched);
+        g.json_begun = false;
+    }
+    g.fstat.elapsed_ns = nowNs() - g.tfile_ns;
+    g.tot.matches += g.fstat.matches;
+    g.tot.matched_lines += g.fstat.matched_lines;
+    g.tot.files += 1;
+    g.tot.elapsed_ns += g.fstat.elapsed_ns;
+    g.tot.bytes_searched += g.fstat.bytes_searched;
+    if (status_matched) g.tot.files_with += 1;
     const want = (o.list == .matching and status_matched) or (o.list == .nonmatching and !status_matched);
     if (want) {
         try printFilename(g);
@@ -992,6 +1798,7 @@ fn finishFile(g: *G, count: u64) Err!bool {
 }
 
 fn grepOpened(g: *G, fd: i32, name: []const u8, is_stdin: bool, seekable_stdin: bool) Err!bool {
+
     _ = is_stdin;
     g.fname = name;
     {
@@ -1013,11 +1820,125 @@ fn grepOpened(g: *G, fd: i32, name: []const u8, is_stdin: bool, seekable_stdin: 
     return matched;
 }
 
+fn rgFileOk(g: *G, display: []const u8, is_dir: bool) bool {
+    const o = &g.o;
+    var rel = display;
+    while (std.mem.startsWith(u8, rel, "./")) rel = rel[2..];
+    if (o.rg_globs.len > 0) {
+        var last: ?bool = null;
+        var white = false;
+        for (o.rg_globs) |gp| {
+            if (!gp.negate) white = true;
+            if (gp.matches(rel, is_dir)) last = !gp.negate;
+        }
+        if (is_dir) {
+            if (last != null and !last.?) return false;
+        } else if (last) |l| {
+            if (!l) return false;
+        } else if (white) return false;
+    }
+    if (!is_dir) {
+        const base = if (std.mem.lastIndexOfScalar(u8, rel, '/')) |k| rel[k + 1 ..] else rel;
+        if (o.type_include.len > 0 and !ign.nameHasGlob(base, o.type_include)) return false;
+        if (o.type_exclude.len > 0 and ign.nameHasGlob(base, o.type_exclude)) return false;
+    }
+    return true;
+}
+
+fn ignored(g: *G, display: []const u8, is_dir: bool) bool {
+    var i = g.ign_stack.items.len;
+    while (i > 0) {
+        i -= 1;
+        const lv = g.ign_stack.items[i];
+        if (display.len < lv.prefix_len) continue;
+        const rel = display[lv.prefix_len..];
+        const l: ign.PatternList = .{ .items = lv.pats };
+        if (l.verdict(rel, is_dir)) |v| return v;
+    }
+    return false;
+}
+
+/// Read `path` fully; null on error.
+fn slurp(gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
+    var err: LX.E = .SUCCESS;
+    const fd = sys.openFd(path, sys.O.RDONLY, 0, &err) orelse return null;
+    defer _ = sys.closeFd(fd);
+    var data: std.ArrayList(u8) = .empty;
+    var buf: [16384]u8 = undefined;
+    while (true) {
+        const n = sys.readFd(fd, &buf, &err) orelse {
+            data.deinit(gpa);
+            return null;
+        };
+        if (n == 0) break;
+        data.appendSlice(gpa, buf[0..n]) catch {
+            data.deinit(gpa);
+            return null;
+        };
+    }
+    return data.toOwnedSlice(gpa) catch null;
+}
+
+fn pushIgnore(g: *G, dir_path: []const u8, prefix_len: usize) Err!void {
+    for ([_][]const u8{ ".gitignore", ".ignore" }) |nm| {
+        const fp = try std.fmt.allocPrint(g.gpa, "{s}/{s}", .{ dir_path, nm });
+        defer g.gpa.free(fp);
+        const data = slurp(g.gpa, fp) orelse continue;
+        var pats: std.ArrayList(ign.Pattern) = .empty;
+        var it = std.mem.splitScalar(u8, data, '\n');
+        while (it.next()) |ln| {
+            if (ign.Pattern.parse(ln, true)) |pt| try pats.append(g.gpa, pt);
+        }
+        try g.ign_stack.append(g.gpa, .{ .prefix_len = prefix_len, .pats = try pats.toOwnedSlice(g.gpa), .data = data });
+    }
+}
+
+const Decompressed = union(enum) { raw, data: []u8, failed };
+
+/// Decompress gzip, zlib, xz or zstd data (by magic number).
+fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
+    const std_c = std.compress;
+    var in = Io.Reader.fixed(data);
+    if (data.len >= 2 and data[0] == 0x1f and data[1] == 0x8b) {
+        var win: [std_c.flate.max_window_len]u8 = undefined;
+        var d = std_c.flate.Decompress.init(&in, .gzip, &win);
+        const out = d.reader.allocRemaining(gpa, .unlimited) catch return .failed;
+        return .{ .data = out };
+    }
+    if (data.len >= 2 and data[0] == 0x78 and (data[1] == 0x01 or data[1] == 0x5e or data[1] == 0x9c or data[1] == 0xda) and ((@as(u16, data[0]) << 8) | data[1]) % 31 == 0) {
+        var win: [std_c.flate.max_window_len]u8 = undefined;
+        var d = std_c.flate.Decompress.init(&in, .zlib, &win);
+        const out = d.reader.allocRemaining(gpa, .unlimited) catch return .failed;
+        return .{ .data = out };
+    }
+    if (data.len >= 6 and std.mem.eql(u8, data[0..6], &.{ 0xFD, '7', 'z', 'X', 'Z', 0x00 })) {
+        const b0 = gpa.alloc(u8, 0) catch return .failed;
+        var d = std_c.xz.Decompress.init(&in, gpa, b0) catch {
+            gpa.free(b0);
+            return .failed;
+        };
+        defer d.deinit();
+        const out = d.reader.allocRemaining(gpa, .unlimited) catch return .failed;
+        return .{ .data = out };
+    }
+    if (data.len >= 4 and std.mem.eql(u8, data[0..4], &.{ 0x28, 0xb5, 0x2f, 0xfd })) {
+        const zbuf = gpa.alloc(u8, std_c.zstd.default_window_len + std_c.zstd.block_size_max) catch return .failed;
+        defer gpa.free(zbuf);
+        var d = std_c.zstd.Decompress.init(&in, zbuf, .{});
+        const out = d.reader.allocRemaining(gpa, .unlimited) catch return .failed;
+        return .{ .data = out };
+    }
+    if (data.len >= 3 and std.mem.eql(u8, data[0..3], "BZh")) {
+        g.obs.emit(.{ .unsupported_compression = .{ .name = g.fname, .format = "bzip2" } });
+    }
+    return .raw;
+}
+
 fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir: bool) Err!bool {
     const o = &g.o;
     // status of the file: true = matched
     var err: LX.E = .SUCCESS;
-    var st_opt = sys.fileStat(path, cmdline or o.deref_recursive, &err);
+    var st_opt = sys.fileStat(path, cmdline or o.deref_recursive or o.symlinks != .gnu, &err);
     if (st_opt == null) {
         if (!(cmdline and false)) {
             g.obs.emit(.{ .read_error = .{ .name = display, .errno = err } });
@@ -1029,7 +1950,13 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
     st_opt = null;
     if (st.isDir()) {
         if (o.directories == .skip) return false;
-        if (o.directories == .recurse) return try grepDir(g, path, display, cmdline);
+        if (o.directories == .recurse) {
+            if (cmdline and o.symlinks == .none) {
+                var e2: LX.E = .SUCCESS;
+                if (sys.fileStat(path, false, &e2)) |l| if (l.isLink()) return false;
+            }
+            return try grepDir(g, path, display, cmdline);
+        }
         g.obs.emit(.{ .is_directory = display });
         g.errseen = true;
         return false;
@@ -1041,6 +1968,7 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
         const base = if (std.mem.lastIndexOfScalar(u8, display, '/')) |k| display[k + 1 ..] else display;
         if (g.o.globs.len > 0 and matchGlobs(g, display, base, cmdline and !in_dir)) return false;
     }
+    if (in_dir and !rgFileOk(g, display, false)) return false;
     var oerr: LX.E = .SUCCESS;
     const fd = sys.openFd(path, sys.O.RDONLY | 0o4000, 0, &oerr) orelse {
         g.obs.emit(.{ .read_error = .{ .name = display, .errno = oerr } });
@@ -1061,12 +1989,61 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
         0 => false,
         else => in_dir,
     };
+    if (o.decompress and st.isReg()) {
+        const raw = slurp(g.gpa, path) orelse {
+            g.obs.emit(.{ .read_error = .{ .name = display, .errno = .IO } });
+            g.errseen = true;
+            return false;
+        };
+        g.fname = display;
+        switch (decompressBuf(g.gpa, raw, g)) {
+            .raw => {
+                g.file_mem = raw;
+                defer {
+                    g.file_mem = null;
+                    g.gpa.free(raw);
+                }
+                return try grepOpened(g, fd, display, false, false);
+            },
+            .data => |d| {
+                g.gpa.free(raw);
+                g.file_mem = d;
+                defer {
+                    g.file_mem = null;
+                    g.gpa.free(d);
+                }
+                return try grepOpened(g, fd, display, false, false);
+            },
+            .failed => {
+                g.gpa.free(raw);
+                g.obs.emit(.{ .decompress_failed = display });
+                g.errseen = true;
+                return false;
+            },
+        }
+    }
     return try grepOpened(g, fd, display, false, false);
+}
+
+const SortEnt = struct { name: []u8, key: i128 };
+
+fn entLess(ctx: *const G, a: SortEnt, b: SortEnt) bool {
+    if (ctx.o.sort != .path and a.key != b.key) return a.key < b.key;
+    return std.mem.lessThan(u8, a.name, b.name);
+}
+
+fn sortEntLess(ctx: *const G, a: SortEnt, b: SortEnt) bool {
+    return if (ctx.o.sort_reverse) entLess(ctx, b, a) else entLess(ctx, a, b);
 }
 
 fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool {
     const o = &g.o;
     if (dirExcluded(g, display, if (std.mem.lastIndexOfScalar(u8, display, '/')) |k| display[k + 1 ..] else display, cmdline)) return false;
+    if (o.include_dirs.len > 0) {
+        var nm = display;
+        while (nm.len > 1 and nm[nm.len - 1] == '/') nm = nm[0 .. nm.len - 1];
+        if (!dirIncluded(g, if (std.mem.lastIndexOfScalar(u8, nm, '/')) |k| nm[k + 1 ..] else nm)) return false;
+    }
     var any = false;
     const dir_h = Io.Dir.cwd().openDir(g.env.io, path, .{ .iterate = true }) catch |e| {
         const emap: LX.E = switch (e) {
@@ -1095,26 +2072,77 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
     while (pbase.len > 1 and pbase[pbase.len - 1] == '/') pbase = pbase[0 .. pbase.len - 1];
     var dbase = display;
     while (dbase.len > 1 and dbase[dbase.len - 1] == '/') dbase = dbase[0 .. dbase.len - 1];
+    const implicit = g.implicit_dot and std.mem.eql(u8, display, ".");
+    const ign_mark = g.ign_stack.items.len;
+    defer {
+        while (g.ign_stack.items.len > ign_mark) {
+            const lv = g.ign_stack.pop().?;
+            g.gpa.free(lv.pats);
+            g.gpa.free(lv.data);
+        }
+    }
+    if (o.ignore_vcs) try pushIgnore(g, pbase, if (implicit) 0 else dbase.len + 1);
+    if (o.sort != .none) {
+        var ents: std.ArrayList(SortEnt) = .empty;
+        defer ents.deinit(g.gpa);
+        for (names.items) |n| {
+            var key: i128 = 0;
+            if (o.sort != .path) {
+                const child = try std.fmt.allocPrint(g.gpa, "{s}/{s}", .{ pbase, n });
+                defer g.gpa.free(child);
+                var e3: LX.E = .SUCCESS;
+                if (sys.fileStat(child, true, &e3)) |fs| {
+                    key = switch (o.sort) {
+                        .modified => @as(i128, fs.mtime_s) * 1_000_000_000 + fs.mtime_ns,
+                        .accessed => @as(i128, fs.atime_s) * 1_000_000_000 + fs.atime_ns,
+                        .created => if (fs.has_btime) @as(i128, fs.btime_s) * 1_000_000_000 + fs.btime_ns else @as(i128, fs.ctime_s) * 1_000_000_000 + fs.ctime_ns,
+                        .size => fs.size,
+                        else => 0,
+                    };
+                }
+            }
+            try ents.append(g.gpa, .{ .name = n, .key = key });
+        }
+        std.mem.sort(SortEnt, ents.items, g, sortEntLess);
+        for (ents.items, 0..) |e, i| names.items[i] = e.name;
+    }
     for (names.items) |n| {
-        const child = if (std.mem.eql(u8, path, ".") and g.implicit_dot)
+        if (!o.search_hidden and n.len > 0 and n[0] == '.') continue;
+        const child = if (implicit)
             std.fmt.allocPrint(g.gpa, "{s}", .{n}) catch return error.OutOfMemory
         else
             try std.fmt.allocPrint(g.gpa, "{s}/{s}", .{ pbase, n });
         defer g.gpa.free(child);
-        const disp = if (g.implicit_dot and std.mem.eql(u8, display, "."))
+        const disp = if (implicit)
             std.fmt.allocPrint(g.gpa, "{s}", .{n}) catch return error.OutOfMemory
         else
             try std.fmt.allocPrint(g.gpa, "{s}/{s}", .{ dbase, n });
         defer g.gpa.free(disp);
         var err: LX.E = .SUCCESS;
         const lst = sys.fileStat(child, false, &err);
+        var is_dir = false;
         if (lst) |l| {
-            if (l.isLink() and !o.deref_recursive) continue;
+            if (l.isLink() and !o.deref_recursive) {
+                if (o.symlinks == .gnu) continue;
+                var e4: LX.E = .SUCCESS;
+                const tgt = sys.fileStat(child, true, &e4);
+                if (tgt == null or tgt.?.isDir()) continue;
+            }
+            is_dir = l.isDir();
+        }
+        if (o.ignore_vcs and ignored(g, disp, is_dir)) continue;
+        if (is_dir) {
+            if (!rgFileOk(g, disp, true)) continue;
         }
         if (try grepFile(g, child, disp, false, true)) any = true;
         if (g.early) break;
     }
     return any;
+}
+
+fn dirIncluded(g: *G, base: []const u8) bool {
+    for (g.o.include_dirs) |p| if (fnmatch.match(p, base, .{})) return true;
+    return false;
 }
 
 // ---------------------------------------------------------------- patterns

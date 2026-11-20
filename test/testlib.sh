@@ -209,7 +209,7 @@ print_summary() {
 help_cmp() {
     exp=$(PATH="${GNU_BIN:-/usr/bin}:/usr/bin" LC_ALL=C "$UTIL" --help | awk '/^GNU coreutils online help/ { exit } { lines[n++] = $0 } END { while (n > 0 && lines[n-1] == "") n--; for (i = 0; i < n; i++) print lines[i] }')
     # The --json lines are our documented extension (decision 0003, 0005); GNU has none.
-    act=$(ours --help | grep -v -e '^ *--json ' -e '^Actions (not in GNU):')
+    act=$(ours --help | grep -v -e '^ *--json ' -e '^Actions (not in GNU):' -e '(not in GNU)$')
     if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); printf "PASS --help text\n"
     else FAIL=$((FAIL + 1)); printf "FAIL --help text\n"; fi
 }

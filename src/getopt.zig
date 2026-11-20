@@ -56,6 +56,10 @@ pub const Parser = struct {
     ended: bool = false,
     /// Omit the "Try '--help'" line (sed prints its whole usage instead).
     no_try: bool = false,
+    /// Long options with an id at or above this value (non-zero) are
+    /// extensions: an abbreviation that also fits a lower-id option means that
+    /// option, as it does in GNU, never "ambiguous".
+    ext_min: u32 = 0,
     /// Do not print diagnostics; the formatted text is kept in `last_diag`.
     silent: bool = false,
     last_diag: []const u8 = "",
@@ -179,6 +183,10 @@ pub const Parser = struct {
             .{ .name = "version", .id = version_id },
         };
         var exact = false;
+        var gnu_hit = false;
+        if (p.ext_min != 0) for (p.longs) |l| {
+            if (l.id < p.ext_min and name.len > 0 and std.mem.startsWith(u8, l.name, name)) gnu_hit = true;
+        };
         for ([_][]const Long{ p.longs, &builtin }) |table| {
             for (table) |l| {
                 if (std.mem.eql(u8, l.name, name)) {
@@ -186,6 +194,7 @@ pub const Parser = struct {
                     exact = true;
                     break;
                 }
+                if (gnu_hit and l.id >= p.ext_min) continue;
                 if (name.len > 0 and std.mem.startsWith(u8, l.name, name)) {
                     if (found) |f| {
                         if (f.id != l.id or f.arg != l.arg) ambiguous = true;
@@ -198,7 +207,7 @@ pub const Parser = struct {
             var buf: [512]u8 = undefined;
             var n: usize = 0;
             for ([_][]const Long{ p.longs, &builtin }) |table| for (table) |l| {
-                if (std.mem.startsWith(u8, l.name, name)) {
+                if (std.mem.startsWith(u8, l.name, name) and !(gnu_hit and l.id >= p.ext_min)) {
                     const piece = std.fmt.bufPrint(buf[n..], " '--{s}'", .{l.name}) catch break;
                     n += piece.len;
                 }
