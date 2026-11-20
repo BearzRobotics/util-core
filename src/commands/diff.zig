@@ -189,6 +189,7 @@ pub fn main(ctx: cli.Context) u8 {
             'i' => opts.flags.ignore_case = true,
             'c' => {
                 if (!setStyle(ctx, &opts, &style_set, .context)) return 2;
+                context_given = 3;
             },
             'C', O.context => {
                 if (!setStyle(ctx, &opts, &style_set, .context)) return 2;
@@ -196,6 +197,7 @@ pub fn main(ctx: cli.Context) u8 {
             },
             'u' => {
                 if (!setStyle(ctx, &opts, &style_set, .unified)) return 2;
+                context_given = 3;
             },
             'U', O.unified => {
                 if (!setStyle(ctx, &opts, &style_set, .unified)) return 2;
@@ -256,7 +258,7 @@ pub fn main(ctx: cli.Context) u8 {
             O.suppress_common => opts.suppress_common_lines = true,
             'p' => function_default = true,
             'F' => opts.function_regexp = o.arg.?,
-            O.label => {
+            'L', O.label => {
                 if (nlabels >= 2) {
                     cli.warn(ctx, "too many file label options", .{});
                     return 2;

@@ -1,0 +1,456 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//! diff3 library (decision 0004): three-way comparison of MYFILE, OLDFILE and
+//! YOURFILE and the ways GNU diff3 reports it.
+//! References: GNU diffutils manual "Comparing Three Files" and "Merging"
+//! (3.12). The two comparisons (OLDFILE with each of the others) come from
+//! `diffcore`; blocks that touch in OLDFILE are merged into one, as in GNU.
+//!
+//! `merge3` returns the data (`Block`s with a `Kind` and, per file, a line
+//! range). `writeNormal`, `writeEd` and `writeMerge` are the text forms and
+//! `writeJson` the `--json` form.
+
+const std = @import("std");
+const Io = std.Io;
+const diffcore = @import("diffcore.zig");
+const json = @import("../json.zig");
+
+pub const Lines = diffcore.Lines;
+
+/// Which files a block differs in.
+pub const Kind = enum {
+    /// Same in all three (only produced by `withUnchanged`).
+    unchanged,
+    /// Only MYFILE differs from the other two.
+    only_first,
+    /// Only OLDFILE differs (MYFILE and YOURFILE agree).
+    only_second,
+    /// Only YOURFILE differs.
+    only_third,
+    /// All three differ: a conflict.
+    overlap,
+};
+
+pub const Range = struct {
+    /// 0-based index of the first line.
+    start: usize,
+    count: usize,
+};
+
+pub const Block = struct {
+    kind: Kind,
+    /// Ranges in MYFILE, OLDFILE and YOURFILE.
+    ranges: [3]Range,
+};
+
+pub const Flags = struct {
+    strip_trailing_cr: bool = false,
+};
+
+pub const Result = struct {
+    gpa: std.mem.Allocator,
+    lines: [3]Lines,
+    blocks: []Block,
+    owned: [3]?[]u8 = .{ null, null, null },
+
+    pub fn deinit(r: *Result) void {
+        for (r.lines) |l| l.deinit(r.gpa);
+        r.gpa.free(r.blocks);
+        for (r.owned) |o| if (o) |m| r.gpa.free(m);
+    }
+
+    /// Blocks and the unchanged stretches between them, in file order.
+    pub fn withUnchanged(r: *const Result, gpa: std.mem.Allocator) ![]Block {
+        var out: std.ArrayList(Block) = .empty;
+        errdefer out.deinit(gpa);
+        var pos = [3]usize{ 0, 0, 0 };
+        for (r.blocks) |b| {
+            const gap = b.ranges[1].start - pos[1];
+            if (gap > 0) try out.append(gpa, .{ .kind = .unchanged, .ranges = .{
+                .{ .start = pos[0], .count = gap },
+                .{ .start = pos[1], .count = gap },
+                .{ .start = pos[2], .count = gap },
+            } });
+            try out.append(gpa, b);
+            for (0..3) |f| pos[f] = b.ranges[f].start + b.ranges[f].count;
+        }
+        const rest = r.lines[1].count() - pos[1];
+        if (rest > 0) try out.append(gpa, .{ .kind = .unchanged, .ranges = .{
+            .{ .start = pos[0], .count = rest },
+            .{ .start = pos[1], .count = rest },
+            .{ .start = pos[2], .count = rest },
+        } });
+        return out.toOwnedSlice(gpa);
+    }
+};
+
+const Region = struct { lo: usize, hi_excl: usize, a: bool, b: bool, a_delta: isize, b_delta: isize };
+
+/// Compare the three buffers. They are borrowed and must outlive the result
+/// (unless `strip_trailing_cr` is set, which copies).
+pub fn merge3(gpa: std.mem.Allocator, mine: []const u8, older: []const u8, yours: []const u8, flags: Flags) !Result {
+    var data = [3][]const u8{ mine, older, yours };
+    var owned: [3]?[]u8 = .{ null, null, null };
+    errdefer for (owned) |o| if (o) |m| gpa.free(m);
+    if (flags.strip_trailing_cr) {
+        for (0..3) |i| {
+            owned[i] = try diffcore.stripCr(gpa, data[i]);
+            data[i] = owned[i].?;
+        }
+    }
+    var ls: [3]Lines = undefined;
+    var made: usize = 0;
+    errdefer for (ls[0..made]) |l| l.deinit(gpa);
+    for (0..3) |i| {
+        ls[i] = try diffcore.splitLines(gpa, data[i]);
+        made += 1;
+    }
+    const ea = try diffcore.compare(gpa, ls[1], ls[0], .{});
+    defer gpa.free(ea);
+    const eb = try diffcore.compare(gpa, ls[1], ls[2], .{});
+    defer gpa.free(eb);
+
+    var blocks: std.ArrayList(Block) = .empty;
+    errdefer blocks.deinit(gpa);
+    var ia: usize = 0;
+    var ib: usize = 0;
+    var delta_a: isize = 0; // lines MYFILE is ahead of OLDFILE before the current block
+    var delta_b: isize = 0;
+    while (ia < ea.len or ib < eb.len) {
+        // Start with the earlier block.
+        const take_a = ib >= eb.len or (ia < ea.len and ea[ia].line0 <= eb[ib].line0);
+        const first = if (take_a) ea[ia] else eb[ib];
+        var lo = first.line0;
+        var hi = first.line0 + first.deleted; // exclusive end in OLDFILE
+        var has_a = false;
+        var has_b = false;
+        var da: isize = 0;
+        var db: isize = 0;
+        // Absorb every block of either thread that touches [lo, hi].
+        var changed = true;
+        while (changed) {
+            changed = false;
+            if (ia < ea.len and ea[ia].line0 <= hi) {
+                const e = ea[ia];
+                hi = @max(hi, e.line0 + e.deleted);
+                da += @as(isize, @intCast(e.inserted)) - @as(isize, @intCast(e.deleted));
+                has_a = true;
+                ia += 1;
+                changed = true;
+            }
+            if (ib < eb.len and eb[ib].line0 <= hi) {
+                const e = eb[ib];
+                hi = @max(hi, e.line0 + e.deleted);
+                db += @as(isize, @intCast(e.inserted)) - @as(isize, @intCast(e.deleted));
+                has_b = true;
+                ib += 1;
+                changed = true;
+            }
+        }
+        const a_lo: usize = @intCast(@as(isize, @intCast(lo)) + delta_a);
+        const b_lo: usize = @intCast(@as(isize, @intCast(lo)) + delta_b);
+        const a_cnt: usize = @intCast(@as(isize, @intCast(hi - lo)) + da);
+        const b_cnt: usize = @intCast(@as(isize, @intCast(hi - lo)) + db);
+        delta_a += da;
+        delta_b += db;
+        var kind: Kind = undefined;
+        if (has_a and !has_b) kind = .only_first else if (has_b and !has_a) kind = .only_third else {
+            var same = a_cnt == b_cnt;
+            if (same) {
+                var k: usize = 0;
+                while (k < a_cnt) : (k += 1) {
+                    if (!std.mem.eql(u8, ls[0].raw(a_lo + k), ls[2].raw(b_lo + k))) {
+                        same = false;
+                        break;
+                    }
+                }
+            }
+            kind = if (same) .only_second else .overlap;
+        }
+        try blocks.append(gpa, .{ .kind = kind, .ranges = .{
+            .{ .start = a_lo, .count = a_cnt },
+            .{ .start = lo, .count = hi - lo },
+            .{ .start = b_lo, .count = b_cnt },
+        } });
+        lo = hi;
+    }
+    return .{ .gpa = gpa, .lines = ls, .blocks = try blocks.toOwnedSlice(gpa), .owned = owned };
+}
+
+pub const Options = struct {
+    /// -T
+    initial_tab: bool = false,
+    /// -L labels for the three files (defaults: the file names).
+    labels: [3][]const u8 = .{ "", "", "" },
+    /// ed script and merge selection.
+    select: Select = .all,
+    /// -E, -X, -A: bracket conflicts; `show_all` (-A) also shows OLDFILE.
+    bracket: bool = false,
+    show_all: bool = false,
+    /// -i: append "w" and "q".
+    write_quit: bool = false,
+};
+
+/// Which changes an ed script or merge incorporates.
+pub const Select = enum {
+    /// -e: changes from OLDFILE to YOURFILE, overlapping ones included.
+    all,
+    /// -3: only the non-overlapping ones.
+    easy_only,
+    /// -x: only the overlapping ones.
+    overlap_only,
+};
+
+fn writeLinePrefixed(w: *Io.Writer, prefix: []const u8, text: []const u8) Io.Writer.Error!void {
+    try w.writeAll(prefix);
+    try w.writeAll(text);
+    if (text.len == 0 or text[text.len - 1] != '\n') try w.writeAll("\n\\ No newline at end of file\n");
+}
+
+fn rangeHeader(w: *Io.Writer, r: Range) Io.Writer.Error!void {
+    if (r.count == 0) try w.print("{d}a", .{r.start}) else if (r.count == 1) try w.print("{d}c", .{r.start + 1}) else try w.print("{d},{d}c", .{ r.start + 1, r.start + r.count });
+}
+
+/// The default report: one stanza per block.
+pub fn writeNormal(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void {
+    const prefix: []const u8 = if (o.initial_tab) "\t" else "  ";
+    for (r.blocks) |b| {
+        try w.writeAll("====");
+        switch (b.kind) {
+            .only_first => try w.writeByte('1'),
+            .only_second => try w.writeByte('2'),
+            .only_third => try w.writeByte('3'),
+            else => {},
+        }
+        try w.writeByte('\n');
+        const order: [3]usize = if (b.kind == .only_second) .{ 0, 2, 1 } else .{ 0, 1, 2 };
+        const skip: usize = switch (b.kind) {
+            .only_first => 1,
+            .only_second => 0,
+            .only_third => 0,
+            else => 3,
+        };
+        for (order) |f| {
+            try w.print("{d}:", .{f + 1});
+            try rangeHeader(w, b.ranges[f]);
+            try w.writeByte('\n');
+            if (f == skip) continue;
+            var k: usize = 0;
+            while (k < b.ranges[f].count) : (k += 1) try writeLinePrefixed(w, prefix, r.lines[f].raw(b.ranges[f].start + k));
+        }
+    }
+}
+
+const Action = enum { none, use_yours, bracket, bracket_old };
+
+fn actionFor(b: Block, o: Options) Action {
+    switch (b.kind) {
+        .overlap => {
+            if (o.select == .easy_only) return .none;
+            if (o.bracket) return if (o.show_all) .bracket_old else .bracket;
+            return .use_yours;
+        },
+        .only_third => return if (o.select == .overlap_only) .none else .use_yours,
+        .only_second => return if (o.show_all and o.bracket) .bracket_old else .none,
+        else => return .none,
+    }
+}
+
+/// Whether the script or merge contains a conflict marker.
+pub fn hasConflicts(r: *const Result, o: Options) bool {
+    for (r.blocks) |b| {
+        const a = actionFor(b, o);
+        if (a == .bracket or a == .bracket_old) return true;
+    }
+    return false;
+}
+
+fn edAddr(w: *Io.Writer, lo: usize, count: usize) Io.Writer.Error!void {
+    if (count <= 1) try w.print("{d}", .{lo + 1}) else try w.print("{d},{d}", .{ lo + 1, lo + count });
+}
+
+fn edText(w: *Io.Writer, text: []const u8) Io.Writer.Error!void {
+    try w.writeAll(text);
+    if (text.len == 0 or text[text.len - 1] != '\n') try w.writeByte('\n');
+}
+
+/// An ed script that turns MYFILE into the merged result.
+pub fn writeEd(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void {
+    var k = r.blocks.len;
+    while (k > 0) {
+        k -= 1;
+        const b = r.blocks[k];
+        const m = b.ranges[0];
+        const old = b.ranges[1];
+        const y = b.ranges[2];
+        switch (actionFor(b, o)) {
+            .none => {},
+            .use_yours => {
+                if (m.count == 0) {
+                    try w.print("{d}a\n", .{m.start});
+                } else {
+                    try edAddr(w, m.start, m.count);
+                    try w.writeByte(if (y.count == 0) 'd' else 'c');
+                    try w.writeByte('\n');
+                }
+                if (y.count > 0) {
+                    var insert = true;
+                    var i: usize = 0;
+                    while (i < y.count) : (i += 1) {
+                        const text = r.lines[2].raw(y.start + i);
+                        if (!insert) {
+                            try w.writeAll("a\n");
+                            insert = true;
+                        }
+                        if (text.len == 2 and text[0] == '.' and text[1] == '\n') {
+                            try w.writeAll("..\n.\ns/.//\n");
+                            insert = false;
+                        } else try edText(w, text);
+                    }
+                    if (insert) try w.writeAll(".\n");
+                }
+            },
+            .bracket, .bracket_old => |a| {
+                const with_old = a == .bracket_old;
+                const second = b.kind == .only_second;
+                // After the block: the closing part.
+                try w.print("{d}a\n", .{m.start + m.count});
+                if (second) {
+                    try w.print(">>>>>>> {s}\n.\n", .{o.labels[2]});
+                } else {
+                    if (with_old) {
+                        try w.print("||||||| {s}\n", .{o.labels[1]});
+                        var i: usize = 0;
+                        while (i < old.count) : (i += 1) try edText(w, r.lines[1].raw(old.start + i));
+                    }
+                    try w.writeAll("=======\n");
+                    var i: usize = 0;
+                    while (i < y.count) : (i += 1) try edText(w, r.lines[2].raw(y.start + i));
+                    try w.print(">>>>>>> {s}\n.\n", .{o.labels[2]});
+                }
+                // Before the block: the opening part.
+                try w.print("{d}a\n", .{m.start});
+                if (second) {
+                    try w.print("<<<<<<< {s}\n", .{o.labels[1]});
+                    var i: usize = 0;
+                    while (i < old.count) : (i += 1) try edText(w, r.lines[1].raw(old.start + i));
+                    try w.writeAll("=======\n.\n");
+                } else try w.print("<<<<<<< {s}\n.\n", .{o.labels[0]});
+            },
+        }
+    }
+    if (o.write_quit) try w.writeAll("w\nq\n");
+}
+
+/// The merged file itself (-m).
+pub fn writeMerge(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void {
+    var pos: usize = 0; // next line of MYFILE
+    for (r.blocks) |b| {
+        const m = b.ranges[0];
+        var i = pos;
+        while (i < m.start) : (i += 1) try w.writeAll(r.lines[0].raw(i));
+        pos = m.start + m.count;
+        const old = b.ranges[1];
+        const y = b.ranges[2];
+        switch (actionFor(b, o)) {
+            .none => {
+                i = 0;
+                while (i < m.count) : (i += 1) try w.writeAll(r.lines[0].raw(m.start + i));
+            },
+            .use_yours => {
+                i = 0;
+                while (i < y.count) : (i += 1) try w.writeAll(r.lines[2].raw(y.start + i));
+            },
+            .bracket, .bracket_old => |a| {
+                const second = b.kind == .only_second;
+                if (second) {
+                    try w.print("<<<<<<< {s}\n", .{o.labels[1]});
+                    i = 0;
+                    while (i < old.count) : (i += 1) try edText(w, r.lines[1].raw(old.start + i));
+                    try w.writeAll("=======\n");
+                    i = 0;
+                    while (i < m.count) : (i += 1) try edText(w, r.lines[0].raw(m.start + i));
+                } else {
+                    try w.print("<<<<<<< {s}\n", .{o.labels[0]});
+                    i = 0;
+                    while (i < m.count) : (i += 1) try edText(w, r.lines[0].raw(m.start + i));
+                    if (a == .bracket_old) {
+                        try w.print("||||||| {s}\n", .{o.labels[1]});
+                        i = 0;
+                        while (i < old.count) : (i += 1) try edText(w, r.lines[1].raw(old.start + i));
+                    }
+                    try w.writeAll("=======\n");
+                    i = 0;
+                    while (i < y.count) : (i += 1) try edText(w, r.lines[2].raw(y.start + i));
+                }
+                try w.print(">>>>>>> {s}\n", .{o.labels[2]});
+            },
+        }
+    }
+    var i = pos;
+    while (i < r.lines[0].count()) : (i += 1) try w.writeAll(r.lines[0].raw(i));
+}
+
+/// The comparison as one JSON object: the three file names and the list of
+/// blocks (including the unchanged stretches) with each side's range and text.
+pub fn writeJson(gpa: std.mem.Allocator, w: *Io.Writer, r: *const Result, names: [3][]const u8) !void {
+    const all = try r.withUnchanged(gpa);
+    defer gpa.free(all);
+    var conflicts: usize = 0;
+    for (r.blocks) |b| {
+        if (b.kind == .overlap) conflicts += 1;
+    }
+    try w.writeAll("{\"files\":[");
+    for (names, 0..) |n, i| {
+        if (i > 0) try w.writeByte(',');
+        try json.writeString(w, n);
+    }
+    try w.print("],\"conflicts\":{d},\"blocks\":[", .{conflicts});
+    for (all, 0..) |b, i| {
+        if (i > 0) try w.writeByte(',');
+        const kind = switch (b.kind) {
+            .unchanged => "unchanged",
+            .only_first => "only-first",
+            .only_second => "only-second",
+            .only_third => "only-third",
+            .overlap => "overlap",
+        };
+        try w.print("{{\"kind\":\"{s}\",\"sides\":[", .{kind});
+        for (0..3) |f| {
+            if (f > 0) try w.writeByte(',');
+            const rg = b.ranges[f];
+            try w.print("{{\"start\":{d},\"count\":{d},\"lines\":[", .{ rg.start + 1, rg.count });
+            var k: usize = 0;
+            while (k < rg.count) : (k += 1) {
+                if (k > 0) try w.writeByte(',');
+                try json.writeString(w, r.lines[f].body(rg.start + k));
+            }
+            try w.writeAll("]}");
+        }
+        try w.writeAll("]}");
+    }
+    try w.writeAll("]}\n");
+}
+
+test "non-overlapping changes give separate blocks" {
+    const t = std.testing;
+    var r = try merge3(t.allocator, "a\nM\nc\nd\ne\n", "a\nb\nc\nd\ne\n", "a\nb\nc\nY\ne\n", .{});
+    defer r.deinit();
+    try t.expectEqual(@as(usize, 2), r.blocks.len);
+    try t.expectEqual(Kind.only_first, r.blocks[0].kind);
+    try t.expectEqual(Kind.only_third, r.blocks[1].kind);
+}
+
+test "same change on both sides is only_second" {
+    const t = std.testing;
+    var r = try merge3(t.allocator, "a\nZ\n", "a\nb\n", "a\nZ\n", .{});
+    defer r.deinit();
+    try t.expectEqual(@as(usize, 1), r.blocks.len);
+    try t.expectEqual(Kind.only_second, r.blocks[0].kind);
+}
+
+test "conflict" {
+    const t = std.testing;
+    var r = try merge3(t.allocator, "a\nM\n", "a\nb\n", "a\nQ\n", .{});
+    defer r.deinit();
+    try t.expectEqual(Kind.overlap, r.blocks[0].kind);
+}

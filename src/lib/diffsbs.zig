@@ -20,9 +20,9 @@ const Layout = struct {
 
 fn layout(width: usize, tabsize: usize, expand: bool) Layout {
     const hw0: usize = if (width >= 3) (width - 3) / 2 else 0;
-    if (hw0 == 0) return .{ .bound = 0, .marker = 0, .col2 = 0 };
     if (expand) return .{ .bound = hw0, .marker = hw0 + 1, .col2 = width - hw0 };
-    const col2 = (hw0 + tabsize - 1) / tabsize * tabsize;
+    var col2 = (width + 3 + tabsize) / 2 / tabsize * tabsize;
+    if (col2 == 0 or col2 > width) col2 = width;
     const b = @min(hw0, @min(width -| col2, col2 -| 3));
     return .{ .bound = b, .marker = @min(hw0 + 1, col2 -| 2), .col2 = col2 };
 }
@@ -227,7 +227,7 @@ fn printLines(p: anytype, fmt: []const u8, g: Group) !void {
                 try p.w.writeByte('%');
                 break;
             }
-            const spec = try parseSpec(fmt, &i);
+            const spec = try parseSpec(fmt, &i, "n");
             const d = fmt[i - 1];
             _ = d;
             const t = fmt[i - 1];
@@ -256,7 +256,7 @@ const Spec = struct {
 
 /// Parse `[-][WIDTH][.[PREC]]{doxX}` after a '%'; leaves `i` just after the
 /// final specifier character (the conversion for numbers, or the letter).
-fn parseSpec(fmt: []const u8, i: *usize) !Spec {
+fn parseSpec(fmt: []const u8, i: *usize, letters: []const u8) !Spec {
     var s: Spec = .{ .start = i.* };
     var j = i.*;
     if (j < fmt.len and fmt[j] == '-') {
@@ -270,9 +270,9 @@ fn parseSpec(fmt: []const u8, i: *usize) !Spec {
         while (j < fmt.len and std.ascii.isDigit(fmt[j])) : (j += 1) pv = pv * 10 + (fmt[j] - '0');
         s.prec = pv;
     }
-    if (j < fmt.len and std.mem.indexOfScalar(u8, "doxX", fmt[j]) != null and j + 1 < fmt.len and std.mem.indexOfScalar(u8, "FLNEMflnem", fmt[j + 1]) != null) {
+    if (j < fmt.len and std.mem.indexOfScalar(u8, "doxX", fmt[j]) != null and j + 1 < fmt.len and std.mem.indexOfScalar(u8, letters, fmt[j + 1]) != null) {
         s.conv = fmt[j];
-        i.* = j + 1;
+        i.* = j + 2;
         return s;
     }
     if (j < fmt.len and std.mem.indexOfScalar(u8, "doxX", fmt[j]) != null and j + 1 < fmt.len and fmt[j + 1] == 'n') {
@@ -402,7 +402,7 @@ fn formatGroup(p: anytype, fmt: []const u8, g0: Group, g1: Group) !void {
             },
             else => {
                 var j = i;
-                const spec = try parseSpec(fmt, &j);
+                const spec = try parseSpec(fmt, &j, "FLNEMflnem");
                 const l = fmt[j - 1];
                 if (spec.conv != 'd' or (j - i >= 2)) {
                     if (letterValue(l, g0, g1)) |v| {

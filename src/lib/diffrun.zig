@@ -22,6 +22,7 @@ const Info = struct {
     exists: bool = true,
     kind: Io.File.Kind = .file,
     size: u64 = 0,
+    inode: u64 = 0,
     mtime: FileTime = .{ .sec = 0, .nsec = 0 },
     stdin: bool = false,
 };
@@ -79,10 +80,10 @@ const Driver = struct {
             const st = try Io.File.stdin().stat(io);
             var t = tsToTime(st.mtime.nanoseconds);
             if (st.kind != .file) t = tsToTime(Io.Timestamp.now(io, .real).nanoseconds);
-            return .{ .kind = st.kind, .size = st.size, .mtime = t, .stdin = true };
+            return .{ .kind = st.kind, .size = st.size, .mtime = t, .stdin = true, .inode = @intCast(st.inode) };
         }
         const st = try Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = !d.options.no_dereference });
-        return .{ .kind = st.kind, .size = st.size, .mtime = tsToTime(st.mtime.nanoseconds) };
+        return .{ .kind = st.kind, .size = st.size, .mtime = tsToTime(st.mtime.nanoseconds), .inode = @intCast(st.inode) };
     }
 
     fn readAll(d: *Driver, path: []const u8, info: Info) ![]u8 {
@@ -217,6 +218,19 @@ const Driver = struct {
         }
         const dn = [2][]const u8{ o.labels[0] orelse disp[0], o.labels[1] orelse disp[1] };
         const is_dir = [2]bool{ infos[0].kind == .directory, infos[1].kind == .directory };
+        if (only) |ex| {
+            if (is_dir[ex]) {
+                // -N: a directory missing on one side is compared as an empty one.
+                if (o.recursive) {
+                    try d.compareDirs(nested, real, disp, only);
+                } else {
+                    const parent = std.fs.path.dirname(disp[ex]) orelse ".";
+                    try d.w.print("Only in {s}: {s}\n", .{ parent, std.fs.path.basename(disp[ex]) });
+                    d.raise(1);
+                }
+                return;
+            }
+        }
         if (is_dir[0] and is_dir[1]) {
             if (o.style == .ifdef) {
                 d.fatal("-D option not supported with directories");
@@ -224,7 +238,7 @@ const Driver = struct {
             }
             if (!nested or o.recursive) {
                 if (!nested) d.dir_mode = true;
-                try d.compareDirs(nested, real, disp);
+                try d.compareDirs(nested, real, disp, only);
             } else {
                 if (o.json) {
                     try d.jsonHead("common_subdirectory", dn);
@@ -258,19 +272,25 @@ const Driver = struct {
             if (o.report_identical) try d.identical(dn);
             return;
         }
+        // The very same file is identical without reading it.
+        if (infos[0].exists and infos[1].exists and infos[0].kind == .file and infos[0].inode != 0 and infos[0].inode == infos[1].inode and
+            infos[0].size == infos[1].size and infos[0].mtime.sec == infos[1].mtime.sec and infos[0].mtime.nsec == infos[1].mtime.nsec)
+        {
+            if (o.report_identical) try d.identical(dn);
+            return;
+        }
         try d.compareContents(nested, real, dn, infos);
     }
 
-    fn compareDirs(d: *Driver, nested: bool, real: [2][]const u8, disp: [2][]const u8) anyerror!void {
+    fn compareDirs(d: *Driver, nested: bool, real: [2][]const u8, disp: [2][]const u8, only: ?usize) anyerror!void {
         const gpa = d.env.gpa;
         const o = d.options;
-        const dn = [2][]const u8{ o.labels[0] orelse disp[0], o.labels[1] orelse disp[1] };
         var lists: [2]std.ArrayList([]u8) = .{ .empty, .empty };
         defer for (&lists) |*l| {
             for (l.items) |n| gpa.free(n);
             l.deinit(gpa);
         };
-        for (0..2) |f| d.readDir(real[f], &lists[f], !nested) catch |e| {
+        for (0..2) |f| if (only == null or only.? == f) d.readDir(real[f], &lists[f], !nested) catch |e| {
             d.fileError(real[f], e);
             return;
         };
@@ -283,9 +303,9 @@ const Driver = struct {
             if (i >= l0.len) side = 1 else if (j >= l1.len) side = -1 else if (!d.sameName(l0[i], l1[j])) side = if (d.lessName(l0[i], l1[j])) -1 else 1;
             const name: []const u8 = if (side <= 0) l0[i] else l1[j];
             const name1: []const u8 = if (side >= 0) l1[j] else l0[i];
-            const missing_ok = o.new_file or (o.unidirectional_new_file and side < 0);
+            const missing_ok = o.new_file or (o.unidirectional_new_file and side > 0);
             if (side != 0 and !missing_ok) {
-                const sd = if (side < 0) dn[0] else dn[1];
+                const sd = if (side < 0) disp[0] else disp[1];
                 if (o.json) {
                     try d.jsonSep();
                     try d.w.print("{{\"kind\":\"only_in\",\"side\":\"{s}\",\"dir\":", .{if (side < 0) "old" else "new"});
@@ -300,16 +320,12 @@ const Driver = struct {
                 defer gpa.free(p0);
                 const p1 = try joinPath(gpa, real[1], name1);
                 defer gpa.free(p1);
-                const q0 = try joinPath(gpa, dn[0], name);
+                const q0 = try joinPath(gpa, disp[0], name);
                 defer gpa.free(q0);
-                const q1 = try joinPath(gpa, dn[1], name1);
+                const q1 = try joinPath(gpa, disp[1], name1);
                 defer gpa.free(q1);
-                const only: ?usize = if (side < 0) 0 else if (side > 0) 1 else null;
-                // Labels replace the shown names only at the top level.
-                const saved = d.options.labels;
-                d.options.labels = .{ null, null };
-                defer d.options.labels = saved;
-                try d.compareFiles(true, .{ p0, p1 }, .{ q0, q1 }, only);
+                const child_only: ?usize = if (side < 0) 0 else if (side > 0) 1 else null;
+                try d.compareFiles(true, .{ p0, p1 }, .{ q0, q1 }, child_only);
             }
             if (side <= 0) i += 1;
             if (side >= 0) j += 1;
@@ -340,6 +356,8 @@ const Driver = struct {
             if (o.json) {
                 try d.jsonHead("diff", dn);
                 try d.w.writeAll(",\"equal\":false,\"binary\":true,\"hunks\":[]}");
+            } else if (o.brief) {
+                try d.w.print("Files {s} and {s} differ\n", .{ dn[0], dn[1] });
             } else try d.w.print("Binary files {s} and {s} differ\n", .{ dn[0], dn[1] });
             d.raise(1);
             return;

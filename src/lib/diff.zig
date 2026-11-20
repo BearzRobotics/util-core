@@ -481,7 +481,7 @@ pub const Printer = struct {
             }
         }
         try p.outputLine(text);
-        if ((flag.len > 0 or true) and (text.len == 0 or text[text.len - 1] != '\n') and flagWantsNote(flag)) {
+        if ((flag.len > 0 or true) and (text.len == 0 or text[text.len - 1] != '\n') and flag.len > 0) {
             try p.w.writeAll("\n\\ No newline at end of file\n");
         }
     }
