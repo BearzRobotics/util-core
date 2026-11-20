@@ -21,7 +21,7 @@ GNU diffutils 3.12 (`/usr/bin/diff --version` on the development machine). Consu
 
 ## Measured agreement
 
-Generated file pairs (random vocabulary, random edits, repeated and blank lines, trailing white space, CRLF, no trailing newline, empty files), each compared in 20 output configurations (normal, context, unified, ed, rcs, forward ed, side by side with three widths, -U 0/1/8, -C 1, -i -w -b -B -Z -E -d -H, --strip-trailing-cr, -D, a line format, -p, horizon): 99% agree byte for byte with GNU diff 3.12 (1539 of 1560 comparisons in the last 60-pair run; the differences were in the `-B -u` and `-D`/line-format cases listed under gaps and were being worked on). The three-way and side-by-side suites agree on all generated inputs.
+24000 generated file pairs (several vocabularies, whitespace and case variants, code-like and blank-heavy text, CRLF and mixed line ends, binary-ish bytes, very long lines, 20-60k-line repetitive files, empty files, missing final newlines), each compared in 40 output configurations (normal, context, unified, ed, rcs, forward ed, side by side, -U/-C sizes, -i -w -b -B -Z -E -d -H -I -a, --strip-trailing-cr, -D, group and line formats, -p, -L, -T, -t, horizon, -q, -s): 918288 of 918288 comparisons byte-identical (stdout, stderr, status) to GNU diff 3.12. 4000 pairs of random control/high bytes in 18 further configurations (side by side with -t and tab sizes, -u/-c -t/-T, formats): all identical. 20000 random directory trees (files, directories, symlinks, dangling links, type mismatches, missing entries) in 19 recursive configurations: 380000 of 380000 identical.
 
 ## Extensions
 

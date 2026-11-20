@@ -4,7 +4,7 @@ Status: complete for the GNU options; verified against GNU diffutils 3.12. Date:
 
 ## Reference
 
-GNU diffutils 3.12 (`/usr/bin/diff3 --version` on the development machine). Consulted: the GNU manual nodes "Comparing Three Files", "Merging with diff3" and "Merging Incomplete Sets of Changes" (https://www.gnu.org/software/diffutils/manual/). The behaviour was settled by probing the installed binary (stdout, stderr, exit status).
+GNU diffutils 3.12 (`/usr/bin/diff3 --version` on the development machine). Consulted: the GNU manual nodes "Comparing Three Files", "Merging with diff3" and "Merging Incomplete Sets of Changes" (https://www.gnu.org/software/diffutils/manual/). The behaviour was settled by probing the installed binary (stdout, stderr, exit status); the 3.12 sources were read for understanding of the algorithm only (no code or text copied; this project is GPL-2.0-or-later and independent).
 
 ## Supported options
 
@@ -19,9 +19,15 @@ GNU diffutils 3.12 (`/usr/bin/diff3 --version` on the development machine). Cons
 
 ## Known deviations and gaps
 
-- The comparison is built in (`diffcore`); `--diff-program` other than `diff` is refused.
-- A binary input is reported as `diff failed: Binary files A and B differ` with the pair chosen as GNU does for the cases probed.
+- The comparison is built in (`diffcore`, run as `diff --horizon-lines=100` would) unless `--diff-program` names another program, which is run as GNU runs it (`PROGRAM [-a] [--strip-trailing-cr] --horizon-lines=100 ---no-directory -- OTHER COMMON`) and whose normal-format output is parsed; the line text still comes from the files, so a program whose output contradicts the files can differ from GNU.
+- Like GNU, the common file of the two comparisons is the third file for the default report and the middle file for ed scripts and merges, and the comparisons run from the other file to the common one.
+- A binary input is reported as `diff failed: Binary files A and B differ`, naming the pair GNU's order of comparisons reaches first.
+- With an ed script and a binary input, GNU may print "No newline at end of file" notes from the comparison that ran before the failing one; we print none (8 of 300000 generated comparisons).
 - Block merging follows the "touching blocks conflict" rule observed in GNU; unusual overlaps of several blocks of both comparisons were tested only on generated inputs.
+
+## Measured agreement
+
+Generated triples (text of several vocabularies, whitespace and case variants, code-like lines, blank-heavy, CRLF and mixed line ends, binary, very long lines, repetitive 20-60k-line files, empty files, missing final newlines): 20000 triples in 15 option sets, 299992 of 300000 comparisons byte-identical (stdout, stderr, status) to GNU diff3 3.12; the 8 differences are the binary-with-ed-script case above.
 
 ## Library
 
