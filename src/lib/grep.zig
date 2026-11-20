@@ -163,11 +163,12 @@ pub const Options = struct {
     /// Fold an empty pattern list into the options the way GNU does and
     /// report whether nothing can possibly match (the caller then skips the
     /// search and exits 1). `keys_len` is the length of the pattern list
-    /// (patterns joined with newlines); `have_keys` is false when no pattern
-    /// was given with -e/-f.
-    pub fn prepare(o: *Options, keys_len: usize, have_keys: bool) bool {
+    /// (patterns joined with newlines, without the trailing newline);
+    /// `no_keys` is true when -e/-f were given but supplied no pattern at all
+    /// (-f /dev/null), which is different from one empty pattern (-e '').
+    pub fn prepare(o: *Options, keys_len: usize, no_keys: bool) bool {
         var keycc = keys_len;
-        if (have_keys and keys_len == 0) {
+        if (no_keys) {
             // no keys at all (-f /dev/null): match nothing
             o.invert = !o.invert;
             o.line = false;
@@ -287,6 +288,9 @@ pub const Matcher = struct {
     /// A candidate line is certainly selected (the pattern is just the
     /// literal(s)); no regex run is needed.
     pre_exact: bool = false,
+    /// The only pattern is one literal and -w / -x applies: `isMatch` checks
+    /// the literal's neighbours (or the line length) without a regex.
+    lit_mode: enum { none, word, line } = .none,
 
     pub const Error = error{ OutOfMemory, BadPattern };
 
@@ -347,7 +351,8 @@ pub const Matcher = struct {
         if (m.staged.items.len == 1) {
             const lit = first.lit;
             const exact = first.exact and !options.word and !options.line;
-            const use_lit = lit.len > 0 and (exact or lit.len >= 3 or !(all_scan and !options.line));
+            const whole = first.exact and (options.word or options.line) and !(options.word and options.line);
+            const use_lit = lit.len > 0 and (exact or whole or lit.len >= 3 or !(all_scan and !options.line));
             if (use_lit) {
                 const text = gpa.dupe(u8, lit) catch return;
                 var store: []u8 = &.{};
@@ -360,6 +365,7 @@ pub const Matcher = struct {
                 m.pre_needle = vec.Needle.init(text, options.icase, store);
                 m.pre_kind = .lit;
                 m.pre_exact = exact;
+                if (whole) m.lit_mode = if (options.line) .line else .word;
                 return;
             }
         }
@@ -501,9 +507,32 @@ pub const Matcher = struct {
         return best;
     }
 
+    fn isWordByte(b: u8) bool {
+        return std.ascii.isAlphanumeric(b) or b == '_';
+    }
+
+    /// -w / -x with a single literal pattern; null: needs the regex (a
+    /// neighbour byte is part of a multibyte character).
+    fn litCheck(m: *const Matcher, line: []const u8) ?bool {
+        const n = m.pre_needle.bytes.len;
+        if (m.lit_mode == .line) return line.len == n and m.pre_needle.find(line, 0) != null;
+        var from: usize = 0;
+        while (m.pre_needle.find(line, from)) |p| {
+            const before: ?u8 = if (p > 0) line[p - 1] else null;
+            const after: ?u8 = if (p + n < line.len) line[p + n] else null;
+            if (m.utf8 and ((before orelse 0) >= 0x80 or (after orelse 0) >= 0x80)) return null;
+            if (!(before != null and isWordByte(before.?)) and !(after != null and isWordByte(after.?))) return true;
+            from = p + 1;
+        }
+        return false;
+    }
+
     /// Does any pattern match somewhere in `line`?
     pub fn isMatch(m: *Matcher, line: []const u8) bool {
         if (m.bool_nodes.len > 0) return m.boolEval(m.bool_root, line);
+        if (m.lit_mode != .none) {
+            if (m.litCheck(line)) |r| return r;
+        }
         if (m.set_sr) |*sr| return sr.matchesAnywhere(line) catch {
             m.noteLimit();
             return false;
@@ -602,7 +631,11 @@ pub const Matcher = struct {
     /// it); any failure (back references, limits) leaves the per-pattern
     /// search in place.
     fn buildSet(m: *Matcher, options: Options) void {
-        if (m.staged.items.len < set_threshold) return;
+        if (m.staged.items.len == 0) return;
+        // A few patterns also get the combined DFA when it applies (no
+        // look-around or back-reference): "does the line match" is then one
+        // linear scan instead of a per-pattern regex run.
+        const small = m.staged.items.len < set_threshold;
         var src: std.ArrayList(u8) = .empty;
         defer src.deinit(m.gpa);
         src.appendSlice(m.gpa, "(?s)") catch return;
@@ -614,7 +647,7 @@ pub const Matcher = struct {
             src.append(m.gpa, ')') catch return;
         }
         const re = m.gpa.create(regex.Regex) catch return;
-        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = set_limits }, null) catch {
+        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = set_limits, .engine = if (small) .dfa else .auto }, null) catch {
             m.gpa.destroy(re);
             return;
         };
@@ -1119,6 +1152,8 @@ const G = struct {
     is_stdin: bool = false,
     ign_stack: std.ArrayList(IgnLevel) = .empty,
     file_mem: ?[]const u8 = null,
+    /// Read buffer, kept across files.
+    buf: std.ArrayList(u8) = .empty,
 };
 
 const Stats = struct {
@@ -1151,6 +1186,7 @@ pub fn run(env: Env, options: Options, matcher: *Matcher, inputs: []const Input,
         flushBefore(&g);
         g.before_q.deinit(g.gpa);
         g.out.deinit(g.gpa);
+        g.buf.deinit(g.gpa);
     }
     g.eol = if (g.o.null_data) 0 else '\n';
     g.t0_ns = nowNs();
@@ -1732,8 +1768,9 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
     g.outleft = o.max_count;
     flushBefore(g);
 
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(g.gpa);
+    const buf = &g.buf;
+    buf.clearRetainingCapacity();
+    defer if (buf.capacity > (4 << 20)) buf.clearAndFree(g.gpa);
     var pos: usize = 0;
     var eof = false;
     var stopped = false;
@@ -1743,7 +1780,10 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
 
     // Whole-buffer skipping (Matcher.candidate) is valid only while no
     // non-selected line has to be seen: no -v, no leading context.
-    const can_skip = !o.invert and o.before <= 0 and g.m.bool_nodes.len == 0 and g.m.pre_kind != .none;
+    // With -v only counting (-c, -q is handled by exit_on_match) the skipped
+    // lines are all selected: they are added to the count in bulk.
+    const inv_count = o.invert and g.out_quiet and !g.done_on_match and o.max_count == std.math.maxInt(i64) and !(o.count_matches or o.stats or o.json);
+    const can_skip = (inv_count or (!o.invert and o.before <= 0)) and g.m.bool_nodes.len == 0 and g.m.pre_kind != .none;
     var known_match = false;
     while (!stopped) {
         known_match = false;
@@ -1755,6 +1795,7 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
             switch (g.m.candidate(hay, pos)) {
                 .unknown => {},
                 .none => {
+                    if (inv_count) g.nlines += vec.count(hay[pos..], g.eol) + @intFromBool(eof and hay[limit - 1] != g.eol);
                     g.line_no += vec.count(hay[pos..], g.eol);
                     g.offset += limit - pos;
                     consumed_total += limit - pos;
@@ -1763,6 +1804,7 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                 },
                 .at => |idx| {
                     const start = if (vec.lastIndexOf(hay[pos..idx], g.eol)) |k| pos + k + 1 else pos;
+                    if (inv_count) g.nlines += vec.count(hay[pos..start], g.eol);
                     g.line_no += vec.count(hay[pos..start], g.eol);
                     g.offset += start - pos;
                     consumed_total += start - pos;
