@@ -8,6 +8,7 @@ const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const sdiff = @import("../lib/sdiff.zig");
 const diff = @import("../lib/diff.zig");
+const subprog = @import("../lib/subprog.zig");
 
 const help_text = @embedFile("../help/sdiff.txt");
 
@@ -75,11 +76,11 @@ fn runEditor(context: ?*anyopaque, gpa: std.mem.Allocator, text: []const u8) ?[]
         f.writeStreamingAll(ctx.io, text) catch return null;
     }
     defer Io.Dir.cwd().deleteFile(ctx.io, path) catch {};
-    var child = std.process.spawn(ctx.io, .{ .argv = &.{ editor, path } }) catch return null;
-    const term = child.wait(ctx.io) catch return null;
-    switch (term) {
-        .exited => |code| if (code != 0) return null,
-        else => return null,
+    const status = subprog.inherit(.{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ }, &.{ editor, path });
+    if (status != 0) {
+        var eb: [512]u8 = undefined;
+        cli.warn(ctx, "{s}", .{subprog.describe(&eb, editor, status)});
+        return null;
     }
     const f = Io.Dir.cwd().openFile(ctx.io, path, .{}) catch return null;
     defer f.close(ctx.io);
@@ -106,6 +107,8 @@ pub fn main(ctx: cli.Context) u8 {
     var output: ?[]const u8 = null;
     var as_json = false;
     var ignores: std.ArrayList([]const u8) = .empty;
+    var dargs: std.ArrayList([]const u8) = .empty;
+    var program: []const u8 = "diff";
     var parser = getopt.Parser.init(ctx, "o:iEZbWBI:aw:lstdHv", &.{
         .{ .name = "output", .arg = .required, .id = 'o' },
         .{ .name = "ignore-case", .id = 'i' },
@@ -141,40 +144,74 @@ pub fn main(ctx: cli.Context) u8 {
         const a = item.opt;
         switch (a.id) {
             'o' => output = a.arg.?,
-            'i' => o.diff.flags.ignore_case = true,
-            'E' => o.diff.flags.ignore_tab_expansion = true,
-            'Z' => o.diff.flags.ignore_trailing_space = true,
+            'i' => {
+                o.diff.flags.ignore_case = true;
+                dargs.append(arena, "-i") catch return 2;
+            },
+            'E' => {
+                o.diff.flags.ignore_tab_expansion = true;
+                dargs.append(arena, "-E") catch return 2;
+            },
+            'Z' => {
+                o.diff.flags.ignore_trailing_space = true;
+                dargs.append(arena, "-Z") catch return 2;
+            },
             'b' => {
+                dargs.append(arena, "-b") catch return 2;
                 if (!o.diff.flags.ignore_all_space) o.diff.flags.ignore_space_change = true;
             },
             'W' => {
+                dargs.append(arena, "-w") catch return 2;
                 o.diff.flags.ignore_all_space = true;
                 o.diff.flags.ignore_space_change = false;
             },
-            'B' => o.diff.ignore_blank_lines = true,
-            'I' => ignores.append(arena, a.arg.?) catch return 2,
-            O.strip_cr => o.diff.strip_trailing_cr = true,
-            'a' => text = true,
+            'B' => {
+                o.diff.ignore_blank_lines = true;
+                dargs.append(arena, "-B") catch return 2;
+            },
+            'I' => {
+                ignores.append(arena, a.arg.?) catch return 2;
+                dargs.appendSlice(arena, &.{ "-I", a.arg.? }) catch return 2;
+            },
+            O.strip_cr => {
+                o.diff.strip_trailing_cr = true;
+                dargs.append(arena, "--strip-trailing-cr") catch return 2;
+            },
+            'a' => {
+                text = true;
+                dargs.append(arena, "-a") catch return 2;
+            },
             'w' => {
+                dargs.appendSlice(arena, &.{ "-W", a.arg.? }) catch return 2;
                 const v = parseCount(a.arg.?) orelse 0;
                 if (v == 0) return diffUsage(ctx, "invalid width '{s}'", .{a.arg.?});
                 o.diff.width = v;
             },
-            'l' => o.diff.left_column = true,
+            'l' => {
+                o.diff.left_column = true;
+                dargs.append(arena, "--left-column") catch return 2;
+            },
             's' => o.diff.suppress_common_lines = true,
-            't' => o.diff.expand_tabs = true,
+            't' => {
+                o.diff.expand_tabs = true;
+                dargs.append(arena, "-t") catch return 2;
+            },
             O.tabsize => {
+                dargs.appendSlice(arena, &.{ "--tabsize", a.arg.? }) catch return 2;
                 const v = parseCount(a.arg.?) orelse 0;
                 if (v == 0) return diffUsage(ctx, "invalid tabsize '{s}'", .{a.arg.?});
                 o.diff.tab_size = v;
             },
-            'd' => o.diff.flags.minimal = true,
-            'H' => o.diff.flags.speed_large_files = true,
+            'd' => {
+                o.diff.flags.minimal = true;
+                dargs.append(arena, "-d") catch return 2;
+            },
+            'H' => {
+                o.diff.flags.speed_large_files = true;
+                dargs.append(arena, "-H") catch return 2;
+            },
             O.diff_program => {
-                if (!std.mem.eql(u8, a.arg.?, "diff")) {
-                    cli.warn(ctx, "{s}: No such file or directory", .{a.arg.?});
-                    return 2;
-                }
+                program = a.arg.?;
             },
             O.json => as_json = true,
             'v', getopt.version_id => return if (cli.printVersion(ctx)) 0 else 2,
@@ -193,12 +230,55 @@ pub fn main(ctx: cli.Context) u8 {
         return usage(ctx, "option --json is incompatible with text layout options and -o", .{});
     }
     if (std.mem.eql(u8, ops[0], "-") and std.mem.eql(u8, ops[1], "-")) return usage(ctx, "both files cannot be standard input", .{});
+    const external = !std.mem.eql(u8, program, "diff");
+    if (external and as_json) return usage(ctx, "option --json is incompatible with --diff-program", .{});
+    const senv: subprog.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+    if (external and output == null) {
+        // GNU runs the program in place of sdiff: diff's options, then -y.
+        var argv: std.ArrayList([]const u8) = .empty;
+        argv.append(arena, program) catch return 2;
+        argv.appendSlice(arena, dargs.items) catch return 2;
+        if (o.diff.suppress_common_lines) argv.append(arena, "--suppress-common-lines") catch return 2;
+        argv.appendSlice(arena, &.{ "-y", "--", ops[0], ops[1] }) catch return 2;
+        const st = subprog.inherit(senv, argv.items);
+        if (st == 126 or st == 127) {
+            cli.warn(ctx, "{s}: {s}", .{ program, if (st == 127) "No such file or directory" else "Permission denied" });
+            return 2;
+        }
+        return if (st >= subprog.abnormal) 2 else @intCast(st);
+    }
 
+    // With -o the files are read as given (a directory operand means the file
+    // of the same name in it); the comparison itself names them as typed.
+    var fnames: [2][]const u8 = .{ ops[0], ops[1] };
+    if (output != null) {
+        var is_dir: [2]bool = .{ false, false };
+        for (0..2) |i| {
+            if (std.mem.eql(u8, ops[i], "-")) {
+                cli.warn(ctx, "cannot interactively merge standard input", .{});
+                return 2;
+            }
+            if (Io.Dir.cwd().statFile(ctx.io, ops[i], .{})) |st| {
+                is_dir[i] = st.kind == .directory;
+            } else |_| {}
+        }
+        if (is_dir[0] and is_dir[1]) {
+            cli.warn(ctx, "both files to be compared are directories", .{});
+            return 2;
+        }
+        for (0..2) |i| {
+            if (!is_dir[i]) continue;
+            const base = std.fs.path.basename(ops[1 - i]);
+            const dir = ops[i];
+            const slash: []const u8 = if (dir.len > 0 and dir[dir.len - 1] != '/') "/" else "";
+            fnames[i] = std.fmt.allocPrint(arena, "{s}{s}{s}", .{ dir, slash, base }) catch return 2;
+        }
+    }
     var data: [2][]u8 = .{ &.{}, &.{} };
     defer for (data) |m| gpa.free(m);
     for (0..2) |i| {
-        data[i] = readAll(ctx, ops[i]) catch |e| {
-            cli.writeStderr(ctx, "diff: {s}: {s}", .{ ops[i], cli.errText(e) });
+        data[i] = readAll(ctx, fnames[i]) catch |e| {
+            if (output != null) cli.warn(ctx, "{s}: {s}", .{ fnames[i], cli.errText(e) }) else cli.writeStderr(ctx, "diff: {s}: {s}", .{ ops[i], cli.errText(e) });
             return 2;
         };
     }
@@ -241,7 +321,25 @@ pub fn main(ctx: cli.Context) u8 {
         var in = Io.File.stdin().readerStreaming(ctx.io, &ibuf);
         var ec: EditCtx = .{ .ctx = &ctx };
         var rep: Rep = .{ .ctx = ctx };
-        const st = sdiff.interact(env, o, .{ ops[0], ops[1] }, data[0], data[1], w, &ow.interface, &in.interface, .{ .context = &ec, .func = runEditor }, .{ .context = &rep, .func = Rep.on }) catch return fail(ctx, &stdout);
+        if (external) {
+            var argv: std.ArrayList([]const u8) = .empty;
+            argv.append(arena, program) catch return 2;
+            argv.appendSlice(arena, dargs.items) catch return 2;
+            argv.appendSlice(arena, &.{ "--sdiff-merge-assist", "--", ops[0], ops[1] }) catch return 2;
+            const run = subprog.capture(senv, argv.items) catch return fail(ctx, &stdout);
+            defer gpa.free(run.output);
+            const st = sdiff.interactExternal(env, o, .{ fnames[0], fnames[1] }, data[0], data[1], run.output, w, &ow.interface, &in.interface, .{ .context = &ec, .func = runEditor }, .{ .context = &rep, .func = Rep.on }) catch return fail(ctx, &stdout);
+            ow.interface.flush() catch {};
+            w.flush() catch return fail(ctx, &stdout);
+            if (st != 0) return st;
+            if (run.status > 1) {
+                var eb: [512]u8 = undefined;
+                cli.warn(ctx, "{s}", .{subprog.describe(&eb, program, run.status)});
+                return 2;
+            }
+            return @intCast(run.status);
+        }
+        const st = sdiff.interact(env, o, .{ fnames[0], fnames[1] }, data[0], data[1], w, &ow.interface, &in.interface, .{ .context = &ec, .func = runEditor }, .{ .context = &rep, .func = Rep.on }) catch return fail(ctx, &stdout);
         ow.interface.flush() catch {};
         w.flush() catch return fail(ctx, &stdout);
         return st;
@@ -267,6 +365,7 @@ const Rep = struct {
                 "v:\tVerbosely include common lines.\n" ++
                 "q:\tQuit.\n", .{}),
             .editor_failed => |t| cli.warn(r.ctx, "{s}", .{t}),
+            .bad_protocol => |t| cli.warn(r.ctx, "{s}", .{t}),
         }
     }
 };

@@ -115,7 +115,9 @@ pub fn list(env: Env, options: Options, a: []const u8, b: []const u8, w: *Io.Wri
             l0 = c.items[k].edit.line0;
             l1 = c.items[k].edit.line1;
         }
-        try common(w, o, &c, &p0, &p1, l0, l1, null);
+        try common(w, o, &c, p0, p1, l0, l1);
+        p0 = l0;
+        p1 = l1;
         if (k < c.items.len) {
             differs = true;
             const e = c.items[k].edit;
@@ -132,35 +134,9 @@ pub fn list(env: Env, options: Options, a: []const u8, b: []const u8, w: *Io.Wri
     return differs;
 }
 
-fn common(w: *Io.Writer, o: diff.Options, c: *const diff.Compared, p0: *usize, p1: *usize, l0: usize, l1: usize, out: ?*Io.Writer) !void {
-    var a = p0.*;
-    var b = p1.*;
-    while (a != l0 and b != l1) {
-        if (!o.suppress_common_lines) {
-            if (o.left_column) try diffsbs.row(w, o, c.a.raw(a), '(', null) else try diffsbs.row(w, o, c.a.raw(a), ' ', c.b.raw(b));
-        }
-        if (out) |ow| try writeLine(ow, c.a.raw(a));
-        a += 1;
-        b += 1;
-    }
-    while (b != l1) : (b += 1) {
-        if (!o.suppress_common_lines) try diffsbs.row(w, o, null, ')', c.b.raw(b));
-    }
-    while (a != l0) : (a += 1) {
-        if (!o.suppress_common_lines) try diffsbs.row(w, o, c.a.raw(a), '(', null);
-        if (out) |ow| try writeLine(ow, c.a.raw(a));
-    }
-    p0.* = l0;
-    p1.* = l1;
-}
-
-fn writeLine(w: *Io.Writer, raw: []const u8) Io.Writer.Error!void {
-    try w.writeAll(raw);
-    if (raw.len == 0 or raw[raw.len - 1] != '\n') try w.writeByte('\n');
-}
-
 fn hdr(buf: *std.ArrayList(u8), gpa: std.mem.Allocator, mark: []const u8, name: []const u8, start: usize, count: usize) !void {
-    if (count <= 1) try buf.print(gpa, "{s} {s} {d}\n", .{ mark, name, start + 1 }) else try buf.print(gpa, "{s} {s} {d},{d}\n", .{ mark, name, start + 1, start + count });
+    if (count == 0) return;
+    if (count == 1) try buf.print(gpa, "{s} {s} {d}\n", .{ mark, name, start + 1 }) else try buf.print(gpa, "{s} {s} {d},{d}\n", .{ mark, name, start + 1, start + count });
 }
 
 /// Events of the interactive merge worth telling the user about (stderr).
@@ -169,6 +145,8 @@ pub const Event = union(enum) {
     help,
     /// The editor could not be run.
     editor_failed: []const u8,
+    /// A line of the diff program's output that is not part of the protocol.
+    bad_protocol: []const u8,
 };
 
 pub const Observer = @import("common.zig").Observer(Event);
@@ -178,6 +156,114 @@ pub const Editor = struct {
     /// Run an editor on `text` (the initial content) and return the edited
     /// content, allocated with `gpa`; null if editing is not possible.
     func: ?*const fn (context: ?*anyopaque, gpa: std.mem.Allocator, text: []const u8) ?[]u8 = null,
+};
+
+/// A read position in an input file, counted in lines (GNU sdiff copies the
+/// raw bytes of the files, so a last line without a newline stays without).
+const Cursor = struct {
+    data: []const u8,
+    pos: usize = 0,
+
+    /// The next `n` lines (fewer at the end of the data).
+    fn take(c: *Cursor, n: usize) []const u8 {
+        const start = c.pos;
+        var left = n;
+        while (left > 0 and c.pos < c.data.len) {
+            if (std.mem.indexOfScalarPos(u8, c.data, c.pos, '\n')) |nl| {
+                c.pos = nl + 1;
+                left -= 1;
+            } else {
+                c.pos = c.data.len;
+                break;
+            }
+        }
+        return c.data[start..c.pos];
+    }
+};
+
+const Outcome = enum { done, quit, failed };
+
+/// The prompt and the commands applying to one group of differing lines.
+const Session = struct {
+    env: Env,
+    names: [2][]const u8,
+    screen: *Io.Writer,
+    out: *Io.Writer,
+    answers: *Io.Reader,
+    editor: Editor,
+    observer: Observer,
+    /// Common lines are not shown (`-s`, toggled by the `s` and `v` commands).
+    silent: bool,
+
+    fn header(buf: *std.ArrayList(u8), gpa: std.mem.Allocator, mark: []const u8, name: []const u8, start: usize, count: usize) !void {
+        return hdr(buf, gpa, mark, name, start, count);
+    }
+
+    /// Ask until a command settles the group: `left` and `right` are the
+    /// cursors in front of its lines (`llen` and `rlen` of them), `lline` and
+    /// `rline` their 1-based numbers.
+    fn command(s: *Session, left: *Cursor, right: *Cursor, lline: usize, llen: usize, rline: usize, rlen: usize) !Outcome {
+        while (true) {
+            try s.screen.writeAll("%");
+            try s.screen.flush();
+            const line = (s.answers.takeDelimiter('\n') catch return .quit) orelse return .quit;
+            const terminated = s.answers.seek > 0 and s.answers.buffer[s.answers.seek - 1] == '\n';
+            // GNU skips white space between the letters of a command.
+            var cmd_buf: [3]u8 = undefined;
+            var cmd_len: usize = 0;
+            for (line) |ch| {
+                if (ch == ' ' or (ch >= 9 and ch <= 13)) continue;
+                if (cmd_len < cmd_buf.len) cmd_buf[cmd_len] = ch;
+                cmd_len += 1;
+            }
+            if (!terminated) {
+                // End of input inside a command line: GNU complains, then quits.
+                if (cmd_len != 0) {
+                    s.observer.emit(.help);
+                    try s.screen.writeAll("%");
+                    try s.screen.flush();
+                }
+                return .quit;
+            }
+            if (cmd_len == 0 or cmd_len > 2) {
+                s.observer.emit(.help);
+                continue;
+            }
+            const cmd = cmd_buf[0..cmd_len];
+            if (cmd_len == 1 and (cmd[0] == 'l' or cmd[0] == '1')) {
+                try s.out.writeAll(left.take(llen));
+                _ = right.take(rlen);
+                return .done;
+            } else if (cmd_len == 1 and (cmd[0] == 'r' or cmd[0] == '2')) {
+                try s.out.writeAll(right.take(rlen));
+                _ = left.take(llen);
+                return .done;
+            } else if (cmd_len == 1 and cmd[0] == 'q') {
+                return .quit;
+            } else if (cmd_len == 1 and cmd[0] == 's') {
+                s.silent = true;
+            } else if (cmd_len == 1 and cmd[0] == 'v') {
+                s.silent = false;
+            } else if (cmd[0] == 'e' and (cmd_len == 1 or std.mem.indexOfScalar(u8, "lrbd12", cmd[1]) != null)) {
+                const gpa = s.env.gpa;
+                var buf: std.ArrayList(u8) = .empty;
+                defer buf.deinit(gpa);
+                const which: u8 = if (cmd_len == 2) cmd[1] else 'n';
+                if (which == 'd') try header(&buf, gpa, "---", s.names[0], lline - 1, llen);
+                if (which == 'l' or which == '1' or which == 'b' or which == 'd') try buf.appendSlice(gpa, left.take(llen)) else _ = left.take(llen);
+                if (which == 'd') try header(&buf, gpa, "+++", s.names[1], rline - 1, rlen);
+                if (which == 'r' or which == '2' or which == 'b' or which == 'd') try buf.appendSlice(gpa, right.take(rlen)) else _ = right.take(rlen);
+                const f = s.editor.func orelse {
+                    s.observer.emit(.{ .editor_failed = "no editor available" });
+                    return .failed;
+                };
+                const edited = f(s.editor.context, gpa, buf.items) orelse return .failed;
+                defer gpa.free(edited);
+                try s.out.writeAll(edited);
+                return .done;
+            } else s.observer.emit(.help);
+        }
+    }
 };
 
 /// Interactive merge (`sdiff -o`). Rows go to `screen`, the result to `out`,
@@ -190,9 +276,11 @@ pub fn interact(env: Env, options: Options, names: [2][]const u8, a: []const u8,
     defer c.deinit();
     var m = try diff.Matchers.init(env.gpa, o);
     defer m.deinit();
+    var s: Session = .{ .env = env, .names = names, .screen = screen, .out = out, .answers = answers, .editor = editor, .observer = observer, .silent = o.suppress_common_lines };
+    var left: Cursor = .{ .data = a };
+    var right: Cursor = .{ .data = b };
     var p0: usize = 0;
     var p1: usize = 0;
-    var silent = o.suppress_common_lines;
     var differs = false;
     var k: usize = 0;
     while (k <= c.items.len) : (k += 1) {
@@ -204,8 +292,14 @@ pub fn interact(env: Env, options: Options, names: [2][]const u8, a: []const u8,
             l1 = c.items[k].edit.line1;
         }
         var so = o;
-        so.suppress_common_lines = silent;
-        try common(screen, so, &c, &p0, &p1, l0, l1, out);
+        so.suppress_common_lines = s.silent;
+        if (l0 != p0 or l1 != p1) {
+            try common(screen, so, &c, p0, p1, l0, l1);
+            try out.writeAll(left.take(l0 - p0));
+            _ = right.take(l1 - p1);
+        }
+        p0 = l0;
+        p1 = l1;
         if (k >= c.items.len) break;
         differs = true;
         const e = c.items[k].edit;
@@ -215,76 +309,100 @@ pub fn interact(env: Env, options: Options, names: [2][]const u8, a: []const u8,
         while (j < e.deleted) : (j += 1) try diffsbs.row(screen, o, c.a.raw(e.line0 + j), '<', null);
         j = i;
         while (j < e.inserted) : (j += 1) try diffsbs.row(screen, o, null, '>', c.b.raw(e.line1 + j));
-        // Prompt until a command settles the hunk.
-        while (true) {
-            try screen.writeAll("%");
-            try screen.flush();
-            const line = (answers.takeDelimiter('\n') catch return 2) orelse return 2;
-            const cmd = std.mem.trim(u8, line, " \t\r");
-            if (cmd.len == 0) {
-                observer.emit(.help);
-                continue;
-            }
-            const left_lines = struct {
-                fn put(w: *Io.Writer, lines: diff.Lines, start: usize, n: usize) !void {
-                    var q: usize = 0;
-                    while (q < n) : (q += 1) try writeLine(w, lines.raw(start + q));
-                }
-            };
-            if (std.mem.eql(u8, cmd, "l") or std.mem.eql(u8, cmd, "1")) {
-                try left_lines.put(out, c.a, e.line0, e.deleted);
-                break;
-            } else if (std.mem.eql(u8, cmd, "r") or std.mem.eql(u8, cmd, "2")) {
-                try left_lines.put(out, c.b, e.line1, e.inserted);
-                break;
-            } else if (std.mem.eql(u8, cmd, "q")) {
+        switch (try s.command(&left, &right, e.line0 + 1, e.deleted, e.line1 + 1, e.inserted)) {
+            .done => {},
+            .quit, .failed => {
+                try out.flush();
                 return 2;
-            } else if (std.mem.eql(u8, cmd, "s")) {
-                silent = true;
-            } else if (std.mem.eql(u8, cmd, "v")) {
-                silent = false;
-            } else if (cmd[0] == 'e' and cmd.len <= 2 and (cmd.len == 1 or std.mem.indexOfScalar(u8, "lrbd12", cmd[1]) != null)) {
-                var buf: std.ArrayList(u8) = .empty;
-                defer buf.deinit(env.gpa);
-                const which: u8 = if (cmd.len == 2) cmd[1] else 'n';
-                const want_left = which == 'l' or which == '1' or which == 'b' or which == 'd';
-                const want_right = which == 'r' or which == '2' or which == 'b' or which == 'd';
-                if (which == 'd') try hdr(&buf, env.gpa, "---", names[0], e.line0, e.deleted);
-                if (want_left) {
-                    var q: usize = 0;
-                    while (q < e.deleted) : (q += 1) {
-                        try buf.appendSlice(env.gpa, c.a.raw(e.line0 + q));
-                        if (!c.a.terminated(e.line0 + q)) try buf.append(env.gpa, '\n');
-                    }
-                }
-                if (which == 'd') try hdr(&buf, env.gpa, "+++", names[1], e.line1, e.inserted);
-                if (want_right) {
-                    var q: usize = 0;
-                    while (q < e.inserted) : (q += 1) {
-                        try buf.appendSlice(env.gpa, c.b.raw(e.line1 + q));
-                        if (!c.b.terminated(e.line1 + q)) try buf.append(env.gpa, '\n');
-                    }
-                }
-                const f = editor.func orelse {
-                    observer.emit(.{ .editor_failed = "no editor available" });
-                    continue;
-                };
-                const edited = f(editor.context, env.gpa, buf.items) orelse {
-                    observer.emit(.{ .editor_failed = "editor failed" });
-                    continue;
-                };
-                defer env.gpa.free(edited);
-                try out.writeAll(edited);
-                break;
-            } else {
-                observer.emit(.help);
-            }
+            },
         }
         p0 = e.line0 + e.deleted;
         p1 = e.line1 + e.inserted;
     }
     try out.flush();
     return if (differs) 1 else 0;
+}
+
+fn parseCount(t: []const u8) ?usize {
+    if (t.len == 0) return null;
+    var v: usize = 0;
+    for (t) |ch| {
+        if (!std.ascii.isDigit(ch)) return null;
+        v = std.math.mul(usize, v, 10) catch return null;
+        v = std.math.add(usize, v, ch - '0') catch return null;
+    }
+    return v;
+}
+
+/// The same merge driven by the output of a `--sdiff-merge-assist` diff
+/// program (`protocol`): `iL,R` and `cL,R` lines, each followed by max(L,R)
+/// rows of side-by-side text. Returns 0 when it ran to the end, 2 on a quit,
+/// a failed editor or a malformed protocol (reported through `observer`).
+pub fn interactExternal(env: Env, options: Options, names: [2][]const u8, a: []const u8, b: []const u8, protocol: []const u8, screen: *Io.Writer, out: *Io.Writer, answers: *Io.Reader, editor: Editor, observer: Observer) !u8 {
+    var s: Session = .{ .env = env, .names = names, .screen = screen, .out = out, .answers = answers, .editor = editor, .observer = observer, .silent = options.diff.suppress_common_lines };
+    var left: Cursor = .{ .data = a };
+    var right: Cursor = .{ .data = b };
+    var proto: Cursor = .{ .data = protocol };
+    var lline: usize = 1;
+    var rline: usize = 1;
+    var status: u8 = 0;
+    while (proto.pos < protocol.len) {
+        const nl = std.mem.indexOfScalarPos(u8, protocol, proto.pos, '\n') orelse {
+            observer.emit(.{ .bad_protocol = protocol[proto.pos..] });
+            status = 2;
+            break;
+        };
+        const line = protocol[proto.pos..nl];
+        proto.pos = nl + 1;
+        if (line.len > 0 and line[0] == ' ') {
+            try screen.writeAll(line[1..]);
+            try screen.writeByte('\n');
+            continue;
+        }
+        const comma = std.mem.indexOfScalar(u8, line, ',');
+        const llen = if (line.len > 1 and comma != null) parseCount(line[1..comma.?]) else null;
+        const rlen = if (comma) |cm| parseCount(line[cm + 1 ..]) else null;
+        if (line.len == 0 or llen == null or rlen == null or (line[0] != 'i' and line[0] != 'c')) {
+            observer.emit(.{ .bad_protocol = line });
+            status = 2;
+            break;
+        }
+        const lenmax = @max(llen.?, rlen.?);
+        const rows_text = proto.take(lenmax);
+        if (line[0] == 'i') {
+            if (!s.silent) try screen.writeAll(rows_text);
+            try out.writeAll(left.take(llen.?));
+            _ = right.take(rlen.?);
+        } else {
+            try screen.writeAll(rows_text);
+            switch (try s.command(&left, &right, lline, llen.?, rline, rlen.?)) {
+                .done => {},
+                .quit, .failed => {
+                    status = 2;
+                    break;
+                },
+            }
+        }
+        lline += llen.?;
+        rline += rlen.?;
+    }
+    try out.flush();
+    return status;
+}
+
+fn common(w: *Io.Writer, o: diff.Options, c: *const diff.Compared, p0: usize, p1: usize, l0: usize, l1: usize) !void {
+    if (o.suppress_common_lines) return;
+    var a = p0;
+    var b = p1;
+    if (!o.left_column) {
+        while (a != l0 and b != l1) {
+            try diffsbs.row(w, o, c.a.raw(a), ' ', c.b.raw(b));
+            a += 1;
+            b += 1;
+        }
+        while (b != l1) : (b += 1) try diffsbs.row(w, o, null, ')', c.b.raw(b));
+    }
+    while (a != l0) : (a += 1) try diffsbs.row(w, o, c.a.raw(a), '(', null);
 }
 
 /// The side-by-side result as JSON: the aligned rows.

@@ -155,14 +155,16 @@ fn common(p: anytype, next0: *usize, next1: *usize, limit0: usize, limit1: usize
     var q1 = next1.*;
     const o = p.options;
     if (!o.suppress_common_lines and (q0 != limit0 or q1 != limit1)) {
-        while (q0 != limit0 and q1 != limit1) {
-            if (o.left_column) try row(p.w, o, p.c.a.raw(q0), '(', null) else try row(p.w, o, p.c.a.raw(q0), ' ', p.c.b.raw(q1));
-            q0 += 1;
-            q1 += 1;
-        }
-        while (q1 != limit1) {
-            try row(p.w, o, null, ')', p.c.b.raw(q1));
-            q1 += 1;
+        if (!o.left_column) {
+            while (q0 != limit0 and q1 != limit1) {
+                try row(p.w, o, p.c.a.raw(q0), ' ', p.c.b.raw(q1));
+                q0 += 1;
+                q1 += 1;
+            }
+            while (q1 != limit1) {
+                try row(p.w, o, null, ')', p.c.b.raw(q1));
+                q1 += 1;
+            }
         }
         while (q0 != limit0) {
             try row(p.w, o, p.c.a.raw(q0), '(', null);

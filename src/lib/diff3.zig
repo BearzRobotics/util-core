@@ -42,9 +42,110 @@ pub const Block = struct {
     ranges: [3]Range,
 };
 
+/// A source of the two comparisons other than the built-in engine (an
+/// external `--diff-program`): `func(context, gpa, pair)` returns the edits of
+/// OLDFILE against MYFILE (pair 0) or against YOURFILE (pair 1).
+pub const External = struct {
+    context: ?*anyopaque = null,
+    func: *const fn (context: ?*anyopaque, gpa: std.mem.Allocator, pair: u1) anyerror![]diffcore.Edit,
+};
+
 pub const Flags = struct {
     strip_trailing_cr: bool = false,
+    external: ?External = null,
 };
+
+pub const ParseError = error{ OutOfMemory, IncompleteLastLine, BadControl, BadLeadingChars, BadSeparator };
+
+fn skipBlanks(t: []const u8, i: usize) usize {
+    var k = i;
+    while (k < t.len and (t[k] == ' ' or t[k] == '\t')) k += 1;
+    return k;
+}
+
+fn readNum(t: []const u8, i: *usize) ?usize {
+    if (i.* >= t.len or !std.ascii.isDigit(t[i.*])) return null;
+    var v: usize = 0;
+    while (i.* < t.len and std.ascii.isDigit(t[i.*])) : (i.* += 1) v = v *| 10 +| (t[i.*] - '0');
+    return v;
+}
+
+/// Parse a diff in the normal format (what `--diff-program` prints) into
+/// edits of its first file against its second. `bad_line` receives the
+/// offending control line for `error.BadControl`.
+pub fn parseNormalDiff(gpa: std.mem.Allocator, text: []const u8, bad_line: *[]const u8) ParseError![]diffcore.Edit {
+    var edits: std.ArrayList(diffcore.Edit) = .empty;
+    errdefer edits.deinit(gpa);
+    if (text.len > 0 and text[text.len - 1] != '\n') return error.IncompleteLastLine;
+    var pos: usize = 0;
+    while (pos < text.len) {
+        const eol = std.mem.indexOfScalarPos(u8, text, pos, '\n') orelse text.len;
+        const line = text[pos..eol];
+        bad_line.* = line;
+        var i: usize = skipBlanks(line, 0);
+        const a0 = readNum(line, &i) orelse return error.BadControl;
+        var a1 = a0;
+        i = skipBlanks(line, i);
+        if (i < line.len and line[i] == ',') {
+            i += 1;
+            a1 = readNum(line, &i) orelse return error.BadControl;
+        }
+        i = skipBlanks(line, i);
+        const kind: u8 = if (i < line.len) line[i] else 0;
+        if (kind != 'a' and kind != 'c' and kind != 'd') return error.BadControl;
+        i += 1;
+        i = skipBlanks(line, i);
+        const b0 = readNum(line, &i) orelse return error.BadControl;
+        var b1 = b0;
+        i = skipBlanks(line, i);
+        if (i < line.len and line[i] == ',') {
+            i += 1;
+            b1 = readNum(line, &i) orelse return error.BadControl;
+            i = skipBlanks(line, i);
+        }
+        if (i != line.len) return error.BadControl;
+        pos = eol + 1;
+        const del: usize = if (kind == 'a') 0 else (if (a1 >= a0) a1 - a0 + 1 else 0);
+        const ins: usize = if (kind == 'd') 0 else (if (b1 >= b0) b1 - b0 + 1 else 0);
+        // Skip the text lines (and any "\ No newline" notes).
+        var k: usize = 0;
+        while (k < del) : (k += 1) pos = try skipDiffLine(text, pos, '<');
+        if (kind == 'c') {
+            if (!std.mem.startsWith(u8, text[pos..], "---\n")) return error.BadSeparator;
+            pos += 4;
+        }
+        k = 0;
+        while (k < ins) : (k += 1) pos = try skipDiffLine(text, pos, '>');
+        const line0: usize = if (kind == 'a') a0 else a0 -| 1;
+        const line1: usize = if (kind == 'd') b0 else b0 -| 1;
+        try edits.append(gpa, .{ .line0 = line0, .line1 = line1, .deleted = del, .inserted = ins });
+    }
+    return edits.toOwnedSlice(gpa);
+}
+
+fn skipDiffLine(text: []const u8, pos: usize, lead: u8) ParseError!usize {
+    if (pos + 1 >= text.len or text[pos] != lead or text[pos + 1] != ' ') return error.BadLeadingChars;
+    var p = std.mem.indexOfScalarPos(u8, text, pos, '\n') orelse return error.IncompleteLastLine;
+    p += 1;
+    if (p < text.len and text[p] == '\\') {
+        p = (std.mem.indexOfScalarPos(u8, text, p, '\n') orelse return error.IncompleteLastLine) + 1;
+    }
+    return p;
+}
+
+/// Whether `edits` stay inside sequences of `n0` and `n1` lines and ascend
+/// (what the merge needs to be memory safe with an arbitrary program).
+fn editsFit(edits: []const diffcore.Edit, n0: usize, n1: usize) bool {
+    var p0: usize = 0;
+    var p1: usize = 0;
+    for (edits) |e| {
+        if (e.line0 < p0 or e.line1 < p1) return false;
+        if (e.line0 + e.deleted > n0 or e.line1 + e.inserted > n1) return false;
+        p0 = e.line0 + e.deleted;
+        p1 = e.line1 + e.inserted;
+    }
+    return true;
+}
 
 pub const Result = struct {
     gpa: std.mem.Allocator,
@@ -108,10 +209,13 @@ pub fn merge3(gpa: std.mem.Allocator, mine: []const u8, older: []const u8, yours
         ls[i] = try diffcore.splitLines(gpa, data[i]);
         made += 1;
     }
-    const ea = try diffcore.compare(gpa, ls[1], ls[0], .{});
+    const ea = if (flags.external) |x| try x.func(x.context, gpa, 0) else try diffcore.compare(gpa, ls[1], ls[0], .{});
     defer gpa.free(ea);
-    const eb = try diffcore.compare(gpa, ls[1], ls[2], .{});
+    const eb = if (flags.external) |x| try x.func(x.context, gpa, 1) else try diffcore.compare(gpa, ls[1], ls[2], .{});
     defer gpa.free(eb);
+    if (flags.external != null) {
+        if (!editsFit(ea, ls[1].count(), ls[0].count()) or !editsFit(eb, ls[1].count(), ls[2].count())) return error.InvalidEdits;
+    }
 
     var blocks: std.ArrayList(Block) = .empty;
     errdefer blocks.deinit(gpa);
