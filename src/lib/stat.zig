@@ -19,7 +19,7 @@ const tzmod = @import("../tz.zig");
 const strftime = @import("../strftime.zig");
 const userdb = @import("../userdb.zig");
 const fileinfo = @import("../fileinfo.zig");
-const Quoted = @import("../quoted.zig").Quoted;
+const Quoted = @import("../quote.zig").Quoted;
 
 pub const Env = common.Env;
 

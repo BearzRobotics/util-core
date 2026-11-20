@@ -12,6 +12,7 @@
 //! %q, %b, \e, and "%N$" accepted with the number ignored.
 
 const std = @import("std");
+const quote = @import("../quote.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const Sink = @import("sink.zig").Sink;
@@ -383,66 +384,9 @@ fn invalidSpec(st: *State, text: []const u8) ?usize {
 }
 
 /// Shell quoting as printf %q: plain when safe, '...' or $'...' otherwise
-/// (GNU shell-escape quoting with ':' special; same rules as `cli.quote`,
-/// which a library module may not import).
+/// (GNU shell-escape quoting with ':' special, the rules of `quote.Quoted`).
 fn quoteShell(w: *std.Io.Writer, name: []const u8) !void {
-    if (name.len == 0) return w.writeAll("''");
-    var has_ctl = false;
-    var has_squote = false;
-    var has_other = false;
-    for (name, 0..) |c, i| {
-        if (c < 0x20 or c >= 0x7f) {
-            has_ctl = true;
-            continue;
-        }
-        switch (c) {
-            '\'' => has_squote = true,
-            ' ', '!', '"', '$', '&', '(', ')', '*', ';', '<', '=', '>', '?', '[', '\\', '^', '`', '|', ':' => has_other = true,
-            '#', '~' => if (i == 0) {
-                has_other = true;
-            },
-            '{', '}' => if (name.len == 1) {
-                has_other = true;
-            },
-            else => {},
-        }
-    }
-    if (!(has_ctl or has_squote or has_other)) return w.writeAll(name);
-    if (!has_ctl and has_squote and !has_other and std.mem.indexOfAny(u8, name, "\"$`\\") == null) {
-        try w.writeByte('"');
-        try w.writeAll(name);
-        return w.writeByte('"');
-    }
-    var i: usize = 0;
-    var first = true;
-    while (i < name.len) {
-        const ctl = name[i] < 0x20 or name[i] >= 0x7f;
-        var j = i;
-        while (j < name.len and ((name[j] < 0x20 or name[j] >= 0x7f) == ctl)) j += 1;
-        if (ctl) {
-            if (first) try w.writeAll("''");
-            try w.writeAll("$'");
-            for (name[i..j]) |c| switch (c) {
-                7 => try w.writeAll("\\a"),
-                8 => try w.writeAll("\\b"),
-                9 => try w.writeAll("\\t"),
-                10 => try w.writeAll("\\n"),
-                11 => try w.writeAll("\\v"),
-                12 => try w.writeAll("\\f"),
-                13 => try w.writeAll("\\r"),
-                else => try w.print("\\{o:0>3}", .{c}),
-            };
-            try w.writeByte('\'');
-        } else {
-            try w.writeByte('\'');
-            for (name[i..j]) |c| {
-                if (c == '\'') try w.writeAll("'\\''") else try w.writeByte(c);
-            }
-            try w.writeByte('\'');
-        }
-        first = false;
-        i = j;
-    }
+    return quote.Quoted.format(.{ .name = name }, w);
 }
 
 // ------------------------------------------------------------ numeric args
