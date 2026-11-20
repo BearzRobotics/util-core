@@ -224,7 +224,7 @@ fn reProtect(c: *copy.Copier, dst_name: []const u8, attrs: []const DirAttr, x: c
         const name = dst_name[0..at.slash_offset];
         if (x.preserve_timestamps) {
             const ts = [2]sys.TimeSpec{ .{ .sec = at.st.atime_s, .nsec = at.st.atime_ns }, .{ .sec = at.st.mtime_s, .nsec = at.st.mtime_ns } };
-            if (sys.setTimes(name, -1, ts, false)) |te| {
+            if (sys.setTimes(name, sys.invalid_handle, ts, false)) |te| {
                 warn(c, "failed to preserve times for {f}: {s}", .{ quote.quoteA(name), sys.errnoText(te) });
                 return false;
             }

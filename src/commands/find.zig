@@ -54,13 +54,13 @@ fn report(context: ?*anyopaque, ev: find.Event) void {
 /// -ok: print the question on stderr, read one line from standard input.
 fn confirm(context: ?*anyopaque, prompt: []const u8) bool {
     _ = context;
-    _ = sys.writeAllFd(2, prompt);
+    _ = sys.writeAllFd(std.Io.File.stderr().handle, prompt);
     var line: [256]u8 = undefined;
     var k: usize = 0;
     var err: LX.E = .SUCCESS;
     while (k < line.len) {
         var b: [1]u8 = undefined;
-        const got = sys.readFd(0, &b, &err) orelse break;
+        const got = sys.readFd(std.Io.File.stdin().handle, &b, &err) orelse break;
         if (got == 0) break;
         if (b[0] == '\n') break;
         line[k] = b[0];

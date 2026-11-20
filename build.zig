@@ -15,7 +15,10 @@
 //!              a link named after a command          (-Dmode=multicall, all)
 //!
 //! Nothing here depends on the host OS, so cross-compilation works with
-//! -Dtarget=.
+//! -Dtarget=. Supported targets: Linux (x86_64, aarch64; run and tested),
+//! macOS (aarch64-macos, x86_64-macos; compile-checked only) and Windows
+//! (x86_64-windows, aarch64-windows; x86_64 run natively). See
+//! docs/portability.md.
 
 const std = @import("std");
 const commands = @import("src/commands.zig");

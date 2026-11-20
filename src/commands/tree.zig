@@ -214,6 +214,6 @@ pub fn main(ctx: cli.Context) u8 {
 
 fn usageErr() u8 {
     const cut = std.mem.indexOf(u8, help_text, "  ------- Listing options") orelse help_text.len;
-    _ = sys.writeAllFd(2, help_text[0..cut]);
+    _ = sys.writeAllFd(std.Io.File.stderr().handle, help_text[0..cut]);
     return 1;
 }

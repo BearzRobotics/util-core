@@ -34,6 +34,13 @@ pub fn main(ctx: cli.Context) u8 {
         return 125;
     }
 
+    if (!sys.has_jobcontrol) {
+        // No hangup signal and no descriptor redirection to make the command
+        // immune: say so instead of pretending (GNU's exit status 125).
+        cli.warn(ctx, "not supported on this platform", .{});
+        return 125;
+    }
+
     const stdin_tty = Io.File.stdin().isTty(ctx.io) catch false;
     const stdout_tty = Io.File.stdout().isTty(ctx.io) catch false;
     const stderr_tty = Io.File.stderr().isTty(ctx.io) catch false;
@@ -51,7 +58,7 @@ pub fn main(ctx: cli.Context) u8 {
             return 125;
         };
         _ = sys.dup2(null_file.handle, 0);
-        if (null_file.handle != 0) null_file.close(ctx.io);
+        if (null_file.handle != Io.File.stdin().handle) null_file.close(ctx.io);
         if (plan.notice_ignoring_input) cli.warn(ctx, "ignoring input", .{});
     }
 
@@ -74,7 +81,7 @@ pub fn main(ctx: cli.Context) u8 {
             return 125;
         };
         _ = sys.dup2(file.handle, 1);
-        if (file.handle != 1) file.close(ctx.io);
+        if (file.handle != Io.File.stdout().handle) file.close(ctx.io);
         switch (plan.stdout_notice) {
             .ignoring_input_and_appending_output => cli.warn(ctx, "ignoring input and appending output to {f}", .{cli.quoteA(shown)}),
             .appending_output => cli.warn(ctx, "appending output to {f}", .{cli.quoteA(shown)}),
@@ -85,10 +92,10 @@ pub fn main(ctx: cli.Context) u8 {
             .ignoring_input_and_redirecting_stderr => cli.warn(ctx, "ignoring input and redirecting stderr to stdout", .{}),
             .redirecting_stderr => cli.warn(ctx, "redirecting stderr to stdout", .{}),
         };
-        _ = sys.dup2(1, 2);
+        _ = sys.dup2(Io.File.stdout().handle, 2);
     }
 
-    _ = sys.setSignal(1, .ignore);
+    _ = sys.setSignal(sys.signo.HUP, .ignore);
     sys.restoreSigpipe();
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(ctx.gpa);

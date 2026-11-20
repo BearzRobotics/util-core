@@ -167,7 +167,7 @@ pub const Program = struct {
 
     pub fn deinit(p: *Program) void {
         for (p.st.outs.items) |o| {
-            if (o.fd > 2) _ = sys.closeFd(o.fd);
+            if (!isStdFd(o.fd)) _ = sys.closeFd(o.fd);
         }
         const gpa = p.gpa;
         p.arena.deinit();
@@ -187,10 +187,10 @@ pub fn compile(env: Env, options: Options, chunks: []const Chunk, diag: *Compile
     const st = try arena.create(State);
     st.* = .{ .env = env, .arena = arena, .opts = options, .chunks = chunks, .diag = diag };
     errdefer for (st.outs.items) |o| {
-        if (o.fd > 2) _ = sys.closeFd(o.fd);
+        if (!isStdFd(o.fd)) _ = sys.closeFd(o.fd);
     };
     const stdout_o = try arena.create(Output);
-    stdout_o.* = .{ .fd = 1, .path = "/dev/stdout", .is_std = true };
+    stdout_o.* = .{ .fd = std.Io.File.stdout().handle, .path = "/dev/stdout", .is_std = true };
     st.stdout_out = stdout_o;
 
     var parser = Parser{ .s = st };
@@ -257,7 +257,7 @@ pub fn run(env: Env, program: *Program, options: Options, inputs: []const Input,
     }
     const stdout_o = try env.gpa.create(Output);
     defer env.gpa.destroy(stdout_o);
-    stdout_o.* = .{ .fd = 1, .path = "/dev/stdout", .is_std = true };
+    stdout_o.* = .{ .fd = std.Io.File.stdout().handle, .path = "/dev/stdout", .is_std = true };
     defer stdout_o.buf.deinit(env.gpa);
     st.stdout_out = stdout_o;
 
@@ -274,7 +274,7 @@ pub fn run(env: Env, program: *Program, options: Options, inputs: []const Input,
     ex.resetRanges();
     // stdout shared with `w /dev/stdout`
     for (st.outs.items) |o| {
-        if (o.fd == 1) o.sink = stdout_o;
+        if (o.fd == std.Io.File.stdout().handle) o.sink = stdout_o;
     }
     ex.loop() catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -364,8 +364,12 @@ const Cmd = struct {
     depth: u16 = 0,
 };
 
+fn isStdFd(fd: sys.Handle) bool {
+    return fd == std.Io.File.stdout().handle or fd == std.Io.File.stderr().handle or fd == std.Io.File.stdin().handle;
+}
+
 const Output = struct {
-    fd: i32,
+    fd: sys.Handle,
     path: []const u8 = "",
     buf: std.ArrayList(u8) = .empty,
     missing_nl: bool = false,
@@ -634,12 +638,12 @@ const Parser = struct {
             if (std.mem.eql(u8, o.path, name)) return i;
         }
         const o = try s.arena.create(Output);
-        o.* = .{ .fd = -1, .path = name };
+        o.* = .{ .fd = sys.invalid_handle, .path = name };
         if (std.mem.eql(u8, name, "/dev/stdout")) {
-            o.fd = 1;
+            o.fd = std.Io.File.stdout().handle;
             o.is_std = true;
         } else if (std.mem.eql(u8, name, "/dev/stderr")) {
-            o.fd = 2;
+            o.fd = std.Io.File.stderr().handle;
             o.is_std = true;
         } else {
             var err: LX.E = .SUCCESS;
@@ -1260,10 +1264,10 @@ const Exec = struct {
     fn flushOut(e: *Exec, o: *Output) Err!void {
         if (o.buf.items.len == 0) return;
         const items = if (o.fail_n != 0) o.fail_n else o.buf.items.len;
-        if (o.fd == 1) {
+        if (o.fd == std.Io.File.stdout().handle) {
             e.s.out_w.writeAll(o.buf.items) catch return e.writeFailed("stdout", items, null);
             e.s.out_w.flush() catch return e.writeFailed("stdout", items, null);
-        } else if (o.fd == 2) {
+        } else if (o.fd == std.Io.File.stderr().handle) {
             if (e.s.err_w) |w| {
                 w.writeAll(o.buf.items) catch return e.writeFailed(o.path, items, null);
                 w.flush() catch return e.writeFailed(o.path, items, null);
@@ -1316,7 +1320,7 @@ const Exec = struct {
             if (o.sim_fill + bytes.len > 4096) o.fail_n = bytes.len else o.sim_fill += bytes.len;
         }
         o.buf.appendSlice(e.gpa, bytes) catch return error.OutOfMemory;
-        if (o.buf.items.len > 65536 or e.s.opts.unbuffered or o.fd == 2) try e.flushOut(o);
+        if (o.buf.items.len > 65536 or e.s.opts.unbuffered or o.fd == std.Io.File.stderr().handle) try e.flushOut(o);
     }
 
     fn missingNl(e: *Exec, o: *Output) Err!void {
@@ -1395,7 +1399,7 @@ const Exec = struct {
         }
     }
 
-    fn readAll(e: *Exec, fd: i32, data: *std.ArrayList(u8), name: []const u8) Err!bool {
+    fn readAll(e: *Exec, fd: sys.Handle, data: *std.ArrayList(u8), name: []const u8) Err!bool {
         var buf: [65536]u8 = undefined;
         while (true) {
             var err: LX.E = .SUCCESS;
@@ -1469,9 +1473,9 @@ const Exec = struct {
         try e.flushOut(o);
         // copy mode and owner from the original
         var serr: LX.E = .SUCCESS;
-        var ofd: i32 = -1;
+        var ofd: sys.Handle = sys.invalid_handle;
         if (sys.openFd(e.in_place_target, sys.O.RDONLY, 0, &serr)) |f| ofd = f;
-        if (ofd >= 0) {
+        if (ofd != sys.invalid_handle) {
             if (sys.fstatFd(ofd, &serr)) |st| {
                 _ = sys.fchmodFd(o.fd, st.mode & 0o7777);
                 _ = sys.fchownFd(o.fd, st.uid, st.gid);
@@ -1591,7 +1595,7 @@ const Exec = struct {
                     try e.missingNl(e.cur_out);
                     var data: std.ArrayList(u8) = .empty;
                     if (std.mem.eql(u8, a.text, "/dev/stdin")) {
-                        _ = try e.readAll(0, &data, a.text);
+                        _ = try e.readAll(std.Io.File.stdin().handle, &data, a.text);
                     } else {
                         var err: LX.E = .SUCCESS;
                         if (sys.openFd(a.text, sys.O.RDONLY, 0, &err)) |fd| {
@@ -2066,7 +2070,7 @@ const Exec = struct {
         const sh = std.fmt.allocPrint(e.gpa, "( {s} ) > {s}", .{ command, outp }) catch return error.OutOfMemory;
         defer e.gpa.free(sh);
         const child = std.process.spawn(e.s.env.io, .{ .argv = &.{ "/bin/sh", "-c", sh } }) catch return &.{};
-        _ = sys.waitPid(@intCast(child.id.?), true);
+        _ = sys.waitPid(child.id.?, true);
         var data: std.ArrayList(u8) = .empty;
         var err: LX.E = .SUCCESS;
         if (sys.openFd(outp, sys.O.RDONLY, 0, &err)) |fd| {

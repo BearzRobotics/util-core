@@ -47,7 +47,7 @@ pub fn run(env: Env, final: ?u16, names: []const []const u8, obs: Observer) erro
             ok = false;
             continue;
         }
-        if (final) |m| Io.Dir.cwd().setFilePermissions(env.io, name, .fromMode(m), .{}) catch |e| {
+        if (final) |m| Io.Dir.cwd().setFilePermissions(env.io, name, sys.permissionsFromMode(m), .{}) catch |e| {
             obs.emit(.{ .name = name, .failure = .{ .permissions = e } });
             ok = false;
         };

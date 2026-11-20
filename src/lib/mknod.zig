@@ -73,7 +73,7 @@ pub fn run(env: Env, name: []const u8, opts: Options) error{OutOfMemory}!?Failur
     const z = try env.gpa.dupeSentinel(u8, name, 0);
     defer env.gpa.free(z);
     if (sys.mknod(z, file_type | (opts.mode orelse 0o666), opts.dev)) |e| return .{ .create = e };
-    if (opts.mode) |m| Io.Dir.cwd().setFilePermissions(env.io, name, .fromMode(m), .{}) catch |e|
+    if (opts.mode) |m| Io.Dir.cwd().setFilePermissions(env.io, name, sys.permissionsFromMode(m), .{}) catch |e|
         return .{ .permissions = e };
     return null;
 }

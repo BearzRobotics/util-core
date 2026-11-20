@@ -8,41 +8,114 @@
 //! exists, and opening a file with O_APPEND. They are collected here so that
 //! (a) commands never touch std.posix / std.os directly, (b) each exception is
 //! documented in one place, and (c) each can be replaced by a std.Io call as
-//! soon as one exists. Every function degrades gracefully on Windows and WASI.
+//! soon as one exists.
+//!
+//! Platforms: the Linux implementations are in this file; every other
+//! operating system (macOS, Windows) is served by `sys/other.zig`, which uses
+//! std.Io where it can, libc (macOS) or kernel32 (Windows) otherwise, and
+//! reports `E.NOSYS` / `E.OPNOTSUPP` for facilities that cannot exist there
+//! (chroot, mknod, signals on Windows, ...). See docs/portability.md.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 
-const has_posix = builtin.os.tag != .windows and builtin.os.tag != .wasi;
+const is_linux = builtin.os.tag == .linux;
+const other = @import("sys/other.zig");
+
+/// Portable errno vocabulary (the Linux numbering and names). Other
+/// operating systems map their error codes onto it.
+pub const E = std.os.linux.E;
+
+/// Operating-system file handle: a descriptor (i32) on POSIX systems, a HANDLE
+/// on Windows. Always the type of `Io.File.handle`.
+pub const Handle = Io.File.Handle;
+
+/// Child process identifier as `std.process.Child.id`: a pid on POSIX
+/// systems, the process HANDLE on Windows.
+pub const Pid = std.process.Child.Id;
+
+/// True where signals, process groups and descriptor juggling (nohup, env
+/// signal options) exist.
+pub const has_jobcontrol = builtin.os.tag != .windows;
+
+/// The handle for descriptor number `fd` as a shell sees it (`test -t FD`):
+/// any descriptor on POSIX systems, only 0, 1 and 2 on Windows.
+pub fn handleFromFd(fd: i32) ?Handle {
+    if (comptime builtin.os.tag != .windows) return fd;
+    return switch (fd) {
+        0 => Io.File.stdin().handle,
+        1 => Io.File.stdout().handle,
+        2 => Io.File.stderr().handle,
+        else => null,
+    };
+}
+
+/// A handle that refers to nothing (-1 on POSIX systems).
+pub const invalid_handle: Handle = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
+
+/// Permissions value for creating a file or directory with POSIX `mode`. On
+/// Windows only the write bits matter (they select the read-only attribute).
+pub fn permissionsFromMode(mode: u32) Io.File.Permissions {
+    if (comptime builtin.os.tag == .windows) {
+        return if (mode & 0o222 == 0) @enumFromInt(1) else .default_file; // FILE_ATTRIBUTE_READONLY
+    }
+    return Io.File.Permissions.fromMode(@intCast(mode & 0o7777));
+}
+
+/// Signal numbers of the host (Linux numbering is used as the abstract
+/// numbering on Windows, where signals do not exist).
+pub const signo = if (builtin.os.tag.isDarwin() or builtin.os.tag.isBSD()) struct {
+    pub const HUP: u8 = 1;
+    pub const INT: u8 = 2;
+    pub const QUIT: u8 = 3;
+    pub const KILL: u8 = 9;
+    pub const PIPE: u8 = 13;
+    pub const ALRM: u8 = 14;
+    pub const TERM: u8 = 15;
+    pub const STOP: u8 = 17;
+    pub const TSTP: u8 = 18;
+    pub const CONT: u8 = 19;
+} else struct {
+    pub const HUP: u8 = 1;
+    pub const INT: u8 = 2;
+    pub const QUIT: u8 = 3;
+    pub const KILL: u8 = 9;
+    pub const PIPE: u8 = 13;
+    pub const ALRM: u8 = 14;
+    pub const TERM: u8 = 15;
+    pub const STOP: u8 = 19;
+    pub const TSTP: u8 = 20;
+    pub const CONT: u8 = 18;
+};
 
 pub const Signal = enum { int, pipe };
 
-fn posixSignal(sig: Signal) std.posix.SIG {
-    return switch (sig) {
+fn posixSignal(sg: Signal) std.posix.SIG {
+    return switch (sg) {
         .int => .INT,
         .pipe => .PIPE,
     };
 }
 
-fn setDisposition(sig: Signal, handler: ?std.posix.Sigaction.handler_fn) void {
-    if (comptime !has_posix) return;
+fn setDisposition(sg: Signal, ignore: bool) void {
+    if (comptime !is_linux) return other.setDisposition(sg == .pipe, ignore);
     const act: std.posix.Sigaction = .{
-        .handler = .{ .handler = handler },
+        .handler = .{ .handler = if (ignore) std.posix.SIG.IGN else std.posix.SIG.DFL },
         .mask = std.posix.sigemptyset(),
         .flags = 0,
     };
-    std.posix.sigaction(posixSignal(sig), &act, null);
+    std.posix.sigaction(posixSignal(sg), &act, null);
 }
 
 /// Ignore `sig` for the rest of the process.
-pub fn ignoreSignal(sig: Signal) void {
-    setDisposition(sig, std.posix.SIG.IGN);
+pub fn ignoreSignal(sg: Signal) void {
+    setDisposition(sg, true);
 }
 
 /// Restore the default action of `sig`.
-pub fn defaultSignal(sig: Signal) void {
-    setDisposition(sig, std.posix.SIG.DFL);
+pub fn defaultSignal(sg: Signal) void {
+    setDisposition(sg, false);
 }
 
 /// Zig's runtime ignores SIGPIPE, which would turn `cmd | head` into a write
@@ -62,13 +135,13 @@ pub fn umask() u16 {
         _ = std.os.linux.syscall1(.umask, old);
         return @intCast(old & 0o7777);
     }
-    return 0o022;
+    return other.umask();
 }
 
 /// Width in columns of the terminal on standard output, or null when it is
 /// not a terminal or the system cannot say.
 pub fn terminalColumns() ?usize {
-    if (comptime !has_posix) return null;
+    if (comptime !is_linux) return other.terminalColumns();
     var ws: std.posix.winsize = undefined;
     const rc = std.posix.system.ioctl(1, std.posix.T.IOCGWINSZ, @intFromPtr(&ws));
     return if (rc == 0 and ws.col > 0) ws.col else null;
@@ -77,7 +150,7 @@ pub fn terminalColumns() ?usize {
 /// True when process `pid` exists (kill(pid, 0)); EPERM counts as existing.
 /// Always true where there is no kill(2).
 pub fn processAlive(pid: i32) bool {
-    if (comptime !has_posix) return true;
+    if (comptime !is_linux) return other.processAlive(pid);
     std.posix.kill(pid, @fromBackingInt(@intCast(0))) catch |e| return e == error.PermissionDenied;
     return true;
 }
@@ -86,7 +159,7 @@ pub fn processAlive(pid: i32) bool {
 /// concurrent writers do not overwrite each other. Io.Dir.createFile has no
 /// append mode, and emulating it with a seek is not atomic.
 pub fn openAppend(path: []const u8) !Io.File {
-    if (comptime !has_posix) return error.Unsupported;
+    if (comptime !is_linux) return other.openAppendMode(path, 0o666);
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
         .ACCMODE = .WRONLY,
         .CREAT = true,
@@ -103,7 +176,7 @@ pub fn openAppend(path: []const u8) !Io.File {
 pub const Identity = struct { uid: u32, euid: u32, gid: u32, egid: u32 };
 
 pub fn identity() Identity {
-    if (comptime builtin.os.tag != .linux) return .{ .uid = 0, .euid = 0, .gid = 0, .egid = 0 };
+    if (comptime !is_linux) return other.identity();
     return .{
         .uid = std.os.linux.getuid(),
         .euid = std.os.linux.geteuid(),
@@ -114,7 +187,7 @@ pub fn identity() Identity {
 
 /// Supplementary group ids of the calling process, in kernel order.
 pub fn supplementaryGroups(buf: []u32) []u32 {
-    if (comptime builtin.os.tag != .linux) return buf[0..0];
+    if (comptime !is_linux) return other.supplementaryGroups(buf);
     const n = std.os.linux.getgroups(buf.len, @ptrCast(buf.ptr));
     if (@as(isize, @bitCast(n)) < 0) return buf[0..0];
     return buf[0..n];
@@ -123,41 +196,41 @@ pub fn supplementaryGroups(buf: []u32) []u32 {
 /// uname(2) result. The strings are read from the stored buffers through
 /// methods, so copying the struct never leaves a slice pointing at a dead frame.
 pub const Uname = struct {
-    raw: if (builtin.os.tag == .linux) std.os.linux.utsname else void,
+    raw: if (is_linux) std.os.linux.utsname else other.UnameBuf,
 
     pub fn sysname(u: *const Uname) []const u8 {
-        if (comptime builtin.os.tag != .linux) return "unknown";
+        if (comptime !is_linux) return u.raw.get(0);
         return std.mem.sliceTo(&u.raw.sysname, 0);
     }
     pub fn nodename(u: *const Uname) []const u8 {
-        if (comptime builtin.os.tag != .linux) return "unknown";
+        if (comptime !is_linux) return u.raw.get(1);
         return std.mem.sliceTo(&u.raw.nodename, 0);
     }
     pub fn release(u: *const Uname) []const u8 {
-        if (comptime builtin.os.tag != .linux) return "unknown";
+        if (comptime !is_linux) return u.raw.get(2);
         return std.mem.sliceTo(&u.raw.release, 0);
     }
     pub fn version(u: *const Uname) []const u8 {
-        if (comptime builtin.os.tag != .linux) return "unknown";
+        if (comptime !is_linux) return u.raw.get(3);
         return std.mem.sliceTo(&u.raw.version, 0);
     }
     pub fn machine(u: *const Uname) []const u8 {
-        if (comptime builtin.os.tag != .linux) return "unknown";
+        if (comptime !is_linux) return u.raw.get(4);
         return std.mem.sliceTo(&u.raw.machine, 0);
     }
 };
 
 pub fn uname() Uname {
     var u: Uname = undefined;
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime is_linux) {
         _ = std.os.linux.uname(&u.raw);
-    } else u.raw = {};
+    } else u.raw = other.uname();
     return u;
 }
 
 /// Number of CPUs the process may run on (sched_getaffinity), or null.
 pub fn affinityCpus() ?usize {
-    if (comptime builtin.os.tag != .linux) return null;
+    if (comptime !is_linux) return null;
     const set = std.posix.sched_getaffinity(0) catch return null;
     var n: usize = 0;
     for (set) |w| n += @popCount(w);
@@ -204,8 +277,8 @@ pub const FileStat = struct {
 
 /// stat (follow = true) or lstat of `path`; null if the call fails. `err`
 /// receives the error.
-pub fn fileStat(path: []const u8, follow: bool, err: *std.os.linux.E) ?FileStat {
-    if (comptime builtin.os.tag != .linux) return null;
+pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
+    if (comptime !is_linux) return other.fileStat(path, follow, err);
     var buf: [4097]u8 = undefined;
     if (path.len >= 4096) {
         err.* = .NAMETOOLONG;
@@ -253,7 +326,7 @@ fn statxToFileStat(sx: std.os.linux.Statx) FileStat {
 }
 
 /// strerror-style text for a Linux errno.
-pub fn errnoText(e: std.os.linux.E) []const u8 {
+pub fn errnoText(e: E) []const u8 {
     return switch (e) {
         .NOENT => "No such file or directory",
         .ACCES => "Permission denied",
@@ -299,12 +372,25 @@ pub fn errnoText(e: std.os.linux.E) []const u8 {
     };
 }
 
+/// Monotonic clock in nanoseconds (for elapsed-time measurements only).
+pub fn monotonicNs() i128 {
+    if (comptime !is_linux) return other.monotonicNs();
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+}
+
 // ----------------------------------------------------------------- signals
 // Signal names and dispositions by number, for env, nohup, timeout and kill.
 // std.Io has no signal API (see docs/decisions/0002-std-io-exceptions.md).
 
 /// Names of signals 1..31 on Linux (generic architectures), without "SIG".
-pub const signal_names = [_][]const u8{
+pub const signal_names = if (builtin.os.tag.isDarwin() or builtin.os.tag.isBSD()) [_][]const u8{
+    "HUP",  "INT",  "QUIT", "ILL",   "TRAP", "ABRT",  "EMT", "FPE",
+    "KILL", "BUS",  "SEGV", "SYS",   "PIPE", "ALRM",  "TERM", "URG",
+    "STOP", "TSTP", "CONT", "CHLD",  "TTIN", "TTOU",  "IO",  "XCPU",
+    "XFSZ", "VTALRM", "PROF", "WINCH", "INFO", "USR1", "USR2",
+} else [_][]const u8{
     "HUP",  "INT",  "QUIT", "ILL",   "TRAP", "ABRT",   "BUS", "FPE",
     "KILL", "USR1", "SEGV", "USR2",  "PIPE", "ALRM",   "TERM", "STKFLT",
     "CHLD", "CONT", "STOP", "TSTP",  "TTIN", "TTOU",   "URG", "XCPU",
@@ -315,7 +401,7 @@ pub const signal_names = [_][]const u8{
 /// or RTMIN+k / RTMAX-k for real-time signals. `buf` holds the formatted name.
 pub fn signalName(n: u8, buf: *[16]u8) ?[]const u8 {
     if (n >= 1 and n <= 31) return signal_names[n - 1];
-    if (n < 34 or n > 64) return null;
+    if (!is_linux or n < 34 or n > 64) return null;
     if (n == 34) return "RTMIN";
     if (n == 64) return "RTMAX";
     if (n <= 49) return std.fmt.bufPrint(buf, "RTMIN+{d}", .{n - 34}) catch null;
@@ -332,11 +418,11 @@ pub fn signalNumber(text: []const u8) ?u8 {
     }
     var name = text;
     if (name.len > 3 and std.ascii.eqlIgnoreCase(name[0..3], "SIG")) name = name[3..];
-    if (std.ascii.eqlIgnoreCase(name, "IO")) return 29;
-    if (std.ascii.eqlIgnoreCase(name, "CLD")) return 17;
+    if (is_linux and std.ascii.eqlIgnoreCase(name, "IO")) return 29;
+    if (std.ascii.eqlIgnoreCase(name, "CLD")) name = "CHLD";
     for (signal_names, 1..) |n, i| if (std.ascii.eqlIgnoreCase(n, name)) return @intCast(i);
     var n: u8 = 34;
-    while (n <= 64) : (n += 1) {
+    while (is_linux and n <= 64) : (n += 1) {
         var buf: [16]u8 = undefined;
         if (signalName(n, &buf)) |nm| if (std.ascii.eqlIgnoreCase(nm, name)) return n;
     }
@@ -348,7 +434,7 @@ pub const Disposition = enum { default, ignore, block };
 /// Set the action for signal `num` (1..64) in this process; it is inherited
 /// across exec, which is how `env` and `nohup` use it.
 pub fn setSignal(num: u8, d: Disposition) bool {
-    if (comptime builtin.os.tag != .linux) return false;
+    if (comptime !is_linux) return other.setSignal(num, d);
     const L = std.os.linux;
     const sig: L.SIG = @enumFromInt(num);
     // KILL and STOP can be blocked (silently ineffective) but not caught or ignored.
@@ -373,7 +459,7 @@ pub fn setSignal(num: u8, d: Disposition) bool {
 
 /// Unblock signal `num` (used before running a child that should see it).
 pub fn unblockSignal(num: u8) void {
-    if (comptime builtin.os.tag != .linux) return;
+    if (comptime !is_linux) return other.unblockSignal(num);
     const L = std.os.linux;
     var set = L.sigemptyset();
     L.sigaddset(&set, @enumFromInt(num));
@@ -382,8 +468,9 @@ pub fn unblockSignal(num: u8) void {
 
 /// Current action of signal `num`: .ignore, .default, or null when a handler
 /// is installed (or on error). Also reports whether it is blocked.
-pub fn signalState(num: u8) struct { disp: ?Disposition, blocked: bool } {
-    if (comptime builtin.os.tag != .linux) return .{ .disp = .default, .blocked = false };
+pub const SignalState = struct { disp: ?Disposition, blocked: bool };
+pub fn signalState(num: u8) SignalState {
+    if (comptime !is_linux) return other.signalState(num);
     const L = std.os.linux;
     const sig: L.SIG = @enumFromInt(num);
     if (num == 9 or num == 19) return .{ .disp = .default, .blocked = false };
@@ -397,11 +484,28 @@ pub fn signalState(num: u8) struct { disp: ?Disposition, blocked: bool } {
     return .{ .disp = d, .blocked = blocked };
 }
 
-/// kill(2): send `sig` to `pid` (negative pid = process group). Returns the
-/// errno on failure.
-pub fn sendSignal(pid: i32, sig: u8) ?std.os.linux.E {
-    if (comptime builtin.os.tag != .linux) return .NOSYS;
+/// kill(2): send `sig` to `pid`. Returns the errno on failure. On Windows the
+/// process handle is terminated for any signal but 0 (the only thing a signal
+/// can mean there).
+pub fn sendSignal(pid: Pid, sig: u8) ?E {
+    if (comptime !is_linux) return other.sendSignal(pid, sig);
     const rc = std.os.linux.kill(pid, @enumFromInt(sig));
+    const e = std.os.linux.errno(rc);
+    return if (e == .SUCCESS) null else e;
+}
+
+/// kill(0, sig): signal every process of our own process group.
+pub fn signalOwnGroup(sig: u8) ?E {
+    if (comptime !is_linux) return other.signalOwnGroup(sig);
+    const rc = std.os.linux.kill(0, @enumFromInt(sig));
+    const e = std.os.linux.errno(rc);
+    return if (e == .SUCCESS) null else e;
+}
+
+/// Send `sig` to this process itself.
+pub fn raiseSelf(sig: u8) ?E {
+    if (comptime !is_linux) return other.raiseSelf(sig);
+    const rc = std.os.linux.kill(@intCast(std.os.linux.getpid()), @enumFromInt(sig));
     const e = std.os.linux.errno(rc);
     return if (e == .SUCCESS) null else e;
 }
@@ -418,17 +522,20 @@ fn errOf(rc: usize) ?LX.E {
 }
 
 /// dup2(2).
-pub fn dup2(old: i32, new: i32) ?LX.E {
+pub fn dup2(old: Handle, new: i32) ?LX.E {
+    if (comptime !is_linux) return other.dup2(old, new);
     return errOf(LX.dup2(old, new));
 }
 
 /// True when descriptor `fd` is open (fcntl F_GETFD succeeds).
 pub fn fdOpen(fd: i32) bool {
+    if (comptime !is_linux) return other.fdOpen(fd);
     return LX.errno(LX.fcntl(fd, LX.F.GETFD, 0)) == .SUCCESS;
 }
 
 /// Open `path` for appending, creating it with `mode` if needed.
 pub fn openAppendMode(path: []const u8, mode: u32) !Io.File {
+    if (comptime !is_linux) return other.openAppendMode(path, mode);
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
         .ACCMODE = .WRONLY,
         .CREAT = true,
@@ -440,6 +547,7 @@ pub fn openAppendMode(path: []const u8, mode: u32) !Io.File {
 
 /// Scheduling priority ("niceness") of this process, -20..19.
 pub fn getNice() i32 {
+    if (comptime !is_linux) return other.getNice();
     // The raw syscall returns 20 - nice.
     const rc = LX.syscall2(.getpriority, 0, 0);
     return 20 - @as(i32, @intCast(@as(isize, @bitCast(rc))));
@@ -447,22 +555,26 @@ pub fn getNice() i32 {
 
 /// setpriority(PRIO_PROCESS, 0, nice).
 pub fn setNice(value: i32) ?LX.E {
+    if (comptime !is_linux) return other.setNice(value);
     return errOf(LX.syscall3(.setpriority, 0, 0, @bitCast(@as(isize, value))));
 }
 
 /// Make this process a process-group leader (setpgid(0, 0)).
 pub fn becomeGroupLeader() void {
+    if (comptime !is_linux) return other.becomeGroupLeader();
     _ = LX.syscall2(.setpgid, 0, 0);
 }
 
 /// chroot(2).
 pub fn chroot(path: [:0]const u8) ?LX.E {
+    if (comptime !is_linux) return other.chrootPath(path);
     return errOf(LX.chroot(path.ptr));
 }
 
 /// sync(2), fsync(2), fdatasync(2) and syncfs(2) on an open descriptor.
 pub const SyncKind = enum { all, data, file, fs };
-pub fn syncFile(fd: i32, kind: SyncKind) ?LX.E {
+pub fn syncFile(fd: Handle, kind: SyncKind) ?LX.E {
+    if (comptime !is_linux) return other.syncFile(fd, kind);
     return switch (kind) {
         .all => blk: {
             LX.sync();
@@ -477,6 +589,7 @@ pub fn syncFile(fd: i32, kind: SyncKind) ?LX.E {
 /// mknodat(2) relative to the working directory; `mode` includes the file
 /// type bits (S_IFIFO, S_IFCHR, ...) and `dev` is makedev(major, minor).
 pub fn mknod(path: [:0]const u8, mode: u32, dev: u64) ?LX.E {
+    if (comptime !is_linux) return other.mknodPath(path, mode, dev);
     return errOf(LX.mknodat(LX.AT.FDCWD, path.ptr, mode, @intCast(dev)));
 }
 
@@ -484,7 +597,8 @@ pub fn mknod(path: [:0]const u8, mode: u32, dev: u64) ?LX.E {
 pub const WaitResult = union(enum) { exited: u8, signaled: u8, none };
 
 /// waitpid(pid, WNOHANG or blocking).
-pub fn waitPid(pid: i32, block: bool) WaitResult {
+pub fn waitPid(pid: Pid, block: bool) WaitResult {
+    if (comptime !is_linux) return other.waitPid(pid, block);
     var status: i32 = 0;
     while (true) {
         const rc = LX.waitpid(pid, &status, if (block) 0 else LX.W.NOHANG);
@@ -507,11 +621,17 @@ pub fn waitPid(pid: i32, block: bool) WaitResult {
 pub const Watcher = struct {
     pidfd: i32,
     sigfd: i32,
+    /// State of the non-Linux implementations (sys/other.zig).
+    extra: if (is_linux) void else other.WatchState = if (is_linux) {} else undefined,
 
     pub const Event = union(enum) { child_exited, signal: u8, timeout, failed };
 
     /// Block `signals` and open descriptors for `pid` and for those signals.
-    pub fn init(pid: i32, signals: []const u8) ?Watcher {
+    pub fn init(pid: Pid, signals: []const u8) ?Watcher {
+        if (comptime !is_linux) {
+            const st = other.watchInit(pid, signals) orelse return null;
+            return .{ .pidfd = -1, .sigfd = -1, .extra = st };
+        }
         var set = LX.sigemptyset();
         for (signals) |s| LX.sigaddset(&set, @enumFromInt(s));
         _ = LX.sigprocmask(LX.SIG.BLOCK, &set, null);
@@ -519,11 +639,12 @@ pub const Watcher = struct {
         if (LX.errno(sfd) != .SUCCESS) return null;
         const pfd = LX.syscall2(.pidfd_open, @intCast(pid), 0);
         if (LX.errno(pfd) != .SUCCESS) return null;
-        return .{ .pidfd = @intCast(pfd), .sigfd = @intCast(sfd) };
+        return .{ .pidfd = @intCast(pfd), .sigfd = @intCast(sfd), .extra = {} };
     }
 
     /// Wait up to `timeout_ns` (null = forever).
     pub fn wait(w: Watcher, timeout_ns: ?u64) Event {
+        if (comptime !is_linux) return other.watchWait(w.extra, timeout_ns);
         var fds = [_]LX.pollfd{
             .{ .fd = w.pidfd, .events = LX.POLL.IN, .revents = 0 },
             .{ .fd = w.sigfd, .events = LX.POLL.IN, .revents = 0 },
@@ -552,6 +673,7 @@ pub const Watcher = struct {
     }
 
     pub fn deinit(w: Watcher) void {
+        if (comptime !is_linux) return other.watchDeinit(w.extra);
         _ = LX.close(w.pidfd);
         _ = LX.close(w.sigfd);
     }
@@ -561,6 +683,7 @@ pub const Watcher = struct {
 
 /// clock_settime(CLOCK_REALTIME); needs CAP_SYS_TIME.
 pub fn setRealtime(sec: i64, nsec: u32) ?LX.E {
+    if (comptime !is_linux) return other.setRealtime(sec, nsec);
     const ts: LX.timespec = .{ .sec = sec, .nsec = nsec };
     return errOf(LX.clock_settime(.REALTIME, &ts));
 }
@@ -577,7 +700,8 @@ pub const TimeSpec = struct {
 
 /// utimensat(2) on `path` (cwd-relative), or futimens on `fd` when path is
 /// null. `times` null means "now" for both. Returns the errno on failure.
-pub fn setTimes(path: ?[]const u8, fd: i32, times: ?[2]TimeSpec, nofollow: bool) ?LX.E {
+pub fn setTimes(path: ?[]const u8, fd: Handle, times: ?[2]TimeSpec, nofollow: bool) ?LX.E {
+    if (comptime !is_linux) return other.setTimes(path, fd, times, nofollow);
     var ts: [2]LX.timespec = undefined;
     var tp: ?*[2]LX.timespec = null;
     if (times) |t| {
@@ -598,6 +722,7 @@ pub fn setTimes(path: ?[]const u8, fd: i32, times: ?[2]TimeSpec, nofollow: bool)
 /// fchownat(2) on `path` (cwd-relative); uid or gid == maxInt(u32) leaves
 /// that id unchanged. `nofollow` changes a symbolic link itself.
 pub fn chownAt(path: []const u8, uid: u32, gid: u32, nofollow: bool) ?LX.E {
+    if (comptime !is_linux) return other.chownAt(path, uid, gid, nofollow);
     var buf: [4097]u8 = undefined;
     if (path.len >= 4096) return .NAMETOOLONG;
     @memcpy(buf[0..path.len], path);
@@ -623,6 +748,7 @@ pub const StatFs = struct {
 
 /// statfs(2) of `path`; `err` receives the errno on failure.
 pub fn statfs(path: []const u8, err: *LX.E) ?StatFs {
+    if (comptime !is_linux) return other.statfs(path, err);
     var buf: [4097]u8 = undefined;
     if (path.len >= 4096) {
         err.* = .NAMETOOLONG;
@@ -649,6 +775,7 @@ pub fn statfs(path: []const u8, err: *LX.E) ?StatFs {
 
 /// getxattr(2)/lgetxattr(2) into `buf`; returns the value length.
 pub fn getXattr(path: []const u8, name: [:0]const u8, follow: bool, buf: []u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.getXattr(path, name, follow, buf, err);
     var pbuf: [4097]u8 = undefined;
     if (path.len >= 4096) {
         err.* = .NAMETOOLONG;
@@ -692,7 +819,8 @@ pub const O = struct {
 };
 
 /// openat(AT_FDCWD, path, flags | O_CLOEXEC, mode).
-pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?i32 {
+pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
+    if (comptime !is_linux) return other.openFd(path, flags, mode, err);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse {
         err.* = .NAMETOOLONG;
@@ -713,7 +841,7 @@ pub const RawEntry = struct { name: []u8, dtype: u8 };
 /// All entries of the directory `path` in readdir order, including "." and
 /// ".." (std.Io hides them). Names are allocated with `gpa`.
 pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEntry {
-    if (comptime builtin.os.tag != .linux) return null;
+    if (comptime !is_linux) return other.readDirRaw(gpa, path, err);
     const fd = openFd(path, O.RDONLY | O.DIRECTORY, 0, err) orelse return null;
     defer _ = closeFd(fd);
     var list: std.ArrayList(RawEntry) = .empty;
@@ -748,12 +876,14 @@ pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEn
     return list.toOwnedSlice(gpa) catch null;
 }
 
-pub fn closeFd(fd: i32) ?LX.E {
+pub fn closeFd(fd: Handle) ?LX.E {
+    if (comptime !is_linux) return other.closeFd(fd);
     return errOf(LX.close(fd));
 }
 
 /// read(2); returns the byte count (0 at end of file).
-pub fn readFd(fd: i32, buf: []u8, err: *LX.E) ?usize {
+pub fn readFd(fd: Handle, buf: []u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.readFd(fd, buf, err);
     while (true) {
         const rc = LX.read(fd, buf.ptr, buf.len);
         const e = LX.errno(rc);
@@ -766,8 +896,43 @@ pub fn readFd(fd: i32, buf: []u8, err: *LX.E) ?usize {
     }
 }
 
+/// One write(2); returns the byte count written.
+pub fn writeFd(fd: Handle, bytes: []const u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.writeFd(fd, bytes, err);
+    while (true) {
+        const rc = LX.write(fd, bytes.ptr, bytes.len);
+        const e = LX.errno(rc);
+        if (e == .INTR) continue;
+        if (e != .SUCCESS) {
+            err.* = e;
+            return null;
+        }
+        return rc;
+    }
+}
+
+/// fcntl(F_GETFL): the file status flags (O_APPEND, O_DIRECT, ...). Systems
+/// without them report 0.
+pub fn getStatusFlags(fd: Handle, err: *LX.E) ?usize {
+    if (comptime !is_linux) return 0;
+    const rc = LX.fcntl(fd, LX.F.GETFL, 0);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return rc;
+}
+
+/// fcntl(F_SETFL).
+pub fn setStatusFlags(fd: Handle, flags: usize) ?LX.E {
+    if (comptime !is_linux) return null;
+    return errOf(LX.fcntl(fd, LX.F.SETFL, flags));
+}
+
 /// Write all of `bytes`.
-pub fn writeAllFd(fd: i32, bytes: []const u8) ?LX.E {
+pub fn writeAllFd(fd: Handle, bytes: []const u8) ?LX.E {
+    if (comptime !is_linux) return other.writeAllFd(fd, bytes);
     var off: usize = 0;
     while (off < bytes.len) {
         const rc = LX.write(fd, bytes.ptr + off, bytes.len - off);
@@ -780,6 +945,7 @@ pub fn writeAllFd(fd: i32, bytes: []const u8) ?LX.E {
 }
 
 pub fn mkdirPath(path: []const u8, mode: u32) ?LX.E {
+    if (comptime !is_linux) return other.mkdirPath(path, mode);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
     return errOf(LX.mkdirat(LX.AT.FDCWD, p, mode));
@@ -787,6 +953,7 @@ pub fn mkdirPath(path: []const u8, mode: u32) ?LX.E {
 
 /// unlinkat(AT_FDCWD, path, removedir ? AT_REMOVEDIR : 0).
 pub fn unlinkPath(path: []const u8, removedir: bool) ?LX.E {
+    if (comptime !is_linux) return other.unlinkPath(path, removedir);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
     return errOf(LX.unlinkat(LX.AT.FDCWD, p, if (removedir) LX.AT.REMOVEDIR else 0));
@@ -796,6 +963,7 @@ pub const RENAME_NOREPLACE: u32 = 1;
 pub const RENAME_EXCHANGE: u32 = 2;
 
 pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?LX.E {
+    if (comptime !is_linux) return other.renamePath(old, new, flags);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
@@ -805,6 +973,7 @@ pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?LX.E {
 
 /// linkat(2); `follow` makes a hard link to the target of a symlink.
 pub fn linkPath(old: []const u8, new: []const u8, follow: bool) ?LX.E {
+    if (comptime !is_linux) return other.linkPath(old, new, follow);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
@@ -813,6 +982,7 @@ pub fn linkPath(old: []const u8, new: []const u8, follow: bool) ?LX.E {
 }
 
 pub fn symlinkPath(target: []const u8, path: []const u8) ?LX.E {
+    if (comptime !is_linux) return other.symlinkPath(target, path);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, target) orelse return .NAMETOOLONG;
@@ -821,6 +991,7 @@ pub fn symlinkPath(target: []const u8, path: []const u8) ?LX.E {
 }
 
 pub fn readlinkPath(path: []const u8, buf: []u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.readlinkPath(path, buf, err);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse {
         err.* = .NAMETOOLONG;
@@ -838,6 +1009,7 @@ pub fn readlinkPath(path: []const u8, buf: []u8, err: *LX.E) ?usize {
 /// fchmodat(2); `nofollow` is honoured by retrying through /proc where the
 /// kernel lacks AT_SYMLINK_NOFOLLOW support (symlinks are then left alone).
 pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?LX.E {
+    if (comptime !is_linux) return other.chmodPath(path, mode, nofollow);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
     if (nofollow) {
@@ -850,26 +1022,31 @@ pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?LX.E {
     return errOf(LX.syscall4(.fchmodat, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), mode, 0));
 }
 
-pub fn fchmodFd(fd: i32, mode: u32) ?LX.E {
+pub fn fchmodFd(fd: Handle, mode: u32) ?LX.E {
+    if (comptime !is_linux) return other.fchmodFd(fd, mode);
     return errOf(LX.fchmod(fd, mode));
 }
 
-pub fn fchownFd(fd: i32, uid: u32, gid: u32) ?LX.E {
+pub fn fchownFd(fd: Handle, uid: u32, gid: u32) ?LX.E {
+    if (comptime !is_linux) return other.fchownFd(fd, uid, gid);
     return errOf(LX.fchown(fd, uid, gid));
 }
 
-pub fn ftruncateFd(fd: i32, len: u64) ?LX.E {
+pub fn ftruncateFd(fd: Handle, len: u64) ?LX.E {
+    if (comptime !is_linux) return other.ftruncateFd(fd, len);
     return errOf(LX.ftruncate(fd, @intCast(len)));
 }
 
 pub fn accessPath(path: []const u8, mode: u32) ?LX.E {
+    if (comptime !is_linux) return other.accessPath(path, mode);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
     return errOf(LX.syscall4(.faccessat2, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), mode, 0x200));
 }
 
 /// lseek(2): whence 0/1/2 or SEEK_DATA 3 / SEEK_HOLE 4.
-pub fn seekFd(fd: i32, off: i64, whence: u32, err: *LX.E) ?i64 {
+pub fn seekFd(fd: Handle, off: i64, whence: u32, err: *LX.E) ?i64 {
+    if (comptime !is_linux) return other.seekFd(fd, off, whence, err);
     const rc = LX.syscall3(.lseek, @bitCast(@as(isize, fd)), @bitCast(off), whence);
     const e = LX.errno(rc);
     if (e != .SUCCESS) {
@@ -880,7 +1057,8 @@ pub fn seekFd(fd: i32, off: i64, whence: u32, err: *LX.E) ?i64 {
 }
 
 /// statx(2) on an open descriptor.
-pub fn fstatFd(fd: i32, err: *LX.E) ?FileStat {
+pub fn fstatFd(fd: Handle, err: *LX.E) ?FileStat {
+    if (comptime !is_linux) return other.fstatFd(fd, err);
     var sx: LX.Statx = undefined;
     const rc = LX.statx(fd, "", LX.AT.EMPTY_PATH, .{ .TYPE = true, .MODE = true, .NLINK = true, .UID = true, .GID = true, .ATIME = true, .MTIME = true, .CTIME = true, .INO = true, .SIZE = true, .BLOCKS = true, .BTIME = true }, &sx);
     const e = LX.errno(rc);
@@ -898,16 +1076,19 @@ pub fn currentUmask() u32 {
 
 /// glibc makedev().
 pub fn makedev(major: u64, minor: u64) u64 {
+    if (comptime !is_linux) return other.makedev(major, minor);
     return ((major & 0xfff) << 8) | (minor & 0xff) | ((minor & ~@as(u64, 0xff)) << 12) | ((major & ~@as(u64, 0xfff)) << 32);
 }
 
 /// umask(2): set the mask and return the previous one.
 pub fn setUmask(mask: u32) u32 {
+    if (comptime !is_linux) return other.setUmask(mask);
     return @intCast(std.os.linux.syscall1(.umask, mask) & 0o7777);
 }
 
 /// Parent process id.
 pub fn parentPid() i32 {
+    if (comptime !is_linux) return other.parentPid();
     return @intCast(std.os.linux.getppid());
 }
 
@@ -918,17 +1099,21 @@ pub fn parentPid() i32 {
 // (flush, reset the colour, then deliver the signal with its default action).
 // std.Io has no signal API (decision 0002).
 
-const catch_signals = [_]u8{ 1, 2, 13, 3, 15, 14, 20 }; // HUP INT PIPE QUIT TERM ALRM TSTP
+const catch_signals = [_]u8{ 1, 2, 13, 3, 15, 14, 20 }; // HUP INT PIPE QUIT TERM ALRM TSTP (Linux numbers)
 var caught_signal: std.atomic.Value(u8) = .init(0);
-var saved_actions: [catch_signals.len]if (builtin.os.tag == .linux) std.os.linux.Sigaction else u8 = undefined;
+var saved_actions: [catch_signals.len]std.os.linux.Sigaction = undefined;
 var saved_valid: [catch_signals.len]bool = @splat(false);
 
-fn catchHandler(sig: if (builtin.os.tag == .linux) std.os.linux.SIG else u8) callconv(.c) void {
-    caught_signal.store(@intCast(@intFromEnum(sig)), .release);
+pub fn recordCaught(n: u8) void {
+    caught_signal.store(n, .release);
+}
+
+fn catchHandler(sg: std.os.linux.SIG) callconv(.c) void {
+    caught_signal.store(@intCast(@intFromEnum(sg)), .release);
 }
 
 fn catchOne(i: usize) void {
-    if (comptime builtin.os.tag != .linux) return;
+    if (comptime !is_linux) return;
     const L = std.os.linux;
     const sig: L.SIG = @enumFromInt(catch_signals[i]);
     var old: L.Sigaction = undefined;
@@ -949,13 +1134,13 @@ fn catchOne(i: usize) void {
 /// Catch SIGHUP, SIGINT, SIGPIPE, SIGQUIT, SIGTERM, SIGALRM and SIGTSTP unless
 /// they are ignored; a caught signal is recorded for `takeCaughtSignal`.
 pub fn catchSignals() void {
-    if (comptime builtin.os.tag != .linux) return;
+    if (comptime !is_linux) return other.catchSignals();
     for (0..catch_signals.len) |i| catchOne(i);
 }
 
 /// Put back the actions that were in place before `catchSignals`.
 pub fn restoreCaughtSignals() void {
-    if (comptime builtin.os.tag != .linux) return;
+    if (comptime !is_linux) return other.restoreCaughtSignals();
     const L = std.os.linux;
     for (0..catch_signals.len) |i| {
         if (!saved_valid[i]) continue;
@@ -974,7 +1159,7 @@ pub fn takeCaughtSignal() ?u8 {
 /// default action runs (SIGTSTP stops the process with SIGSTOP and the handler
 /// is installed again when it continues).
 pub fn deliverCaughtSignal(sig: u8) void {
-    if (comptime builtin.os.tag != .linux) return;
+    if (comptime !is_linux) return other.deliverCaughtSignal(sig);
     const L = std.os.linux;
     const self: i32 = @intCast(L.getpid());
     if (sig == 20) {
