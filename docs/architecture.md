@@ -77,8 +77,9 @@ identically in both modes, and the same unit and shell tests cover both
 - `@import` needs string literals, so adding a command means: create
   `src/commands/<name>.zig`, then add it to both `all` and `modules` in
   `src/commands.zig`.
-- Nothing in `build.zig` depends on the host OS; `-Dtarget=x86_64-windows`
-  builds (verified for the three current commands; not run on Windows).
+- Nothing in `build.zig` depends on the host OS; every command and the library
+  build for Linux, macOS and Windows targets (see `docs/portability.md`).
+  OS facilities live only in `src/sys.zig` and `src/sys/other.zig`.
 
 ## Conventions for command frontends
 
@@ -120,7 +121,8 @@ csplit, expr, ptx, locate and updatedb. Zig-native; no C FFI.
 
 ## Known gaps
 
-- No CI; Windows and macOS are unverified.
+- No CI; macOS is compile-checked only and Windows runs only the smoke test in
+  `test/test_windows_vm.sh`.
 - Only the minimal `--help`/`--version` text exists; the version string is
   `0.0.0-dev`.
 
