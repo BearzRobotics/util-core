@@ -83,8 +83,54 @@ fn groupEnd(b: []const u8, i: usize) ?usize {
     return null;
 }
 
-pub fn analyze(gpa: std.mem.Allocator, whole_body: []const u8, o: Opts) std.mem.Allocator.Error!Info {
-    var body = whole_body;
+/// Does `inner` (the inside of a group) have a `|` outside nested groups?
+fn hasTopAlt(inner: []const u8) bool {
+    var j: usize = 0;
+    while (j < inner.len) {
+        switch (inner[j]) {
+            '\\' => j += 2,
+            '[' => j = classEnd(inner, j) orelse return true,
+            '(' => j = groupEnd(inner, j) orelse return true,
+            '|' => return true,
+            else => j += 1,
+        }
+    }
+    return false;
+}
+
+/// `body` with every `(?:X)` that holds no alternation and carries no
+/// quantifier replaced by X (posixre writes a UTF-8 literal as such a group).
+fn flatten(gpa: std.mem.Allocator, body: []const u8, out: *std.ArrayList(u8)) std.mem.Allocator.Error!void {
+    var i: usize = 0;
+    while (i < body.len) {
+        const c = body[i];
+        if (c == '\\' and i + 1 < body.len) {
+            try out.appendSlice(gpa, body[i .. i + 2]);
+            i += 2;
+        } else if (c == '[') {
+            const e = classEnd(body, i) orelse body.len;
+            try out.appendSlice(gpa, body[i..e]);
+            i = e;
+        } else if (c == '(' and std.mem.startsWith(u8, body[i..], "(?:")) {
+            const e = groupEnd(body, i) orelse body.len;
+            const inner = if (e <= body.len and e >= i + 4) body[i + 3 .. e - 1] else "";
+            const quantified = e < body.len and std.mem.indexOfScalar(u8, "*+?{", body[e]) != null;
+            if (e <= body.len and e >= i + 4 and !quantified and !hasTopAlt(inner)) {
+                try flatten(gpa, inner, out);
+            } else try out.appendSlice(gpa, body[i..e]);
+            i = e;
+        } else {
+            try out.append(gpa, c);
+            i += 1;
+        }
+    }
+}
+
+pub fn analyze(gpa: std.mem.Allocator, raw_body: []const u8, o: Opts) std.mem.Allocator.Error!Info {
+    var flat: std.ArrayList(u8) = .empty;
+    defer flat.deinit(gpa);
+    try flatten(gpa, raw_body, &flat);
+    var body: []const u8 = flat.items;
     var a_start = false;
     var a_end = false;
     if (std.mem.startsWith(u8, body, "\\A")) {
@@ -246,7 +292,9 @@ test "analyze finds required literals" {
     try expectInfo("ab+c", o, "ab", false, true);
     try expectInfo("abc*d", o, "ab", false, true);
     try expectInfo("(two|the)s?", o, "", false, true);
-    try expectInfo("x(?:ab)y", o, "x", false, true);
+    try expectInfo("x(?:ab)y", o, "xaby", true, true);
+    try expectInfo("x(?:ab)+y", o, "x", false, true);
+    try expectInfo("(?:\\xc3\\xa9)", o, "\xc3\xa9", true, true);
     try expectInfo("\\Athe", o, "the", true, false);
     try expectInfo("e$", o, "e", true, false);
     try expectInfo("\\Ae\\z", o, "e", true, false);
