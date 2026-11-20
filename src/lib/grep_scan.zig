@@ -183,6 +183,9 @@ pub fn analyze(gpa: std.mem.Allocator, raw_body: []const u8, o: Opts) std.mem.Al
     if (std.mem.startsWith(u8, body, "\\A")) {
         body = body[2..];
         a_start = true;
+    }else if (std.mem.startsWith(u8, body, "^")) {
+        body = body[1..];
+        a_start = true;
     }
     if (std.mem.endsWith(u8, body, "\\z")) {
         body = body[0 .. body.len - 2];

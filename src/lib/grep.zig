@@ -1216,6 +1216,11 @@ const G = struct {
     file_mem: ?[]const u8 = null,
     /// Read buffer, kept across files.
     buf: std.ArrayList(u8) = .empty,
+    /// Stat of the file about to be opened by grepOpened (saves an fstat).
+    pre_stat: ?sys.FileStat = null,
+    /// Size of the regular file being read: reaching it ends the read loop
+    /// without a final read that returns 0.
+    cur_size: ?u64 = null,
 };
 
 const Stats = struct {
@@ -1847,6 +1852,8 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
     const inv_count = o.invert and g.out_quiet and !g.done_on_match and o.max_count == std.math.maxInt(i64) and !(o.count_matches or o.stats or o.json);
     const can_skip = (inv_count or (!o.invert and o.before <= 0)) and g.m.bool_nodes.len == 0 and g.m.pre_kind != .none;
     var known_match = false;
+    var total_read: u64 = 0;
+    var size_reached = false;
     while (!stopped) {
         known_match = false;
         if (can_skip and !extra_nul_split and g.outleft != 0 and g.pending <= 0 and pos < buf.items.len and g.m.pre_kind != .none) skip: {
@@ -1896,6 +1903,10 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                 break;
             }
             // read more
+            if (size_reached) {
+                eof = true;
+                continue;
+            }
             if (pos > 0 and pos == buf.items.len) {
                 buf.clearRetainingCapacity();
                 pos = 0;
@@ -1920,6 +1931,10 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                 eof = true;
                 continue;
             }
+            total_read += n;
+            if (g.file_mem == null) if (g.cur_size) |sz| {
+                if (total_read >= sz) size_reached = true;
+            };
             if (!g.binary and o.binary_files != .text and !o.null_data) {
                 if (vec.indexOf(room[0..n], 0, 0) != null) {
                     g.binary = true;
@@ -2054,12 +2069,16 @@ fn grepOpened(g: *G, fd: sys.Handle, name: []const u8, is_stdin: bool, seekable_
     {
         var serr: LX.E = .SUCCESS;
         g.offset_width = 20;
-        if (sys.fstatFd(fd, &serr)) |fst| {
+        g.cur_size = null;
+        const fst_opt = g.pre_stat orelse sys.fstatFd(fd, &serr);
+        g.pre_stat = null;
+        if (fst_opt) |fst| {
             if (fst.isReg()) {
                 var w: usize = 1;
                 var sz = fst.size;
                 while (sz >= 10) : (sz /= 10) w += 1;
                 g.offset_width = w;
+                if (fst.size > 0) g.cur_size = @intCast(fst.size);
             }
         }
     }
@@ -2272,6 +2291,7 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
             },
         }
     }
+    g.pre_stat = st;
     return try grepOpened(g, fd, display, false, false);
 }
 
@@ -2308,14 +2328,17 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
     };
     var dir = dir_h;
     var names: std.ArrayList([]u8) = .empty;
+    var kinds: std.ArrayList(Io.File.Kind) = .empty;
     defer {
         for (names.items) |n| g.gpa.free(n);
         names.deinit(g.gpa);
+        kinds.deinit(g.gpa);
     }
     var it = dir.iterate();
     while (it.next(g.env.io) catch null) |entry| {
         const dup = try g.gpa.dupe(u8, entry.name);
         try names.append(g.gpa, dup);
+        try kinds.append(g.gpa, entry.kind);
     }
     dir.close(g.env.io);
     var pbase = path;
@@ -2356,7 +2379,7 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
         std.mem.sort(SortEnt, ents.items, g, sortEntLess);
         for (ents.items, 0..) |e, i| names.items[i] = e.name;
     }
-    for (names.items) |n| {
+    for (names.items, 0..) |n, name_idx| {
         if (!o.search_hidden and n.len > 0 and n[0] == '.') continue;
         const child = if (implicit)
             std.fmt.allocPrint(g.gpa, "{s}", .{n}) catch return error.OutOfMemory
@@ -2369,8 +2392,12 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
             try std.fmt.allocPrint(g.gpa, "{s}/{s}", .{ dbase, n });
         defer g.gpa.free(disp);
         var err: LX.E = .SUCCESS;
-        const lst = sys.fileStat(child, false, &err);
-        var is_dir = false;
+        // The directory entry already says "regular file" or "directory";
+        // only other kinds (symlinks, unknown) need an lstat. (Sorting
+        // permutes `names`, so the kinds are not used then.)
+        const known_kind: Io.File.Kind = if (o.sort == .none) kinds.items[name_idx] else .unknown;
+        const lst = if (known_kind == .file or known_kind == .directory) null else sys.fileStat(child, false, &err);
+        var is_dir = known_kind == .directory;
         if (lst) |l| {
             if (l.isLink() and !o.deref_recursive) {
                 if (o.symlinks == .gnu) continue;
