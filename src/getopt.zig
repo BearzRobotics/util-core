@@ -56,6 +56,8 @@ pub const Parser = struct {
     ended: bool = false,
     /// Omit the "Try '--help'" line (sed prints its whole usage instead).
     no_try: bool = false,
+    /// Word the "Try" line as its own diagnostic ("prog: Try ..."), as the diffutils do.
+    try_prefix: bool = false,
     /// Long options with an id at or above this value (non-zero) are
     /// extensions: an abbreviation that also fits a lower-id option means that
     /// option, as it does in GNU, never "ambiguous".
@@ -89,7 +91,7 @@ pub const Parser = struct {
             p.last_diag = std.fmt.bufPrint(&p.diag_buf, fmt, args) catch "";
             return;
         }
-        if (p.no_try) cli.warn(p.ctx, fmt, args) else cli.warn(p.ctx, fmt ++ "\nTry '{s} --help' for more information.", args ++ .{p.ctx.name});
+        if (p.no_try) cli.warn(p.ctx, fmt, args) else if (p.try_prefix) cli.warn(p.ctx, fmt ++ "\n{s}: Try '{s} --help' for more information.", args ++ .{ p.ctx.name, p.ctx.name }) else cli.warn(p.ctx, fmt ++ "\nTry '{s} --help' for more information.", args ++ .{p.ctx.name});
     }
 
     fn pushOperand(p: *Parser, s: []const u8) void {

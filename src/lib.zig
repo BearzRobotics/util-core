@@ -57,6 +57,7 @@ pub const bracket = @import("lib/bracket.zig");
 pub const cat = @import("lib/cat.zig");
 pub const chroot = @import("lib/chroot.zig");
 pub const cksum = @import("lib/cksum.zig");
+pub const cmp = @import("lib/cmp.zig");
 pub const comm = @import("lib/comm.zig");
 pub const common = @import("lib/common.zig");
 pub const cp = @import("lib/cp.zig");
