@@ -14,6 +14,10 @@ tsort sort md5sum sha1sum sha224sum sha256sum sha384sum sha512sum b2sum cksum
 sum base64 base32 basenc factor join arch nproc whoami logname hostid
 users unlink link readlink realpath truncate ln rm test [ printf expr env nice nohup timeout sync stdbuf chroot pathchk mkfifo mknod mktemp split od fmt shuf numfmt pr ptx csplit date touch stat ls dir vdir du df cp mv install dd shred xargs sed grep find tree locate updatedb
 
+## Diffutils (added 2026-11-20)
+
+cmp diff diff3 sdiff: libraries `util_core.cmp`, `diffcore` (shared comparison engine), `diff`, `diff3`, `sdiff`; differential suites `test/test_cmp.sh`, `test_diff.sh`, `test_diff3.sh`, `test_sdiff.sh` and the `--json` suites `test_*_json.sh`. Gaps: diff -l (pagination through pr), --diff-program, locale collation. See the compatibility records.
+
 ## Not yet implemented
 
 - **Moved to util-unix (removed from this project):** chmod, id, groups, tty, uname, chown, chgrp,

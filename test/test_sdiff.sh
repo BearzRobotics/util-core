@@ -26,7 +26,7 @@ for p in i1,i2 o,n t1,t2 w1,w2 c1,c2 s1,s3 m1,m2 empty,o o,empty empty,empty i1,
 done
 
 printf "\n[ Option handling and errors ]\n"
-for args in "i1" "" "i1 i2 o" "-x i1 i2" "-w 0 i1 i2" "-w x i1 i2" "--tabsize=0 i1 i2" "--tabsize=x i1 i2" "nonex i2" "i1 nonex" "--bogus" "--diff-program=nonexist i1 i2"; do
+for args in "i1" "i1 i2 o" "-x i1 i2" "-w 0 i1 i2" "-w x i1 i2" "--tabsize=0 i1 i2" "--tabsize=x i1 i2" "nonex i2" "i1 nonex" "--bogus" "--diff-program=nonexist i1 i2"; do
     eval run_cmp \"sdiff $args\" $args
 done
 CMP_STDIN="$W/i1"

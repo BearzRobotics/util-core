@@ -655,8 +655,13 @@ pub fn compare(gpa: Allocator, a: Lines, b: Lines, flags: Flags) ![]Edit {
     defer gpa.free(disc0);
     const disc1 = try gpa.alloc(u8, m1);
     defer gpa.free(disc1);
-    discardConfusing(gpa, eq0, cnt1, disc0);
-    discardConfusing(gpa, eq1, cnt0, disc1);
+    if (flags.minimal) {
+        @memset(disc0, 0);
+        @memset(disc1, 0);
+    } else {
+        discardConfusing(gpa, eq0, cnt1, disc0);
+        discardConfusing(gpa, eq1, cnt0, disc1);
+    }
 
     const undisc0 = try gpa.alloc(u32, m0);
     defer gpa.free(undisc0);

@@ -24,6 +24,13 @@ fn usage(ctx: cli.Context, comptime fmt: []const u8, args: anytype) u8 {
     return 2;
 }
 
+/// sdiff runs diff, so these option errors are diff's.
+fn diffUsage(ctx: cli.Context, comptime fmt: []const u8, args: anytype) u8 {
+    cli.writeStderr(ctx, "diff: " ++ fmt, args);
+    cli.writeStderr(ctx, "diff: Try 'diff --help' for more information.", .{});
+    return 2;
+}
+
 fn parseCount(text: []const u8) ?usize {
     if (text.len == 0) return null;
     var v: usize = 0;
@@ -150,7 +157,7 @@ pub fn main(ctx: cli.Context) u8 {
             'a' => text = true,
             'w' => {
                 const v = parseCount(a.arg.?) orelse 0;
-                if (v == 0) return usage(ctx, "invalid width '{s}'", .{a.arg.?});
+                if (v == 0) return diffUsage(ctx, "invalid width '{s}'", .{a.arg.?});
                 o.diff.width = v;
             },
             'l' => o.diff.left_column = true,
@@ -158,14 +165,14 @@ pub fn main(ctx: cli.Context) u8 {
             't' => o.diff.expand_tabs = true,
             O.tabsize => {
                 const v = parseCount(a.arg.?) orelse 0;
-                if (v == 0) return usage(ctx, "invalid tabsize '{s}'", .{a.arg.?});
+                if (v == 0) return diffUsage(ctx, "invalid tabsize '{s}'", .{a.arg.?});
                 o.diff.tab_size = v;
             },
             'd' => o.diff.flags.minimal = true,
             'H' => o.diff.flags.speed_large_files = true,
             O.diff_program => {
                 if (!std.mem.eql(u8, a.arg.?, "diff")) {
-                    cli.warn(ctx, "subsidiary program '{s}' is not supported; the built-in comparison is always used", .{a.arg.?});
+                    cli.warn(ctx, "{s}: No such file or directory", .{a.arg.?});
                     return 2;
                 }
             },
@@ -191,7 +198,7 @@ pub fn main(ctx: cli.Context) u8 {
     defer for (data) |m| gpa.free(m);
     for (0..2) |i| {
         data[i] = readAll(ctx, ops[i]) catch |e| {
-            cli.warn(ctx, "{s}: {s}", .{ ops[i], cli.errText(e) });
+            cli.writeStderr(ctx, "diff: {s}: {s}", .{ ops[i], cli.errText(e) });
             return 2;
         };
     }

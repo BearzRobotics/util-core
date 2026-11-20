@@ -159,6 +159,10 @@ fn writeLine(w: *Io.Writer, raw: []const u8) Io.Writer.Error!void {
     if (raw.len == 0 or raw[raw.len - 1] != '\n') try w.writeByte('\n');
 }
 
+fn hdr(buf: *std.ArrayList(u8), gpa: std.mem.Allocator, mark: []const u8, name: []const u8, start: usize, count: usize) !void {
+    if (count <= 1) try buf.print(gpa, "{s} {s} {d}\n", .{ mark, name, start + 1 }) else try buf.print(gpa, "{s} {s} {d},{d}\n", .{ mark, name, start + 1, start + count });
+}
+
 /// Events of the interactive merge worth telling the user about (stderr).
 pub const Event = union(enum) {
     /// An unknown command: GNU prints its command summary.
@@ -217,7 +221,10 @@ pub fn interact(env: Env, options: Options, names: [2][]const u8, a: []const u8,
             try screen.flush();
             const line = (answers.takeDelimiter('\n') catch return 2) orelse return 2;
             const cmd = std.mem.trim(u8, line, " \t\r");
-            if (cmd.len == 0) continue;
+            if (cmd.len == 0) {
+                observer.emit(.help);
+                continue;
+            }
             const left_lines = struct {
                 fn put(w: *Io.Writer, lines: diff.Lines, start: usize, n: usize) !void {
                     var q: usize = 0;
@@ -242,7 +249,7 @@ pub fn interact(env: Env, options: Options, names: [2][]const u8, a: []const u8,
                 const which: u8 = if (cmd.len == 2) cmd[1] else 'n';
                 const want_left = which == 'l' or which == '1' or which == 'b' or which == 'd';
                 const want_right = which == 'r' or which == '2' or which == 'b' or which == 'd';
-                if (which == 'd') try buf.print(env.gpa, "--- {s} {d},{d}\n", .{ names[0], e.line0 + 1, e.line0 + e.deleted });
+                if (which == 'd') try hdr(&buf, env.gpa, "---", names[0], e.line0, e.deleted);
                 if (want_left) {
                     var q: usize = 0;
                     while (q < e.deleted) : (q += 1) {
@@ -250,7 +257,7 @@ pub fn interact(env: Env, options: Options, names: [2][]const u8, a: []const u8,
                         if (!c.a.terminated(e.line0 + q)) try buf.append(env.gpa, '\n');
                     }
                 }
-                if (which == 'd') try buf.print(env.gpa, "--- {s} {d},{d}\n", .{ names[1], e.line1 + 1, e.line1 + e.inserted });
+                if (which == 'd') try hdr(&buf, env.gpa, "+++", names[1], e.line1, e.inserted);
                 if (want_right) {
                     var q: usize = 0;
                     while (q < e.inserted) : (q += 1) {

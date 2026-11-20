@@ -51,6 +51,10 @@ pub const Result = struct {
     lines: [3]Lines,
     blocks: []Block,
     owned: [3]?[]u8 = .{ null, null, null },
+    /// How many of the two comparisons (OLDFILE with MYFILE, with YOURFILE)
+    /// involve a last line without a newline; GNU warns once for each when it
+    /// writes an ed script.
+    missing_newline: u8 = 0,
 
     pub fn deinit(r: *Result) void {
         for (r.lines) |l| l.deinit(r.gpa);
@@ -173,7 +177,18 @@ pub fn merge3(gpa: std.mem.Allocator, mine: []const u8, older: []const u8, yours
         } });
         lo = hi;
     }
-    return .{ .gpa = gpa, .lines = ls, .blocks = try blocks.toOwnedSlice(gpa), .owned = owned };
+    var missing: u8 = 0;
+    for ([2]struct { e: []const diffcore.Edit, other: usize }{ .{ .e = ea, .other = 0 }, .{ .e = eb, .other = 2 } }) |pair| {
+        var hit = false;
+        for (pair.e) |e| {
+            const n_old = ls[1].count();
+            const n_oth = ls[pair.other].count();
+            if (e.deleted > 0 and e.line0 + e.deleted == n_old and !ls[1].terminated(n_old - 1)) hit = true;
+            if (e.inserted > 0 and e.line1 + e.inserted == n_oth and !ls[pair.other].terminated(n_oth - 1)) hit = true;
+        }
+        if (hit) missing += 1;
+    }
+    return .{ .gpa = gpa, .lines = ls, .blocks = try blocks.toOwnedSlice(gpa), .owned = owned, .missing_newline = missing };
 }
 
 pub const Options = struct {
@@ -273,6 +288,37 @@ fn edText(w: *Io.Writer, text: []const u8) Io.Writer.Error!void {
     if (text.len == 0 or text[text.len - 1] != '\n') try w.writeByte('\n');
 }
 
+/// Text appended or changed by an ed command. A line that starts with a dot
+/// gets a second one (a lone dot would end the input) and a closing
+/// `s/^\.//` command removes them again.
+const Ins = struct {
+    /// Number the next inserted line gets once the command has run.
+    next: usize,
+    first_dot: ?usize = null,
+
+    fn line(s: *Ins, w: *Io.Writer, text: []const u8) Io.Writer.Error!void {
+        if (text.len > 0 and text[0] == '.') {
+            try w.writeByte('.');
+            if (s.first_dot == null) s.first_dot = s.next;
+        }
+        try edText(w, text);
+        s.next += 1;
+    }
+
+    fn marker(s: *Ins, w: *Io.Writer, comptime fmt: []const u8, args: anytype) Io.Writer.Error!void {
+        try w.print(fmt ++ "\n", args);
+        s.next += 1;
+    }
+
+    fn finish(s: *Ins, w: *Io.Writer) Io.Writer.Error!void {
+        try w.writeAll(".\n");
+        if (s.first_dot) |f| {
+            const last = s.next - 1;
+            if (f == last) try w.print("{d}s/^\\.//\n", .{f}) else try w.print("{d},{d}s/^\\.//\n", .{ f, last });
+        }
+    }
+};
+
 /// An ed script that turns MYFILE into the merged result.
 pub fn writeEd(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void {
     var k = r.blocks.len;
@@ -293,20 +339,10 @@ pub fn writeEd(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void
                     try w.writeByte('\n');
                 }
                 if (y.count > 0) {
-                    var insert = true;
+                    var ins: Ins = .{ .next = m.start + 1 };
                     var i: usize = 0;
-                    while (i < y.count) : (i += 1) {
-                        const text = r.lines[2].raw(y.start + i);
-                        if (!insert) {
-                            try w.writeAll("a\n");
-                            insert = true;
-                        }
-                        if (text.len == 2 and text[0] == '.' and text[1] == '\n') {
-                            try w.writeAll("..\n.\ns/.//\n");
-                            insert = false;
-                        } else try edText(w, text);
-                    }
-                    if (insert) try w.writeAll(".\n");
+                    while (i < y.count) : (i += 1) try ins.line(w, r.lines[2].raw(y.start + i));
+                    try ins.finish(w);
                 }
             },
             .bracket, .bracket_old => |a| {
@@ -314,34 +350,39 @@ pub fn writeEd(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void
                 const second = b.kind == .only_second;
                 // After the block: the closing part.
                 try w.print("{d}a\n", .{m.start + m.count});
+                var ins: Ins = .{ .next = m.start + m.count + 1 };
                 if (second) {
-                    try w.print(">>>>>>> {s}\n.\n", .{o.labels[2]});
+                    try ins.marker(w, ">>>>>>> {s}", .{o.labels[2]});
                 } else {
                     if (with_old) {
-                        try w.print("||||||| {s}\n", .{o.labels[1]});
+                        try ins.marker(w, "||||||| {s}", .{o.labels[1]});
                         var i: usize = 0;
-                        while (i < old.count) : (i += 1) try edText(w, r.lines[1].raw(old.start + i));
+                        while (i < old.count) : (i += 1) try ins.line(w, r.lines[1].raw(old.start + i));
                     }
-                    try w.writeAll("=======\n");
+                    try ins.marker(w, "=======", .{});
                     var i: usize = 0;
-                    while (i < y.count) : (i += 1) try edText(w, r.lines[2].raw(y.start + i));
-                    try w.print(">>>>>>> {s}\n.\n", .{o.labels[2]});
+                    while (i < y.count) : (i += 1) try ins.line(w, r.lines[2].raw(y.start + i));
+                    try ins.marker(w, ">>>>>>> {s}", .{o.labels[2]});
                 }
+                try ins.finish(w);
                 // Before the block: the opening part.
                 try w.print("{d}a\n", .{m.start});
+                var ins2: Ins = .{ .next = m.start + 1 };
                 if (second) {
-                    try w.print("<<<<<<< {s}\n", .{o.labels[1]});
+                    try ins2.marker(w, "<<<<<<< {s}", .{o.labels[1]});
                     var i: usize = 0;
-                    while (i < old.count) : (i += 1) try edText(w, r.lines[1].raw(old.start + i));
-                    try w.writeAll("=======\n.\n");
-                } else try w.print("<<<<<<< {s}\n.\n", .{o.labels[0]});
+                    while (i < old.count) : (i += 1) try ins2.line(w, r.lines[1].raw(old.start + i));
+                    try ins2.marker(w, "=======", .{});
+                } else try ins2.marker(w, "<<<<<<< {s}", .{o.labels[0]});
+                try ins2.finish(w);
             },
         }
     }
     if (o.write_quit) try w.writeAll("w\nq\n");
 }
 
-/// The merged file itself (-m).
+/// The merged file itself (-m). Lines are written as they are, so a last
+/// line without a newline stays without one.
 pub fn writeMerge(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void {
     var pos: usize = 0; // next line of MYFILE
     for (r.blocks) |b| {
@@ -365,22 +406,22 @@ pub fn writeMerge(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!v
                 if (second) {
                     try w.print("<<<<<<< {s}\n", .{o.labels[1]});
                     i = 0;
-                    while (i < old.count) : (i += 1) try edText(w, r.lines[1].raw(old.start + i));
+                    while (i < old.count) : (i += 1) try w.writeAll(r.lines[1].raw(old.start + i));
                     try w.writeAll("=======\n");
                     i = 0;
-                    while (i < m.count) : (i += 1) try edText(w, r.lines[0].raw(m.start + i));
+                    while (i < m.count) : (i += 1) try w.writeAll(r.lines[0].raw(m.start + i));
                 } else {
                     try w.print("<<<<<<< {s}\n", .{o.labels[0]});
                     i = 0;
-                    while (i < m.count) : (i += 1) try edText(w, r.lines[0].raw(m.start + i));
+                    while (i < m.count) : (i += 1) try w.writeAll(r.lines[0].raw(m.start + i));
                     if (a == .bracket_old) {
                         try w.print("||||||| {s}\n", .{o.labels[1]});
                         i = 0;
-                        while (i < old.count) : (i += 1) try edText(w, r.lines[1].raw(old.start + i));
+                        while (i < old.count) : (i += 1) try w.writeAll(r.lines[1].raw(old.start + i));
                     }
                     try w.writeAll("=======\n");
                     i = 0;
-                    while (i < y.count) : (i += 1) try edText(w, r.lines[2].raw(y.start + i));
+                    while (i < y.count) : (i += 1) try w.writeAll(r.lines[2].raw(y.start + i));
                 }
                 try w.print(">>>>>>> {s}\n", .{o.labels[2]});
             },

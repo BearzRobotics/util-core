@@ -103,7 +103,8 @@ pub fn main(ctx: cli.Context) u8 {
             else => unreachable,
         }
     }
-    if (incompatible or (merge and write_quit) or (nlabels != 0 and nlabels != 3)) return usage(ctx, "incompatible options", .{});
+    const brackets = merge or (letter != null and (letter.? == 'E' or letter.? == 'A'));
+    if (incompatible or (merge and write_quit) or (nlabels != 0 and !brackets)) return usage(ctx, "incompatible options", .{});
     const ops = parser.operands.items;
     if (ops.len < 3) {
         const last: []const u8 = if (ctx.args.len > 0) ctx.args[ctx.args.len - 1] else ctx.name;
@@ -111,7 +112,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
     if (ops.len > 3) return usage(ctx, "extra operand '{s}'", .{ops[3]});
     if (as_json and (letter != null or merge or write_quit or o.initial_tab)) return usage(ctx, "option --json is incompatible with output style options", .{});
-    for (0..3) |i| o.labels[i] = if (nlabels == 3) labels[i] else ops[i];
+    for (0..3) |i| o.labels[i] = if (i < nlabels) labels[i] else ops[i];
     if (letter) |l| switch (l) {
         'e' => {},
         '3' => o.select = .easy_only,
@@ -137,13 +138,15 @@ pub fn main(ctx: cli.Context) u8 {
     if (stdin_count > 1) return usage(ctx, "incompatible options", .{});
     for (0..3) |i| {
         data[i] = readAll(ctx, ops[i]) catch |e| {
-            cli.warn(ctx, "{s}: {s}", .{ ops[i], cli.errText(e) });
+            cli.writeStderr(ctx, "diff: {s}: {s}", .{ ops[i], cli.errText(e) });
+            cli.warn(ctx, "subsidiary program 'diff' failed (exit status 2)", .{});
             return 2;
         };
     }
     if (!text) for (0..3) |i| {
         if (std.mem.indexOfScalar(u8, data[i][0..@min(data[i].len, 4096)], 0) != null) {
-            cli.warn(ctx, "diff failed: Binary files {s} and {s} differ", .{ ops[0], ops[2] });
+            const first: usize = if (std.mem.indexOfScalar(u8, data[0][0..@min(data[0].len, 4096)], 0) != null) 0 else 1;
+            cli.warn(ctx, "diff failed: Binary files {s} and {s} differ", .{ ops[first], ops[2] });
             return 2;
         }
     };
@@ -157,6 +160,10 @@ pub fn main(ctx: cli.Context) u8 {
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
     var status: u8 = 0;
+    if (letter != null and !merge) {
+        var wn: u8 = 0;
+        while (wn < res.missing_newline) : (wn += 1) cli.warn(ctx, "No newline at end of file", .{});
+    }
     if (merge or letter != null) {
         if (diff3.hasConflicts(&res, o)) status = 1;
     }

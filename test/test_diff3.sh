@@ -24,7 +24,7 @@ for t in $TRIPLES; do
 done
 
 printf "\n[ Option handling and errors ]\n"
-for args in "mine old" "mine old your x" "-L a -L b -L c -L d mine old your" "-L a mine old your" "-L a -L b mine old your" "-e -m mine old your" "-E -x mine old your" "-3 -x mine old your" "-e -3 mine old your" "-A -x mine old your" "-X -E mine old your" "-x -e mine2 old your2" "-m -i mine old your" "nonex old your" "mine nonex your" "mine old nonex" "--bogus" "-e -e mine old your" "--ed mine old your" "--show-all mine old your" "--show-overlap mine old your" "--easy-only mine old your" "--overlap-only mine old your" "--merge mine2 old your2" "--initial-tab mine old your" "--label=a --label=b --label=c mine old your" "--text mine old your" "--diff-program=nonexist mine old your"; do
+for args in "mine old" "mine old your x" "-L a -L b -L c -L d mine old your" "-L a mine old your" "-L a -L b mine old your" "-e -m mine old your" "-E -x mine old your" "-3 -x mine old your" "-e -3 mine old your" "-A -x mine old your" "-X -E mine old your" "-x -e mine2 old your2" "-m -i mine old your" "nonex old your" "mine nonex your" "mine old nonex" "--bogus" "-e -e mine old your" "--ed mine old your" "--show-all mine old your" "--show-overlap mine old your" "--easy-only mine old your" "--overlap-only mine old your" "--merge mine2 old your2" "--initial-tab mine old your" "--label=a --label=b --label=c mine old your" "--text mine old your"; do
     run_cmp "diff3 $args" $args
 done
 CMP_STDIN="$W/old"

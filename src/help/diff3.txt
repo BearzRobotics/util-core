@@ -22,6 +22,7 @@ Mandatory arguments to long options are mandatory for short options too.
   -L, --label=LABEL           use LABEL instead of file name
                                 (can be repeated up to three times)
 
+      --json                  print the comparison as JSON (not in GNU)
       --help                  display this help and exit
   -v, --version               output version information and exit
 

@@ -25,6 +25,7 @@ Mandatory arguments to long options are mandatory for short options too.
   -H, --speed-large-files      assume large files, many scattered small changes
       --diff-program=PROGRAM   use PROGRAM to compare files
 
+      --json                   print the aligned rows as JSON (not in GNU)
       --help                   display this help and exit
   -v, --version                output version information and exit
 

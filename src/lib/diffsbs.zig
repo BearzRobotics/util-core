@@ -62,7 +62,6 @@ fn printHalf(w: *Io.Writer, o: diff.Options, text: []const u8, out_bound: usize)
             },
             '\r' => {
                 try w.writeByte(c);
-                _ = try tabFromTo(w, o.expand_tabs, o.tab_size, 0, in_pos);
                 in_pos = 0;
                 out_pos = 0;
             },
@@ -183,6 +182,7 @@ fn defaultGroup(o: diff.Options, which: u2, buf: *std.ArrayList(u8), gpa: std.me
         else => f.changed_group,
     };
     if (given) |g| return g;
+    if (which < 2) if (f.changed_group) |g| return g;
     if (o.ifdef_name) |n| {
         buf.clearRetainingCapacity();
         switch (which) {
@@ -208,6 +208,12 @@ fn lineFormat(o: diff.Options, which: u2) []const u8 {
         1 => f.new_line orelse "%L",
         else => f.unchanged_line orelse "%L",
     };
+}
+
+/// A group whose last line has no newline gets one when more format text follows.
+fn groupTail(p: anytype, g: Group, fmt: []const u8, next: usize) !void {
+    const lines = if (g.file == 0) p.c.a else p.c.b;
+    if (g.end > g.beg and !lines.terminated(g.end - 1) and next < fmt.len) try p.w.writeByte('\n');
 }
 
 fn printLines(p: anytype, fmt: []const u8, g: Group) !void {
@@ -370,14 +376,17 @@ fn formatGroup(p: anytype, fmt: []const u8, g0: Group, g1: Group) !void {
             '<' => {
                 i += 1;
                 try printLines(p, lineFormat(o, 0), g0);
+                try groupTail(p, g0, fmt, i);
             },
             '>' => {
                 i += 1;
                 try printLines(p, lineFormat(o, 1), g1);
+                try groupTail(p, g1, fmt, i);
             },
             '=' => {
                 i += 1;
                 try printLines(p, lineFormat(o, 2), g0);
+                try groupTail(p, g0, fmt, i);
             },
             '(' => {
                 // %(A=B?T:E)
