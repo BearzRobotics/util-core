@@ -73,22 +73,18 @@ Behaviour that is not an option:
 
 ## Performance
 
-Measured with `crap` (cycles, instructions, wall time; stdout piped through `cat` because GNU and ours exit at the first match when stdout is /dev/null). Input: a 10.4 MB, 200000-line file of random words; `-f` with 3000 random 5-6 letter words (300 matching lines); 4 cores busy with other work, so wall times are noisy.
+Full matrix (GNU grep, ours before/after, ripgrep, ugrep over 100 MB, 10 MB, UTF-8 and 10000-file inputs): docs/benchmarks/grep.md, produced by `sh bench/grep-matrix.sh`.
 
-| command | wall | cycles | instructions |
-|---|---|---|---|
-| GNU grep 3.12 `-c -f words big` | 172 ms | 901 M | 574 M |
-| ripgrep 15.1 | 56 ms | 279 M | 480 M |
-| ugrep 7.5 | 41 ms | 188 M | 411 M |
-| ours | 1.99 s | 10.4 G | 39.4 G |
-| ours before this change (3 MB prefix, wall clock only) | 16.4 s | | |
+How lines are selected: the pattern is analysed once (src/lib/grep_scan.zig). A required literal (or up to eight of them, for an alternation or a short `-F` list) is searched over the whole read buffer with a vectorised scan (src/bytes.zig `Needle`), and only the line around a hit reaches the regex; for a bare literal, or `-w`/`-x`/`^lit`/`lit$` of one, the line check needs no regex at all. Patterns without anchors, look-around or back-references also get a combined lazy DFA that scans the buffer, or just checks a line. Skipped lines are counted in bulk (line numbers, byte offsets, `-v -c`). None of this is used with context before a match, `-v` output, boolean queries or after the first NUL in a file (binary), where every line is looked at.
 
-The 16.4 s figure is the 3 MB prefix of the file, so the full file would have been about 55 s: the change is roughly a 27x speed-up on this case, but a 3000-word list is still 12x slower than GNU, 35x slower than rg. Most of the 2 s is the lazy DFA being built state by state. Single pattern `-c two` over the file: GNU 8.0 ms, rg 3.1 ms, ugrep 3.6 ms, ours 23.6 ms (that path is the pre-existing one-regex search; the DFA is only used from four patterns).
+Results on the 100 MB file: a rare literal 36 ms (GNU 64, ripgrep 16, ugrep 17; was 224); `-i` 28 ms (GNU 62; was 117); `-w -c` 95 ms (GNU 155; was 209); `-E` alternation of three literals 34 ms (GNU 99; was 200); `-f` with 3000 words on 10 MB 283 ms (GNU 140, rg 68, ugrep 49; was 278 before this round, 1.99 s earlier).
+
+Still behind GNU: patterns that need the DFA on every line (`^[a-m]+[[:space:]][n-z]+` 8.5x, `-x` with a regex 3x, UTF-8 `-i` and `.` 3x) and large `-f` lists (2x). The regex-zig 0.3.0 DFA loop costs 30-60 instructions per byte; see the notes in docs/benchmarks/grep.md. Also `-r` over 10000 small files is about 1.1x GNU (one stat, open, read and close per file, as GNU).
 
 ## Known deviations and gaps
 
 - `-P` uses the Perl dialect of regex-zig, not PCRE2: features such as recursion, conditionals and Unicode properties are missing and error messages differ (`invalid Perl regular expression`).
-- Large pattern lists use the combined DFA only for line selection and only without back-references; `-o`, colour and `--replace` with thousands of patterns compile each pattern on first use and are slow. Cold DFA construction for several thousand patterns costs about a second; GNU grep (Aho-Corasick/DFA) is still faster on such lists.
+- Large pattern lists use the combined DFA only for line selection and only without back-references; `-o`, colour and `--replace` with thousands of patterns compile each pattern on first use and are slow. A 3000-word `-f` list is about 2x GNU for line selection, 4-6x ripgrep/ugrep.
 - Not adopted: regex-zig's native POSIX BRE (the BRE/ERE-to-Perl translation in posixre.zig carries GNU's leniency rules and diagnostics, and was not re-verified against 7049 cases with the native parser).
 - Binary detection looks at each 96 KiB read rather than at GNU's buffer boundaries, so a NUL byte appearing far into a large file may switch to binary mode at a slightly different line.
 - Binary detection at GNU's exact buffer boundaries is not matched (kept above); the `-q`/`/dev/null` early exit gap is closed.
