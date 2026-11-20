@@ -41,7 +41,7 @@ C-locale only everywhere.
   block for many minutes). Those two run only with `SYNC_GLOBAL=1`; run them on an
   idle machine or drive, never on the development drive (maintainer's instruction,
   2026-11-19). The scratch files now live on tmpfs.
-- `shred`: `test_shred.sh` hangs at its `/dev/full` test (before and after the
+- `shred`: the `/dev/full` case of `test_shred.sh` is opt-in (`SHRED_DEVFULL=1`). `shred /dev/full` fsyncs the device and waits, uninterruptibly (`sync_inodes_sb`), for the machine's pending disk writeback, for GNU shred as well as ours, so it only completes on an idle machine. Run it there, then delete this item.
   library conversion); check whether GNU `shred /dev/full` hangs too.
 - `ls` library returns formatted text and `--json` only, not structured entries.
 - Wrappers for find, tree, locate and updatedb pass `smp_allocator` because of

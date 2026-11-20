@@ -55,6 +55,9 @@ shred_cmp "ro with -f" -fv ro
 shred_cmp "ro -fu" -fu ro
 shred_cmp "-u names" -uv big
 shred_cmp "-uz names" -uvz tiny
-shred_cmp "dev full" /dev/full
+# shred fsyncs its target, and fsync on /dev/full waits for the machine's pending disk
+# writeback (the process sits uninterruptible in sync_inodes_sb, GNU's as well as ours, and
+# cannot be killed). Opt in with SHRED_DEVFULL=1 on an idle machine.
+[ -n "${SHRED_DEVFULL:-}" ] && shred_cmp "dev full" /dev/full
 shred_cmp "dash" - 
 cd /; print_summary
