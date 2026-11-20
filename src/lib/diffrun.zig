@@ -362,7 +362,7 @@ const Driver = struct {
             d.raise(1);
             return;
         }
-        if (same_bytes and o.style != .ed and o.style != .forward_ed) {
+        if (same_bytes and o.style != .ed and o.style != .forward_ed and o.style != .ifdef) {
             if (o.report_identical) try d.identical(dn);
             return;
         }
@@ -389,11 +389,11 @@ const Driver = struct {
             return;
         };
         defer cmp.deinit();
-        if (!cmp.differs()) {
+        if (!cmp.differs() and o.style != .ifdef) {
             if (o.report_identical) try d.identical(dn);
             return;
         }
-        d.raise(1);
+        if (cmp.differs()) d.raise(1);
         if (o.brief) {
             if (o.json) {
                 try d.jsonHead("diff", dn);

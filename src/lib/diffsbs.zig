@@ -196,11 +196,18 @@ fn defaultGroup(o: diff.Options, which: u2, buf: *std.ArrayList(u8), gpa: std.me
         }
         return buf.items;
     }
+    if (which == 3) {
+        const og = f.old_group orelse "%<";
+        const ng = f.new_group orelse "%>";
+        buf.clearRetainingCapacity();
+        try buf.appendSlice(gpa, og);
+        try buf.appendSlice(gpa, ng);
+        return buf.items;
+    }
     return switch (which) {
         0 => "%<",
         1 => "%>",
-        2 => "%=",
-        else => "%<%>",
+        else => "%=",
     };
 }
 

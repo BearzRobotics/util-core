@@ -192,7 +192,7 @@ pub fn interact(env: Env, options: Options, names: [2][]const u8, a: []const u8,
     defer m.deinit();
     var p0: usize = 0;
     var p1: usize = 0;
-    var silent = false;
+    var silent = o.suppress_common_lines;
     var differs = false;
     var k: usize = 0;
     while (k <= c.items.len) : (k += 1) {
@@ -204,7 +204,7 @@ pub fn interact(env: Env, options: Options, names: [2][]const u8, a: []const u8,
             l1 = c.items[k].edit.line1;
         }
         var so = o;
-        so.suppress_common_lines = o.suppress_common_lines or silent;
+        so.suppress_common_lines = silent;
         try common(screen, so, &c, &p0, &p1, l0, l1, out);
         if (k >= c.items.len) break;
         differs = true;
