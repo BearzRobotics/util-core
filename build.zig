@@ -5,9 +5,11 @@
 //!   -Dcommands=a,b,c   build only these commands (default: all)
 //!   -Dmode=standalone|multicall|all
 //!                      what to install (default: all)
+//!   -Dman=bool         install the manual pages (default: on)
 //!   -Dstrip=bool       strip debug info (default: on unless -Doptimize=Debug)
 //!
-//! Outputs (zig-out/bin):
+//! Outputs (zig-out/bin; manual pages in zig-out/share/man/man1 as NAME.1.md, which
+//! dkman and dkde-help read):
 //!   <command>  one executable per selected command   (-Dmode=standalone, all)
 //!   util-core  multicall binary; `util-core <command> ...` or invoked through
 //!              a link named after a command          (-Dmode=multicall, all)
@@ -37,6 +39,7 @@ pub fn build(b: *std.Build) void {
     const strip = b.option(bool, "strip", "Strip debug info from command executables (default: on unless Debug)") orelse (optimize != .debug);
 
     const mode = b.option(Mode, "mode", "What to build: standalone (one binary per command), multicall (util-core only) or all (default)") orelse .all;
+    const install_man = b.option(bool, "man", "Install the manual pages as share/man/man1/NAME.1.md (default: on)") orelse true;
     const selected = selectCommands(b);
     const regex_mod = b.dependency("regex", .{ .target = target, .optimize = optimize }).module("regex");
 
@@ -84,6 +87,20 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addOptions("build_options", opts);
         exe.root_module.addImport("regex", regex_mod);
         b.installArtifact(exe);
+    }
+
+    // Manual pages (Markdown, rendered by dkman and dkde-help; see docs/manpages/README.md).
+    if (install_man) {
+        for (selected) |name| {
+            // `[` is documented on the `test` page.
+            const page = if (std.mem.eql(u8, name, "[")) "test" else name;
+            const src = b.fmt("docs/manpages/{s}.md", .{page});
+            const dest = b.fmt("{s}.1.md", .{name});
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path(src), .{ .custom = "share/man/man1" }, dest).step);
+        }
+        if (mode != .standalone) {
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("docs/manpages/util-core.md"), .{ .custom = "share/man/man1" }, "util-core.1.md").step);
+        }
     }
 
     // Syntax-highlighting modules (they depend on the regex-zig package).

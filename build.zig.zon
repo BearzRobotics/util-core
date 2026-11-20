@@ -9,5 +9,5 @@
             .hash = "regex-0.3.0-bWvIn7D8CgBvfUhlJMp4nIRpRPYTsf6XVlcsRyHxS8bu",
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE", "README.md" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE", "README.md", "docs/manpages" },
 }
