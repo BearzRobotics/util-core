@@ -1,18 +1,18 @@
-% GREP(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 grep - print lines that match patterns
 
-SYNOPSIS
-grep [OPTION]... PATTERNS [FILE]...
-grep --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    grep [OPTION]... PATTERNS [FILE]...
+    grep --help | --version
+
+# DESCRIPTION
+
 Print lines that match patterns.
 
-OPTIONS
+# OPTIONS
+
 -E, -F, -G, -P
 : Extended, fixed-string, basic (default) or Perl-style patterns; naming two different matchers is an error.
 
@@ -49,7 +49,8 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXTENSIONS (NOT IN GNU)
+# EXTENSIONS (NOT IN GNU)
+
 Every option below is opt-in; without it grep behaves as GNU grep 3.12 (decision 0006). The long names are listed in `--help` on lines ending in "(not in GNU)". Where an extension's short letter would clash with GNU's, only the long form exists. Where ripgrep, ugrep and FreeBSD grep disagree with GNU on what an option means, GNU wins.
 
 From ripgrep (tested against `rg` 15):
@@ -108,7 +109,8 @@ From FreeBSD grep (tested against the FreeBSD grep of the Chimera Linux sysroot)
 
 Abbreviations of long options keep GNU's meaning: `--cou` is `--count` although `--count-matches` also starts that way.
 
-DIFFERENCES FROM GNU
+# DIFFERENCES FROM GNU
+
 Diagnostics are clearer than GNU's where GNU is silent or uninformative (decision 0005 update). Standard output and the exit status are GNU's; only the text on standard error differs.
 
 - An invalid `-P` pattern: GNU prints PCRE's message; we print `invalid Perl regular expression: REASON (at offset N in 'PATTERN')`.
@@ -117,30 +119,41 @@ Diagnostics are clearer than GNU's where GNU is silent or uninformative (decisio
 - `--decompress` problems: damaged data and unsupported formats are named.
 - An invalid `--bool` query, `--type` name or `--sort` key says what is wrong; GNU has no such options.
 
-EXIT STATUS
-Status	Meaning
-0	A line was selected.
-1	No line was selected.
-2	An error occurred (unless -q found a match).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | A line was selected. |
+| 1 | No line was selected. |
+| 2 | An error occurred (unless -q found a match). |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU grep 3.12 (`/usr/bin/grep --version` on the development machine). Consulted 2026-11-07: the GNU grep manual (https://www.gnu.org/software/grep/manual/grep.html) and POSIX.1-2024 grep, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/grep.html. Behaviour was checked by differential tests against the GNU binary (`sh test/test_grep.sh`).
+
 See docs/compatibility/grep.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - `-P` uses the Perl dialect of regex-zig, not PCRE2: features such as recursion, conditionals and Unicode properties are missing and error messages differ (`invalid Perl regular expression`).
 - With four or more patterns the lines are selected by one lazily built DFA over all of them; `-o`, colours and `--replace` still try each pattern, and the first such use compiles every pattern separately. Patterns with back-references fall back to one search per pattern.
 - Binary detection looks at each 96 KiB read rather than at GNU's buffer boundaries, so a NUL byte appearing far into a large file may switch to binary mode at a slightly different line.
 - UTF-8 character classes use Unicode 16 tables and may differ from glibc's C.UTF-8 for rare code points; other locales are treated as C.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/grep.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+
