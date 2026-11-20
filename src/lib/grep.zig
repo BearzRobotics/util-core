@@ -26,6 +26,8 @@ const sys = @import("../sys.zig");
 const unicode = @import("../unicode.zig");
 const fnmatch = @import("../fnmatch.zig");
 const ign = @import("grep_ignore.zig");
+const scan = @import("grep_scan.zig");
+const vec = @import("../bytes.zig");
 
 pub const Env = common.Env;
 pub const Input = common.Input;
@@ -161,11 +163,12 @@ pub const Options = struct {
     /// Fold an empty pattern list into the options the way GNU does and
     /// report whether nothing can possibly match (the caller then skips the
     /// search and exits 1). `keys_len` is the length of the pattern list
-    /// (patterns joined with newlines); `have_keys` is false when no pattern
-    /// was given with -e/-f.
-    pub fn prepare(o: *Options, keys_len: usize, have_keys: bool) bool {
+    /// (patterns joined with newlines, without the trailing newline);
+    /// `no_keys` is true when -e/-f were given but supplied no pattern at all
+    /// (-f /dev/null), which is different from one empty pattern (-e '').
+    pub fn prepare(o: *Options, keys_len: usize, no_keys: bool) bool {
         var keycc = keys_len;
-        if (have_keys and keys_len == 0) {
+        if (no_keys) {
             // no keys at all (-f /dev/null): match nothing
             o.invert = !o.invert;
             o.line = false;
@@ -238,6 +241,13 @@ const set_limits: regex.Limits = blk: {
     break :blk l;
 };
 
+/// Cache cap of the combined DFA for fewer than `set_threshold` patterns.
+const small_set_limits: regex.Limits = blk: {
+    var l = posixre.big_limits;
+    l.max_dfa_cache = 16 << 20;
+    break :blk l;
+};
+
 const Pat = struct {
     re: regex.Regex,
     longest: ?*regex.Regex,
@@ -272,6 +282,26 @@ pub const Matcher = struct {
     bool_nodes: []BoolNode = &.{},
     bool_root: usize = 0,
     bool_subs: std.ArrayList(*Matcher) = .empty,
+    /// Buffer-wide pre-filter (see `candidate`): a required literal, or a DFA
+    /// over the patterns, finds the next line worth running the regex on.
+    pre_kind: enum { none, lit, multi, scan } = .none,
+    pre_needle: vec.Needle = undefined,
+    pre_text: []u8 = &.{},
+    /// Several required literals (an alternation or a short -F list): the
+    /// nearest hit of any of them.
+    pre_multi: std.ArrayList(vec.Needle) = .empty,
+    pre_multi_mem: std.ArrayList([]u8) = .empty,
+    pre_store: []u8 = &.{},
+    pre_re: ?*regex.Regex = null,
+    pre_sr: ?regex.Searcher = null,
+    /// The scan DFA is the combined `set`.
+    pre_use_set: bool = false,
+    /// A candidate line is certainly selected (the pattern is just the
+    /// literal(s)); no regex run is needed.
+    pre_exact: bool = false,
+    /// The only pattern is one literal and -w / -x applies: `isMatch` checks
+    /// the literal's neighbours (or the line length) without a regex.
+    lit_mode: enum { none, word, line, start, end, both } = .none,
 
     pub const Error = error{ OutOfMemory, BadPattern };
 
@@ -286,10 +316,165 @@ pub const Matcher = struct {
         while (it.next()) |pt| try m.stage(opts, pt, observer, diag);
         m.buildSet(opts);
         if (m.set == null) try m.realize(diag);
+        m.buildPre(opts);
         return m;
     }
 
+    /// Where the next line that can match starts, looking at `hay[from..]`
+    /// (`hay` ends at a line boundary or at end of input). `.none`: no line
+    /// there matches; `.at(i)`: the lines before the one holding byte `i`
+    /// do not match; `.unknown`: no pre-filter, look at every line.
+    pub const Cand = union(enum) { none, at: usize, unknown };
+
+    pub fn candidate(m: *Matcher, hay: []const u8, from: usize) Cand {
+        switch (m.pre_kind) {
+            .none => return .unknown,
+            .lit => return if (m.pre_needle.find(hay, from)) |p| .{ .at = p } else .none,
+            .multi => {
+                var best: ?usize = null;
+                for (m.pre_multi.items) |*nd| {
+                    // only a hit before the best one so far matters
+                    const lim = if (best) |b| @min(hay.len, b + nd.bytes.len - 1) else hay.len;
+                    if (nd.find(hay[0..lim], from)) |p| best = p;
+                }
+                return if (best) |p| .{ .at = p } else .none;
+            },
+            .scan => {
+                const sr: *regex.Searcher = if (m.pre_use_set) &m.set_sr.? else &m.pre_sr.?;
+                const f = &(sr.fwd orelse {
+                    m.pre_kind = .none;
+                    return .unknown;
+                });
+                const e = (f.findEnd(hay, from, true) catch {
+                    m.pre_kind = .none;
+                    return .unknown;
+                }) orelse return .none;
+                return .{ .at = if (e > from) e - 1 else e };
+            },
+        }
+    }
+
+    /// Up to `multi_max` required literals (each at least two bytes) cover
+    /// every pattern: search for them directly.
+    const multi_max = 8;
+
+    fn buildMulti(m: *Matcher, options: Options, ao: scan.Opts) bool {
+        const gpa = m.gpa;
+        var lits: std.ArrayList(scan.Lit) = .empty;
+        defer {
+            for (lits.items) |l| gpa.free(l.text);
+            lits.deinit(gpa);
+        }
+        for (m.staged.items) |st| {
+            const ok = scan.literals(gpa, st.body, ao, &lits) catch return false;
+            if (!ok or lits.items.len > multi_max) return false;
+        }
+        if (lits.items.len < 2) return false;
+        var all_exact = !options.word and !options.line;
+        for (lits.items) |l| {
+            if (l.text.len < 2) return false;
+            if (!l.exact) all_exact = false;
+        }
+        for (lits.items) |l| {
+            const fold = options.icase;
+            const mem = gpa.alloc(u8, l.text.len * 2) catch return false;
+            m.pre_multi_mem.append(gpa, mem) catch {
+                gpa.free(mem);
+                return false;
+            };
+            @memcpy(mem[0..l.text.len], l.text);
+            m.pre_multi.append(gpa, vec.Needle.init(mem[0..l.text.len], fold, mem[l.text.len..])) catch return false;
+        }
+        m.pre_kind = .multi;
+        m.pre_exact = all_exact;
+        return true;
+    }
+
+    fn buildPre(m: *Matcher, options: Options) void {
+        if (m.staged.items.len == 0) return;
+        const gpa = m.gpa;
+        const ao: scan.Opts = .{ .icase = options.icase, .utf8 = options.utf8, .eol = if (options.null_data) 0 else '\n' };
+        var all_scan = true;
+        var all_exact = !options.word and !options.line;
+        var first: scan.Info = .{};
+        defer first.deinit(gpa);
+        for (m.staged.items, 0..) |st, k| {
+            var info = scan.analyze(gpa, st.body, ao) catch return;
+            if (!info.scannable) all_scan = false;
+            if (!info.exact or info.anchor_start or info.anchor_end) all_exact = false;
+            if (k == 0) first = info else info.deinit(gpa);
+        }
+        if (m.staged.items.len == 1) {
+            const lit = first.lit;
+            const exact = first.exact and !first.anchor_start and !first.anchor_end and !options.word and !options.line;
+            const anchored = first.exact and (first.anchor_start or first.anchor_end) and !options.word and !options.line and !options.null_data;
+            const whole = ((first.exact and !first.anchor_start and !first.anchor_end) and (options.word or options.line) and !(options.word and options.line)) or anchored;
+            const use_lit = lit.len > 0 and (exact or whole or lit.len >= 2 or !(all_scan and !options.line));
+            if (use_lit) {
+                const text = gpa.dupe(u8, lit) catch return;
+                var store: []u8 = &.{};
+                if (options.icase) store = gpa.alloc(u8, text.len) catch {
+                    gpa.free(text);
+                    return;
+                };
+                m.pre_text = text;
+                m.pre_store = store;
+                m.pre_needle = vec.Needle.init(text, options.icase, store);
+                m.pre_kind = .lit;
+                m.pre_exact = exact;
+                if (whole) m.lit_mode = if (anchored)
+                    (if (first.anchor_start and first.anchor_end) .both else if (first.anchor_start) .start else .end)
+                else if (options.line) .line else .word;
+                return;
+            }
+        }
+        if (m.buildMulti(options, ao)) return;
+        if (!all_scan or options.line) return;
+        if (m.set != null) {
+            // The combined set is exactly the alternation of the bodies.
+            if (options.word) return;
+            m.pre_use_set = true;
+            m.pre_kind = .scan;
+            m.pre_exact = all_exact;
+            return;
+        }
+        var src: std.ArrayList(u8) = .empty;
+        defer src.deinit(gpa);
+        src.appendSlice(gpa, "(?s)") catch return;
+        for (m.staged.items, 0..) |st, i| {
+            if (i > 0) src.append(gpa, '|') catch return;
+            src.appendSlice(gpa, "(?:") catch return;
+            src.appendSlice(gpa, st.body) catch return;
+            src.append(gpa, ')') catch return;
+        }
+        var lim = posixre.big_limits;
+        lim.max_dfa_cache = 16 << 20;
+        const re = gpa.create(regex.Regex) catch return;
+        re.* = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = lim, .engine = .dfa }, null) catch {
+            gpa.destroy(re);
+            return;
+        };
+        m.pre_sr = re.searcher(gpa) catch {
+            re.deinit(gpa);
+            gpa.destroy(re);
+            return;
+        };
+        m.pre_re = re;
+        m.pre_kind = .scan;
+        m.pre_exact = all_exact;
+    }
+
     pub fn deinit(m: *Matcher) void {
+        m.gpa.free(m.pre_text);
+        for (m.pre_multi_mem.items) |mem| m.gpa.free(mem);
+        m.pre_multi_mem.deinit(m.gpa);
+        m.pre_multi.deinit(m.gpa);
+        m.gpa.free(m.pre_store);
+        if (m.pre_sr) |*x| x.deinit();
+        if (m.pre_re) |re| {
+            re.deinit(m.gpa);
+            m.gpa.destroy(re);
+        }
         if (m.set_sr) |*x| x.deinit();
         if (m.set) |st| {
             st.deinit(m.gpa);
@@ -385,9 +570,46 @@ pub const Matcher = struct {
         return best;
     }
 
+    fn isWordByte(b: u8) bool {
+        return std.ascii.isAlphanumeric(b) or b == '_';
+    }
+
+    /// -w / -x with a single literal pattern; null: needs the regex (a
+    /// neighbour byte is part of a multibyte character).
+    fn litCheck(m: *const Matcher, line: []const u8) ?bool {
+        const n = m.pre_needle.bytes.len;
+        switch (m.lit_mode) {
+            .line => return line.len == n and m.pre_needle.find(line, 0) != null,
+            .start => return m.pre_needle.matchesAt(line, 0),
+            .end => return line.len >= n and m.pre_needle.matchesAt(line, line.len - n),
+            .both => return line.len == n and m.pre_needle.matchesAt(line, 0),
+            else => {},
+        }
+        var from: usize = 0;
+        while (m.pre_needle.find(line, from)) |p| {
+            const before: ?u8 = if (p > 0) line[p - 1] else null;
+            const after: ?u8 = if (p + n < line.len) line[p + n] else null;
+            if (m.utf8 and ((before orelse 0) >= 0x80 or (after orelse 0) >= 0x80)) return null;
+            if (!(before != null and isWordByte(before.?)) and !(after != null and isWordByte(after.?))) return true;
+            from = p + 1;
+        }
+        return false;
+    }
+
     /// Does any pattern match somewhere in `line`?
     pub fn isMatch(m: *Matcher, line: []const u8) bool {
         if (m.bool_nodes.len > 0) return m.boolEval(m.bool_root, line);
+        if (m.lit_mode != .none) {
+            if (m.litCheck(line)) |r| return r;
+        }
+        if (m.pre_exact) switch (m.pre_kind) {
+            .lit => return m.pre_needle.find(line, 0) != null,
+            .multi => {
+                for (m.pre_multi.items) |*nd| if (nd.find(line, 0) != null) return true;
+                return false;
+            },
+            else => {},
+        };
         if (m.set_sr) |*sr| return sr.matchesAnywhere(line) catch {
             m.noteLimit();
             return false;
@@ -486,7 +708,11 @@ pub const Matcher = struct {
     /// it); any failure (back references, limits) leaves the per-pattern
     /// search in place.
     fn buildSet(m: *Matcher, options: Options) void {
-        if (m.staged.items.len < set_threshold) return;
+        if (m.staged.items.len == 0) return;
+        // A few patterns also get the combined DFA when it applies (no
+        // look-around or back-reference): "does the line match" is then one
+        // linear scan instead of a per-pattern regex run.
+        const small = m.staged.items.len < set_threshold;
         var src: std.ArrayList(u8) = .empty;
         defer src.deinit(m.gpa);
         src.appendSlice(m.gpa, "(?s)") catch return;
@@ -498,7 +724,7 @@ pub const Matcher = struct {
             src.append(m.gpa, ')') catch return;
         }
         const re = m.gpa.create(regex.Regex) catch return;
-        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = set_limits }, null) catch {
+        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = if (small) small_set_limits else set_limits, .engine = if (small) .dfa else .auto }, null) catch {
             m.gpa.destroy(re);
             return;
         };
@@ -1003,6 +1229,13 @@ const G = struct {
     is_stdin: bool = false,
     ign_stack: std.ArrayList(IgnLevel) = .empty,
     file_mem: ?[]const u8 = null,
+    /// Read buffer, kept across files.
+    buf: std.ArrayList(u8) = .empty,
+    /// Stat of the file about to be opened by grepOpened (saves an fstat).
+    pre_stat: ?sys.FileStat = null,
+    /// Size of the regular file being read: reaching it ends the read loop
+    /// without a final read that returns 0.
+    cur_size: ?u64 = null,
 };
 
 const Stats = struct {
@@ -1035,6 +1268,7 @@ pub fn run(env: Env, options: Options, matcher: *Matcher, inputs: []const Input,
         flushBefore(&g);
         g.before_q.deinit(g.gpa);
         g.out.deinit(g.gpa);
+        g.buf.deinit(g.gpa);
     }
     g.eol = if (g.o.null_data) 0 else '\n';
     g.t0_ns = nowNs();
@@ -1480,13 +1714,13 @@ fn flushBefore(g: *G) void {
 const Stop = enum { cont, stop };
 
 /// Process one input line. Returns .stop when scanning of this file ends.
-fn doLine(g: *G, text: []const u8) Err!Stop {
+fn doLine(g: *G, text: []const u8, known_match: bool) Err!Stop {
     g.line_no += 1;
     const no = g.line_no;
     const off = g.offset;
     g.offset += text.len + 1;
     const o = &g.o;
-    const matched = g.m.isMatch(text);
+    const matched = known_match or g.m.isMatch(text);
     const selected = matched != o.invert;
 
     if (g.outleft == 0) {
@@ -1585,6 +1819,8 @@ fn validUtf8(s: []const u8) bool {
 }
 
 /// Search one open descriptor. Returns the number of selected lines.
+const chunk_len = 96 * 1024; // GNU grep's read size: binary detection works per read
+
 fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
     const o = &g.o;
     g.cur_noeol = false;
@@ -1614,24 +1850,74 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
     g.outleft = o.max_count;
     flushBefore(g);
 
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(g.gpa);
+    const buf = &g.buf;
+    buf.clearRetainingCapacity();
+    defer if (buf.capacity > (4 << 20)) buf.clearAndFree(g.gpa);
     var pos: usize = 0;
     var eof = false;
-    var chunk: [98304]u8 = undefined;
     var stopped = false;
     var consumed_total: u64 = 0;
     const base_quiet = g.out_quiet;
     var extra_nul_split = false;
 
+    // Whole-buffer skipping (Matcher.candidate) is valid only while no
+    // non-selected line has to be seen: no -v, no leading context.
+    // With -v only counting (-c, -q is handled by exit_on_match) the skipped
+    // lines are all selected: they are added to the count in bulk.
+    const inv_count = o.invert and g.out_quiet and !g.done_on_match and o.max_count == std.math.maxInt(i64) and !(o.count_matches or o.stats or o.json);
+    const can_skip = (inv_count or (!o.invert and o.before <= 0)) and g.m.bool_nodes.len == 0 and g.m.pre_kind != .none;
+    var known_match = false;
+    var total_read: u64 = 0;
+    var size_reached = false;
+    // A DFA scan whose hits are dense only doubles the work (each hit line is
+    // checked again): give it up for the rest of the file.
+    var scan_calls: u32 = 0;
+    var scan_gap: u64 = 0;
+    var scan_off = false;
     while (!stopped) {
+        known_match = false;
+        if (can_skip and !extra_nul_split and g.outleft != 0 and g.pending <= 0 and pos < buf.items.len and g.m.pre_kind != .none and !scan_off) skip: {
+            const rest = buf.items[pos..];
+            const limit = if (eof) buf.items.len else if (vec.lastIndexOf(rest, g.eol)) |k| pos + k + 1 else break :skip;
+            if (limit <= pos) break :skip;
+            const hay = buf.items[0..limit];
+            switch (g.m.candidate(hay, pos)) {
+                .unknown => {},
+                .none => {
+                    if (inv_count) g.nlines += vec.count(hay[pos..], g.eol) + @intFromBool(eof and hay[limit - 1] != g.eol);
+                    g.line_no += vec.count(hay[pos..], g.eol);
+                    g.offset += limit - pos;
+                    consumed_total += limit - pos;
+                    pos = limit;
+                    continue;
+                },
+                .at => |idx| {
+                    const start = if (vec.lastIndexOf(hay[pos..idx], g.eol)) |k| pos + k + 1 else pos;
+                    if (inv_count) g.nlines += vec.count(hay[pos..start], g.eol);
+                    g.line_no += vec.count(hay[pos..start], g.eol);
+                    g.offset += start - pos;
+                    consumed_total += start - pos;
+                    if (g.m.pre_kind == .scan and !g.m.pre_exact) {
+                        scan_calls += 1;
+                        scan_gap += start - pos;
+                        if (scan_calls == 64) {
+                            if (scan_gap < 64 * 512) scan_off = true;
+                            scan_calls = 0;
+                            scan_gap = 0;
+                        }
+                    }
+                    pos = start;
+                    known_match = g.m.pre_exact;
+                },
+            }
+        }
         // find next line
         var term: ?usize = null;
         if (pos < buf.items.len) {
             const rest = buf.items[pos..];
             if (extra_nul_split) {
                 term = std.mem.indexOfAny(u8, rest, "\n\x00");
-            } else term = std.mem.indexOfScalar(u8, rest, g.eol);
+            } else term = vec.indexOf(rest, g.eol, 0);
         }
         if (term == null) {
             if (eof) {
@@ -1641,25 +1927,31 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                     consumed_total += text.len;
                     pos = buf.items.len;
                     g.cur_noeol = true;
-                    if (try doLine(g, text) == .stop) stopped = true;
+                    if (try doLine(g, text, known_match) == .stop) stopped = true;
                 }
                 break;
             }
             // read more
+            if (size_reached) {
+                eof = true;
+                continue;
+            }
             if (pos > 0 and pos == buf.items.len) {
                 buf.clearRetainingCapacity();
                 pos = 0;
-            } else if (pos > (1 << 20)) {
+            } else if (pos > chunk_len) {
                 try buf.replaceRange(g.gpa, 0, pos, &.{});
                 pos = 0;
             }
             var err: LX.E = .SUCCESS;
+            try buf.ensureUnusedCapacity(g.gpa, chunk_len);
+            const room = buf.unusedCapacitySlice()[0..chunk_len];
             const n = if (g.file_mem) |mem| blk: {
-                const k = @min(chunk.len, mem.len - mem_pos);
-                @memcpy(chunk[0..k], mem[mem_pos .. mem_pos + k]);
+                const k = @min(room.len, mem.len - mem_pos);
+                @memcpy(room[0..k], mem[mem_pos .. mem_pos + k]);
                 mem_pos += k;
                 break :blk k;
-            } else sys.readFd(fd, &chunk, &err) orelse {
+            } else sys.readFd(fd, room, &err) orelse {
                 g.obs.emit(.{ .read_error = .{ .name = g.fname, .errno = err } });
                 g.errseen = true;
                 break;
@@ -1668,8 +1960,12 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                 eof = true;
                 continue;
             }
+            total_read += n;
+            if (g.file_mem == null) if (g.cur_size) |sz| {
+                if (total_read >= sz) size_reached = true;
+            };
             if (!g.binary and o.binary_files != .text and !o.null_data) {
-                if (std.mem.indexOfScalar(u8, chunk[0..n], 0) != null) {
+                if (vec.indexOf(room[0..n], 0, 0) != null) {
                     g.binary = true;
                     if (o.binary_files == .without_match) {
                         return 0;
@@ -1682,13 +1978,13 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                     }
                 }
             }
-            try buf.appendSlice(g.gpa, chunk[0..n]);
+            buf.items.len += n;
             continue;
         }
         const text = buf.items[pos .. pos + term.?];
         consumed_total += term.? + 1;
         pos += term.? + 1;
-        if (try doLine(g, text) == .stop) stopped = true;
+        if (try doLine(g, text, known_match) == .stop) stopped = true;
     }
     _ = base_quiet;
     g.fstat.bytes_searched = consumed_total;
@@ -1802,12 +2098,16 @@ fn grepOpened(g: *G, fd: sys.Handle, name: []const u8, is_stdin: bool, seekable_
     {
         var serr: LX.E = .SUCCESS;
         g.offset_width = 20;
-        if (sys.fstatFd(fd, &serr)) |fst| {
+        g.cur_size = null;
+        const fst_opt = g.pre_stat orelse sys.fstatFd(fd, &serr);
+        g.pre_stat = null;
+        if (fst_opt) |fst| {
             if (fst.isReg()) {
                 var w: usize = 1;
                 var sz = fst.size;
                 while (sz >= 10) : (sz /= 10) w += 1;
                 g.offset_width = w;
+                if (fst.size > 0) g.cur_size = @intCast(fst.size);
             }
         }
     }
@@ -2020,6 +2320,7 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
             },
         }
     }
+    g.pre_stat = st;
     return try grepOpened(g, fd, display, false, false);
 }
 
@@ -2056,14 +2357,17 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
     };
     var dir = dir_h;
     var names: std.ArrayList([]u8) = .empty;
+    var kinds: std.ArrayList(Io.File.Kind) = .empty;
     defer {
         for (names.items) |n| g.gpa.free(n);
         names.deinit(g.gpa);
+        kinds.deinit(g.gpa);
     }
     var it = dir.iterate();
     while (it.next(g.env.io) catch null) |entry| {
         const dup = try g.gpa.dupe(u8, entry.name);
         try names.append(g.gpa, dup);
+        try kinds.append(g.gpa, entry.kind);
     }
     dir.close(g.env.io);
     var pbase = path;
@@ -2104,7 +2408,7 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
         std.mem.sort(SortEnt, ents.items, g, sortEntLess);
         for (ents.items, 0..) |e, i| names.items[i] = e.name;
     }
-    for (names.items) |n| {
+    for (names.items, 0..) |n, name_idx| {
         if (!o.search_hidden and n.len > 0 and n[0] == '.') continue;
         const child = if (implicit)
             std.fmt.allocPrint(g.gpa, "{s}", .{n}) catch return error.OutOfMemory
@@ -2117,8 +2421,12 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
             try std.fmt.allocPrint(g.gpa, "{s}/{s}", .{ dbase, n });
         defer g.gpa.free(disp);
         var err: LX.E = .SUCCESS;
-        const lst = sys.fileStat(child, false, &err);
-        var is_dir = false;
+        // The directory entry already says "regular file" or "directory";
+        // only other kinds (symlinks, unknown) need an lstat. (Sorting
+        // permutes `names`, so the kinds are not used then.)
+        const known_kind: Io.File.Kind = if (o.sort == .none) kinds.items[name_idx] else .unknown;
+        const lst = if (known_kind == .file or known_kind == .directory) null else sys.fileStat(child, false, &err);
+        var is_dir = known_kind == .directory;
         if (lst) |l| {
             if (l.isLink() and !o.deref_recursive) {
                 if (o.symlinks == .gnu) continue;

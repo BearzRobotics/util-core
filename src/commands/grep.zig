@@ -465,11 +465,12 @@ pub fn main(ctx: cli.Context) u8 {
     }
     // patterns
     var keycc: usize = 0;
-    if (!(have_keys and keys.items.len == 0)) {
+    const no_keys = have_keys and keys.items.len == 0;
+    if (!no_keys) {
         _ = keys.pop();
         keycc = keys.items.len;
     }
-    if (o.prepare(keycc, have_keys)) return 1;
+    if (o.prepare(keycc, no_keys)) return 1;
 
     var report_state = Report{ .ctx = ctx, .no_messages = no_messages };
     const observer: grep.Observer = .{ .context = &report_state, .func = report };
