@@ -709,20 +709,20 @@ pub fn compare(gpa: Allocator, a: Lines, b: Lines, flags: Flags) ![]Edit {
     shiftBoundaries(eq1, changed1, changed0);
 
     // Build the script.
-    var i0: usize = 0;
-    var i1: usize = 0;
-    while (i0 < m0 or i1 < m1) {
-        const c0 = if (i0 < m0) changed0[i0 + 1] != 0 else false;
-        const c1 = if (i1 < m1) changed1[i1 + 1] != 0 else false;
+    var p0: usize = 0;
+    var p1: usize = 0;
+    while (p0 < m0 or p1 < m1) {
+        const c0 = if (p0 < m0) changed0[p0 + 1] != 0 else false;
+        const c1 = if (p1 < m1) changed1[p1 + 1] != 0 else false;
         if (c0 or c1) {
-            const l0 = i0;
-            const l1 = i1;
-            while (i0 < m0 and changed0[i0 + 1] != 0) i0 += 1;
-            while (i1 < m1 and changed1[i1 + 1] != 0) i1 += 1;
-            try edits.append(gpa, .{ .line0 = l0 + prefix, .line1 = l1 + prefix, .deleted = i0 - l0, .inserted = i1 - l1 });
+            const l0 = p0;
+            const l1 = p1;
+            while (p0 < m0 and changed0[p0 + 1] != 0) p0 += 1;
+            while (p1 < m1 and changed1[p1 + 1] != 0) p1 += 1;
+            try edits.append(gpa, .{ .line0 = l0 + prefix, .line1 = l1 + prefix, .deleted = p0 - l0, .inserted = p1 - l1 });
         }
-        i0 += 1;
-        i1 += 1;
+        p0 += 1;
+        p1 += 1;
     }
     return edits.toOwnedSlice(gpa);
 }

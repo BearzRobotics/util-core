@@ -24,6 +24,8 @@ test {
     _ = @import("lib/chroot.zig");
     _ = @import("lib/cksum.zig");
     _ = @import("lib/cmp.zig");
+    _ = @import("lib/diffcore.zig");
+    _ = @import("lib/diff.zig");
     _ = @import("lib/comm.zig");
     _ = @import("lib/cp.zig");
     _ = @import("lib/csplit.zig");
