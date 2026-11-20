@@ -1819,7 +1819,7 @@ fn validUtf8(s: []const u8) bool {
 }
 
 /// Search one open descriptor. Returns the number of selected lines.
-const chunk_len = 256 * 1024;
+const chunk_len = 96 * 1024; // GNU grep's read size: binary detection works per read
 
 fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
     const o = &g.o;
