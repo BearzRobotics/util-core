@@ -368,7 +368,7 @@ test "analyze finds required literals" {
     try expectInfo("\\Athe", o, "the", true, false);
     try expectInfo("e$", o, "e", true, false);
     try expectInfo("\\Ae\\z", o, "e", true, false);
-    try expectInfo("^the", o, "the", false, false);
+    try expectInfo("^the", o, "the", true, false);
     try expectInfo("a|b", o, "", false, true);
     try expectInfo("(?<!x)abc", o, "", false, false);
     try expectInfo("(^a)", o, "", false, false);
