@@ -12,7 +12,6 @@ opt-in or terminal-only departure. Per-command detail is in each
 | find | `-json` action (listed in `--help`) | the action is given | do not pass it |
 | tree | `-J` is tree's own JSON output (not an extension) | n/a | n/a |
 | cat (and others, see their records) | see Extensions in each `docs/compatibility/<cmd>.md` | | |
-| grep | none yet (ripgrep- and FreeBSD-derived options are planned, not implemented) | n/a | n/a |
+| grep | ripgrep-, ugrep- and FreeBSD-derived options: `--json`, `--smart-case`, `--glob`, `--hidden`/`--no-hidden`, `--ignore-vcs`, `--replace`, `--count-matches`, `--stats`, `--type`/`--type-not`/`--type-list`, `--max-columns`, `--sort`, `--and`/`--andnot`/`--not`/`--bool`, `-O`/`-p`/`-S`, `--include-dir`, `--mmap`, `--decompress`; clearer stderr for invalid -P patterns, regex limits, out of memory and decompression failures (listed in `--help` as "(not in GNU)") | the option is given (diagnostics: the failure occurs) | do not pass it |
 
-TODO (audit in progress): complete this table from the per-command records;
-grep's extension list is not yet enumerated in docs/compatibility/grep.md.
+TODO (audit in progress): complete this table from the per-command records.

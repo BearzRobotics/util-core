@@ -15,12 +15,19 @@ Pattern selection and interpretation:
   -w, --word-regexp         match only whole words
   -x, --line-regexp         match only whole lines
   -z, --null-data           a data line ends in 0 byte, not newline
+      --smart-case          ignore case unless a pattern has an uppercase letter (not in GNU)
+      --and=PATTERN, --andnot=PATTERN, --not=PATTERN  boolean query terms (not in GNU)
+      --bool                PATTERN is a Boolean query: A B, A|B, -A, (A B) (not in GNU)
 
 Miscellaneous:
   -s, --no-messages         suppress error messages
   -v, --invert-match        select non-matching lines
   -V, --version             display version information and exit
       --help                display this help text and exit
+      --json                print results as JSON Lines (ripgrep schema) (not in GNU)
+      --stats               print search statistics after the results (not in GNU)
+      --decompress          search inside gzip, zlib, xz and zstd files (not in GNU)
+      --mmap                accepted and ignored (FreeBSD) (not in GNU)
 
 Output control:
   -m, --max-count=NUM       stop after NUM selected lines
@@ -51,6 +58,19 @@ Output control:
   -c, --count               print only a count of selected lines per FILE
   -T, --initial-tab         make tabs line up (if needed)
   -Z, --null                print 0 byte after FILE name
+      --count-matches       print the number of matches per FILE, not lines (not in GNU)
+      --replace=TEXT        replace each match with TEXT ($1, ${name}) (not in GNU)
+      --max-columns=NUM     omit lines longer than NUM bytes (not in GNU)
+      --max-columns-preview  show the start of omitted lines (not in GNU)
+      --glob=GLOB           include FILEs matching GLOB; '!GLOB' excludes (not in GNU)
+      --type=NAME, --type-not=NAME  search only (or not) files of a type (not in GNU)
+      --type-list           list the built-in file types and exit (not in GNU)
+      --hidden, --no-hidden  search (default) or skip hidden files with -r (not in GNU)
+      --ignore-vcs          with -r, honour .gitignore and .ignore files (not in GNU)
+      --no-ignore           do not honour ignore files (default) (not in GNU)
+      --sort=KEY, --sortr=KEY  order files with -r: path, modified, accessed, created, size (not in GNU)
+      --include-dir=GLOB    with -r, search only directories matching GLOB (not in GNU)
+  -O, -p, -S                with -r: follow links on the command line only, never, or all (not in GNU)
 
 Context control:
   -B, --before-context=NUM  print NUM lines of leading context

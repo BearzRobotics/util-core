@@ -14,6 +14,7 @@ const LX = std.os.linux;
 const Io = std.Io;
 
 const help_text = @embedFile("../help/grep.txt");
+const ign = @import("../lib/grep_ignore.zig");
 
 // -------------------------------------------------------------------- main
 
@@ -48,9 +49,17 @@ pub fn main(ctx: cli.Context) u8 {
     var globs: std.ArrayList(grep.Glob) = .empty;
     var excl: std.ArrayList([]const u8) = .empty;
     var no_messages = false;
+    var rg_globs: std.ArrayList(ign.Pattern) = .empty;
+    var type_inc: std.ArrayList([]const u8) = .empty;
+    var type_exc: std.ArrayList([]const u8) = .empty;
+    var terms: std.ArrayList(grep.BoolTerm) = .empty;
+    var incl_dirs: std.ArrayList([]const u8) = .empty;
+    var use_bool = false;
+    var bool_query = false;
+    var have_ops = false;
     o.utf8 = grep.localeIsUtf8(env);
 
-    var p = getopt.Parser.init(ctx, "0123456789A:B:C:D:EFGHIPTUVX:abcd:e:f:hiLlm:noqRrsuvwxyZz", &.{
+    var p = getopt.Parser.init(ctx, "0123456789A:B:C:D:EFGHIOPSTUVX:abcd:e:f:hiLlm:nopqRrsuvwxyZz", &.{
         .{ .name = "basic-regexp", .id = 'G' },
         .{ .name = "extended-regexp", .id = 'E' },
         .{ .name = "fixed-regexp", .id = 'F' },
@@ -98,7 +107,33 @@ pub fn main(ctx: cli.Context) u8 {
         .{ .name = "binary", .id = 'U' },
         .{ .name = "with-filename", .id = 'H' },
         .{ .name = "word-regexp", .id = 'w' },
+        // Extensions (decision 0006); ids from 2000 lose abbreviation ties.
+        .{ .name = "json", .id = 2000 },
+        .{ .name = "smart-case", .id = 2001 },
+        .{ .name = "glob", .arg = .required, .id = 2002 },
+        .{ .name = "hidden", .id = 2003 },
+        .{ .name = "no-hidden", .id = 2004 },
+        .{ .name = "no-ignore", .id = 2005 },
+        .{ .name = "ignore-vcs", .id = 2006 },
+        .{ .name = "replace", .arg = .required, .id = 2007 },
+        .{ .name = "count-matches", .id = 2008 },
+        .{ .name = "stats", .id = 2009 },
+        .{ .name = "type", .arg = .required, .id = 2010 },
+        .{ .name = "type-not", .arg = .required, .id = 2011 },
+        .{ .name = "type-list", .id = 2012 },
+        .{ .name = "max-columns", .arg = .required, .id = 2013 },
+        .{ .name = "max-columns-preview", .id = 2014 },
+        .{ .name = "sort", .arg = .required, .id = 2015 },
+        .{ .name = "sortr", .arg = .required, .id = 2016 },
+        .{ .name = "mmap", .id = 2020 },
+        .{ .name = "decompress", .id = 2021 },
+        .{ .name = "include-dir", .arg = .required, .id = 2022 },
+        .{ .name = "and", .arg = .required, .id = 2030 },
+        .{ .name = "andnot", .arg = .required, .id = 2031 },
+        .{ .name = "not", .arg = .required, .id = 2032 },
+        .{ .name = "bool", .id = 2033 },
     });
+    p.ext_min = 2000;
     defer p.deinit();
     p.no_try = true;
 
@@ -199,6 +234,7 @@ pub fn main(ctx: cli.Context) u8 {
                     keys.appendSlice(gpa, opt.arg.?) catch return oom(ctx);
                     keys.append(gpa, '\n') catch return oom(ctx);
                     have_keys = true;
+                    terms.append(arena, .{ .keys = opt.arg.? }) catch return oom(ctx);
                 },
                 'f' => {
                     const name = opt.arg.?;
@@ -222,6 +258,8 @@ pub fn main(ctx: cli.Context) u8 {
                     if (data.items.len > 0) {
                         keys.appendSlice(gpa, data.items) catch return oom(ctx);
                         if (data.items[data.items.len - 1] != '\n') keys.append(gpa, '\n') catch return oom(ctx);
+                        const t = if (data.items[data.items.len - 1] == '\n') data.items[0 .. data.items.len - 1] else data.items;
+                        terms.append(arena, .{ .keys = arena.dupe(u8, t) catch return oom(ctx) }) catch return oom(ctx);
                     }
                 },
                 'h' => o.with_filename = false,
@@ -279,7 +317,7 @@ pub fn main(ctx: cli.Context) u8 {
                 1101 => {
                     const a = opt.arg;
                     if (a == null) o.color = colorAuto(ctx) else if (std.mem.eql(u8, a.?, "always") or std.mem.eql(u8, a.?, "yes") or std.mem.eql(u8, a.?, "force")) o.color = true else if (std.mem.eql(u8, a.?, "never") or std.mem.eql(u8, a.?, "no") or std.mem.eql(u8, a.?, "none")) o.color = false else if (std.mem.eql(u8, a.?, "auto") or std.mem.eql(u8, a.?, "tty") or std.mem.eql(u8, a.?, "if-tty")) o.color = colorAuto(ctx) else {
-                        return if (cli.writeStdout(ctx.io, help_text)) 0 else 2;
+                        return gnuHelp(ctx, gpa);
                     }
                 },
                 1102 => globs.append(gpa, .{ .pat = opt.arg.?, .include = false }) catch return oom(ctx),
@@ -311,6 +349,99 @@ pub fn main(ctx: cli.Context) u8 {
                 1108 => o.label = opt.arg.?,
                 1109 => o.line_buffered = true,
                 1110 => o.group_sep = null,
+                'O' => o.symlinks = .cmdline,
+                'p' => o.symlinks = .none,
+                'S' => o.deref_recursive = true,
+                2000 => o.json = true,
+                2001 => o.smart_case = true,
+                2002 => {
+                    const pt = ign.Pattern.parse(opt.arg.?, false) orelse {
+                        cli.warn(ctx, "{s}: invalid glob", .{opt.arg.?});
+                        return 2;
+                    };
+                    rg_globs.append(arena, pt) catch return oom(ctx);
+                },
+                2003 => o.search_hidden = true,
+                2004 => o.search_hidden = false,
+                2005 => o.ignore_vcs = false,
+                2006 => o.ignore_vcs = true,
+                2007 => o.replace = opt.arg.?,
+                2008 => o.count_matches = true,
+                2009 => o.stats = true,
+                2010, 2011 => {
+                    const t = ign.findType(opt.arg.?) orelse {
+                        cli.warn(ctx, "unrecognized file type: {s} (see --type-list)", .{opt.arg.?});
+                        return 2;
+                    };
+                    const dst = if (opt.id == 2010) &type_inc else &type_exc;
+                    dst.appendSlice(arena, t.globs) catch return oom(ctx);
+                },
+                2012 => {
+                    var ob: std.ArrayList(u8) = .empty;
+                    defer ob.deinit(gpa);
+                    for (ign.types) |t| {
+                        ob.appendSlice(gpa, t.name) catch return oom(ctx);
+                        ob.appendSlice(gpa, ": ") catch return oom(ctx);
+                        for (t.globs, 0..) |gl, i| {
+                            if (i > 0) ob.appendSlice(gpa, ", ") catch return oom(ctx);
+                            ob.appendSlice(gpa, gl) catch return oom(ctx);
+                        }
+                        ob.append(gpa, '\n') catch return oom(ctx);
+                    }
+                    return if (cli.writeStdout(ctx.io, ob.items)) 0 else 2;
+                },
+                2013 => {
+                    o.max_columns = std.fmt.parseInt(usize, opt.arg.?, 10) catch {
+                        cli.warn(ctx, "{s}: invalid --max-columns value", .{opt.arg.?});
+                        return 2;
+                    };
+                },
+                2014 => o.max_columns_preview = true,
+                2015, 2016 => {
+                    var k = opt.arg.?;
+                    var rev = opt.id == 2016;
+                    if (k.len > 1 and k[0] == 'r' and !std.mem.eql(u8, k, "none")) {
+                        // ugrep spelling: rname, rsize, ...
+                        rev = true;
+                        k = k[1..];
+                    }
+                    const keymap = [_]struct { n: []const u8, v: grep.SortKey }{
+                        .{ .n = "none", .v = .none },        .{ .n = "path", .v = .path },
+                        .{ .n = "name", .v = .path },        .{ .n = "modified", .v = .modified },
+                        .{ .n = "changed", .v = .modified }, .{ .n = "accessed", .v = .accessed },
+                        .{ .n = "used", .v = .accessed },    .{ .n = "created", .v = .created },
+                        .{ .n = "size", .v = .size },
+                    };
+                    var found = false;
+                    for (keymap) |e| if (std.mem.eql(u8, e.n, k)) {
+                        o.sort = e.v;
+                        o.sort_reverse = rev and e.v != .none;
+                        found = true;
+                    };
+                    if (!found) {
+                        cli.warn(ctx, "{s}: invalid sort key (use none, path, modified, accessed, created or size)", .{opt.arg.?});
+                        return 2;
+                    }
+                },
+                2020 => {},
+                2021 => o.decompress = true,
+                2022 => incl_dirs.append(arena, opt.arg.?) catch return oom(ctx),
+                2030, 2031, 2032 => {
+                    use_bool = true;
+                    have_ops = true;
+                    var pat_arg = opt.arg.?;
+                    if (std.mem.eql(u8, pat_arg, "-e")) {
+                        // "--and -e PATTERN": the pattern is the next argument
+                        if (p.index >= ctx.args.len) return usage(ctx);
+                        pat_arg = ctx.args[p.index];
+                        p.index += 1;
+                    }
+                    terms.append(arena, .{ .keys = pat_arg, .negate = opt.id != 2030, .and_next = opt.id != 2032 }) catch return oom(ctx);
+                },
+                2033 => {
+                    use_bool = true;
+                    bool_query = true;
+                },
                 getopt.help_id => return if (cli.writeStdout(ctx.io, help_text)) 0 else 2,
                 getopt.version_id => return version(ctx),
                 else => return usage(ctx),
@@ -319,10 +450,13 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     var operands = p.operands.items;
-    if (!have_keys) {
+    if (!have_keys and have_ops) {
+        if (terms.items.len == 0) return usage(ctx);
+    } else if (!have_keys) {
         if (operands.len == 0) return usage(ctx);
         keys.appendSlice(gpa, operands[0]) catch return oom(ctx);
         keys.append(gpa, '\n') catch return oom(ctx);
+        terms.insert(arena, 0, .{ .keys = operands[0] }) catch return oom(ctx);
         operands = operands[1..];
     }
     if (default_ctx >= 0) {
@@ -340,13 +474,34 @@ pub fn main(ctx: cli.Context) u8 {
     var report_state = Report{ .ctx = ctx, .no_messages = no_messages };
     const observer: grep.Observer = .{ .context = &report_state, .func = report };
     var diag: grep.CompileError = .{};
-    var matcher = grep.Matcher.compile(gpa, o, keys.items, observer, &diag) catch |e| switch (e) {
+    o.rg_globs = rg_globs.items;
+    o.type_include = type_inc.items;
+    o.type_exclude = type_exc.items;
+    o.include_dirs = incl_dirs.items;
+    const compiled = if (use_bool and bool_query) blk: {
+        var q: std.ArrayList(u8) = .empty;
+        for (terms.items) |t| {
+            var lines = std.mem.splitScalar(u8, t.keys, '\n');
+            while (lines.next()) |ln| {
+                if (q.items.len > 0) q.appendSlice(arena, " | ") catch return oom(ctx);
+                q.appendSlice(arena, "(") catch return oom(ctx);
+                q.appendSlice(arena, ln) catch return oom(ctx);
+                q.appendSlice(arena, ")") catch return oom(ctx);
+            }
+        }
+        break :blk grep.Matcher.compileQuery(gpa, o, q.items, observer, &diag);
+    } else if (use_bool)
+        grep.Matcher.compileTerms(gpa, o, terms.items, observer, &diag)
+    else
+        grep.Matcher.compile(gpa, o, keys.items, observer, &diag);
+    var matcher = compiled catch |e| switch (e) {
         error.OutOfMemory => return oom(ctx),
         error.BadPattern => {
             cli.warn(ctx, "{s}", .{switch (diag.kind) {
                 .syntax => posixre.diagnoseGrep(diag.pattern, diag.extended),
                 .bare_class => "character class syntax is [[:space:]], not [:space:]",
-                .invalid_perl => "invalid Perl regular expression",
+                .invalid_perl => return perlDiag(ctx, &diag),
+                .bool_syntax => return boolDiag(ctx, &diag),
             }});
             return 2;
         },
@@ -404,12 +559,43 @@ fn report(context: ?*anyopaque, ev: grep.Event) void {
             '{' => cli.warn(ctx, "warning: {{...}} at start of expression", .{}),
             else => cli.warn(ctx, "warning: {c} at start of expression", .{ch}),
         },
+        .unsupported_compression => |u| cli.warn(ctx, "{s}: {s} compression is not supported by --decompress; searching the compressed bytes", .{ u.name, u.format }),
+        .decompress_failed => |n| cli.warn(ctx, "{s}: cannot decompress: the compressed data is damaged or truncated", .{n}),
+        .search_limit => |e| cli.warn(ctx, "{s}: regular expression search exceeded its limits near line {d}; lines it gave up on were treated as not matching", .{ e.name, e.line }),
         .deprecated_grep_color => |gc| cli.warn(ctx, "warning: GREP_COLOR='{s}' is deprecated; use GREP_COLORS='mt={s}'", .{ gc, gc }),
     }
 }
 
+/// The help text as GNU prints it for an invalid --color argument: without
+/// the lines that describe extensions.
+fn gnuHelp(ctx: cli.Context, gpa: std.mem.Allocator) u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    var it = std.mem.splitScalar(u8, help_text, '\n');
+    while (it.next()) |ln| {
+        if (std.mem.endsWith(u8, ln, "(not in GNU)")) continue;
+        out.appendSlice(gpa, ln) catch return oom(ctx);
+        out.append(gpa, '\n') catch return oom(ctx);
+    }
+    if (out.items.len > 0) _ = out.pop(); // the split leaves one newline too many
+    return if (cli.writeStdout(ctx.io, out.items)) 0 else 2;
+}
+
 fn oom(ctx: cli.Context) u8 {
-    cli.warn(ctx, "memory exhausted", .{});
+    cli.warn(ctx, "memory exhausted (a pattern list or an input line is larger than the memory available; try -m, a smaller file, or less -f data)", .{});
+    return 2;
+}
+
+fn perlDiag(ctx: cli.Context, d: *const grep.CompileError) u8 {
+    if (d.detail.len > 0)
+        cli.warn(ctx, "invalid Perl regular expression: {s} (at offset {d} in '{s}')", .{ d.detail, d.offset, d.pattern })
+    else
+        cli.warn(ctx, "invalid Perl regular expression: '{s}'", .{d.pattern});
+    return 2;
+}
+
+fn boolDiag(ctx: cli.Context, d: *const grep.CompileError) u8 {
+    cli.warn(ctx, "invalid Boolean query: syntax error at offset {d} in '{s}'", .{ d.offset, d.pattern });
     return 2;
 }
 
