@@ -258,7 +258,7 @@ const Driver = struct {
             const n0 = Io.Dir.cwd().readLink(d.env.io, real[0], &b0) catch |e| return d.fileError(real[0], e);
             const n1 = Io.Dir.cwd().readLink(d.env.io, real[1], &b1) catch |e| return d.fileError(real[1], e);
             if (std.mem.eql(u8, b0[0..n0], b1[0..n1])) {
-                if (o.report_identical) try d.identical(dn);
+                if (o.report_identical or o.json) try d.identical(dn);
             } else {
                 if (o.json) {
                     try d.jsonHead("symlinks_differ", dn);
@@ -269,14 +269,14 @@ const Driver = struct {
             return;
         }
         if (nested and infos[0].exists and infos[1].exists and infos[0].kind != .file) {
-            if (o.report_identical) try d.identical(dn);
+            if (o.report_identical or o.json) try d.identical(dn);
             return;
         }
         // The very same file is identical without reading it.
         if (infos[0].exists and infos[1].exists and infos[0].kind == .file and infos[0].inode != 0 and infos[0].inode == infos[1].inode and
             infos[0].size == infos[1].size and infos[0].mtime.sec == infos[1].mtime.sec and infos[0].mtime.nsec == infos[1].mtime.nsec)
         {
-            if (o.report_identical) try d.identical(dn);
+            if (o.report_identical or o.json) try d.identical(dn);
             return;
         }
         try d.compareContents(nested, real, dn, infos);
@@ -350,7 +350,7 @@ const Driver = struct {
         };
         if (binary) {
             if (same_bytes) {
-                if (o.report_identical) try d.identical(dn);
+                if (o.report_identical or o.json) try d.identical(dn);
                 return;
             }
             if (o.json) {
@@ -362,8 +362,8 @@ const Driver = struct {
             d.raise(1);
             return;
         }
-        if (same_bytes and o.style != .ed and o.style != .forward_ed and o.style != .ifdef) {
-            if (o.report_identical) try d.identical(dn);
+        if (same_bytes and o.style != .ed and o.style != .forward_ed and o.style != .ifdef and o.style != .side_by_side) {
+            if (o.report_identical or o.json) try d.identical(dn);
             return;
         }
         var bufs: [2][]const u8 = .{ data[0], data[1] };
@@ -389,8 +389,8 @@ const Driver = struct {
             return;
         };
         defer cmp.deinit();
-        if (!cmp.differs() and o.style != .ifdef) {
-            if (o.report_identical) try d.identical(dn);
+        if (!cmp.differs() and o.style != .ifdef and o.style != .side_by_side) {
+            if (o.report_identical or o.json) try d.identical(dn);
             return;
         }
         if (cmp.differs()) d.raise(1);

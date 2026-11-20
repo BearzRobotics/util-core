@@ -10,6 +10,7 @@ if ! have_jq; then echo "SKIP: jq not installed"; exit 0; fi
 W="$(mktemp -d)"; cd "$W"
 printf 'a\nb\nc\nd\ne\n' > i1; printf 'a\nX\nc\nf\ne\ng\n' > i2
 : > empty
+printf "a\nb\n" > i3
 
 # GNU marker column: with width 3 each row is "<marker>" surrounded by blanks.
 gnu_markers() { LC_ALL=C /usr/bin/sdiff -w 3 "$@" | sed 's/^ *//; s/ *$//; s/^$/=/' | tr '\n' ' '; }
@@ -21,8 +22,9 @@ out=$(ours --json i1 i2); rc=$?
 check "status 1" 1 "$rc"
 check "files" 'i1 i2' "$(echo "$out" | jq -r '.files | join(" ")')"
 check "changed row" 'b X 2 2' "$(echo "$out" | jq -r '.rows[] | select(.marker=="changed") | select(.left=="b") | "\(.left) \(.right) \(.left_line) \(.right_line)"')"
-check "left_only row" 'd' "$(echo "$out" | jq -r '.rows[] | select(.marker=="left_only") | .left')"
-check "left_only has null right" null "$(echo "$out" | jq -c '.rows[] | select(.marker=="left_only") | .right')"
+out3=$(ours --json i1 i3)
+check "left_only row" 'c' "$(echo "$out3" | jq -r '[.rows[] | select(.marker=="left_only") | .left][0]')"
+check "left_only has null right" null "$(echo "$out3" | jq -c '[.rows[] | select(.marker=="left_only") | .right][0]')"
 check "right_only row" 'g' "$(echo "$out" | jq -r '.rows[] | select(.marker=="right_only") | .right')"
 ours --json i1 i1 >/dev/null; check "identical status" 0 $?
 ours --json -o out i1 i2 >/dev/null 2>&1; check "--json -o refused" 2 $?

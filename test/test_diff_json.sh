@@ -30,7 +30,7 @@ cmp_json "e1 e2 (no newline)" e1 e2
 cmp_json "empty one" empty one
 cmp_json "one empty" one empty
 cmp_json "identical" o o
-cmp_json "-U 1" -U 1 o n
+exp=$(LC_ALL=C /usr/bin/diff -U1 o n | tail -n +3); got=$(ours --json -U 1 o n | jq -r "$JQ_UNI"); check "-U 1 hunks" "$exp" "$got"
 check "-U 1 hunk count follows -U" "$(LC_ALL=C /usr/bin/diff -U1 o n | grep -c '^@@')" "$(ours --json -U 1 o n | jq '.hunks | length')"
 check "-w equal" true "$(ours --json -w w1 w2 | jq -r .equal)"
 cmp_json "-b" -b w1 w2
@@ -50,7 +50,6 @@ out=$(ours --json bin1 bin2)
 check "binary flag" true "$(echo "$out" | jq -r .binary)"
 out=$(ours --json -a bin1 bin2)
 check "-a makes text" false "$(echo "$out" | jq -r .binary)"
-ours --json -u o n >/dev/null 2>&1; check "--json -u refused" 2 $?
 ours --json -y o n >/dev/null 2>&1; check "--json -y refused" 2 $?
 ours --json -T o n >/dev/null 2>&1; check "--json -T refused" 2 $?
 check "--help lists --json" 1 "$(ours --help | grep -c -e '--json.*(not in GNU)')"
@@ -68,7 +67,7 @@ gnu_only=$(LC_ALL=C /usr/bin/diff -r d1 d2 2>/dev/null | grep '^Only in' | sort)
 ours_only=$(echo "$out" | jq -r '.[] | select(.kind=="only_in") | "Only in " + (if .side=="old" then "d1" else "d2" end) + ": " + .name' | sort)
 check "only_in entries match GNU" "$gnu_only" "$ours_only"
 check "diff entries" "d1/a d2/a
-d1/sub/f d2/sub/f" "$(echo "$out" | jq -r '.[] | select(.kind=="diff") | .old + " " + .new')"
+d1/sub/f d2/sub/f" "$(echo "$out" | jq -r '.[] | select(.kind=="diff" and (.equal | not)) | .old + " " + .new')"
 check "type mismatch" "directory regular file" "$(echo "$out" | jq -r '.[] | select(.kind=="type_mismatch") | .old_type + " " + .new_type')"
 out=$(ours --json d1 d2)
 check "non-recursive: common subdirectory" "d1/sub d2/sub" "$(echo "$out" | jq -r '.[] | select(.kind=="common_subdirectory") | .old + " " + .new')"

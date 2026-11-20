@@ -306,7 +306,8 @@ pub fn main(ctx: cli.Context) u8 {
     if (fmt_any) opts.formats = fmt;
     opts.json = as_json;
     if (as_json) {
-        if (opts.style != .normal or style_set) return usage(ctx, "option --json is incompatible with an output style", .{});
+        if (style_set and opts.style != .unified and opts.style != .context) return usage(ctx, "option --json is incompatible with an output style", .{});
+        opts.style = .normal;
         if (opts.expand_tabs or opts.initial_tab or opts.suppress_blank_empty or opts.color) return usage(ctx, "option --json is incompatible with text layout options", .{});
     }
     if (context_given) |c| opts.context = c;

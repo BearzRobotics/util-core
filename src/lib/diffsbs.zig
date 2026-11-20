@@ -146,7 +146,7 @@ pub fn printSideBySide(p: anytype, items: anytype) !void {
     }
     // Common lines after the last change; only if something was printed or
     // the files have no differences at all (then nothing is called).
-    if (items.len > 0) try common(p, &next0, &next1, p.c.a.count(), p.c.b.count());
+    try common(p, &next0, &next1, p.c.a.count(), p.c.b.count());
 }
 
 fn common(p: anytype, next0: *usize, next1: *usize, limit0: usize, limit1: usize) !void {

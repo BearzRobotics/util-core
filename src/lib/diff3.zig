@@ -355,9 +355,12 @@ pub fn writeEd(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void
                     try ins.marker(w, ">>>>>>> {s}", .{o.labels[2]});
                 } else {
                     if (with_old) {
+                        // GNU numbers the following lines as if this section were absent.
+                        const keep = ins.next;
                         try ins.marker(w, "||||||| {s}", .{o.labels[1]});
                         var i: usize = 0;
                         while (i < old.count) : (i += 1) try ins.line(w, r.lines[1].raw(old.start + i));
+                        ins.next = keep;
                     }
                     try ins.marker(w, "=======", .{});
                     var i: usize = 0;
