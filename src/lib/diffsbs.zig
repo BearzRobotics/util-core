@@ -41,7 +41,8 @@ fn tabFromTo(w: *Io.Writer, expand: bool, tabsize: usize, from_in: usize, to: us
 }
 
 /// Print one half line, at most `out_bound` columns; returns the column reached.
-fn printHalf(w: *Io.Writer, o: diff.Options, text: []const u8, out_bound: usize) Io.Writer.Error!usize {
+fn printHalf(w: *Io.Writer, o: diff.Options, text: []const u8, out_bound: usize, indent: usize) Io.Writer.Error!usize {
+    var cr_seen = false;
     var in_pos: usize = 0;
     var out_pos: usize = 0;
     for (text) |c| {
@@ -63,6 +64,7 @@ fn printHalf(w: *Io.Writer, o: diff.Options, text: []const u8, out_bound: usize)
             '\r' => {
                 try w.writeByte(c);
                 in_pos = 0;
+                cr_seen = true;
                 out_pos = 0;
             },
             '\x08' => {
@@ -85,6 +87,7 @@ fn printHalf(w: *Io.Writer, o: diff.Options, text: []const u8, out_bound: usize)
             },
         }
     }
+    if (cr_seen and out_pos < indent) return try tabFromTo(w, o.expand_tabs, o.tab_size, out_pos, indent);
     return out_pos;
 }
 
@@ -100,7 +103,7 @@ pub fn row(w: *Io.Writer, o: diff.Options, left: ?[]const u8, sep_in: u8, right:
     var put_newline = false;
     if (left) |l| {
         put_newline = put_newline or endsNl(l);
-        col = try printHalf(w, o, l, lay.bound);
+        col = try printHalf(w, o, l, lay.bound, 0);
     }
     if (sep != ' ') {
         col = try tabFromTo(w, o.expand_tabs, o.tab_size, col, lay.marker);
@@ -112,7 +115,7 @@ pub fn row(w: *Io.Writer, o: diff.Options, left: ?[]const u8, sep_in: u8, right:
         put_newline = put_newline or endsNl(r);
         if (!(r.len > 0 and r[0] == '\n')) {
             col = try tabFromTo(w, o.expand_tabs, o.tab_size, col, lay.col2);
-            _ = try printHalf(w, o, r, lay.bound);
+            _ = try printHalf(w, o, r, lay.bound, col);
         }
     }
     if (put_newline) try w.writeByte('\n');
@@ -213,7 +216,7 @@ fn lineFormat(o: diff.Options, which: u2) []const u8 {
 /// A group whose last line has no newline gets one when more format text follows.
 fn groupTail(p: anytype, g: Group, fmt: []const u8, next: usize) !void {
     const lines = if (g.file == 0) p.c.a else p.c.b;
-    if (g.end > g.beg and !lines.terminated(g.end - 1) and next < fmt.len) try p.w.writeByte('\n');
+    if (g.end > g.beg and !lines.terminated(g.end - 1) and next < fmt.len and fmt[next] != '%') try p.w.writeByte('\n');
 }
 
 fn printLines(p: anytype, fmt: []const u8, g: Group) !void {
