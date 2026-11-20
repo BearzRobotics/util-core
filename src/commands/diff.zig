@@ -269,7 +269,7 @@ pub fn main(ctx: cli.Context) u8 {
             't' => opts.expand_tabs = true,
             'T' => opts.initial_tab = true,
             O.suppress_blank_empty => opts.suppress_blank_empty = true,
-            'l' => {},
+            'l' => opts.paginate = true,
             'r' => opts.recursive = true,
             O.no_deref => opts.no_dereference = true,
             'N' => opts.new_file = true,

@@ -9,6 +9,7 @@ const common = @import("common.zig");
 const json = @import("../json.zig");
 const tz = @import("../tz.zig");
 const fnmatch = @import("../fnmatch.zig");
+const diffsbs = @import("diffsbs.zig");
 
 const Options = diff.Options;
 const Env = diff.Env;
@@ -273,13 +274,20 @@ const Driver = struct {
             return;
         }
         // The very same file is identical without reading it.
-        if (infos[0].exists and infos[1].exists and infos[0].kind == .file and infos[0].inode != 0 and infos[0].inode == infos[1].inode and
+        if (diffsbs.noDiffMeansNoOutput(o) and infos[0].exists and infos[1].exists and infos[0].kind == .file and infos[0].inode != 0 and infos[0].inode == infos[1].inode and
             infos[0].size == infos[1].size and infos[0].mtime.sec == infos[1].mtime.sec and infos[0].mtime.nsec == infos[1].mtime.nsec)
         {
             if (o.report_identical or o.json) try d.identical(dn);
             return;
         }
         try d.compareContents(nested, real, dn, infos);
+    }
+
+    /// `-l`: format the finished output of one file with the page formatter,
+    /// titled `diff OPTIONS NAME1 NAME2`, as GNU's `pr -h` pipe does.
+    fn paginate(d: *Driver, text: []const u8, title: []const u8) !void {
+        const pr = @import("pr.zig");
+        _ = try pr.run(d.env, .{ .custom_header = title, .stdin_data = text }, &.{}, d.w, .none);
     }
 
     fn compareDirs(d: *Driver, nested: bool, real: [2][]const u8, disp: [2][]const u8, only: ?usize) anyerror!void {
@@ -415,20 +423,28 @@ const Driver = struct {
         if (nested or d.dir_mode) {
             header = try std.fmt.allocPrint(gpa, "diff{s} {s} {s}", .{ o.switch_string, dn[0], dn[1] });
         }
+        var page: Io.Writer.Allocating = .init(gpa);
+        defer page.deinit();
         var pr: diff.Printer = .{
             .gpa = gpa,
-            .w = d.w,
+            .w = if (o.paginate) &page.writer else d.w,
             .options = o,
             .c = &cmp,
             .m = &d.matchers,
             .names = dn,
             .times = .{ infos[0].mtime, infos[1].mtime },
             .zone = &d.zone,
-            .header = header,
+            .header = if (o.paginate) null else header,
         };
         try pr.script();
+        if (o.paginate and pr.begun) try d.paginate(page.written(), header orelse try diffName(gpa, o, dn, &header));
     }
 };
+
+fn diffName(gpa: std.mem.Allocator, o: diff.Options, dn: [2][]const u8, slot: *?[]u8) ![]const u8 {
+    slot.* = try std.fmt.allocPrint(gpa, "diff{s} {s} {s}", .{ o.switch_string, dn[0], dn[1] });
+    return slot.*.?;
+}
 
 pub fn run(env: Env, options: Options, name0: []const u8, name1: []const u8, w: *Io.Writer, observer: Observer) !u8 {
     const gpa = env.gpa;

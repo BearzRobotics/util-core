@@ -123,6 +123,7 @@ pub fn row(w: *Io.Writer, o: diff.Options, left: ?[]const u8, sep_in: u8, right:
 
 pub fn printSideBySide(p: anytype, items: anytype) !void {
     const o = p.options;
+    try p.begin();
     var next0: usize = 0;
     var next1: usize = 0;
     for (0..items.len) |k| {
@@ -214,23 +215,160 @@ fn defaultGroup(o: diff.Options, which: u2, buf: *std.ArrayList(u8), gpa: std.me
 fn lineFormat(o: diff.Options, which: u2) []const u8 {
     const f = o.formats;
     return switch (which) {
-        0 => f.old_line orelse "%L",
-        1 => f.new_line orelse "%L",
-        else => f.unchanged_line orelse "%L",
+        0 => f.old_line orelse "%l\n",
+        1 => f.new_line orelse "%l\n",
+        else => f.unchanged_line orelse "%l\n",
     };
 }
 
-/// A group whose last line has no newline gets one when more format text follows.
-fn groupTail(p: anytype, g: Group, fmt: []const u8, next: usize) !void {
-    const lines = if (g.file == 0) p.c.a else p.c.b;
-    if (g.end > g.beg and !lines.terminated(g.end - 1) and next < fmt.len and fmt[next] != '%') try p.w.writeByte('\n');
+/// A parsed printf-like directive: `%[-'0]*[0-9]*(.[0-9]*)?[doxXc]`.
+const Spec = struct {
+    minus: bool = false,
+    zero: bool = false,
+    width: usize = 0,
+    prec: ?usize = null,
+    conv: u8 = 'd',
+    /// The letter after the conversion (`n`, or a group letter), or the quote of `%c'x'`.
+    arg: u8 = 0,
+    /// Index just after the directive.
+    end: usize = 0,
+};
+
+fn at(fmt: []const u8, i: usize) u8 {
+    return if (i < fmt.len) fmt[i] else 0;
+}
+
+/// Scan the directive whose `%` is at `start`; null when it is not one.
+fn scanSpec(fmt: []const u8, start: usize) ?Spec {
+    var s: Spec = .{};
+    var f = start + 1;
+    var c = at(fmt, f);
+    f += 1;
+    while (c == '-' or c == '\'' or c == '0') {
+        if (c == '-') s.minus = true;
+        if (c == '0') s.zero = true;
+        c = at(fmt, f);
+        f += 1;
+    }
+    while (std.ascii.isDigit(c)) {
+        s.width = s.width *| 10 +| (c - '0');
+        c = at(fmt, f);
+        f += 1;
+    }
+    if (c == '.') {
+        var pv: usize = 0;
+        while (true) {
+            c = at(fmt, f);
+            f += 1;
+            if (!std.ascii.isDigit(c)) break;
+            pv = pv *| 10 +| (c - '0');
+        }
+        s.prec = pv;
+    }
+    const c1 = at(fmt, f);
+    f += 1;
+    s.conv = c;
+    s.arg = c1;
+    s.end = f;
+    switch (c) {
+        'c', 'd', 'o', 'x', 'X' => return s,
+        else => return null,
+    }
+}
+
+fn printNum(w: *Io.Writer, s: Spec, v: usize) Io.Writer.Error!void {
+    var buf: [64]u8 = undefined;
+    const t: []const u8 = switch (s.conv) {
+        'o' => std.fmt.bufPrint(&buf, "{o}", .{v}) catch "",
+        'x' => std.fmt.bufPrint(&buf, "{x}", .{v}) catch "",
+        'X' => std.fmt.bufPrint(&buf, "{X}", .{v}) catch "",
+        else => std.fmt.bufPrint(&buf, "{d}", .{v}) catch "",
+    };
+    const digits: []const u8 = if (s.prec != null and s.prec.? == 0 and v == 0) "" else t;
+    var zeros: usize = 0;
+    if (s.prec) |pv| {
+        if (pv > digits.len) zeros = pv - digits.len;
+    } else if (s.zero and !s.minus and s.width > digits.len) zeros = s.width - digits.len;
+    const total = digits.len + zeros;
+    const pad = if (s.width > total) s.width - total else 0;
+    if (!s.minus) try w.splatByteAll(' ', pad);
+    try w.splatByteAll('0', zeros);
+    try w.writeAll(digits);
+    if (s.minus) try w.splatByteAll(' ', pad);
+}
+
+const Literal = struct { value: u8, end: usize };
+
+/// The character literal of `%c'C'` or `%c'\OOO'`; `lit` is the index just
+/// after the opening quote. Returns the value and the index after the closing quote.
+fn charLiteral(fmt: []const u8, lit: usize) ?Literal {
+    var p = lit;
+    const c = at(fmt, p);
+    p += 1;
+    switch (c) {
+        0, '\'' => return null,
+        '\\' => {
+            var value: u32 = 0;
+            while (true) {
+                const d = at(fmt, p);
+                p += 1;
+                if (d == '\'') break;
+                if (d < '0' or d > '7') return null;
+                value = value * 8 + (d - '0');
+            }
+            const digits = p - lit - 2;
+            if (digits < 1 or digits > 3) return null;
+            return .{ .value = @truncate(value), .end = p };
+        },
+        else => {
+            if (at(fmt, p) != '\'') return null;
+            return .{ .value = c, .end = p + 1 };
+        },
+    }
+}
+
+fn letterValue(l: u8, g0: Group, g1: Group) ?usize {
+    const g = if (std.ascii.isUpper(l)) g1 else g0;
+    const f = g.beg + 1; // first line number
+    const last = g.end; // last line number (1-based) = end exclusive 0-based
+    return switch (std.ascii.toLower(l)) {
+        'f' => f,
+        'l' => last,
+        'n' => last - g.beg,
+        'e' => f - 1,
+        'm' => last + 1,
+        else => null,
+    };
+}
+
+/// One directive other than the fixed ones: a number (`%dn` of a line,
+/// `%dF` of a group) or a character literal. Returns the index after it, or
+/// null when `fmt` has no valid directive there.
+fn printfSpec(w: *Io.Writer, fmt: []const u8, start: usize, line_no: ?usize, groups: ?[2]Group, out: bool) !?usize {
+    const s = scanSpec(fmt, start) orelse return null;
+    switch (s.conv) {
+        'c' => {
+            if (s.arg != '\'') return null;
+            const lit = charLiteral(fmt, s.end) orelse return null;
+            if (out) try w.writeByte(lit.value);
+            return lit.end;
+        },
+        else => {
+            var v: usize = undefined;
+            if (line_no) |n| {
+                if (s.arg != 'n') return null;
+                v = n;
+            } else v = letterValue(s.arg, groups.?[0], groups.?[1]) orelse return null;
+            if (out) try printNum(w, s, v);
+            return s.end;
+        },
+    }
 }
 
 fn printLines(p: anytype, fmt: []const u8, g: Group) !void {
     const lines = if (g.file == 0) p.c.a else p.c.b;
     var k = g.beg;
     while (k < g.end) : (k += 1) {
-        const raw = lines.raw(k);
         var i: usize = 0;
         while (i < fmt.len) {
             const c = fmt[i];
@@ -239,201 +377,107 @@ fn printLines(p: anytype, fmt: []const u8, g: Group) !void {
                 try p.w.writeByte(c);
                 continue;
             }
-            if (i >= fmt.len) {
-                try p.w.writeByte('%');
-                break;
-            }
-            const spec = try parseSpec(fmt, &i, "n");
-            const d = fmt[i - 1];
-            _ = d;
-            const t = fmt[i - 1];
-            switch (t) {
-                '%' => try p.w.writeByte('%'),
-                'L' => try p.w.writeAll(raw),
-                'l' => try p.w.writeAll(lines.body(k)),
-                'n' => try printNum(p.w, spec, k + 1),
-                'c' => try charLiteral(p.w, fmt, &i),
-                else => {
+            switch (at(fmt, i)) {
+                '%' => {
+                    i += 1;
                     try p.w.writeByte('%');
-                    try p.w.writeAll(fmt[spec.start .. i]);
+                },
+                'l' => {
+                    i += 1;
+                    try p.outputLine(lines.body(k));
+                },
+                'L' => {
+                    i += 1;
+                    try p.outputLine(lines.raw(k));
+                },
+                else => {
+                    if (try printfSpec(p.w, fmt, i - 1, k + 1, null, true)) |e| i = e else try p.w.writeByte('%');
                 },
             }
         }
     }
 }
 
-const Spec = struct {
-    start: usize,
-    minus: bool = false,
-    width: usize = 0,
-    prec: ?usize = null,
-    conv: u8 = 'd',
-};
-
-/// Parse `[-][WIDTH][.[PREC]]{doxX}` after a '%'; leaves `i` just after the
-/// final specifier character (the conversion for numbers, or the letter).
-fn parseSpec(fmt: []const u8, i: *usize, letters: []const u8) !Spec {
-    var s: Spec = .{ .start = i.* };
-    var j = i.*;
-    if (j < fmt.len and fmt[j] == '-') {
-        s.minus = true;
-        j += 1;
-    }
-    while (j < fmt.len and std.ascii.isDigit(fmt[j])) : (j += 1) s.width = s.width * 10 + (fmt[j] - '0');
-    if (j < fmt.len and fmt[j] == '.') {
-        j += 1;
-        var pv: usize = 0;
-        while (j < fmt.len and std.ascii.isDigit(fmt[j])) : (j += 1) pv = pv * 10 + (fmt[j] - '0');
-        s.prec = pv;
-    }
-    if (j < fmt.len and std.mem.indexOfScalar(u8, "doxX", fmt[j]) != null and j + 1 < fmt.len and std.mem.indexOfScalar(u8, letters, fmt[j + 1]) != null) {
-        s.conv = fmt[j];
-        i.* = j + 2;
-        return s;
-    }
-    if (j < fmt.len and std.mem.indexOfScalar(u8, "doxX", fmt[j]) != null and j + 1 < fmt.len and fmt[j + 1] == 'n') {
-        s.conv = fmt[j];
-        i.* = j + 2;
-        return s;
-    }
-    // Plain `%X` forms.
-    i.* = i.* + 1;
-    s.start = i.* - 1;
-    s.width = 0;
-    return s;
-}
-
-fn printNum(w: *Io.Writer, s: Spec, v: usize) Io.Writer.Error!void {
-    var buf: [64]u8 = undefined;
-    var t: []const u8 = switch (s.conv) {
-        'o' => std.fmt.bufPrint(&buf, "{o}", .{v}) catch "",
-        'x' => std.fmt.bufPrint(&buf, "{x}", .{v}) catch "",
-        'X' => std.fmt.bufPrint(&buf, "{X}", .{v}) catch "",
-        else => std.fmt.bufPrint(&buf, "{d}", .{v}) catch "",
-    };
-    var zeros: usize = 0;
-    if (s.prec) |pv| {
-        if (pv > t.len) zeros = pv - t.len;
-    }
-    const total = t.len + zeros;
-    const pad = if (s.width > total) s.width - total else 0;
-    if (!s.minus) try w.splatByteAll(' ', pad);
-    try w.splatByteAll('0', zeros);
-    try w.writeAll(t);
-    if (s.minus) try w.splatByteAll(' ', pad);
-    t = "";
-}
-
-fn charLiteral(w: *Io.Writer, fmt: []const u8, i: *usize) Io.Writer.Error!void {
-    // %c'C' or %c'\OOO'
-    if (i.* < fmt.len and fmt[i.*] == '\'') {
-        i.* += 1;
-        if (i.* < fmt.len and fmt[i.*] == '\\') {
-            i.* += 1;
-            var v: u32 = 0;
-            var n: usize = 0;
-            while (n < 3 and i.* < fmt.len and fmt[i.*] >= '0' and fmt[i.*] <= '7') : (n += 1) {
-                v = v * 8 + (fmt[i.*] - '0');
-                i.* += 1;
+/// Scan (and, when `out`, print) a group format up to the first free `endchar`
+/// (0: the whole string); returns the index of the terminator.
+fn formatScan(p: anytype, fmt: []const u8, start: usize, endchar: u8, out: bool, g0: Group, g1: Group) Io.Writer.Error!usize {
+    const o = p.options;
+    var i = start;
+    while (i < fmt.len and fmt[i] != endchar) {
+        var c = fmt[i];
+        i += 1;
+        const after = i;
+        if (c == '%') {
+            c = at(fmt, i);
+            i += 1;
+            switch (c) {
+                '%' => {},
+                '(' => {
+                    if (try ifThenElse(p, fmt, &i, out, g0, g1)) continue;
+                    c = '%';
+                    i = after;
+                },
+                '<' => {
+                    if (out) try printLines(p, lineFormat(o, 0), g0);
+                    continue;
+                },
+                '=' => {
+                    if (out) try printLines(p, lineFormat(o, 2), g0);
+                    continue;
+                },
+                '>' => {
+                    if (out) try printLines(p, lineFormat(o, 1), g1);
+                    continue;
+                },
+                else => {
+                    if (try printfSpec(p.w, fmt, i - 2, null, .{ g0, g1 }, out)) |e| {
+                        i = e;
+                        continue;
+                    }
+                    c = '%';
+                    i = after;
+                },
             }
-            try w.writeByte(@truncate(v));
-        } else if (i.* < fmt.len) {
-            try w.writeByte(fmt[i.*]);
-            i.* += 1;
         }
-        if (i.* < fmt.len and fmt[i.*] == '\'') i.* += 1;
+        if (out) try p.w.writeByte(c);
     }
+    return i;
 }
 
-fn letterValue(l: u8, g0: Group, g1: Group) ?usize {
-    const g = if (std.ascii.isUpper(l)) g1 else g0;
-    const f = g.beg + 1; // first line number
-    const last = g.end; // last line number (1-based) = end exclusive 0-based
-    return switch (std.ascii.toUpper(l)) {
-        'F' => f,
-        'L' => last,
-        'N' => last + 1 - f,
-        'E' => f - 1,
-        'M' => last + 1,
-        else => null,
-    };
+/// `%(A=B?then:else)`, with `i` just after the `(`. False (and `i`
+/// unspecified) when the condition is malformed.
+fn ifThenElse(p: anytype, fmt: []const u8, i_ptr: *usize, out: bool, g0: Group, g1: Group) Io.Writer.Error!bool {
+    var i = i_ptr.*;
+    var vals: [2]usize = undefined;
+    for (0..2) |k| {
+        if (std.ascii.isDigit(at(fmt, i))) {
+            var v: usize = 0;
+            while (std.ascii.isDigit(at(fmt, i))) : (i += 1) {
+                const m = std.math.mul(usize, v, 10) catch return false;
+                v = std.math.add(usize, m, at(fmt, i) - '0') catch return false;
+            }
+            vals[k] = v;
+        } else {
+            vals[k] = letterValue(at(fmt, i), g0, g1) orelse return false;
+            i += 1;
+        }
+        const want: u8 = if (k == 0) '=' else '?';
+        const got = at(fmt, i);
+        i += 1;
+        if (got != want) return false;
+    }
+    const eq = vals[0] == vals[1];
+    i = try formatScan(p, fmt, i, ':', out and eq, g0, g1);
+    if (i < fmt.len) {
+        i = try formatScan(p, fmt, i + 1, ')', out and !eq, g0, g1);
+        if (i < fmt.len) i += 1;
+    }
+    i_ptr.* = i;
+    return true;
 }
 
 fn formatGroup(p: anytype, fmt: []const u8, g0: Group, g1: Group) !void {
-    const o = p.options;
-    var i: usize = 0;
-    while (i < fmt.len) {
-        const c = fmt[i];
-        i += 1;
-        if (c != '%') {
-            try p.w.writeByte(c);
-            continue;
-        }
-        if (i >= fmt.len) {
-            try p.w.writeByte('%');
-            break;
-        }
-        const nc = fmt[i];
-        switch (nc) {
-            '%' => {
-                try p.w.writeByte('%');
-                i += 1;
-            },
-            'c' => {
-                i += 1;
-                try charLiteral(p.w, fmt, &i);
-            },
-            '<' => {
-                i += 1;
-                try printLines(p, lineFormat(o, 0), g0);
-                try groupTail(p, g0, fmt, i);
-            },
-            '>' => {
-                i += 1;
-                try printLines(p, lineFormat(o, 1), g1);
-                try groupTail(p, g1, fmt, i);
-            },
-            '=' => {
-                i += 1;
-                try printLines(p, lineFormat(o, 2), g0);
-                try groupTail(p, g0, fmt, i);
-            },
-            '(' => {
-                // %(A=B?T:E)
-                i += 1;
-                const a = fmt[i];
-                const b = if (i + 2 < fmt.len) fmt[i + 2] else 0;
-                if (i + 3 < fmt.len and fmt[i + 1] == '=' and fmt[i + 3] == '?') {
-                    const av = letterValue(a, g0, g1);
-                    const bv = letterValue(b, g0, g1);
-                    const equal = av != null and bv != null and av.? == bv.?;
-                    i += 4;
-                    const then_start = i;
-                    while (i < fmt.len and fmt[i] != ':') i += 1;
-                    const then_text = fmt[then_start..i];
-                    if (i < fmt.len) i += 1;
-                    const else_start = i;
-                    while (i < fmt.len and fmt[i] != ')') i += 1;
-                    const else_text = fmt[else_start..i];
-                    if (i < fmt.len) i += 1;
-                    try formatGroup(p, if (equal) then_text else else_text, g0, g1);
-                } else try p.w.writeAll("%(");
-            },
-            else => {
-                var j = i;
-                const spec = try parseSpec(fmt, &j, "FLNEMflnem");
-                const l = fmt[j - 1];
-                if (spec.conv != 'd' or (j - i >= 2)) {
-                    if (letterValue(l, g0, g1)) |v| {
-                        try printNum(p.w, spec, v);
-                        i = j;
-                        continue;
-                    }
-                }
-                try p.w.writeByte('%');
-            },
-        }
-    }
+    _ = try formatScan(p, fmt, 0, 0, true, g0, g1);
 }
 
 pub fn printIfdef(p: anytype, items: anytype) !void {
@@ -466,5 +510,23 @@ pub fn printIfdef(p: anytype, items: anytype) !void {
     }
     const n0 = p.c.a.count();
     const n1 = p.c.b.count();
-    if (next0 < n0 or next1 < n1) try formatGroup(p, gf[2], .{ .file = 0, .beg = next0, .end = n0 }, .{ .file = 1, .beg = next1, .end = n1 });
+    if (next0 < n0 or next1 < n1) {
+        try p.begin();
+        try formatGroup(p, gf[2], .{ .file = 0, .beg = next0, .end = n0 }, .{ .file = 1, .beg = next1, .end = n1 });
+    }
+}
+
+/// GNU's no_diff_means_no_output: identical inputs may be skipped without
+/// reading them only when nothing would be printed for them.
+pub fn noDiffMeansNoOutput(o: diff.Options) bool {
+    switch (o.style) {
+        .ifdef => {
+            const ug = o.formats.unchanged_group orelse "%=";
+            if (ug.len == 0) return true;
+            const ul = o.formats.unchanged_line orelse "%l\n";
+            return std.mem.eql(u8, ug, "%=") and ul.len == 0;
+        },
+        .side_by_side => return o.suppress_common_lines,
+        else => return true,
+    }
 }

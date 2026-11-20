@@ -100,6 +100,8 @@ pub const Options = struct {
     switch_string: []const u8 = "",
     /// Output the result as JSON.
     json: bool = false,
+    /// -l: pass each file's output through the page formatter (`pr -h`).
+    paginate: bool = false,
 };
 
 pub const Event = union(enum) {
@@ -277,7 +279,7 @@ fn isSpaceByte(c: u8) bool {
 fn lineTrivial(options: Options, m: *Matchers, text: []const u8) bool {
     if (options.ignore_blank_lines) {
         var t = text;
-        if (options.flags.ignore_space_change or options.flags.ignore_all_space) {
+        if (options.flags.ignore_trailing_space or options.flags.ignore_space_change or options.flags.ignore_all_space) {
             while (t.len > 0 and isSpaceByte(t[t.len - 1])) t = t[0 .. t.len - 1];
         }
         if (t.len == 0) return true;
@@ -393,7 +395,7 @@ fn findHunk(items: []const Item, start: usize, context: usize) usize {
         const prev = s;
         s += 1;
         if (s >= items.len) return prev;
-        const thresh = if (items[prev].ignore or items[s].ignore) ignorable else non_ignorable;
+        const thresh = if (items[s].ignore) ignorable else non_ignorable;
         if (items[s].edit.line0 - top0 >= thresh) return prev;
     }
 }
@@ -492,7 +494,7 @@ pub const Printer = struct {
     }
 
     /// The text of a line, expanding tabs for -t.
-    fn outputLine(p: *Printer, text: []const u8) Io.Writer.Error!void {
+    pub fn outputLine(p: *Printer, text: []const u8) Io.Writer.Error!void {
         const o = p.options;
         if (!o.expand_tabs) return p.w.writeAll(text);
         var col: usize = 0;

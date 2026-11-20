@@ -60,6 +60,9 @@ pub const Options = struct {
     custom_header: ?[]const u8 = null,
     /// -D: strftime format of the header date.
     date_format: ?[]const u8 = null,
+    /// When set, standard input ("-" or no operand) is read from this buffer
+    /// instead of the process's standard input (used by `diff -l`).
+    stdin_data: ?[]const u8 = null,
 };
 
 pub const Event = union(enum) {
@@ -134,6 +137,7 @@ pub fn run(env: Env, opts: Options, files: []const []const u8, out_w: *Io.Writer
     pr.col_sep_length = opts.col_sep_length;
     pr.custom_header = opts.custom_header;
     pr.date_format = opts.date_format;
+    pr.stdin_data = opts.stdin_data;
     if (pr.date_format == null) pr.date_format = "%Y-%m-%d %H:%M";
     if (pr.first_page_number == 0) pr.first_page_number = 1;
 
@@ -230,6 +234,7 @@ const Pr = struct {
     print_a_header: bool = false,
     use_form_feed: bool = false,
     have_read_stdin: bool = false,
+    stdin_data: ?[]const u8 = null,
     print_across_flag: bool = false,
     storing_columns: bool = true,
     balance_columns: bool = false,
@@ -347,6 +352,11 @@ const Pr = struct {
         return true;
     }
 
+    fn readStdin(p: *Pr) ?[]u8 {
+        if (p.stdin_data) |d| return p.gpa.dupe(u8, d) catch null;
+        return p.readAll(Io.File.stdin());
+    }
+
     fn readAll(p: *Pr, file: Io.File) ?[]u8 {
         var list: std.ArrayList(u8) = .empty;
         var chunk: [65536]u8 = undefined;
@@ -365,7 +375,7 @@ const Pr = struct {
             c.name = "standard input";
             p.have_read_stdin = true;
             file = Io.File.stdin();
-            data = p.readAll(file.?);
+            data = p.readStdin();
         } else {
             c.name = name;
             if (openPath(p.env.io, name)) |f| {
@@ -461,7 +471,7 @@ const Pr = struct {
                 c0.name = "standard input";
                 p.have_read_stdin = true;
                 const s = p.gpa.create(Stream) catch return false;
-                s.* = .{ .data = p.readAll(Io.File.stdin()) orelse &.{} };
+                s.* = .{ .data = p.readStdin() orelse &.{} };
                 p.streams.append(p.gpa, s) catch return false;
                 p.stream_data.append(p.gpa, @constCast(s.data)) catch return false;
                 c0.fp = s;
