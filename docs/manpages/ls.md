@@ -112,16 +112,19 @@ none (locale variables are ignored; behaviour is that of the C locale)
 STANDARD STREAMS
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
+DIFFERENCES FROM GNU
+- Out of memory: GNU prints `ls: memory exhausted` and stops. This ls prints what it could list, then `ls: memory exhausted: the listing is incomplete`. The exit status is 2 in both. (Better diagnostics per the project's compatibility policy; stderr only.)
+- `--json` is an extension (see OPTIONS). The library also offers the listing as data (`util_core.ls.list`); that is an API, not a command-line difference.
+
 COMPATIBILITY
 Reference: GNU coreutils 9.7 (`/usr/bin/ls --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "ls invocation" (`info '(coreutils) ls invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/ls-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), ls, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/ls.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_ls.sh`).
 See docs/compatibility/ls.md for details.
 
 LIMITATIONS
 - Only the C locale is modelled: names sort bytewise, only ASCII counts as printable (with `-q` every other byte becomes `?`), `locale` quoting uses `'`, and month names are English. GNU in a UTF-8 locale differs.
-- `std.Io` does not report `.` and `..`, so they are added at the start of each directory; GNU lists them wherever the file system returns them (first on common file systems).
-- Capability colouring (`ca=`) is accepted in LS_COLORS but never applied.
+- Capability colouring (`ca=`) checks only that the `security.capability` attribute exists; it could not be compared with a GNU ls built with libcap.
 - SELinux contexts are read from the `security.selinux` attribute only; ACLs are detected through the `system.posix_acl_*` attributes, so `+` appears only when the file system exposes them.
-- The terminal is not put into raw mode and no signal handlers restore colour on SIGINT/SIGTSTP.
+- The terminal is not put into raw mode. While colouring, ls catches SIGHUP, SIGINT, SIGPIPE, SIGQUIT, SIGTERM, SIGALRM and SIGTSTP and resets the colour between names before the signal takes effect, so a blocked write delays it.
 - A directory's contents are not streamed: all names of one directory are held in memory (except for the `-U1` case, which GNU also streams).
 
 SEE ALSO

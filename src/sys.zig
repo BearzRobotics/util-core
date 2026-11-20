@@ -910,3 +910,79 @@ pub fn setUmask(mask: u32) u32 {
 pub fn parentPid() i32 {
     return @intCast(std.os.linux.getppid());
 }
+
+// ------------------------------------------- catching terminating signals (ls)
+// GNU ls installs handlers for the signals that end or stop it so that a
+// coloured listing does not leave the terminal in the last colour: the handler
+// only records the signal, and the program acts on it at the next safe point
+// (flush, reset the colour, then deliver the signal with its default action).
+// std.Io has no signal API (decision 0002).
+
+const catch_signals = [_]u8{ 1, 2, 13, 3, 15, 14, 20 }; // HUP INT PIPE QUIT TERM ALRM TSTP
+var caught_signal: std.atomic.Value(u8) = .init(0);
+var saved_actions: [catch_signals.len]if (builtin.os.tag == .linux) std.os.linux.Sigaction else u8 = undefined;
+var saved_valid: [catch_signals.len]bool = @splat(false);
+
+fn catchHandler(sig: if (builtin.os.tag == .linux) std.os.linux.SIG else u8) callconv(.c) void {
+    caught_signal.store(@intCast(@intFromEnum(sig)), .release);
+}
+
+fn catchOne(i: usize) void {
+    if (comptime builtin.os.tag != .linux) return;
+    const L = std.os.linux;
+    const sig: L.SIG = @enumFromInt(catch_signals[i]);
+    var old: L.Sigaction = undefined;
+    if (L.errno(L.sigaction(sig, null, &old)) != .SUCCESS) return;
+    if (old.handler.handler == L.SIG.IGN) return; // an ignored signal stays ignored
+    const act: L.Sigaction = .{
+        .handler = .{ .handler = catchHandler },
+        .mask = L.sigemptyset(),
+        .flags = L.SA.RESTART,
+    };
+    if (L.errno(L.sigaction(sig, &act, null)) != .SUCCESS) return;
+    if (!saved_valid[i]) {
+        saved_actions[i] = old;
+        saved_valid[i] = true;
+    }
+}
+
+/// Catch SIGHUP, SIGINT, SIGPIPE, SIGQUIT, SIGTERM, SIGALRM and SIGTSTP unless
+/// they are ignored; a caught signal is recorded for `takeCaughtSignal`.
+pub fn catchSignals() void {
+    if (comptime builtin.os.tag != .linux) return;
+    for (0..catch_signals.len) |i| catchOne(i);
+}
+
+/// Put back the actions that were in place before `catchSignals`.
+pub fn restoreCaughtSignals() void {
+    if (comptime builtin.os.tag != .linux) return;
+    const L = std.os.linux;
+    for (0..catch_signals.len) |i| {
+        if (!saved_valid[i]) continue;
+        _ = L.sigaction(@enumFromInt(catch_signals[i]), &saved_actions[i], null);
+        saved_valid[i] = false;
+    }
+}
+
+/// The signal recorded by the handler since the last call, or null.
+pub fn takeCaughtSignal() ?u8 {
+    const v = caught_signal.swap(0, .acq_rel);
+    return if (v == 0) null else v;
+}
+
+/// Act on a signal from `takeCaughtSignal` as if it had not been caught: the
+/// default action runs (SIGTSTP stops the process with SIGSTOP and the handler
+/// is installed again when it continues).
+pub fn deliverCaughtSignal(sig: u8) void {
+    if (comptime builtin.os.tag != .linux) return;
+    const L = std.os.linux;
+    const self: i32 = @intCast(L.getpid());
+    if (sig == 20) {
+        _ = L.kill(self, @enumFromInt(19));
+        return; // execution resumes here after SIGCONT; the handler is still set
+    }
+    const act: L.Sigaction = .{ .handler = .{ .handler = L.SIG.DFL }, .mask = L.sigemptyset(), .flags = 0 };
+    _ = L.sigaction(@enumFromInt(sig), &act, null);
+    unblockSignal(sig);
+    _ = L.kill(self, @enumFromInt(sig));
+}

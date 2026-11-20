@@ -42,6 +42,7 @@ WASI.
 | `syncFile` | `sync` | `sync`, `fsync`, `fdatasync`, `syncfs` | no flush API |
 | `chroot`, `mknod` | `chroot`, `mkfifo`, `mknod` | `chroot`, `mknodat` | no such API |
 | `chownAt` | `cp`, `mv`, `install` | `fchownat` | `Io.File` has no owner-change API |
+| `catchSignals`, `restoreCaughtSignals`, `takeCaughtSignal`, `deliverCaughtSignal` | `ls` (reset colour on SIGINT, SIGTERM, SIGTSTP, ...) | `sigaction` with `SA_RESTART` recording the signal, then `kill` of ourselves with the default action | no signal API (add to the list of facilities to ask std.Io for upstream: handlers and raise) |
 | `fileStat`, `errnoText` | `test` (and later `stat`, `ls`, `du`, `find`, `chown`) | `statx(2)` for owner, group, device, block count and nanosecond times | `Io.File.Stat` has no uid, gid, device number or block count |
 
 One related use stays outside `sys.zig`: `cli.giveBack` calls

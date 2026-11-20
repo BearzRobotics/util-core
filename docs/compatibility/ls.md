@@ -1,6 +1,6 @@
 # ls: compatibility record
 
-Status: implemented with the gaps listed below; differential tests pass against GNU ls 9.7 in the C locale. Date: 2026-11-07
+Status: implemented with the gaps listed below; differential tests pass against GNU ls 9.7 in the C locale. Date: 2026-11-19 (structured entries API, capability colouring, signal colour reset, memory-exhausted diagnostic)
 
 ## Reference
 
@@ -9,6 +9,8 @@ GNU coreutils 9.7 (`/usr/bin/ls --version` on the development machine, installed
 ## Library
 
 Module `util_core.ls` (`src/lib/ls.zig`); the executable `src/commands/ls.zig` is a thin wrapper that parses arguments and words the diagnostics (decision 0004).
+
+Two entry points: `run` writes the GNU text (or `--json`) to a writer; `walk` and `list` return the same listing as data (`Entry` values: name, directory, quoted display name, kind, size, blocks, mode, nlink, uid/gid and resolved names, inode, device numbers, atime/mtime/ctime/btime and the selected time with nanoseconds, link target, security context, ACL and capability flags, the `-F` indicator character, the LS_COLORS class and sequence) for callers that want no terminal formatting at all. They share the collection, filtering and sorting code with `run` (a collected file list is turned into `Entry` values at the point where the text writer would print it), honour the same `Options` (sort, `-a`/`-A`, `-R`, `-d`, `--hide`/`-I`, `-L`/`-H`, `--time`, quoting and indicator styles, colour), and ignore layout options. `--json` is written from the same `Entry` values. The text writer itself still prints from the internal file records, not from `Entry`, so that the GNU-verified column and long-format code is untouched.
 
 ## Supported options
 
@@ -58,13 +60,15 @@ Per decision 0005 every departure from GNU is listed here.
 
 - `--json`: a JSON array of the listed files in the order the text form prints them (fields as for `stat --json`). A long option GNU does not define, so it never changes the meaning of a GNU option; it is rejected (with a message) when combined with options that would define text layout or units, and is listed in `--help` as a non-GNU line. Off unless given; the default output is byte-for-byte GNU. Library callers get it through the `json` field of the options, default false. Covered by `test/test_ls_json.sh` (which also checks the GNU path through `test/test_ls.sh`). Rules: `docs/decisions/0003-json-output.md`.
 
+- Diagnostic (decision 0005, 2026-11-19): when an allocation fails while listing, GNU's `xalloc_die` prints `ls: memory exhausted` and exits 2. Ours keeps listing what it could, then prints `ls: memory exhausted: the listing is incomplete` and exits 2 (the same status). Stdout up to that point is the (partial) listing, where GNU stops at once. Library users get the `out_of_memory` event. Covered by `test/test_ls_extras.sh`. Considered and not changed: `not listing already-listed directory` (GNU's wording is tested against GNU and is clear), write errors (already reported with the system's reason, as GNU does).
+
 ## Known deviations and gaps
 
 - Only the C locale is modelled: names sort bytewise, only ASCII counts as printable (with `-q` every other byte becomes `?`), `locale` quoting uses `'`, and month names are English. GNU in a UTF-8 locale differs.
-- `std.Io` does not report `.` and `..`, so they are added at the start of each directory; GNU lists them wherever the file system returns them (first on common file systems).
-- Capability colouring (`ca=`) is accepted in LS_COLORS but never applied.
+- Capability colouring (`ca=`) is implemented (a regular file with a `security.capability` attribute gets the `ca` colour, after setuid and setgid and before `ex`), but cannot be compared with the reference binary: the Ubuntu GNU ls 9.7 used here is built without libcap and never colours capabilities. Covered by `test/test_ls_extras.sh` against the documented rule only. A GNU ls built with libcap decides with `cap_get_file`; ours checks only that the attribute exists.
 - SELinux contexts are read from the `security.selinux` attribute only; ACLs are detected through the `system.posix_acl_*` attributes, so `+` appears only when the file system exposes them.
-- The terminal is not put into raw mode and no signal handlers restore colour on SIGINT/SIGTSTP.
+- The terminal is not put into raw mode. SIGHUP, SIGINT, SIGPIPE, SIGQUIT, SIGTERM, SIGALRM and SIGTSTP are caught while colouring (unless ignored) and the colour is reset before the signal takes its default action; SIGTSTP stops the process and the listing continues after SIGCONT. The handlers record the signal and are acted on between names, as in GNU, so a signal that arrives while output is blocked takes effect when the write returns. Installed only by the command (`Options.restore_color_on_signal`), because they are process-wide; the `sys.catchSignals` family is a new row in decision 0002. The structured API installs none.
+- `Entry` gives `link_target_ok` and the `-F` indicator only when an indicator style or colour needs the target's metadata (as in the text listing). `walk` always collects every field, so it stats each file even for names-only options.
 - A directory's contents are not streamed: all names of one directory are held in memory (except for the `-U1` case, which GNU also streams).
 
 ## Tests
@@ -72,6 +76,8 @@ Per decision 0005 every departure from GNU is listed here.
 `sh test/test_ls.sh`: 1291 differential cases against GNU ls 9.7 (C locale) covering sorting, formats and widths, long format, time styles and zones, all quoting and indicator styles, ignore patterns, recursion and loop detection, dereference options, `--dired`, `--zero`, hyperlinks, LS_COLORS parsing and terminal output through `script`, plus `dir` and `vdir`.
 
 `sh test/test_ls_json.sh`: 44 checks of `--json`: entries and order against GNU `ls -1` for about 30 option combinations (sorts, `-a`/`-A`, `-d`, `-R`, several operands, `--hide`, `-I`, `-B`, `-L`, `-H`), every metadata field against GNU `stat` for each listed path, `dir` and `vdir`, and that layout options do not change the output.
+
+`sh test/test_ls_extras.sh`: 11 checks of the memory-exhausted diagnostic, capability colouring (needs `setcap` and `unshare -rm`, skipped otherwise) and the colour reset on SIGTERM. The structured API is covered by unit tests in `src/lib/ls.zig` (run through `zig build test`).
 
 ## Not yet done
 

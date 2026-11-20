@@ -6,8 +6,20 @@
 //! column layout, sorting, quoting and the long format were studied there and
 //! rewritten). Behaviour is the C locale only: byte-wise name order, ASCII
 //! printability, `Mon DD HH:MM` dates. Not implemented: ACL/xattr details
-//! beyond detecting their presence, SELinux contexts other than reading
-//! security.selinux, and capability colouring.
+//! beyond detecting their presence and SELinux contexts other than reading
+//! security.selinux. Capability colouring (`ca=`) tests for the
+//! security.capability attribute.
+//!
+//! Two ways to use it. `run` writes the listing as GNU ls prints it. `walk`
+//! and `list` return the same listing as data (`Entry`: name, directory,
+//! quoted display name, kind, size, blocks, mode, owner and group, times with
+//! nanoseconds, link target, inode, security context, `-F` indicator, colour
+//! class), sorted and filtered by the same code:
+//!
+//!     var l = try ls.list(env, .{ .sort_type = .size, .sort_reverse = true,
+//!         .ignore_mode = .dot_and_dotdot }, &.{"/etc"}, .none);
+//!     defer l.deinit();
+//!     for (l.entries) |e| std.debug.print("{s}\t{d}\n", .{ e.display_name, e.size });
 //!
 //! `run` lists the operands (or the current directory) according to an
 //! `Options` value and writes the result to a caller-supplied writer; entries
@@ -165,10 +177,16 @@ const Ls = struct {
     json: bool = false,
     json_dir: ?[]const u8 = null,
     json_count: usize = 0,
+    /// Structured listing (`walk`): entries go to this callback and nothing is
+    /// written to the output.
+    collect: ?Collector = null,
     indicator_style: IndicatorStyle = .none,
     print_with_color: bool = false,
     print_hyperlink: bool = false,
     used_color: bool = false,
+    /// Catch terminating signals and reset the colour before dying.
+    catch_signals: bool = false,
+    signals_installed: bool = false,
     check_symlink_mode: bool = false,
     print_inode: bool = false,
     dereference: Deref = .undefined,
@@ -201,6 +219,7 @@ const Ls = struct {
 
     // State.
     exit_status: u8 = 0,
+    oom: bool = false,
     zone: tzmod.Zone = undefined,
     zone_loaded: bool = false,
     current_time_sec: i64 = std.math.minInt(i64),
@@ -233,6 +252,11 @@ const Ls = struct {
     dired_pos: i64 = 0,
     dired_offsets: std.ArrayList(i64) = .empty,
     subdired_offsets: std.ArrayList(i64) = .empty,
+
+    /// No directory headers, totals or separators: --json and `walk`.
+    fn textless(s: *const Ls) bool {
+        return s.json or s.collect != null;
+    }
 
     fn alloc(s: *Ls) Allocator {
         return s.arena.allocator();
@@ -270,11 +294,17 @@ const Ls = struct {
         if (s.dired) s.put("  ");
     }
 
-    fn pushDiredPos(s: *Ls, list: *std.ArrayList(i64)) void {
-        if (s.dired) list.append(s.gpa, s.dired_pos) catch {};
+    fn pushDiredPos(s: *Ls, offs: *std.ArrayList(i64)) void {
+        if (s.dired) offs.append(s.gpa, s.dired_pos) catch {};
     }
 
     // ----------------------------------------------------------- failures
+
+    /// An allocation failed: the listing is incomplete. Reported once at the
+    /// end (`Event.out_of_memory`, exit status 2 as GNU's xalloc_die).
+    fn nomem(s: *Ls) void {
+        s.oom = true;
+    }
 
     fn setExitStatus(s: *Ls, serious: bool) void {
         if (serious) {
@@ -315,6 +345,22 @@ const Ls = struct {
             s.putIndicator(s.indicatorStr(C_LEFT));
             s.putIndicator(s.indicatorStr(C_RESET));
             s.putIndicator(s.indicatorStr(C_RIGHT));
+        }
+    }
+
+    /// GNU process_signals: a signal caught while colouring is acted on at the
+    /// next safe point: reset the colour, flush, then let the signal take its
+    /// default action (SIGTSTP stops us and the listing goes on after SIGCONT).
+    fn processSignals(s: *Ls) void {
+        if (!s.signals_installed) return;
+        while (sys.takeCaughtSignal()) |sig| {
+            if (s.used_color) {
+                s.used_color = false;
+                s.out.write(s.indicatorStr(C_LEFT));
+                s.out.write(s.indicatorStr(C_RIGHT));
+            }
+            s.out.flush();
+            sys.deliverCaughtSignal(sig);
         }
     }
 
@@ -784,7 +830,10 @@ const Ls = struct {
     fn gobbleFile(s: *Ls, name: []const u8, type_in: FileType, command_line_arg: bool, dirname: ?[]const u8) u64 {
         const a = s.alloc();
         var ftype = type_in;
-        const f = a.create(FileInfo) catch return 0;
+        const f = a.create(FileInfo) catch {
+            s.nomem();
+            return 0;
+        };
         f.* = .{ .name = "" };
         f.filetype = ftype;
         f.quoted = -1;
@@ -802,7 +851,7 @@ const Ls = struct {
             s.print_inode or
             ((ftype == .normal or ftype == .unknown) and
                 (s.indicator_style == .classify or
-                    (s.print_with_color and (s.isColored(C_EXEC) or s.isColored(C_SETUID) or s.isColored(C_SETGID)))));
+                    (s.print_with_color and (s.isColored(C_EXEC) or s.isColored(C_SETUID) or s.isColored(C_SETGID) or s.format_needs_capability))));
 
         var full_name: []const u8 = name;
         if ((check_stat or s.print_scontext or s.format_needs_capability) and name.len > 0 and name[0] != '/' and dirname != null) {
@@ -848,12 +897,18 @@ const Ls = struct {
                 s.fileFailure(command_line_arg, .cannot_access, full_name, .{ .errno = err });
                 if (command_line_arg) return 0;
                 f.name = a.dupe(u8, name) catch name;
-                s.files.append(s.gpa, f) catch {};
+                s.files.append(s.gpa, f) catch s.nomem();
                 return 0;
             }
             f.stat_ok = true;
             f.filetype = typeFromMode(f.st.mode);
             ftype = f.filetype;
+            if (s.format_needs_capability and f.st.isReg()) {
+                // File capabilities live in the security.capability attribute.
+                var cerr: std.os.linux.E = .SUCCESS;
+                var cbuf: [64]u8 = undefined;
+                f.has_capability = sys.getXattr(full_name, "security.capability", do_deref, &cbuf, &cerr) != null;
+            }
         }
 
         if (ftype == .directory and command_line_arg and !s.immediate_dirs) {
@@ -946,7 +1001,7 @@ const Ls = struct {
             if (s.inode_number_width < il) s.inode_number_width = il;
         }
         f.name = a.dupe(u8, name) catch name;
-        s.files.append(s.gpa, f) catch {};
+        s.files.append(s.gpa, f) catch s.nomem();
         return blocks;
     }
 
@@ -1087,9 +1142,9 @@ const Ls = struct {
     // --------------------------------------------------- queue / directories
 
     fn queueDirectory(s: *Ls, name: ?[]const u8, realname: ?[]const u8, command_line_arg: bool) void {
-        const n = if (name) |x| s.gpa.dupe(u8, x) catch return else null;
-        const r = if (realname) |x| s.gpa.dupe(u8, x) catch return else null;
-        s.pending.append(s.gpa, .{ .name = n, .realname = r, .command_line_arg = command_line_arg }) catch {};
+        const n = if (name) |x| s.gpa.dupe(u8, x) catch return s.nomem() else null;
+        const r = if (realname) |x| s.gpa.dupe(u8, x) catch return s.nomem() else null;
+        s.pending.append(s.gpa, .{ .name = n, .realname = r, .command_line_arg = command_line_arg }) catch s.nomem();
     }
 
     fn baseIsDotOrDotDot(name: []const u8) bool {
@@ -1155,14 +1210,14 @@ const Ls = struct {
                 s.setExitStatus(true);
                 return;
             }
-            s.active.append(s.gpa, .{ .dev = dev, .ino = st.ino }) catch {};
+            s.active.append(s.gpa, .{ .dev = dev, .ino = st.ino }) catch s.nomem();
         }
 
         s.clearFiles();
         s.json_dir = realname orelse name;
         defer s.json_dir = null;
 
-        if (!s.json and (s.recursive or s.print_dir_name)) {
+        if (!s.textless() and (s.recursive or s.print_dir_name)) {
             if (!s.first_dir) s.putByte('\n');
             s.first_dir = false;
             s.diredIndent();
@@ -1187,6 +1242,7 @@ const Ls = struct {
         if (raw == null) {
             s.fileFailure(command_line_arg, .reading_directory, name, .{ .errno = derr });
         } else for (raw.?) |entry| {
+            s.processSignals();
             if (s.fileIgnored(entry.name)) continue;
             const kind: Io.File.Kind = switch (entry.dtype) {
                 4 => .directory,
@@ -1210,7 +1266,7 @@ const Ls = struct {
         s.sortFiles();
         if (s.recursive) s.extractDirsFromFiles(name, false);
 
-        if (!s.json and (s.format == .long or s.print_block_size)) {
+        if (!s.textless() and (s.format == .long or s.print_block_size)) {
             var hb: [human.longest]u8 = undefined;
             const t = human.readable(total_blocks, &hb, s.human_output_opts, 512, s.output_block_size);
             s.diredIndent();
@@ -1247,7 +1303,17 @@ const Ls = struct {
         return if (s.color_symlink_as_referent and f.linkok) f.linkmode else f.st.mode;
     }
 
+    const ColorChoice = struct { t: usize, have_ext: bool, ext_seq: ?[]const u8 };
+
     fn getColorIndicator(s: *Ls, f: *const FileInfo, symlink_target: bool) ?[]const u8 {
+        const c = s.colorChoice(f, symlink_target);
+        if (c.have_ext) return c.ext_seq;
+        return s.indicators[c.t];
+    }
+
+    /// The LS_COLORS class of a file (and its extension override), shared by
+    /// the text writer and the entry model.
+    fn colorChoice(s: *Ls, f: *const FileInfo, symlink_target: bool) ColorChoice {
         var name: []const u8 = undefined;
         var mode: u32 = undefined;
         var linkok: i32 = undefined;
@@ -1322,11 +1388,11 @@ const Ls = struct {
         if (t == C_LINK and linkok == 0) {
             if (s.color_symlink_as_referent or s.isColored(C_ORPHAN)) t = C_ORPHAN;
         }
-        if (have_ext) return ext_seq;
-        return s.indicators[t];
+        return .{ .t = t, .have_ext = have_ext, .ext_seq = ext_seq };
     }
 
     fn printNameWithQuoting(s: *Ls, f: *const FileInfo, symlink_target: bool, stack: ?*std.ArrayList(i64), start_col: usize) usize {
+        s.processSignals();
         const name = if (symlink_target) f.linkname.? else f.name;
         const color: ?[]const u8 = if (s.print_with_color) s.getColorIndicator(f, symlink_target) else null;
         const used_color_this_time = s.print_with_color and (color != null or s.isColored(C_NORM));
@@ -1677,10 +1743,10 @@ const Ls = struct {
         return 0;
     }
 
-    fn dumpOffsets(s: *Ls, prefix: []const u8, list: *std.ArrayList(i64)) void {
-        if (list.items.len == 0) return;
+    fn dumpOffsets(s: *Ls, prefix: []const u8, offs: *std.ArrayList(i64)) void {
+        if (offs.items.len == 0) return;
         s.out.write(prefix);
-        for (list.items) |v| s.out.print(" {d}", .{v});
+        for (offs.items) |v| s.out.print(" {d}", .{v});
         s.out.writeByte('\n');
     }
 
@@ -1690,10 +1756,11 @@ const Ls = struct {
         for (s.files.items) |f| {
             var aw: Io.Writer.Allocating = .init(s.gpa);
             defer aw.deinit();
-            const ok = if (f.stat_ok)
-                fileinfo.writeJsonIn(&aw.writer, s.json_dir, f.name, &f.st, f.linkname, s.getUser(f.st.uid), s.getGroup(f.st.gid))
+            const e = s.makeEntry(f, "");
+            const ok = if (e.stat) |*st|
+                fileinfo.writeJsonIn(&aw.writer, e.dir, e.name, st, e.link_target, e.owner, e.group)
             else
-                fileinfo.writeJsonUnknownIn(&aw.writer, s.json_dir, f.name);
+                fileinfo.writeJsonUnknownIn(&aw.writer, e.dir, e.name);
             ok catch continue;
             s.put(if (s.json_count == 0) "[\n" else ",\n");
             s.put(aw.written());
@@ -1701,7 +1768,98 @@ const Ls = struct {
         }
     }
 
+    // ------------------------------------------------------- entry model
+
+    fn kindOf(f: *const FileInfo) Kind {
+        if (f.stat_ok) {
+            return switch (f.st.mode & 0o170000) {
+                0o100000 => .file,
+                0o040000 => .directory,
+                0o120000 => .symlink,
+                0o010000 => .fifo,
+                0o140000 => .socket,
+                0o020000 => .char_device,
+                0o060000 => .block_device,
+                else => .unknown,
+            };
+        }
+        return switch (f.filetype) {
+            .normal => .file,
+            .directory, .arg_directory => .directory,
+            .symbolic_link => .symlink,
+            .fifo => .fifo,
+            .sock => .socket,
+            .chardev => .char_device,
+            .blockdev => .block_device,
+            .whiteout => .whiteout,
+            .unknown => .unknown,
+        };
+    }
+
+    /// The `Entry` for a collected file. Slices point into the current
+    /// directory's storage (and `display`); valid until the directory's list
+    /// is cleared.
+    fn makeEntry(s: *Ls, f: *const FileInfo, display: []const u8) Entry {
+        var e: Entry = .{
+            .name = f.name,
+            .dir = s.json_dir,
+            .display_name = display,
+            .kind = kindOf(f),
+            .stat = if (f.stat_ok) f.st else null,
+            .link_target = f.linkname,
+            .link_target_ok = f.linkok,
+            .security_context = if (std.mem.eql(u8, f.scontext, "?")) null else f.scontext,
+            .has_acl = f.acl_type == .yes,
+            .has_capability = f.has_capability,
+        };
+        if (s.indicator_style != .none) {
+            const c = s.getTypeIndicator(f.stat_ok, f.st.mode, f.filetype);
+            if (c != 0) e.indicator = c;
+        }
+        if (s.print_with_color) {
+            const c = s.colorChoice(f, false);
+            e.color_class = @enumFromInt(c.t);
+            e.color_sequence = if (c.have_ext) c.ext_seq else s.indicators[c.t];
+        }
+        if (f.stat_ok) {
+            const st = &f.st;
+            e.size = st.size;
+            e.blocks = st.blocks;
+            e.mode = st.mode;
+            e.nlink = st.nlink;
+            e.uid = st.uid;
+            e.gid = st.gid;
+            e.owner = s.getUser(st.uid);
+            e.group = s.getGroup(st.gid);
+            e.inode = st.ino;
+            e.dev = .{ st.dev_major, st.dev_minor };
+            e.rdev = .{ st.rdev_major, st.rdev_minor };
+            e.atime = .{ .sec = st.atime_s, .nsec = st.atime_ns };
+            e.mtime = .{ .sec = st.mtime_s, .nsec = st.mtime_ns };
+            e.ctime = .{ .sec = st.ctime_s, .nsec = st.ctime_ns };
+            if (st.has_btime) e.btime = .{ .sec = st.btime_s, .nsec = st.btime_ns };
+            e.time = switch (s.time_type) {
+                .mtime => e.mtime,
+                .ctime => e.ctime,
+                .atime => e.atime,
+                .btime => e.btime,
+            };
+        }
+        return e;
+    }
+
+    fn emitEntries(s: *Ls, c: Collector) void {
+        for (s.files.items) |f| {
+            var q: QName = .{};
+            defer q.text.deinit(s.gpa);
+            s.quoteNameBuf(f.name, s.filename_style, &s.filename_extra, -1, &q);
+            const e = s.makeEntry(f, q.text.items);
+            c.func(c.context, &e);
+        }
+    }
+
     fn printCurrentFiles(s: *Ls) void {
+        if (s.collect) |c| return s.emitEntries(c);
         if (s.json) return s.printJsonFiles();
         switch (s.format) {
             .one_per_line => for (s.files.items) |f| {
@@ -1736,6 +1894,10 @@ const Ls = struct {
 
         if (s.print_with_color) s.parseLsColor();
         if (s.print_with_color) s.tabsize = 0;
+        if (s.print_with_color and s.catch_signals) {
+            sys.catchSignals();
+            s.signals_installed = true;
+        }
 
         if (s.directories_first) {
             s.check_symlink_mode = true;
@@ -1751,7 +1913,7 @@ const Ls = struct {
 
         s.format_needs_stat = s.sort_type == .time or s.sort_type == .size or s.format == .long or s.print_block_size or s.print_hyperlink;
         s.format_needs_type = !s.format_needs_stat and (s.recursive or s.print_with_color or s.print_scontext or s.directories_first or s.indicator_style != .none);
-        s.format_needs_capability = false;
+        s.format_needs_capability = s.print_with_color and s.isColored(C_CAP);
 
         if (s.print_hyperlink) {
             for (0..256) |i| {
@@ -1778,7 +1940,7 @@ const Ls = struct {
 
         if (s.files.items.len > 0) {
             s.printCurrentFiles();
-            if (s.pending.items.len > 0 and !s.json) s.putByte('\n');
+            if (s.pending.items.len > 0 and !s.textless()) s.putByte('\n');
         } else if (operands.len <= 1 and s.pending.items.len == 1) {
             s.print_dir_name = false;
         }
@@ -1805,6 +1967,10 @@ const Ls = struct {
         }
 
         if (s.json) s.put(if (s.json_count == 0) "[]\n" else "\n]\n");
+        if (s.oom) {
+            s.observer.emit(.out_of_memory);
+            s.exit_status = 2;
+        }
 
         if (s.dired) {
             s.dumpOffsets("//DIRED//", &s.dired_offsets);
@@ -1849,6 +2015,11 @@ pub const Options = struct {
     /// from the environment and may turn this off, as GNU does).
     print_with_color: bool = false,
     print_hyperlink: bool = false,
+    /// Catch SIGHUP/INT/PIPE/QUIT/TERM/ALRM/TSTP while colouring and reset the
+    /// terminal colour before the signal takes effect (as GNU ls does). Off by
+    /// default because it changes process-wide signal actions (restored when
+    /// `run` returns); the command-line wrapper turns it on.
+    restore_color_on_signal: bool = false,
     print_inode: bool = false,
     dereference: Deref = .undefined,
     recursive: bool = false,
@@ -1893,6 +2064,124 @@ pub const Options = struct {
     }
 };
 
+// ------------------------------------------------------- structured listing
+
+/// The type of a listed file.
+pub const Kind = enum { unknown, file, directory, symlink, fifo, socket, char_device, block_device, whiteout };
+
+/// The LS_COLORS class of an entry (the two-letter code in parentheses).
+pub const ColorClass = enum(u8) {
+    normal = C_NORM, // no
+    file = C_FILE, // fi
+    directory = C_DIR, // di
+    symlink = C_LINK, // ln
+    fifo = C_FIFO, // pi
+    socket = C_SOCK, // so
+    block_device = C_BLK, // bd
+    char_device = C_CHR, // cd
+    missing = C_MISSING, // mi
+    orphan = C_ORPHAN, // or
+    executable = C_EXEC, // ex
+    door = C_DOOR, // do
+    setuid = C_SETUID, // su
+    setgid = C_SETGID, // sg
+    sticky = C_STICKY, // st
+    other_writable = C_OTHER_WRITABLE, // ow
+    sticky_other_writable = C_STICKY_OTHER_WRITABLE, // tw
+    capability = C_CAP, // ca
+    multi_hardlink = C_MULTIHARDLINK, // mh
+};
+
+pub const Time = struct { sec: i64, nsec: u32 };
+
+/// One listed file. All fields are plain data: nothing here depends on a
+/// terminal, a width or the column layout. Strings are valid as documented on
+/// `walk` and `Listing`.
+pub const Entry = struct {
+    /// The name as the file system reports it (the operand for a command-line
+    /// argument), unquoted.
+    name: []const u8,
+    /// The directory the entry was listed in, as given to `ls` or reached by
+    /// -R (a symbolic link operand shows the link's name); null for an operand
+    /// that is itself listed (a file, or a directory with `immediate_dirs`).
+    dir: ?[]const u8 = null,
+    /// `name` quoted or escaped as the text listing would show it
+    /// (`filename_style`, `qmark_funny_chars`, -F characters), without colour.
+    display_name: []const u8 = "",
+    kind: Kind = .unknown,
+    /// False when the metadata could not be read; the fields below are then
+    /// zero or null and only `name`, `dir`, `display_name` and `kind` (from
+    /// the directory entry, may be .unknown) are meaningful.
+    stat: ?sys.FileStat = null,
+    /// File size in bytes.
+    size: u64 = 0,
+    /// Allocated size in 512-byte units.
+    blocks: u64 = 0,
+    /// st_mode: file type and permission bits.
+    mode: u32 = 0,
+    nlink: u32 = 0,
+    uid: u32 = 0,
+    gid: u32 = 0,
+    /// Resolved names; null when unknown or when `numeric_ids` is set.
+    owner: ?[]const u8 = null,
+    group: ?[]const u8 = null,
+    inode: u64 = 0,
+    /// Device holding the file, and the device number of a device node
+    /// (major, minor).
+    dev: [2]u32 = .{ 0, 0 },
+    rdev: [2]u32 = .{ 0, 0 },
+    atime: ?Time = null,
+    mtime: ?Time = null,
+    ctime: ?Time = null,
+    /// Birth time, when the file system records one.
+    btime: ?Time = null,
+    /// The one selected by `Options.time_type` (-c, -u, --time).
+    time: ?Time = null,
+    /// Where a symbolic link points (as stored); null for other files.
+    link_target: ?[]const u8 = null,
+    /// True when the link target exists. Only determined with an indicator
+    /// style or colour; false otherwise.
+    link_target_ok: bool = false,
+    /// SELinux context (`security.selinux`), null when the file has none.
+    security_context: ?[]const u8 = null,
+    /// An ACL attribute is present (the `+` of the long format).
+    has_acl: bool = false,
+    /// File capabilities are set (`security.capability`); only checked when
+    /// `print_with_color` is set and LS_COLORS gives `ca` a colour.
+    has_capability: bool = false,
+    /// The type indicator `-F`/`-p`/`--file-type` would append (`/`, `*`, `@`,
+    /// `|`, `=`), or 0 for none or when `indicator_style` is `.none`.
+    indicator: u8 = 0,
+    /// Colour class and the SGR parameters from LS_COLORS (for example
+    /// "01;34"); only when `print_with_color` is set. The sequence is null when
+    /// LS_COLORS gives the class no colour; an extension rule (`*.tar`) can
+    /// replace the sequence of a plain file.
+    color_class: ?ColorClass = null,
+    color_sequence: ?[]const u8 = null,
+};
+
+/// Callback for `walk`: `func` is called once per entry, in the order the
+/// text listing prints them.
+pub const Collector = struct {
+    context: ?*anyopaque = null,
+    func: *const fn (context: ?*anyopaque, entry: *const Entry) void,
+};
+
+/// An owned, collected listing (see `list`).
+pub const Listing = struct {
+    arena: std.heap.ArenaAllocator,
+    /// Every entry in print order: command-line operands that are not
+    /// descended into first, then each directory's contents (sorted as
+    /// requested); `Entry.dir` tells the groups apart.
+    entries: []const Entry,
+    result: Result,
+
+    pub fn deinit(l: *Listing) void {
+        l.arena.deinit();
+        l.* = undefined;
+    }
+};
+
 pub const FailureKind = enum { canonicalize, cannot_access, cannot_read_link, cannot_open_dir, cannot_determine_dev_ino, reading_directory };
 pub const Reason = union(enum) { errno: std.os.linux.E, err: anyerror };
 
@@ -1903,6 +2192,8 @@ pub const Event = union(enum) {
     failure: struct { kind: FailureKind, name: []const u8, reason: Reason },
     /// A directory that contains itself (with -R).
     already_listed: []const u8,
+    /// An allocation failed, so the listing is incomplete (exit status 2).
+    out_of_memory,
     /// LS_COLORS holds an unknown two-letter code.
     unrecognized_prefix: [2]u8,
     /// LS_COLORS could not be parsed; colour is turned off.
@@ -1922,7 +2213,89 @@ pub const Result = struct {
 pub fn run(env: Env, options: Options, operands: []const []const u8, writer: *Io.Writer, observer: common.Observer(Event)) Result {
     var o = options;
     o.normalize();
+    return runImpl(env, o, operands, writer, observer, null);
+}
+
+/// Produce the listing `run` would print, as data, and call `collector.func`
+/// for each entry instead of writing text. The same collection and sorting code
+/// as `run` is used, so `Options` mean the same: `sort_type`, `sort_reverse`,
+/// `ignore_mode` (-a/-A), `recursive`, `immediate_dirs`, `ignore_patterns`,
+/// `hide_patterns`, `dereference` (-L/-H), `time_type`, `numeric_ids`,
+/// `indicator_style`, `filename_style`, `print_with_color` (LS_COLORS from
+/// `env`). Layout options (`format`, widths, `human_output_opts`, `dired`,
+/// `json`, `print_hyperlink`, `eolbyte`) have no effect: every entry carries
+/// its full metadata, as with -l. A symbolic link operand is followed or not
+/// as the same options would do for the text listing of the format given.
+///
+/// The strings of an `Entry` are valid only during the call; copy what you
+/// keep (`list` does). Failures arrive through `observer`, the status in
+/// the result. Nothing is written to any stream and no signal handlers are
+/// installed.
+pub fn walk(env: Env, options: Options, operands: []const []const u8, observer: common.Observer(Event), collector: Collector) Result {
+    var o = options;
+    o.json = false;
+    o.normalize();
+    if (o.dereference == .undefined) {
+        o.dereference = if (o.immediate_dirs or o.indicator_style == .classify or o.format == .long) .never else .command_line_symlink_to_dir;
+    }
+    // Gather every field, as -l does; nothing is printed.
+    o.format = .long;
+    o.print_hyperlink = false;
+    o.dired = false;
+    o.restore_color_on_signal = false;
+    var buf: [64]u8 = undefined;
+    var sink = Io.Writer.Discarding.init(&buf);
+    return runImpl(env, o, operands, &sink.writer, observer, collector);
+}
+
+const Collect = struct {
+    arena: *std.heap.ArenaAllocator,
+    list: std.ArrayList(Entry) = .empty,
+    failed: bool = false,
+
+    fn dup(c: *Collect, bytes: []const u8) []const u8 {
+        return c.arena.allocator().dupe(u8, bytes) catch {
+            c.failed = true;
+            return "";
+        };
+    }
+
+    fn add(context: ?*anyopaque, e: *const Entry) void {
+        const c: *Collect = @ptrCast(@alignCast(context.?));
+        var n = e.*;
+        n.name = c.dup(e.name);
+        n.dir = if (e.dir) |d| c.dup(d) else null;
+        n.display_name = c.dup(e.display_name);
+        if (e.owner) |x| n.owner = c.dup(x);
+        if (e.group) |x| n.group = c.dup(x);
+        if (e.link_target) |x| n.link_target = c.dup(x);
+        if (e.security_context) |x| n.security_context = c.dup(x);
+        if (e.color_sequence) |x| n.color_sequence = c.dup(x);
+        c.list.append(c.arena.allocator(), n) catch {
+            c.failed = true;
+        };
+    }
+};
+
+/// `walk` into memory. Usage:
+///
+///     var l = try ls.list(env, .{ .ignore_mode = .minimal, .sort_type = .size,
+///         .sort_reverse = true }, &.{"/etc"}, .none);
+///     defer l.deinit();
+///     for (l.entries) |e| std.debug.print("{s} {d} {s}\n", .{ e.name, e.size, @tagName(e.kind) });
+pub fn list(env: Env, options: Options, operands: []const []const u8, observer: common.Observer(Event)) error{OutOfMemory}!Listing {
+    var l: Listing = .{ .arena = std.heap.ArenaAllocator.init(env.gpa), .entries = &.{}, .result = undefined };
+    errdefer l.arena.deinit();
+    var c: Collect = .{ .arena = &l.arena };
+    l.result = walk(env, options, operands, observer, .{ .context = &c, .func = Collect.add });
+    if (c.failed) return error.OutOfMemory;
+    l.entries = c.list.items;
+    return l;
+}
+
+fn runImpl(env: Env, o: Options, operands: []const []const u8, writer: *Io.Writer, observer: common.Observer(Event), collect: ?Collector) Result {
     var s: Ls = .{
+        .collect = collect,
         .env = env,
         .out = Sink.init(writer),
         .observer = observer,
@@ -1950,6 +2323,7 @@ pub fn run(env: Env, options: Options, operands: []const []const u8, writer: *Io
         .indicator_style = o.indicator_style,
         .print_with_color = o.print_with_color,
         .print_hyperlink = o.print_hyperlink,
+        .catch_signals = o.restore_color_on_signal,
         .print_inode = o.print_inode,
         .dereference = o.dereference,
         .recursive = o.recursive,
@@ -1982,6 +2356,7 @@ pub fn run(env: Env, options: Options, operands: []const []const u8, writer: *Io
         s.subdired_offsets.deinit(env.gpa);
         s.user_cache.deinit();
         s.group_cache.deinit();
+        if (s.signals_installed) sys.restoreCaughtSignals();
         if (s.db) |*d| d.deinit();
         if (s.zone_loaded) s.zone.deinit();
     }
@@ -2021,4 +2396,171 @@ test "run lists a directory in name order" {
     const r = run(env, .{}, &.{path_buf[0..n]}, &aw.writer, .none);
     try std.testing.expectEqual(@as(u8, 0), r.exit_status);
     try std.testing.expectEqualStrings("a\nb\n", aw.written());
+}
+
+fn testDir(tmp: *std.testing.TmpDir, path_buf: *[4096]u8, env: Env) ![]const u8 {
+    const n = try tmp.dir.realPath(env.io, path_buf);
+    return path_buf[0..n];
+}
+
+fn mkfile(tmp: *std.testing.TmpDir, env: Env, name: []const u8, data: []const u8) !void {
+    const f = try tmp.dir.createFile(env.io, name, .{});
+    defer f.close(env.io);
+    try f.writeStreamingAll(env.io, data);
+}
+
+test "list returns entries as data in sorted order" {
+    const gpa = std.testing.allocator;
+    const env: Env = .{ .io = std.testing.io, .gpa = gpa };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try mkfile(&tmp, env, "b", "12345");
+    try mkfile(&tmp, env, "a", "");
+    try mkfile(&tmp, env, ".hid", "x");
+    try mkfile(&tmp, env, "sp ace", "x");
+    try tmp.dir.createDir(env.io, "sub", .default_dir);
+    try tmp.dir.symLink(env.io, "b", "lnk", .{});
+    var pb: [4096]u8 = undefined;
+    const root = try testDir(&tmp, &pb, env);
+
+    var l = try list(env, .{ .indicator_style = .classify, .filename_style = .shell_escape }, &.{root}, .none);
+    defer l.deinit();
+    try std.testing.expectEqual(@as(u8, 0), l.result.exit_status);
+    const names = [_][]const u8{ "a", "b", "lnk", "sp ace", "sub" };
+    try std.testing.expectEqual(names.len, l.entries.len);
+    for (names, l.entries) |n, e| {
+        try std.testing.expectEqualStrings(n, e.name);
+        try std.testing.expectEqualStrings(root, e.dir.?);
+    }
+    const b = l.entries[1];
+    try std.testing.expectEqual(Kind.file, b.kind);
+    try std.testing.expectEqual(@as(u64, 5), b.size);
+    try std.testing.expectEqual(@as(u32, 1), b.nlink);
+    try std.testing.expect(b.mtime != null and b.time.?.sec == b.mtime.?.sec);
+    try std.testing.expectEqual(@as(u8, 0), b.indicator);
+    try std.testing.expect(b.color_class == null);
+    const lnk = l.entries[2];
+    try std.testing.expectEqual(Kind.symlink, lnk.kind);
+    try std.testing.expectEqualStrings("b", lnk.link_target.?);
+    try std.testing.expectEqual(@as(u8, '@'), lnk.indicator);
+    try std.testing.expect(lnk.link_target_ok);
+    try std.testing.expectEqualStrings("'sp ace'", l.entries[3].display_name);
+    try std.testing.expectEqual(Kind.directory, l.entries[4].kind);
+    try std.testing.expectEqual(@as(u8, '/'), l.entries[4].indicator);
+}
+
+test "list honours -a, -r, sort by size, -d and ignore patterns" {
+    const gpa = std.testing.allocator;
+    const env: Env = .{ .io = std.testing.io, .gpa = gpa };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try mkfile(&tmp, env, "small", "1");
+    try mkfile(&tmp, env, "big", "123456");
+    try mkfile(&tmp, env, ".hid", "12");
+    try mkfile(&tmp, env, "skip.o", "1234");
+    var pb: [4096]u8 = undefined;
+    const root = try testDir(&tmp, &pb, env);
+
+    {
+        // -a: --hide does not apply, "." and ".." are listed.
+        var l = try list(env, .{ .ignore_mode = .minimal, .sort_type = .size, .hide_patterns = &.{"*.o"} }, &.{root}, .none);
+        defer l.deinit();
+        try std.testing.expectEqual(@as(usize, 6), l.entries.len);
+        var pos: [4]usize = undefined;
+        for ([_][]const u8{ "big", "skip.o", ".hid", "small" }, 0..) |n, k| {
+            pos[k] = for (l.entries, 0..) |e, i| {
+                if (std.mem.eql(u8, e.name, n)) break i;
+            } else return error.TestUnexpectedResult;
+        }
+        try std.testing.expect(pos[0] < pos[1] and pos[1] < pos[2] and pos[2] < pos[3]);
+    }
+    {
+        var l = try list(env, .{ .ignore_mode = .dot_and_dotdot, .sort_type = .size, .sort_reverse = true, .ignore_patterns = &.{"*.o"} }, &.{root}, .none);
+        defer l.deinit();
+        try std.testing.expectEqual(@as(usize, 3), l.entries.len);
+        try std.testing.expectEqualStrings("small", l.entries[0].name);
+        try std.testing.expectEqualStrings(".hid", l.entries[1].name);
+        try std.testing.expectEqualStrings("big", l.entries[2].name);
+    }
+    {
+        var l = try list(env, .{ .immediate_dirs = true }, &.{root}, .none);
+        defer l.deinit();
+        try std.testing.expectEqual(@as(usize, 1), l.entries.len);
+        try std.testing.expect(l.entries[0].dir == null);
+        try std.testing.expectEqual(Kind.directory, l.entries[0].kind);
+    }
+}
+
+test "list recurses and reports failures through the observer" {
+    const gpa = std.testing.allocator;
+    const env: Env = .{ .io = std.testing.io, .gpa = gpa };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(env.io, "d", .default_dir);
+    try tmp.dir.createDir(env.io, "d/e", .default_dir);
+    try mkfile(&tmp, env, "d/e/leaf", "x");
+    try mkfile(&tmp, env, "d/top", "x");
+    var pb: [4096]u8 = undefined;
+    const root = try testDir(&tmp, &pb, env);
+    var dpath: [4200]u8 = undefined;
+    const d = try std.fmt.bufPrint(&dpath, "{s}/d", .{root});
+
+    var l = try list(env, .{ .recursive = true }, &.{d}, .none);
+    defer l.deinit();
+    try std.testing.expectEqual(@as(usize, 3), l.entries.len); // e, top, then e's leaf
+    try std.testing.expectEqualStrings("e", l.entries[0].name);
+    try std.testing.expectEqualStrings("top", l.entries[1].name);
+    try std.testing.expectEqualStrings("leaf", l.entries[2].name);
+    try std.testing.expect(std.mem.endsWith(u8, l.entries[2].dir.?, "d/e"));
+
+    const Seen = struct {
+        n: usize = 0,
+        fn f(ctx: ?*anyopaque, ev: Event) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            if (ev == .failure) self.n += 1;
+        }
+    };
+    var seen: Seen = .{};
+    var m = try list(env, .{}, &.{"/nonexistent-util-core-test"}, .{ .context = &seen, .func = Seen.f });
+    defer m.deinit();
+    try std.testing.expectEqual(@as(usize, 0), m.entries.len);
+    try std.testing.expectEqual(@as(u8, 2), m.result.exit_status);
+    try std.testing.expectEqual(@as(usize, 1), seen.n);
+}
+
+test "text output is unchanged by the model code" {
+    const gpa = std.testing.allocator;
+    const env: Env = .{ .io = std.testing.io, .gpa = gpa };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try mkfile(&tmp, env, "x y", "1");
+    var pb: [4096]u8 = undefined;
+    const root = try testDir(&tmp, &pb, env);
+    var aw: Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    _ = run(env, .{ .filename_style = .shell }, &.{root}, &aw.writer, .none);
+    try std.testing.expectEqualStrings("'x y'\n", aw.written());
+}
+
+test "colour class and sequence come from LS_COLORS" {
+    const gpa = std.testing.allocator;
+    var environ: std.process.Environ.Map = .init(gpa);
+    defer environ.deinit();
+    try environ.put("LS_COLORS", "di=01;34:*.txt=31:ex=01;32");
+    try environ.put("TERM", "xterm");
+    const env: Env = .{ .io = std.testing.io, .gpa = gpa, .environ = &environ };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try mkfile(&tmp, env, "a.txt", "x");
+    try mkfile(&tmp, env, "plain", "x");
+    try tmp.dir.createDir(env.io, "dd", .default_dir);
+    var pb: [4096]u8 = undefined;
+    const root = try testDir(&tmp, &pb, env);
+    var l = try list(env, .{ .print_with_color = true }, &.{root}, .none);
+    defer l.deinit();
+    try std.testing.expectEqualStrings("a.txt", l.entries[0].name);
+    try std.testing.expectEqualStrings("31", l.entries[0].color_sequence.?);
+    try std.testing.expectEqual(ColorClass.file, l.entries[0].color_class.?);
+    try std.testing.expectEqual(ColorClass.directory, l.entries[1].color_class.?);
+    try std.testing.expectEqualStrings("01;34", l.entries[1].color_sequence.?);
 }
