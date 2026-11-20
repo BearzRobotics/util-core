@@ -168,16 +168,16 @@ fn remove(st: *State, path: []const u8, is_arg: bool) bool {
             };
         }
         dir.close(env.io);
-        const errs_before = st.nerr;
+        var kept = false; // a child failed or was declined, so the directory cannot be empty
         for (names.items) |n| {
             const child = if (std.mem.endsWith(u8, path, "/"))
                 std.fmt.allocPrint(env.gpa, "{s}{s}", .{ path, n }) catch return false
             else
                 std.fmt.allocPrint(env.gpa, "{s}/{s}", .{ path, n }) catch return false;
             defer env.gpa.free(child);
-            _ = remove(st, child, false);
+            if (!remove(st, child, false)) kept = true;
         }
-        if (st.nerr != errs_before) return false; // a child failed: leave the directory, as GNU does
+        if (kept) return false; // GNU leaves the directory without asking again
         return removeEmptyDir(st, path, lst);
     }
 
