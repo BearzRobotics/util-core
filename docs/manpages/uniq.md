@@ -1,15 +1,14 @@
-% UNIQ(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-04
+# NAME
 
-NAME
 uniq - report or omit repeated lines
 
-SYNOPSIS
-uniq [OPTION]... [INPUT [OUTPUT]]
-uniq --help | --version
+# SYNOPSIS
 
-OPTIONS
+    uniq [OPTION]... [INPUT [OUTPUT]]
+    uniq --help | --version
+
+# OPTIONS
+
 -c, --count
 : Prefix each output line with its repeat count (width 7).
 
@@ -43,28 +42,39 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	Invalid usage, or a file error.
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | Invalid usage, or a file error. |
+
+
+# ENVIRONMENT
+
 none
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Normal output goes to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/uniq --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-04: the GNU manual node "uniq invocation" (`info '(coreutils) uniq invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/uniq-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), uniq, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/uniq.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_uniq.sh`). Where POSIX and GNU differ, the text below says which one we follow.
+
 See docs/compatibility/uniq.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - Comparison is bytewise (C locale); LC_COLLATE and multibyte characters are not used; -i folds ASCII only.
 - The traditional `+N` option is not recognised (it is a file name, GNU's default).
 - `--help` text is shorter than GNU's; ASCII quotes in diagnostics.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/uniq.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

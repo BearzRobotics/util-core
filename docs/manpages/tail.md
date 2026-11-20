@@ -1,16 +1,15 @@
-% TAIL(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-04
+# NAME
 
-NAME
 tail - output the last part of files
 
-SYNOPSIS
-tail [-qvz] [-c [+]NUM | -n [+]NUM] [-f] [-s SECONDS] [--pid=PID] [FILE]...
-tail -NUM[bcl][f] [FILE]...
-tail --help | --version
+# SYNOPSIS
 
-OPTIONS
+    tail [-qvz] [-c [+]NUM | -n [+]NUM] [-f] [-s SECONDS] [--pid=PID] [FILE]...
+    tail -NUM[bcl][f] [FILE]...
+    tail --help | --version
+
+# OPTIONS
+
 -c, --bytes=[+]NUM
 : Output the last NUM bytes; with `+`, start at byte NUM.
 
@@ -44,29 +43,40 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	Invalid usage, or a file could not be opened or read.
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | Invalid usage, or a file could not be opened or read. |
+
+
+# ENVIRONMENT
+
 none
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Normal output goes to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/tail --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-04: the GNU manual node "tail invocation" (`info '(coreutils) tail invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/tail-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), tail, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/tail.html. Behaviour was also checked by differential tests against the GNU binary (`sh test/test_tail.sh`). Where POSIX and GNU differ, the text below says which one we follow.
+
 See docs/compatibility/tail.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - Not implemented: --max-unchanged-stats (rejected with an error). Following is done by polling, not inotify, so changes that happen and revert between two polls are not reported; GNU's inotify mode additionally says `has been replaced` instead of `has become inaccessible`/`has appeared` when a file that only just appeared is deleted and re-created.
 - -f is polling only (no inotify); it follows regular files only, whereas GNU also follows FIFOs. -f is ignored for pipes on standard input, as in the manual.
 - The obsolete `tail +5` form is treated as a file name (GNU's default since POSIX 2001); POSIX `-r` is not supported (GNU has none).
 - `--help` text is shorter than GNU's; ASCII quotes in diagnostics.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/tail.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

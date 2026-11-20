@@ -1,19 +1,19 @@
-% SORT(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 sort - sort, merge or check lines of text
 
-SYNOPSIS
-sort [OPTION]... [FILE]...
-sort [OPTION]... --files0-from=F
-sort --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    sort [OPTION]... [FILE]...
+    sort [OPTION]... --files0-from=F
+    sort --help | --version
+
+# DESCRIPTION
+
 Writes the sorted concatenation of all FILEs to standard output. With no FILE, or when FILE is `-`, standard input is read. Lines are compared by one or more keys (the whole line when no key is given); lines whose keys compare equal are then compared bytewise unless -s or -u is given.
 
-OPTIONS
+# OPTIONS
+
 -b, -d, -f, -i, -r
 : Ignore leading blanks in key positions; dictionary order; fold case (ASCII); ignore non-printing (0x20-0x7e kept); reverse.
 
@@ -50,23 +50,31 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	Success (with -c/-C: the input is ordered).
-1	With -c/-C: the input is not ordered.
-2	An error occurred (unreadable input, bad option or key, unsupported option).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success (with -c/-C: the input is ordered). |
+| 1 | With -c/-C: the input is not ordered. |
+| 2 | An error occurred (unreadable input, bad option or key, unsupported option). |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; comparisons are bytewise)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Sorted output goes to standard output unless -o is given; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "sort invocation" (`info '(coreutils) sort invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/sort-invocation.html) and "Version sort ordering" (read, not implemented); POSIX.1-2024 (IEEE Std 1003.1-2024), sort, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sort.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sort.sh`).
+
 See docs/compatibility/sort.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - `--debug` prints GNU's start-up notes on stderr and underlines the key extents under each output line (tabs shown as `>`, numeric/general/human/month keys marked only over the parsed text), in the C locale only; obsolete `+POS1 -POS2` keys are accepted. `--debug` with `-c`, `-C` or `-o` is rejected like GNU. `-V/--version-sort` follows gnulib's filevercmp (suffix handling, `~`, leading dots) and `-R/--random-sort` hashes keys with MD5 over the 16-byte `--random-source` seed exactly like GNU (the key text is NUL-terminated only when the collation locale is not C/POSIX), so seeded output matches GNU byte for byte; without a seed the system RNG is used.
 - Sorting holds the whole input in memory; there are no temporary files, so `-S`, `-T`, `--batch-size`, `--compress-program` have no effect and inputs larger than memory fail. `-c`/`-C` and `-m` (to standard output, at most 128 inputs, standard input named at most once) stream one line per input instead.
 - Single-threaded; `--parallel=N` is validated and ignored.
@@ -77,8 +85,11 @@ LIMITATIONS
 - A write failure reports `write failed: 'standard output'` without the strerror text.
 - `--version` prints `sort (util-core) 0.0.0-dev`; `--help` lists only the implemented options.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/sort.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

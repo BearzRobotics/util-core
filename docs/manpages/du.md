@@ -1,19 +1,19 @@
-% DU(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 du - estimate file space usage
 
-SYNOPSIS
-du [OPTION]... [FILE]...
-du [OPTION]... --files0-from=F
-du --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    du [OPTION]... [FILE]...
+    du [OPTION]... --files0-from=F
+    du --help | --version
+
+# DESCRIPTION
+
 Estimate file space usage.
 
-OPTIONS
+# OPTIONS
+
 -a, --all
 : Write counts for all files, not just directories.
 
@@ -62,28 +62,39 @@ OPTIONS
 --json
 : Print one JSON array with one object per line du would print (`path`, `size` in bytes, `inodes`, `time`, `total`). Cannot be combined with `-h`, `--si`, `-k`, `-m`, `-B`, `-0` or `--time-style`. Not in GNU du.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	An error occurred (or, for check-style modes, a check failed).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | An error occurred (or, for check-style modes, a check failed). |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/du --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "du invocation" (`info '(coreutils) du invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/du-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), du, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/du.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_du.sh`).
+
 See docs/compatibility/du.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - fts is not used: entries are visited in the order the file system returns them, and cycles reached through symbolic links under -L are skipped quietly as fts does while -P cycles produce the `Circular directory structure` warning.
 - The mount-point test behind `-x` compares device numbers only (GNU uses the same rule); bind mounts of one device are not special-cased.
 - Times are formatted in the local zone from /usr/share/zoneinfo or TZ; leap seconds are not applied.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/du.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

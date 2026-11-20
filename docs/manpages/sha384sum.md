@@ -1,18 +1,18 @@
-% SHA384SUM(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 sha384sum - compute and check SHA-384 message digests
 
-SYNOPSIS
-sha384sum [-bctzw] [--tag] [--quiet|--status|--strict|--ignore-missing] [FILE]...
-sha384sum --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    sha384sum [-bctzw] [--tag] [--quiet|--status|--strict|--ignore-missing] [FILE]...
+    sha384sum --help | --version
+
+# DESCRIPTION
+
 Compute and check SHA-384 message digests.
 
-OPTIONS
+# OPTIONS
+
 -b, --binary
 : Mark each input as binary in the output (` *`); the digest is unaffected.
 
@@ -37,27 +37,38 @@ OPTIONS
 --json
 : Print one JSON object per input: file, algorithm, digest or checksum, size. Cannot be combined with the check options. Not in GNU sha384sum.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	An error occurred (or, for check-style modes, a check failed).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | An error occurred (or, for check-style modes, a check failed). |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/sha384sum --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "sha2 utilities invocation" (`info '(coreutils) sha2 utilities invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/sha2 utilities-invocation.html). POSIX does not specify this utility. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sha384sum.sh`).
+
 See docs/compatibility/sha384sum.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - `--version` prints `NAME (util-core) 0.0.0-dev`; `--help` is shorter than GNU's and names the tool as invoked.
 - Digest hex is compared case-insensitively; GNU also accepts upper-case hex.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/sha384sum.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

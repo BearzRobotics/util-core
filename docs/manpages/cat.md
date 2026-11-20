@@ -1,18 +1,18 @@
-% CAT(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-04
+# NAME
 
-NAME
 cat - concatenate files and print on the standard output
 
-SYNOPSIS
-cat [OPTION]... [FILE]...
-cat --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    cat [OPTION]... [FILE]...
+    cat --help | --version
+
+# DESCRIPTION
+
 Copy each FILE (or standard input when none is given, or for the name -) to standard output in order. Without formatting options the data is copied unchanged in 64 KiB chunks. When standard output is a terminal and no GNU formatting option (-A -b -e -E -n -s -t -T -v) is given, cat shows a bat-style view instead: file header, grid and line numbers. In pipes and redirects the output is always the GNU-compatible bytes. With color on and a matching grammar, the text is syntax-highlighted. Paging and git change markers are not implemented yet.
 
-OPTIONS
+# OPTIONS
+
 -A, --show-all
 : Equivalent to -vET.
 
@@ -67,36 +67,47 @@ OPTIONS
 --help, --version
 : Sole-argument handling is not required; either may appear anywhere.
 
-EXIT STATUS
-Status	Meaning
-0	All inputs copied.
-1	A file could not be opened or read, an option was invalid, or writing failed. Remaining files are still processed.
+# EXIT STATUS
 
-STANDARD STREAMS
+| Status | Meaning |
+|---|---|
+| 0 | All inputs copied. |
+| 1 | A file could not be opened or read, an option was invalid, or writing failed. Remaining files are still processed. |
+
+
+# STANDARD STREAMS
+
 Normal output goes to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/cat --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-04: the GNU manual node "cat invocation" (`info '(coreutils) cat invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/cat-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), cat, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/cat.html. Behaviour was also checked by differential tests against the GNU binary (`sh test/test_cat.sh`). Where POSIX and GNU differ, the text below says which one we follow.
+
 See docs/compatibility/cat.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - No syntax highlighting, paging or other bat-inspired features yet (open decision: highlighting backend).
 - Does not detect 'input file is output file'.
 - Short options must be separate or clustered; abbreviated long options are not accepted.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/cat.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
 
-FILES
+# FILES
+
 
 `$XDG_CONFIG_HOME/cat/syntaxes` or `~/.config/cat/syntaxes`: Sublime Text `.sublime-syntax` grammars. None are bundled yet. Grammars are loaded only when a highlighted view is possible (terminal output, color on), so plain use pays nothing.
 
 Colors come from a built-in theme that uses the terminal's 16 ANSI colors. There is no theme option yet.
 
-ENVIRONMENT
+# ENVIRONMENT
+
 
 NO_COLOR
 : When set to a non-empty string, no color is used (no syntax colors, the gutter is drawn faint instead of gray) unless `--color=always` is given. Bold and faint styles remain, as the no-color.org convention allows. An empty value is ignored. `--color=never` removes every escape sequence. The grid, line numbers and header are not affected. (SPEC section 5.4.)
@@ -106,3 +117,4 @@ TERM
 
 XDG_CONFIG_HOME, HOME
 : Locate the grammar directory `cat/syntaxes`.
+

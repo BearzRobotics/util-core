@@ -1,18 +1,18 @@
-% BASENC(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 basenc - encode or decode data in one of several encodings
 
-SYNOPSIS
-basenc --ENCODING [-d] [-i] [-w COLS] [FILE]
-basenc --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    basenc --ENCODING [-d] [-i] [-w COLS] [FILE]
+    basenc --help | --version
+
+# DESCRIPTION
+
 Encode or decode data in one of several encodings.
 
-OPTIONS
+# OPTIONS
+
 --base64, --base64url, --base32, --base32hex, --base16, --base2msbf, --base2lsbf, --z85
 : Select the encoding (one is required).
 
@@ -28,27 +28,38 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	An error occurred (or, for check-style modes, a check failed).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | An error occurred (or, for check-style modes, a check failed). |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/basenc --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "basenc invocation" (`info '(coreutils) basenc invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/basenc-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), basenc, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/basenc.html. RFC 4648 sections 4 to 8; ZeroMQ spec 32/Z85. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_basenc.sh`).
+
 See docs/compatibility/basenc.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - `--version` prints `basenc (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 - Block sizes for partial output on malformed large inputs follow what was observed on GNU 9.7 for small inputs; inputs much larger than 64 KiB with errors in the middle are not tested.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/basenc.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

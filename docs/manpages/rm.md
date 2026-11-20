@@ -1,18 +1,18 @@
-% RM(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 rm - remove files or directories
 
-SYNOPSIS
-rm [OPTION]... [FILE]...
-rm --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    rm [OPTION]... [FILE]...
+    rm --help | --version
+
+# DESCRIPTION
+
 Remove files or directories.
 
-OPTIONS
+# OPTIONS
+
 -f, --force
 : Ignore nonexistent files and arguments, never prompt.
 
@@ -37,26 +37,37 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	An error occurred (or, for check-style modes, a check failed).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | An error occurred (or, for check-style modes, a check failed). |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/rm --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "rm invocation" (`info '(coreutils) rm invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/rm-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), rm, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/rm.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_rm.sh`).
+
 See docs/compatibility/rm.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - `--preserve-root=all` does not compare devices against the parent.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/rm.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

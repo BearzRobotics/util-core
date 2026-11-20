@@ -1,18 +1,18 @@
-% STAT(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 stat - display file or file system status
 
-SYNOPSIS
-stat [OPTION]... FILE...
-stat --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    stat [OPTION]... FILE...
+    stat --help | --version
+
+# DESCRIPTION
+
 Display file or file system status.
 
-OPTIONS
+# OPTIONS
+
 -L, --dereference
 : Follow symbolic links.
 
@@ -34,28 +34,39 @@ OPTIONS
 --json
 : Print one JSON object per operand, one per line (file-system fields with `-f`). Cannot be combined with `-c`, `--printf` or `-t`. Not in GNU stat.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	An error occurred (or, for check-style modes, a check failed).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | An error occurred (or, for check-style modes, a check failed). |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/stat --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "stat invocation" (`info '(coreutils) stat invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/stat-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), stat, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/stat.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_stat.sh`).
+
 See docs/compatibility/stat.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - `%C` reads the `security.selinux` attribute; without it GNU's `failed to get security context` diagnostic is reproduced.
 - `%m` walks up the directory tree looking for a device change; bind mounts are not resolved through the mount table.
 - `--help` omits the "GNU coreutils online help" footer.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/stat.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

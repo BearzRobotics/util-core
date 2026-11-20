@@ -1,18 +1,18 @@
-% OD(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 od - dump files in octal and other formats
 
-SYNOPSIS
-od [OPTION]... [FILE]...
-od --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    od [OPTION]... [FILE]...
+    od --help | --version
+
+# DESCRIPTION
+
 Dump files in octal and other formats.
 
-OPTIONS
+# OPTIONS
+
 -A, --address-radix=RADIX
 : Address radix d, o, x or n.
 
@@ -43,29 +43,40 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	An error occurred (or, for check-style modes, a check failed).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | An error occurred (or, for check-style modes, a check failed). |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/od --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "od invocation" (`info '(coreutils) od invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/od-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), od, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/od.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_od.sh`).
+
 See docs/compatibility/od.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - x87 pseudo-denormal encodings (exponent 0, integer bit 1, non-zero fraction) are printed differently from glibc.
 - `-w0` aborts GNU od; here it is an error.
 - Multibyte characters are not interpreted.
 - `--help` omits the "GNU coreutils online help" footer.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/od.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

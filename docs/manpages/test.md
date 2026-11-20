@@ -1,18 +1,18 @@
-% TEST(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 test - evaluate conditional expressions (also installed as `[`)
 
-SYNOPSIS
-test EXPRESSION | [ EXPRESSION ]
-test --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    test EXPRESSION | [ EXPRESSION ]
+    test --help | --version
+
+# DESCRIPTION
+
 Evaluate conditional expressions (also installed as `[`).
 
-OPTIONS
+# OPTIONS
+
 ! EXPR, ( EXPR ), EXPR -a EXPR, EXPR -o EXPR
 : Negation, grouping, and, or.
 
@@ -31,28 +31,39 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	The expression is true.
-1	The expression is false.
-2	Syntax error.
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | The expression is true. |
+| 1 | The expression is false. |
+| 2 | Syntax error. |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/test --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "test invocation" (`info '(coreutils) test invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/test-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), test, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/test.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_test.sh`).
+
 See docs/compatibility/test.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - `-v` and `-R` (bash extensions) are not GNU test operators and are rejected as GNU does.
 - `[ --version` prints a util-core banner instead of GNU's.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/test.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

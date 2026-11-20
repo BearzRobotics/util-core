@@ -1,18 +1,18 @@
-% BASE32(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 base32 - base32 encode or decode data
 
-SYNOPSIS
-base32 [-d] [-i] [-w COLS] [FILE]
-base32 --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    base32 [-d] [-i] [-w COLS] [FILE]
+    base32 --help | --version
+
+# DESCRIPTION
+
 Base32 encode or decode data.
 
-OPTIONS
+# OPTIONS
+
 -d, --decode
 : Decode data.
 
@@ -25,26 +25,37 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	An error occurred (or, for check-style modes, a check failed).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | An error occurred (or, for check-style modes, a check failed). |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU coreutils 9.7 (`/usr/bin/base32 --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "base32 invocation" (`info '(coreutils) base32 invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/base32-invocation.html); POSIX.1-2024 (IEEE Std 1003.1-2024), base32, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/base32.html. RFC 4648 section 6. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_base32.sh`).
+
 See docs/compatibility/base32.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - `--version` prints `base32 (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/base32.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

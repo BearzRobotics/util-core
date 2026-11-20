@@ -1,18 +1,18 @@
-% LOCATE(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 locate - find files by name in a prebuilt database
 
-SYNOPSIS
-locate [OPTION]... PATTERN...
-locate --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    locate [OPTION]... PATTERN...
+    locate --help | --version
+
+# DESCRIPTION
+
 Find files by name in a prebuilt database.
 
-OPTIONS
+# OPTIONS
+
 -d, --database=PATH
 : Colon-separated list of databases (default LOCATE_PATH, then /usr/local/var/locatedb).
 
@@ -43,26 +43,37 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	A match was found (or only statistics/count requested).
-1	No match, or an error occurred.
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | A match was found (or only statistics/count requested). |
+| 1 | No match, or an error occurred. |
+
+
+# ENVIRONMENT
+
 LOCATE_PATH (locate); FINDOPTIONS, SEARCHPATHS, NETPATHS, PRUNEPATHS, PRUNEFS, LOCATE_DB (updatedb). Locale variables are ignored.
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from the findutils-4.10.0 source tarball by `tools/build-gnu-findutils.sh` into `~/.cache/util-core/findutils`; the suites skip if that is absent. Behaviour was checked against the GNU binaries run with LC_ALL=C.
+
 See docs/compatibility/locate.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - The old (bigram) database format is not supported.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/locate.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

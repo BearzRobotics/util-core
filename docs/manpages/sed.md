@@ -1,18 +1,18 @@
-% SED(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 sed - stream editor for filtering and transforming text
 
-SYNOPSIS
-sed [OPTION]... {script-only-if-no-other-script} [input-file]...
-sed --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    sed [OPTION]... {script-only-if-no-other-script} [input-file]...
+    sed --help | --version
+
+# DESCRIPTION
+
 Stream editor for filtering and transforming text.
 
-OPTIONS
+# OPTIONS
+
 -n, --quiet, --silent
 : Suppress automatic printing of the pattern space.
 
@@ -55,33 +55,44 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	Invalid command, option or script.
-2	An input file could not be read; the others were processed.
-4	I/O error or other fatal error.
-N	From `q N` or `Q N`.
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | Invalid command, option or script. |
+| 2 | An input file could not be read; the others were processed. |
+| 4 | I/O error or other fatal error. |
+| N | From `q N` or `Q N`. |
+
+
+# ENVIRONMENT
+
 none (locale variables are ignored; behaviour is that of the C locale)
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU sed 4.9 (`/usr/bin/sed --version` on the development machine). Consulted 2026-11-07: the GNU sed manual (https://www.gnu.org/software/sed/manual/sed.html) and POSIX.1-2024 sed, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sed.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sed.sh`).
+
 See docs/compatibility/sed.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - Regular expressions use the Perl-dialect engine of regex-zig through src/posixre.zig: alternation is leftmost-first, POSIX and GNU use leftmost-longest, so `s/a|ab/X/` differs on "ab".
 - `--debug` is accepted but prints nothing extra (GNU prints the program and a trace).
 - C locale only: no multibyte characters.
 - `e` and `s///e` run the command through `/bin/sh` and a temporary file in /tmp.
 - `--version` prints an abbreviated banner.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/sed.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+

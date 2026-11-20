@@ -1,18 +1,18 @@
-% UPDATEDB(1) util-core 0.0.0-dev | Util Core Manual
-% Util Core contributors
-% 2026-11-07
+# NAME
 
-NAME
 updatedb - create or update a locate database
 
-SYNOPSIS
-updatedb [OPTION]...
-updatedb --help | --version
+# SYNOPSIS
 
-DESCRIPTION
+    updatedb [OPTION]...
+    updatedb --help | --version
+
+# DESCRIPTION
+
 Create or update a locate database.
 
-OPTIONS
+# OPTIONS
+
 --localpaths=DIRS, --netpaths=DIRS
 : Directories to index (shell-style globbing is applied).
 
@@ -31,27 +31,38 @@ OPTIONS
 --help, --version
 : Print help or version and exit.
 
-EXIT STATUS
-Status	Meaning
-0	Success.
-1	An error occurred (or, for check-style modes, a check failed).
+# EXIT STATUS
 
-ENVIRONMENT
+| Status | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | An error occurred (or, for check-style modes, a check failed). |
+
+
+# ENVIRONMENT
+
 LOCATE_PATH (locate); FINDOPTIONS, SEARCHPATHS, NETPATHS, PRUNEPATHS, PRUNEFS, LOCATE_DB (updatedb). Locale variables are ignored.
 
-STANDARD STREAMS
+# STANDARD STREAMS
+
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
-COMPATIBILITY
+# COMPATIBILITY
+
 Reference: GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from the findutils-4.10.0 source tarball by `tools/build-gnu-findutils.sh` into `~/.cache/util-core/findutils`; the suites skip if that is absent. Behaviour was checked against the GNU binaries run with LC_ALL=C.
+
 See docs/compatibility/updatedb.md for details.
 
-LIMITATIONS
+# LIMITATIONS
+
 - --localuser/--netuser (su) are ignored.
 - Databases are byte-identical to GNU's in all tested cases.
 
-SEE ALSO
+# SEE ALSO
+
 docs/compatibility/updatedb.md, docs/architecture.md
 
-VERSION
+# VERSION
+
 This manual describes the development version 0.0.0-dev; no release exists.
+
