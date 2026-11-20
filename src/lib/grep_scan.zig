@@ -126,6 +126,53 @@ fn flatten(gpa: std.mem.Allocator, body: []const u8, out: *std.ArrayList(u8)) st
     }
 }
 
+pub const Lit = struct { text: []u8, exact: bool };
+
+/// Required literals of each top-level alternative of `body` appended to
+/// `out` (owned); false when some alternative has none (then `out` may hold
+/// partial results the caller frees).
+pub fn literals(gpa: std.mem.Allocator, body: []const u8, o: Opts, out: *std.ArrayList(Lit)) std.mem.Allocator.Error!bool {
+    var flat: std.ArrayList(u8) = .empty;
+    defer flat.deinit(gpa);
+    try flatten(gpa, body, &flat);
+    var start: usize = 0;
+    var j: usize = 0;
+    const b = flat.items;
+    while (j <= b.len) {
+        const at_end = j == b.len;
+        var split = at_end;
+        if (!at_end) switch (b[j]) {
+            '\\' => {
+                j += 2;
+                continue;
+            },
+            '[' => {
+                j = classEnd(b, j) orelse return false;
+                continue;
+            },
+            '(' => {
+                j = groupEnd(b, j) orelse return false;
+                continue;
+            },
+            '|' => split = true,
+            else => {},
+        };
+        if (split) {
+            var info = try analyze(gpa, b[start..j], o);
+            if (info.lit.len == 0) {
+                info.deinit(gpa);
+                return false;
+            }
+            const exact = info.exact and !info.anchor_start and !info.anchor_end;
+            try out.append(gpa, .{ .text = info.lit, .exact = exact });
+            info.lit = &.{};
+            start = j + 1;
+        }
+        j += 1;
+    }
+    return true;
+}
+
 pub fn analyze(gpa: std.mem.Allocator, raw_body: []const u8, o: Opts) std.mem.Allocator.Error!Info {
     var flat: std.ArrayList(u8) = .empty;
     defer flat.deinit(gpa);
@@ -283,6 +330,26 @@ fn expectInfo(body: []const u8, o: Opts, lit: []const u8, exact: bool, scannable
     try std.testing.expectEqualStrings(lit, i.lit);
     try std.testing.expectEqual(exact, i.exact);
     try std.testing.expectEqual(scannable, i.scannable);
+}
+
+test "literals splits alternatives" {
+    const o: Opts = .{ .icase = false, .utf8 = false, .eol = '\n' };
+    var out: std.ArrayList(Lit) = .empty;
+    defer {
+        for (out.items) |l| std.testing.allocator.free(l.text);
+        out.deinit(std.testing.allocator);
+    }
+    try std.testing.expect(try literals(std.testing.allocator, "zqxjv|qq+x|(a|b)cd", o, &out));
+    try std.testing.expectEqual(@as(usize, 3), out.items.len);
+    try std.testing.expectEqualStrings("zqxjv", out.items[0].text);
+    try std.testing.expect(out.items[0].exact);
+    try std.testing.expectEqualStrings("qq", out.items[1].text);
+    try std.testing.expect(!out.items[1].exact);
+    try std.testing.expectEqualStrings("cd", out.items[2].text);
+    var out2: std.ArrayList(Lit) = .empty;
+    defer out2.deinit(std.testing.allocator);
+    try std.testing.expect(!try literals(std.testing.allocator, "ab|c*", o, &out2));
+    for (out2.items) |l| std.testing.allocator.free(l.text);
 }
 
 test "analyze finds required literals" {

@@ -277,9 +277,13 @@ pub const Matcher = struct {
     bool_subs: std.ArrayList(*Matcher) = .empty,
     /// Buffer-wide pre-filter (see `candidate`): a required literal, or a DFA
     /// over the patterns, finds the next line worth running the regex on.
-    pre_kind: enum { none, lit, scan } = .none,
+    pre_kind: enum { none, lit, multi, scan } = .none,
     pre_needle: vec.Needle = undefined,
     pre_text: []u8 = &.{},
+    /// Several required literals (an alternation or a short -F list): the
+    /// nearest hit of any of them.
+    pre_multi: std.ArrayList(vec.Needle) = .empty,
+    pre_multi_mem: std.ArrayList([]u8) = .empty,
     pre_store: []u8 = &.{},
     pre_re: ?*regex.Regex = null,
     pre_sr: ?regex.Searcher = null,
@@ -319,6 +323,15 @@ pub const Matcher = struct {
         switch (m.pre_kind) {
             .none => return .unknown,
             .lit => return if (m.pre_needle.find(hay, from)) |p| .{ .at = p } else .none,
+            .multi => {
+                var best: ?usize = null;
+                for (m.pre_multi.items) |*nd| {
+                    // only a hit before the best one so far matters
+                    const lim = if (best) |b| @min(hay.len, b + nd.bytes.len - 1) else hay.len;
+                    if (nd.find(hay[0..lim], from)) |p| best = p;
+                }
+                return if (best) |p| .{ .at = p } else .none;
+            },
             .scan => {
                 const sr: *regex.Searcher = if (m.pre_use_set) &m.set_sr.? else &m.pre_sr.?;
                 const f = &(sr.fwd orelse {
@@ -332,6 +345,42 @@ pub const Matcher = struct {
                 return .{ .at = if (e > from) e - 1 else e };
             },
         }
+    }
+
+    /// Up to `multi_max` required literals (each at least two bytes) cover
+    /// every pattern: search for them directly.
+    const multi_max = 8;
+
+    fn buildMulti(m: *Matcher, options: Options, ao: scan.Opts) bool {
+        const gpa = m.gpa;
+        var lits: std.ArrayList(scan.Lit) = .empty;
+        defer {
+            for (lits.items) |l| gpa.free(l.text);
+            lits.deinit(gpa);
+        }
+        for (m.staged.items) |st| {
+            const ok = scan.literals(gpa, st.body, ao, &lits) catch return false;
+            if (!ok or lits.items.len > multi_max) return false;
+        }
+        if (lits.items.len < 2) return false;
+        var all_exact = !options.word and !options.line;
+        for (lits.items) |l| {
+            if (l.text.len < 2) return false;
+            if (!l.exact) all_exact = false;
+        }
+        for (lits.items) |l| {
+            const fold = options.icase;
+            const mem = gpa.alloc(u8, l.text.len * 2) catch return false;
+            m.pre_multi_mem.append(gpa, mem) catch {
+                gpa.free(mem);
+                return false;
+            };
+            @memcpy(mem[0..l.text.len], l.text);
+            m.pre_multi.append(gpa, vec.Needle.init(mem[0..l.text.len], fold, mem[l.text.len..])) catch return false;
+        }
+        m.pre_kind = .multi;
+        m.pre_exact = all_exact;
+        return true;
     }
 
     fn buildPre(m: *Matcher, options: Options) void {
@@ -372,6 +421,7 @@ pub const Matcher = struct {
                 return;
             }
         }
+        if (m.buildMulti(options, ao)) return;
         if (!all_scan or options.line) return;
         if (m.set != null) {
             // The combined set is exactly the alternation of the bodies.
@@ -409,6 +459,9 @@ pub const Matcher = struct {
 
     pub fn deinit(m: *Matcher) void {
         m.gpa.free(m.pre_text);
+        for (m.pre_multi_mem.items) |mem| m.gpa.free(mem);
+        m.pre_multi_mem.deinit(m.gpa);
+        m.pre_multi.deinit(m.gpa);
         m.gpa.free(m.pre_store);
         if (m.pre_sr) |*x| x.deinit();
         if (m.pre_re) |re| {
