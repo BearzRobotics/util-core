@@ -83,7 +83,7 @@ See docs/compatibility/sort.md for details.
 - The traditional `+POS1 -POS2` key syntax is not recognised (those arguments are file names).
 - An ambiguous long option prints `option '--s' is ambiguous` without GNU's `; possibilities:` list (shared `cli.badLong`).
 - A write failure reports `write failed: 'standard output'` without the strerror text.
-- `--version` prints `sort (util-core) 0.0.0-dev`; `--help` lists only the implemented options.
+- `--version` prints `sort (util-core) 0.1.0`; `--help` lists only the implemented options.
 
 # SEE ALSO
 
@@ -91,5 +91,5 @@ docs/compatibility/sort.md, docs/architecture.md
 
 # VERSION
 
-This manual describes the development version 0.0.0-dev; no release exists.
+This manual describes util-core 0.1.0.
 

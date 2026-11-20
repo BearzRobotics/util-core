@@ -6,19 +6,68 @@ multicall binary, `util-core` (`util-core ls ...`, or invoked through a link
 named after a command; `util-core --list` lists the commands). Spec and rules: `ai/`; design
 decisions and compatibility records: `docs/`.
 
+## Build modes
+
 ```
 zig build                      # everything: one binary per command, plus util-core (multicall)
 zig build -Dmode=standalone    # only the one-binary-per-command executables
 zig build -Dmode=multicall     # only the util-core multicall binary
-zig build test         # unit tests
+zig build -Dcommands=ls,cat,cp # a subset of the commands
+zig build -Doptimize=ReleaseSafe --prefix ~/.local   # install bin/ and share/man/man1
+zig build test                 # unit tests
 ```
 
-Platforms: Linux (x86_64, aarch64), macOS (aarch64, x86_64) and Windows
-(x86_64, aarch64) are built from any host with `-Dtarget=`, for example
-`zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall`. Linux is the
-reference platform and the only one the full test suites run on; macOS is
-compile-checked only and Windows is checked under wine (a real Windows run is planned before release). What works where is
-in `docs/portability.md`.
+Needs Zig 0.17.1. Release builds are stripped (`-Dstrip=false` keeps debug info).
+
+## Manual pages
+
+The pages are Markdown in the dkman layout (`docs/manpages/`). `-Dman` (on by default,
+`-Dman=false` to skip) installs them to `PREFIX/share/man/man1/NAME.1.md`, where
+dkman and dkde-help find them; `tools/mdman-convert.py` and any Markdown-to-man tool
+can produce man(7) if you need it.
+
+## Use as a library
+
+`build.zig.zon`: `.dependencies = .{ .util_core = .{ .url = "...", .hash = "..." } }`
+(`zig fetch --save` fills both), then in `build.zig`:
+
+```zig
+const uc = b.dependency("util_core", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("util_core", uc.module("util_core"));
+```
+
+The library takes `std.Io`, parses no arguments and prints nothing it was not
+asked to; each command is a module (`util_core.grep`, `util_core.diff`, ...).
+See `docs/decisions/0004-library-first-architecture.md` and the header comment
+of each `src/lib/*.zig`.
+
+## Download
+
+Prebuilt archives are attached to each [release](https://github.com/BearzRobotics/util-core/releases):
+`util-core-VERSION-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` (static musl),
+`-windows-x86_64.zip` and `-windows-aarch64.zip`, with `SHA256SUMS`. Each holds
+`bin/` (every command plus the `util-core` multicall binary) and `share/man/man1/`.
+
+```
+sha256sum -c --ignore-missing SHA256SUMS
+tar xzf util-core-0.1.0-linux-x86_64.tar.gz
+```
+
+## Supported platforms
+
+| Platform | Prebuilt download | Tested |
+|---|---|---|
+| Linux x86_64, aarch64 | yes (static musl) | x86_64: every test suite, differential against GNU |
+| Windows x86_64 | yes | 79 cases under wine; real-Windows recheck before each release |
+| Windows aarch64 | yes | compiled only |
+| macOS x86_64, aarch64 | no | compile-checked in CI only |
+
+macOS builds from source (`zig build`, or `-Dtarget=aarch64-macos` from another host) and is
+compile-checked in CI, but no prebuilt binaries are provided because no maintainer owns a Mac.
+Prebuilt macOS binaries will be offered once a volunteer with a Mac steps up to test and
+maintain that platform. What works where is in `docs/portability.md`.
+
+Cutting a release: `docs/release.md`. Changes: `CHANGELOG.md`.
 
 ## License
 

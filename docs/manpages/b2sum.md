@@ -64,7 +64,7 @@ See docs/compatibility/b2sum.md for details.
 
 # LIMITATIONS
 
-- `--version` prints `NAME (util-core) 0.0.0-dev`; `--help` is shorter than GNU's and names the tool as invoked.
+- `--version` prints `NAME (util-core) 0.1.0`; `--help` is shorter than GNU's and names the tool as invoked.
 - Digest hex is compared case-insensitively; GNU also accepts upper-case hex.
 - Keyed hashing and the other BLAKE2 parameters are not offered (neither does GNU b2sum).
 
@@ -74,5 +74,5 @@ docs/compatibility/b2sum.md, docs/architecture.md
 
 # VERSION
 
-This manual describes the development version 0.0.0-dev; no release exists.
+This manual describes util-core 0.1.0.
 

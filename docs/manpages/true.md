@@ -47,5 +47,5 @@ docs/compatibility/true.md, docs/architecture.md
 
 # VERSION
 
-This manual describes the development version 0.0.0-dev; no release exists.
+This manual describes util-core 0.1.0.
 

@@ -52,7 +52,7 @@ See docs/compatibility/basenc.md for details.
 
 # LIMITATIONS
 
-- `--version` prints `basenc (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `basenc (util-core) 0.1.0`; `--help` is shorter than GNU's.
 - Block sizes for partial output on malformed large inputs follow what was observed on GNU 9.7 for small inputs; inputs much larger than 64 KiB with errors in the middle are not tested.
 
 # SEE ALSO
@@ -61,5 +61,5 @@ docs/compatibility/basenc.md, docs/architecture.md
 
 # VERSION
 
-This manual describes the development version 0.0.0-dev; no release exists.
+This manual describes util-core 0.1.0.
 
