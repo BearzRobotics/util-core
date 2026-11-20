@@ -39,6 +39,14 @@ The installed `/usr/bin/dircolors` is GNU coreutils 9.7. Our built-in database f
 - Read errors use the system error text, without GNU's `read error` wording.
 - Not run under multicall dispatch, on Windows, or on macOS.
 
+## Library
+
+Module `util_core.dircolors` (`src/lib/dircolors.zig`); `src/commands/dircolors.zig` is the argument-parsing and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Every accepted option and behaviour is GNU 9.7 (or a documented gap below); there is no `--json` and no terminal-only presentation.
+
 ## Tests
 
 `test/test_dircolors.sh` (57 checks, expectations derived from the GNU source) and unit tests in `src/commands/dircolors.zig` (glob matcher, parser, TERM state machine, quoting, built-in database).

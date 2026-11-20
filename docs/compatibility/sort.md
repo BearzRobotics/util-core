@@ -41,6 +41,14 @@ GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, install
 - A write failure reports `write failed: 'standard output'` without the strerror text.
 - `--version` prints `sort (util-core) 0.0.0-dev`; `--help` lists only the implemented options.
 
+## Library
+
+Module `util_core.sort` (`src/lib/sort.zig`); `src/commands/sort.zig` is the argument-parsing and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Every accepted option and behaviour is GNU 9.7 (or a documented gap below); there is no `--json` and no terminal-only presentation.
+
 ## Tests
 
 test/test_sort.sh: stdout, normalised stderr and exit status compared with GNU sort 9.7 under LC_ALL=C. It covers every ordering option, keys with and without `-t`, option and key error messages, `-z`, `-o`, `--files0-from`, `-c`/`-C`, `-m`, and 12 seeded pseudo-random inputs run through 35 option combinations each, version sort (-V) on a hand-made list and 10 random inputs, random sort (-R) with a fixed `--random-source`, and `--debug` over about 690 option/fixture combinations.

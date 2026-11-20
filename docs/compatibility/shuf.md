@@ -25,6 +25,14 @@ GNU coreutils 9.7 (`/usr/bin/shuf --version` on the development machine, install
 
 - `--help` omits the "GNU coreutils online help" footer.
 
+## Library
+
+Module `util_core.shuf` (`src/lib/shuf.zig`); `src/commands/shuf.zig` is the argument-parsing and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Every accepted option and behaviour is GNU 9.7 (or a documented gap below); there is no `--json` and no terminal-only presentation.
+
 ## Tests
 
 `sh test/test_shuf.sh`: 145 differential cases against GNU shuf 9.7 in the C locale. Byte-for-byte comparisons with --random-source, including 0-18446744073709551615 ranges and reservoir sampling.

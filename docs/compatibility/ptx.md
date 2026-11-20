@@ -24,6 +24,14 @@ GNU coreutils 9.7 (`/usr/bin/ptx --version` on the development machine, installe
 - With `-W` patterns that can match the empty string GNU loops forever; so do we.
 - `--help` omits the "GNU coreutils online help" footer.
 
+## Library
+
+Module `util_core.ptx` (`src/lib/ptx.zig`); `src/commands/ptx.zig` is the argument-parsing and diagnostics wrapper (decision 0004).
+
+## Extensions
+
+None. Every accepted option and behaviour is GNU 9.7 (or a documented gap below); there is no `--json` and no terminal-only presentation.
+
 ## Tests
 
 `sh test/test_ptx.sh`: 523 differential cases against GNU ptx 9.7 in the C locale. 
