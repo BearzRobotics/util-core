@@ -3,7 +3,7 @@
 #
 #   sh bench/grep-matrix.sh [-o OURS_GREP] [-r RUNS] [-d DATADIR] [-t "tool tool"] [row-name-pattern]
 #
-# Environment: OURS (our grep binary), RUNS (default 5; the fastest run is
+# Environment: OURS (our grep binary), BASE (an older build; add `base` to TOOLS), RUNS (default 5; the fastest run is
 # reported), DATA (default /stuff/tmp/gb/data), TOOLS (default "gnu ours rg ugrep").
 # Output: a markdown table, one row per case, one "wall ms / cpu ms / RSS MB"
 # cell per tool. Standard output of every command goes to a pipe that is read
@@ -86,6 +86,7 @@ bin() {
 	case $1 in
 	gnu) echo /usr/bin/grep ;;
 	ours) echo "$OURS" ;;
+	base) echo "$BASE" ;; # an older build of ours, for before/after tables
 	rg) echo /usr/bin/rg ;;
 	ugrep) echo /usr/bin/ugrep ;;
 	esac

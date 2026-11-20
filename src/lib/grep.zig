@@ -595,6 +595,14 @@ pub const Matcher = struct {
         if (m.lit_mode != .none) {
             if (m.litCheck(line)) |r| return r;
         }
+        if (m.pre_exact) switch (m.pre_kind) {
+            .lit => return m.pre_needle.find(line, 0) != null,
+            .multi => {
+                for (m.pre_multi.items) |*nd| if (nd.find(line, 0) != null) return true;
+                return false;
+            },
+            else => {},
+        };
         if (m.set_sr) |*sr| return sr.matchesAnywhere(line) catch {
             m.noteLimit();
             return false;
