@@ -7,6 +7,8 @@
 //! collide; add a file by adding a line here.
 
 test {
+    _ = @import("fuzz/limits.zig");
+    _ = @import("fuzz/engine.zig");
     _ = @import("fuzz/quoting.zig");
     _ = @import("fuzz/text.zig");
     _ = @import("fuzz/lang.zig");
