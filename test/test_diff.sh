@@ -74,6 +74,22 @@ for args in "-c -u o n" "-u -c o n" "-e -n o n" "-C x o n" "-U -1 o n" "-W 0 o n
     eval run_cmp \"diff $args\" $args
 done
 
+printf "\n[ Control characters, -t, -T, pagination, same file ]\n"
+printf 'a\tb\r\fc\bd\ve\n\a\t\n\n' > cc1; printf 'a\tb\r\fc\bd\ve\n\a\t\x01\x80\n\n\n' > cc2
+printf '\x07\n\t\x1b\xff\r\r\bx\n' > cc3; printf '\x0c\n\t\x1b\xfe\r\bx\r\n' > cc4
+for p in cc1,cc2 cc3,cc4 s1,s3; do
+    a=${p%,*}; b=${p#*,}
+    for f in "-y -W 15" "-y -t -W 15" "-y -t -W 20" "-y -W 30" "-u -t" "-c -t" "-u -T" "-u -T --suppress-blank-empty" "-t -D X" "-n -t" "-t" "-t -e"; do
+        eval run_cmp \"diff $f $a $b\" $f $a $b
+    done
+done
+for f in "-l" "-lu" "-l -y" "-l -D X" "-l -e" "-l -c -L A -L B"; do
+    run_cmp "diff $f o n" $f o n
+done
+for f in -y "-y --suppress-common-lines" "-D X" "--line-format=%L" "-u" ""; do
+    run_cmp "same file $f" $f o o
+done
+
 printf "\n[ Standard input ]\n"
 CMP_STDIN="$W/o"
 run_cmp "stdin vs n"       - n

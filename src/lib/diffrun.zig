@@ -9,6 +9,7 @@ const common = @import("common.zig");
 const json = @import("../json.zig");
 const tz = @import("../tz.zig");
 const fnmatch = @import("../fnmatch.zig");
+const diffsbs = @import("diffsbs.zig");
 
 const Options = diff.Options;
 const Env = diff.Env;
@@ -84,6 +85,37 @@ const Driver = struct {
         }
         const st = try Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = !d.options.no_dereference });
         return .{ .kind = st.kind, .size = st.size, .mtime = tsToTime(st.mtime.nanoseconds), .inode = @intCast(st.inode) };
+    }
+
+    /// -q with nothing to ignore and a plain text report style.
+    fn quickBrief(d: *Driver) bool {
+        const o = d.options;
+        return o.brief and !o.json and !o.ignore_blank_lines and o.ignore_matching.len == 0 and !o.strip_trailing_cr and
+            !o.flags.ignore_case and !o.flags.ignore_tab_expansion and !o.flags.ignore_trailing_space and
+            !o.flags.ignore_space_change and !o.flags.ignore_all_space and o.style != .ed and o.style != .forward_ed and
+            o.style != .ifdef and o.style != .side_by_side;
+    }
+
+    fn streamEqual(d: *Driver, p0: []const u8, p1: []const u8) !bool {
+        const io = d.env.io;
+        const f0 = try Io.Dir.cwd().openFile(io, p0, .{});
+        defer f0.close(io);
+        const f1 = try Io.Dir.cwd().openFile(io, p1, .{});
+        defer f1.close(io);
+        var b0: [65536]u8 = undefined;
+        var b1: [65536]u8 = undefined;
+        while (true) {
+            const n0 = try common.readChunk(io, f0, &b0);
+            // Fill the second buffer to the same length.
+            var n1: usize = 0;
+            while (n1 < n0) {
+                const k = try common.readChunk(io, f1, b1[n1..n0]);
+                if (k == 0) break;
+                n1 += k;
+            }
+            if (n0 != n1 or !std.mem.eql(u8, b0[0..n0], b1[0..n1])) return false;
+            if (n0 == 0) return true;
+        }
     }
 
     fn readAll(d: *Driver, path: []const u8, info: Info) ![]u8 {
@@ -273,13 +305,20 @@ const Driver = struct {
             return;
         }
         // The very same file is identical without reading it.
-        if (infos[0].exists and infos[1].exists and infos[0].kind == .file and infos[0].inode != 0 and infos[0].inode == infos[1].inode and
+        if (diffsbs.noDiffMeansNoOutput(o) and infos[0].exists and infos[1].exists and infos[0].kind == .file and infos[0].inode != 0 and infos[0].inode == infos[1].inode and
             infos[0].size == infos[1].size and infos[0].mtime.sec == infos[1].mtime.sec and infos[0].mtime.nsec == infos[1].mtime.nsec)
         {
             if (o.report_identical or o.json) try d.identical(dn);
             return;
         }
         try d.compareContents(nested, real, dn, infos);
+    }
+
+    /// `-l`: format the finished output of one file with the page formatter,
+    /// titled `diff OPTIONS NAME1 NAME2`, as GNU's `pr -h` pipe does.
+    fn paginate(d: *Driver, text: []const u8, title: []const u8) !void {
+        const pr = @import("pr.zig");
+        _ = try pr.run(d.env, .{ .custom_header = title, .stdin_data = text }, &.{}, d.w, .none);
     }
 
     fn compareDirs(d: *Driver, nested: bool, real: [2][]const u8, disp: [2][]const u8, only: ?usize) anyerror!void {
@@ -335,6 +374,23 @@ const Driver = struct {
     fn compareContents(d: *Driver, nested: bool, real: [2][]const u8, dn: [2][]const u8, infos: [2]Info) anyerror!void {
         const gpa = d.env.gpa;
         const o = d.options;
+        if (d.quickBrief() and infos[0].exists and infos[1].exists and infos[0].kind == .file and infos[1].kind == .file and
+            !infos[0].stdin and !infos[1].stdin)
+        {
+            // Only the answer is wanted: differing sizes settle it, otherwise
+            // compare in blocks and stop at the first difference.
+            const same = infos[0].size == infos[1].size and (d.streamEqual(real[0], real[1]) catch |e| {
+                d.fileError(real[0], e);
+                return;
+            });
+            if (same) {
+                if (o.report_identical) try d.identical(dn);
+            } else {
+                d.raise(1);
+                try d.w.print("Files {s} and {s} differ\n", .{ dn[0], dn[1] });
+            }
+            return;
+        }
         var data: [2][]u8 = .{ &.{}, &.{} };
         defer for (data) |m| gpa.free(m);
         for (0..2) |f| {
@@ -364,6 +420,16 @@ const Driver = struct {
         }
         if (same_bytes and o.style != .ed and o.style != .forward_ed and o.style != .ifdef and o.style != .side_by_side) {
             if (o.report_identical or o.json) try d.identical(dn);
+            return;
+        }
+        // -q with nothing to ignore only needs to know whether the bytes differ.
+        if (o.brief and !o.json and !o.ignore_blank_lines and o.ignore_matching.len == 0 and !o.strip_trailing_cr and
+            !o.flags.ignore_case and !o.flags.ignore_tab_expansion and !o.flags.ignore_trailing_space and
+            !o.flags.ignore_space_change and !o.flags.ignore_all_space and o.style != .ed and o.style != .forward_ed and
+            o.style != .ifdef and o.style != .side_by_side)
+        {
+            d.raise(1);
+            try d.w.print("Files {s} and {s} differ\n", .{ dn[0], dn[1] });
             return;
         }
         var bufs: [2][]const u8 = .{ data[0], data[1] };
@@ -415,20 +481,28 @@ const Driver = struct {
         if (nested or d.dir_mode) {
             header = try std.fmt.allocPrint(gpa, "diff{s} {s} {s}", .{ o.switch_string, dn[0], dn[1] });
         }
+        var page: Io.Writer.Allocating = .init(gpa);
+        defer page.deinit();
         var pr: diff.Printer = .{
             .gpa = gpa,
-            .w = d.w,
+            .w = if (o.paginate) &page.writer else d.w,
             .options = o,
             .c = &cmp,
             .m = &d.matchers,
             .names = dn,
             .times = .{ infos[0].mtime, infos[1].mtime },
             .zone = &d.zone,
-            .header = header,
+            .header = if (o.paginate) null else header,
         };
         try pr.script();
+        if (o.paginate and pr.begun) try d.paginate(page.written(), header orelse try diffName(gpa, o, dn, &header));
     }
 };
+
+fn diffName(gpa: std.mem.Allocator, o: diff.Options, dn: [2][]const u8, slot: *?[]u8) ![]const u8 {
+    slot.* = try std.fmt.allocPrint(gpa, "diff{s} {s} {s}", .{ o.switch_string, dn[0], dn[1] });
+    return slot.*.?;
+}
 
 pub fn run(env: Env, options: Options, name0: []const u8, name1: []const u8, w: *Io.Writer, observer: Observer) !u8 {
     const gpa = env.gpa;

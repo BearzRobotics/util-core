@@ -47,7 +47,7 @@ Output style
 : Tab handling and blank-line suppression in the output.
 
 -l, --paginate
-: Accepted; pagination through pr(1) is not implemented.
+: Pass each file's output through the page formatter, titled `diff OPTIONS FILE1 FILE2`, as GNU does with `pr -h`. The formatter is this project's own `pr` library, run in the same process; the page header carries the current time.
 
 --color[=WHEN]; --palette=PALETTE
 : Colour the output (`never`, `always`, `auto`). Default colours: added green, removed red, headers bold, hunk headers cyan; the palette uses the `ad`, `de`, `hd` and `ln` capabilities.
@@ -100,8 +100,8 @@ The report goes to standard output; diagnostics go to standard error. For -e and
 
 # DIFFERENCES FROM GNU
 
-- `-l` (pagination through pr) is accepted and ignored.
-- `--diff-program` does not exist here; file name ordering is by bytes (C locale), not by the locale collation.
+- `-l` pages the output with the built-in `pr`, not with a `pr` program found on the path.
+- `--diff-program` does not exist; file name ordering is by bytes (C locale), not by the locale collation.
 - Binary detection looks at the first 4096 bytes, as GNU does on the test system; files larger than 1 GiB are refused with a clear error rather than read.
 - `--json` is an extension.
 

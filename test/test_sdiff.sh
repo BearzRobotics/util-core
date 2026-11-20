@@ -59,6 +59,29 @@ for e in el er eb e ed e1 e2; do
 done
 unset TREE_STDIN TREE_CONTENT
 
+printf "\n[ Interactive merge: multi-line and empty ranges ]\n"
+SETUP2="printf 'a\nb\nc\nd\ne\n' > p1; printf 'a\nX\nY\nZ\nd\ne\n' > p2; printf 'a\nd\ne\n' > q2; printf 'a\nb\nc' > s1; printf 'a\nX\nc' > s2; printf 'x\ny\n' > u1; printf 'x\nY\ny\nz\n' > u2"
+printf '#!/bin/sh\nsed s/^/E:/ "$1" > "$1.n" && mv "$1.n" "$1"\n' > "$W/edit.sh"; chmod +x "$W/edit.sh"
+EDITOR="$W/edit.sh"; export EDITOR
+for pr in "p1 p2" "p1 q2" "q2 p1" "s1 s2" "u1 u2"; do
+    for e in ed eb el er e e1 e2 'e d' 'e  l' 'ed\ned\ned' 'l' 'er' 'q'; do
+        mkans "$e\nl\nr\nl\n"
+        run_tree "sdiff -o [$e] $pr" "$SETUP2" -o out $pr
+    done
+done
+unset EDITOR TREE_STDIN TREE_CONTENT
+
+printf "\n[ --diff-program ]\n"
+printf '#!/bin/sh\nexec /usr/bin/diff "$@"\n' > wrapdiff; chmod +x wrapdiff
+printf '#!/bin/sh\necho "ARGS: $*"; exit 1\n' > argsprog; chmod +x argsprog
+for args in "--diff-program=./wrapdiff i1 i2" "--diff-program=./wrapdiff -s -l -w 50 i1 i2" "--diff-program=./argsprog -i -w 40 -s -B -I x -t --tabsize=4 -Z -E -W -b -a -d -H --strip-trailing-cr i1 i2" "--diff-program=./nonexistent i1 i2" "--diff-program=diff i1 i2"; do
+    eval run_cmp \"sdiff $args\" $args
+done
+mkans 'l\nr\nl\n'
+run_tree "sdiff -o --diff-program" "$SETUP" --diff-program=/usr/bin/diff -o out i1 i2
+run_tree "sdiff -o --diff-program missing" "$SETUP" --diff-program=/nonexistent -o out i1 i2
+unset TREE_STDIN TREE_CONTENT
+
 printf "\n[ Help ]\n"
 help_cmp_diffutils
 

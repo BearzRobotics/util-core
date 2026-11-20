@@ -205,17 +205,21 @@ const Ctx = struct {
     real1: []const usize,
 
     inline fn f(c: *Ctx, d: isize) *isize {
-        return &c.fd[@intCast(d + c.off)];
+        return @ptrCast(c.fd.ptr + @as(usize, @bitCast(d + c.off)));
     }
     inline fn b(c: *Ctx, d: isize) *isize {
-        return &c.bd[@intCast(d + c.off)];
+        return @ptrCast(c.bd.ptr + @as(usize, @bitCast(d + c.off)));
     }
     inline fn eq(c: *const Ctx, x: isize, y: isize) bool {
-        return c.xv[@intCast(x)] == c.yv[@intCast(y)];
+        return c.xv.ptr[@as(usize, @bitCast(x))] == c.yv.ptr[@as(usize, @bitCast(y))];
     }
 };
 
 fn diag(c: *Ctx, xoff: isize, xlim: isize, yoff: isize, ylim: isize, find_minimal: bool) Part {
+    // The hot loop of the whole engine: every index is bounded by the
+    // algorithm (diagonals within [dmin, dmax], x and y within the limits),
+    // so the checks are switched off here and only here.
+    @setRuntimeSafety(false);
     const dmin = xoff - ylim;
     const dmax = xlim - yoff;
     const fmid = xoff - yoff;

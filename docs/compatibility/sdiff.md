@@ -4,7 +4,7 @@ Status: complete for the GNU options; verified against GNU diffutils 3.12. Date:
 
 ## Reference
 
-GNU diffutils 3.12 (`/usr/bin/sdiff --version`). Consulted: the GNU manual node "Interactive Merging with sdiff" and "Side by Side". Settled by probing the installed binary.
+GNU diffutils 3.12 (`/usr/bin/sdiff --version`). Consulted: the GNU manual node "Interactive Merging with sdiff" and "Side by Side". Settled by probing the installed binary; the 3.12 sources were read for understanding only (no code or text copied).
 
 ## Supported options
 
@@ -19,9 +19,14 @@ GNU diffutils 3.12 (`/usr/bin/sdiff --version`). Consulted: the GNU manual node 
 
 ## Known deviations and gaps
 
-- The comparison is built in; `--diff-program` other than `diff` is refused.
-- The headers of the `ed` command (`--- FILE N`) were matched for single-line ranges only; the text of a range header for multi-line and empty ranges is a guess.
+- The comparison is built in unless `--diff-program` names another program: without `-o` it is run as GNU runs it (translated options, `-y -- FILE1 FILE2`) and its status returned; with `-o` it is run with `--sdiff-merge-assist` and its `i`/`c` protocol drives the same prompt.
+- The `ed` command's headers (`--- FILE N`, `--- FILE N,M`, none for an empty range) and the whole prompt were verified against GNU with scripted sessions (436 sessions over single-line, multi-line and empty ranges, files without a final newline, `-s -l -B`, failing and missing editors, unterminated last answers).
+- `-d` is `--minimal` as in GNU: the engine skips the discard pass and searches without the shortcut, which is analyze.c's rule (there is no separate sdiff behaviour).
 - The editor is started with `std.process.spawn` on `$EDITOR`; there is no shell, so `EDITOR` must be a program name or path (GNU runs it through the same exec path).
+
+## Measured agreement
+
+20000 generated pairs (all input kinds of the diff campaign) in 18 listing option sets plus a scripted `-o` session each: 380000 of 380000 comparisons identical to GNU sdiff 3.12.
 
 ## Library
 

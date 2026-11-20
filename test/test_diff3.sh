@@ -27,6 +27,14 @@ printf "\n[ Option handling and errors ]\n"
 for args in "mine old" "mine old your x" "-L a -L b -L c -L d mine old your" "-L a mine old your" "-L a -L b mine old your" "-e -m mine old your" "-E -x mine old your" "-3 -x mine old your" "-e -3 mine old your" "-A -x mine old your" "-X -E mine old your" "-x -e mine2 old your2" "-m -i mine old your" "nonex old your" "mine nonex your" "mine old nonex" "--bogus" "-e -e mine old your" "--ed mine old your" "--show-all mine old your" "--show-overlap mine old your" "--easy-only mine old your" "--overlap-only mine old your" "--merge mine2 old your2" "--initial-tab mine old your" "--label=a --label=b --label=c mine old your" "--text mine old your"; do
     run_cmp "diff3 $args" $args
 done
+printf '#!/bin/sh\nexec /usr/bin/diff "$@"\n' > wrapdiff; chmod +x wrapdiff
+printf 'echo garbage\n' > badprog; chmod +x badprog
+printf '#!/bin/sh\necho "x"\n' > badprog2; chmod +x badprog2
+printf '#!/bin/sh\nexit 2\n' > failprog; chmod +x failprog
+printf '#!/bin/sh\nexit 1\n' > quietprog; chmod +x quietprog
+for args in "--diff-program=./wrapdiff mine old your" "--diff-program=./wrapdiff -e mine old your" "--diff-program=./wrapdiff -m mine2 old your2" "--diff-program=./wrapdiff -A mine2 old your2" "--diff-program=./wrapdiff -a mine old your" "--diff-program=./wrapdiff --strip-trailing-cr -E mine old your" "--diff-program=/usr/bin/diff -x mine old your" "--diff-program=./nonexistent mine old your" "--diff-program=./failprog mine old your" "--diff-program=./quietprog mine old your" "--diff-program=./badprog mine old your" "--diff-program=./badprog2 mine old your" "--diff-program=diff mine old your"; do
+    run_cmp "diff3 $args" $args
+done
 CMP_STDIN="$W/old"
 run_cmp "stdin as middle" mine - your
 CMP_STDIN="$W/mine"

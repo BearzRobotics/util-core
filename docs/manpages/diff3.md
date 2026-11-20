@@ -46,7 +46,7 @@ The default report lists each block with the line range in every file (`1:2c`, `
 : Treat files as text; strip a carriage return before each newline.
 
 --diff-program=PROGRAM
-: Only `diff` is accepted: the comparison is built in.
+: Run PROGRAM instead of the built-in comparison. It is called as GNU diff3 calls it (`PROGRAM [-a] [--strip-trailing-cr] --horizon-lines=100 ---no-directory -- OLDFILE OTHER`) and must print a normal-format diff; the text of the lines still comes from the files. A program that cannot be run gives `subsidiary program 'X' not found` (or `could not be invoked`, `failed (exit status N)`) and status 2. The default `diff` stays in process.
 
 --json
 : One JSON object: `files`, `conflicts` and `blocks`, each with a `kind` (`unchanged`, `only-first`, `only-second`, `only-third`, `overlap`) and, for the three files, `start`, `count` and the `lines`. Refused with the other output options. Not in GNU diff3.
@@ -65,7 +65,7 @@ The default report lists each block with the line range in every file (`1:2c`, `
 # DIFFERENCES FROM GNU
 
 - The three-way blocks and the ed and merge forms were reproduced by observing GNU diff3 3.12; the agreement on generated inputs is in the compatibility record.
-- `--diff-program` other than `diff` is refused; a binary input is reported as `diff failed: Binary files ... differ` naming MYFILE and YOURFILE.
+- With `--diff-program` the line text is taken from the files, not from the program's output, so a program whose output contradicts the files can give different text than GNU's; a binary input is reported as `diff failed: Binary files ... differ` naming MYFILE and YOURFILE.
 - `--json` is an extension.
 
 # SEE ALSO
