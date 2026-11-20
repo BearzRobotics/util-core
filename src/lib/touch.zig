@@ -75,7 +75,7 @@ pub fn touchOne(env: Env, file: []const u8, options: Options, observer: Observer
         }
     }
     const t: ?[2]sys.TimeSpec = if (options.now) null else times;
-    const uerr = if (is_stdout) sys.setTimes(null, 1, t, false) else sys.setTimes(file, -1, t, options.no_deref);
+    const uerr = if (is_stdout) sys.setTimes(null, Io.File.stdout().handle, t, false) else sys.setTimes(file, sys.invalid_handle, t, options.no_deref);
     if (uerr) |ue| {
         if (is_stdout and ue == .BADF and options.no_create) return true;
         if (open_errno) |oe| {

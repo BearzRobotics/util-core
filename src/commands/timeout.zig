@@ -77,7 +77,7 @@ pub fn main(ctx: cli.Context) u8 {
         cli.warn(ctx, "failed to run command {f}: {s}", .{ cli.quoteC(command[0]), text });
         return timeout.spawnFailureStatus(e);
     };
-    const pid: i32 = @intCast(child.id.?);
+    const pid = child.id.?;
     // Blocks the watched signals; they are read from the signalfd instead.
     const w = sys.Watcher.init(pid, &timeout.watched_signals) orelse {
         cli.warn(ctx, "unable to monitor the command", .{});
@@ -105,7 +105,7 @@ pub fn main(ctx: cli.Context) u8 {
                 // Die from the same signal, so the parent sees the real cause.
                 _ = sys.setSignal(sig, .default);
                 sys.unblockSignal(sig);
-                _ = sys.sendSignal(@intCast(std.os.linux.getpid()), sig);
+                _ = sys.raiseSelf(sig);
             }
             return f.status;
         },

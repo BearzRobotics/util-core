@@ -166,7 +166,7 @@ fn containsCase(hay: []const u8, needle: []const u8) bool {
     return std.ascii.findIgnoreCase(hay, needle) != null;
 }
 
-fn readAll(l: *L, fd: i32) Error![]u8 {
+fn readAll(l: *L, fd: sys.Handle) Error![]u8 {
     var data: std.ArrayList(u8) = .empty;
     var buf: [65536]u8 = undefined;
     var err: LX.E = .SUCCESS;
@@ -392,7 +392,7 @@ pub fn run(env: Env, options: Options, patterns: []const []const u8, writer: *Io
     }
     for (dbs.items) |elt| {
         if (o.limit) |lim| if (lim <= l.items_accepted) break;
-        var fd: i32 = -1;
+        var fd: sys.Handle = sys.invalid_handle;
         var dbname: []const u8 = elt;
         if (std.mem.eql(u8, elt, "\x00default")) {
             var err: LX.E = .SUCCESS;
@@ -439,7 +439,7 @@ pub fn run(env: Env, options: Options, patterns: []const []const u8, writer: *Io
             }
         }
         const data = try readAll(&l, fd);
-        if (fd != 0 and !(o.stdin != null and fd == o.stdin.?.handle)) _ = sys.closeFd(fd);
+        if (fd != Io.File.stdin().handle and !(o.stdin != null and fd == o.stdin.?.handle)) _ = sys.closeFd(fd);
         try searchDb(&l, data, dbname, patterns, size, mtime);
         found = l.items_accepted;
     }

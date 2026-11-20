@@ -23,7 +23,7 @@ pub const Env = common.Env;
 
 /// Signals that terminate or interrupt timeout and are passed to the
 /// command; the caller creates the Watcher for these.
-pub const watched_signals = [_]u8{ 1, 2, 3, 15 };
+pub const watched_signals = [_]u8{ sys.signo.HUP, sys.signo.INT, sys.signo.QUIT, sys.signo.TERM };
 
 pub const Options = struct {
     /// --foreground: do not signal the whole process group.
@@ -35,7 +35,7 @@ pub const Options = struct {
     /// --kill-after in nanoseconds.
     kill_after: ?u64 = null,
     /// Signal sent on timeout.
-    signal: u8 = 15,
+    signal: u8 = sys.signo.TERM,
     /// Time limit in nanoseconds; 0 means none.
     duration: u64,
 };
@@ -113,13 +113,13 @@ const Supervisor = struct {
     self_signals: u32 = 0,
     last_self: u8 = 0,
 
-    fn sendTo(s: *Supervisor, pid: i32, sig: u8) void {
+    fn sendTo(s: *Supervisor, pid: sys.Pid, sig: u8) void {
         if (s.verbose) s.obs.emit(.{ .sending_signal = sig });
         _ = sys.sendSignal(pid, sig);
         if (!s.foreground) {
             // The whole group includes timeout itself; its copy will arrive on
             // the signalfd and must not be forwarded again.
-            _ = sys.sendSignal(0, sig);
+            _ = sys.signalOwnGroup(sig);
             for (watched_signals) |ws| if (ws == sig) {
                 s.last_self = sig;
                 s.self_signals += 1;
@@ -130,7 +130,7 @@ const Supervisor = struct {
 
 /// Wait for the started command (`pid`), enforcing the time limit and
 /// forwarding signals read from `w`. Does not close `w`.
-pub fn supervise(env: Env, opts: Options, pid: i32, w: sys.Watcher, obs: Observer) Outcome {
+pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Observer) Outcome {
     var sup: Supervisor = .{ .obs = obs, .verbose = opts.verbose, .foreground = opts.foreground };
     var timed_out = false;
     var sent_kill = false;
@@ -153,13 +153,13 @@ pub fn supervise(env: Env, opts: Options, pid: i32, w: sys.Watcher, obs: Observe
                     timed_out = true;
                     sup.sendTo(pid, opts.signal);
                     deadline = if (opts.kill_after) |k| nowNs(env.io) + @as(i96, k) else null;
-                    if (opts.signal != 9) {
+                    if (opts.signal != sys.signo.KILL) {
                         // A stopped command needs CONT to see the signal.
-                        if (opts.signal != 18) _ = sys.sendSignal(pid, 18);
+                        if (opts.signal != sys.signo.CONT) _ = sys.sendSignal(pid, sys.signo.CONT);
                     }
                 } else {
                     sent_kill = true;
-                    sup.sendTo(pid, 9);
+                    sup.sendTo(pid, sys.signo.KILL);
                     deadline = null;
                 }
             },

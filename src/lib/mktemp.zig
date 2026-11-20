@@ -10,6 +10,7 @@
 //! directory with mode 0700 minus umask; on EEXIST another name is tried.
 
 const std = @import("std");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 
@@ -129,11 +130,11 @@ pub fn create(env: Env, arena: std.mem.Allocator, plan: Plan) error{OutOfMemory}
         var failure: ?anyerror = null;
         var exists = false;
         if (plan.directory) {
-            cwd.createDir(env.io, work, .fromMode(0o700)) catch |e| {
+            cwd.createDir(env.io, work, sys.permissionsFromMode(0o700)) catch |e| {
                 if (e == error.PathAlreadyExists) exists = true else failure = e;
             };
         } else {
-            if (cwd.createFile(env.io, work, .{ .exclusive = true, .permissions = .fromMode(0o600) })) |f| {
+            if (cwd.createFile(env.io, work, .{ .exclusive = true, .permissions = sys.permissionsFromMode(0o600) })) |f| {
                 f.close(env.io);
             } else |e| {
                 if (e == error.PathAlreadyExists) exists = true else failure = e;

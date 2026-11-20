@@ -35,7 +35,7 @@ pub const Result = struct {
 pub fn run(env: Env, opts: Options, files: []const []const u8, obs: Observer) Result {
     var res: Result = .{};
     if (files.len == 0) {
-        _ = sys.syncFile(-1, .all);
+        _ = sys.syncFile(sys.invalid_handle, .all);
         return res;
     }
     for (files) |name| {

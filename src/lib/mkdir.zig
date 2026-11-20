@@ -12,6 +12,7 @@
 //! supported.
 
 const std = @import("std");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 
@@ -77,13 +78,13 @@ pub fn makeOne(env: Env, path: []const u8, options: Options, observer: Observer)
             } else |_| {}
             // Parent mode: umask-modified rwx plus u+wx.
             const pmode: u16 = (0o777 & ~options.umask) | 0o300;
-            Io.Dir.cwd().createDir(io, prefix, .fromMode(pmode)) catch |e| {
+            Io.Dir.cwd().createDir(io, prefix, sys.permissionsFromMode(pmode)) catch |e| {
                 if (e == error.PathAlreadyExists) continue;
                 observer.emit(.{ .create_failed = .{ .path = prefix, .err = e } });
                 return false;
             };
             if (pmode != (pmode & ~options.umask)) {
-                Io.Dir.cwd().setFilePermissions(io, prefix, .fromMode(pmode), .{}) catch {};
+                Io.Dir.cwd().setFilePermissions(io, prefix, sys.permissionsFromMode(pmode), .{}) catch {};
             }
             if (options.verbose) observer.emit(.{ .created = prefix });
         }
@@ -95,14 +96,14 @@ pub fn makeOne(env: Env, path: []const u8, options: Options, observer: Observer)
         } else |_| {}
     }
     const create_mode: u16 = if (options.mode) |m| m & 0o777 else 0o777;
-    Io.Dir.cwd().createDir(io, path, .fromMode(create_mode)) catch |e| {
+    Io.Dir.cwd().createDir(io, path, sys.permissionsFromMode(create_mode)) catch |e| {
         observer.emit(.{ .create_failed = .{ .path = path, .err = e } });
         return false;
     };
     if (options.verbose) observer.emit(.{ .created = path });
     if (options.mode) |m| {
         // The kernel applied the umask at creation; set the exact mode now.
-        Io.Dir.cwd().setFilePermissions(io, path, .fromMode(m), .{}) catch |e| {
+        Io.Dir.cwd().setFilePermissions(io, path, sys.permissionsFromMode(m), .{}) catch |e| {
             observer.emit(.{ .chmod_failed = .{ .path = path, .err = e } });
             return false;
         };
