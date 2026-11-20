@@ -3,13 +3,14 @@
 # See bench/README.md.
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
-POOP=${POOP:-$root/../poop/zig-out/bin/poop}
+# crap is the maintainer's fork of poop (same command line); fall back to poop.
+POOP=${POOP:-$(command -v crap 2>/dev/null || command -v poop 2>/dev/null || echo "$root/../crap/zig-out/bin/crap")}
 WORK=${WORK:-${TMPDIR:-/tmp}/util-core-bench}
 DURATION=${DURATION:-1000}
 OPT=${OPT:-ReleaseFast}
 export LC_ALL=C
 
-[ -x "$POOP" ] || { echo "poop not found at $POOP (set POOP=)" >&2; exit 2; }
+[ -x "$POOP" ] || { echo "crap/poop not found at $POOP (build /stuff/git/crap, set POOP=)" >&2; exit 2; }
 mkdir -p "$WORK/raw" "$WORK/data"
 (cd "$root" && zig build "-Doptimize=$OPT" --prefix "$WORK/ours") || exit 2
 sh "$here/gen.sh" "$WORK/data" || exit 2
