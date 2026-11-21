@@ -67,11 +67,13 @@ esac
 if [ "${SMOKE:-1}" = 1 ] && [ "$can_run" = 1 ]; then
     echo "run check: $runner $name$exe"
     mc="$stage/bin/$name$exe"
-    v=$($runner "$mc" echo --version | tr -d "\r" | head -n1); echo "$v"; case $v in "echo ($name) $version"*) ;; *) echo "run check failed: version line" >&2; exit 1 ;; esac
-    out=$(printf 'b\na\n' | $runner "$mc" sort | tr -d '\r' | tr '\n' ' ')
-    [ "$out" = "a b " ] || { echo "run check failed: sort gave '$out'" >&2; exit 1; }
-    out=$($runner "$mc" echo hello | tr -d '\r')
-    [ "$out" = hello ] || { echo "run check failed: echo gave '$out'" >&2; exit 1; }
+    case $name in
+    util-unix) probe=uname; script='[ "$($runner "$mc" sh -c "echo hello")" = hello ]' ;;
+    *) probe=echo; script='[ "$(printf "b\\na\\n" | $runner "$mc" sort | tr -d "\\r" | tr "\\n" " ")" = "a b " ]' ;;
+    esac
+    v=$($runner "$mc" $probe --version | tr -d "\r" | head -n1); echo "$v"
+    case $v in "$probe ($name) $version"*) ;; *) echo "run check failed: version line" >&2; exit 1 ;; esac
+    eval "$script" || { echo "run check failed: $probe" >&2; exit 1; }
 else
     echo "run check skipped (cannot run $target on $host)"
 fi
