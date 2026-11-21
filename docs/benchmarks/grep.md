@@ -64,7 +64,22 @@ so those builds use `-Dcpu=x86_64_v3`).
   against about 1-2 for GNU's. The per-byte loop is `Dfa.findEnd`/`step` (a non-inlined call per byte), and for a
   one-byte first-byte set it recomputes `ByteSet.count()` and scans 256 `has()` calls on every call.
   Faster needs that loop tightened inside regex-zig, not a change in util-core.
-- rg and ugrep use SIMD multi-literal engines (Teddy); ours falls back to the DFA for more than eight literals.
+- rg and ugrep use SIMD multi-literal engines (Teddy). Since the multi-literal round (src/multisearch.zig, an Aho-Corasick automaton behind a two-byte vector filter) ours uses that for lists of any size and for alternations that expand to a finite set of strings; see the second table below.
 - Memory: RSS is 11-19 MB on every row; the read buffer is 96 KiB plus one line and is released after a file
   larger than 4 MiB; the DFA caches are capped (16 MiB for a few patterns, 256 MiB for lists, grown only on demand).
   Nothing grows per file or per pattern beyond that.
+
+## Multi-literal round (2026-11-20)
+
+Same data and method as above (wall / cpu ms / RSS MB, fastest of 5); `base` is the build before the change. Rows for the other patterns are unchanged.
+
+| case | GNU | base | ours | rg | ugrep |
+|---|---|---|---|---|---|
+| -F 10 patterns (100 MB) | 289 / 288 / 11 | 382 / 382 / 11 | 86 / 86 / 11 | 58 / 58 / 105 | 69 / 69 / 11 |
+| -F 1000 patterns | 154 / 150 / 11 | 104 / 104 / 11 | 46 / 46 / 11 | 28 / 28 / 16 | 26 / 26 / 11 |
+| -E alt common `(two\|the)s?` | 12 / 12 / 11 | 33 / 33 / 11 | 9 / 9 / 11 | 13 / 13 / 16 | 10 / 9 / 11 |
+| -E alt 3 lits | 100 / 100 / 11 | 33 / 33 / 11 | 32 / 31 / 11 | 14 / 14 / 106 | 20 / 20 / 11 |
+| -f 3000 words | 135 / 134 / 11 | 236 / 236 / 11 | 49 / 49 / 11 | 52 / 52 / 17 | 36 / 36 / 11 |
+| -f 3000 words -F | 142 / 142 / 11 | 275 / 275 / 11 | 50 / 50 / 11 | 52 / 52 / 17 | 48 / 47 / 11 |
+| -r --include (10000 files) | 16 / 16 / 12 | 28 / 28 / 13 | 17 / 17 / 13 | 10 / 46 / 13 | 11 / 39 / 13 |
+| -f 3000 words -w | 149 / 149 / 11 | minutes | 42 / 42 / 11 | 21 / 21 / 18 | 37 / 37 / 11 |

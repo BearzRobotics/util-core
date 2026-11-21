@@ -28,6 +28,7 @@ const fnmatch = @import("../fnmatch.zig");
 const ign = @import("grep_ignore.zig");
 const scan = @import("grep_scan.zig");
 const vec = @import("../bytes.zig");
+const msearch = @import("../multisearch.zig");
 
 pub const Env = common.Env;
 pub const Input = common.Input;
@@ -284,7 +285,7 @@ pub const Matcher = struct {
     bool_subs: std.ArrayList(*Matcher) = .empty,
     /// Buffer-wide pre-filter (see `candidate`): a required literal, or a DFA
     /// over the patterns, finds the next line worth running the regex on.
-    pre_kind: enum { none, lit, multi, scan } = .none,
+    pre_kind: enum { none, lit, multi, scan, ac } = .none,
     pre_needle: vec.Needle = undefined,
     pre_text: []u8 = &.{},
     /// Several required literals (an alternation or a short -F list): the
@@ -302,6 +303,12 @@ pub const Matcher = struct {
     /// The only pattern is one literal and -w / -x applies: `isMatch` checks
     /// the literal's neighbours (or the line length) without a regex.
     lit_mode: enum { none, word, line, start, end, both } = .none,
+    /// Aho-Corasick automaton over many literals (`pre_kind == .ac`).
+    ac: ?msearch.Ac = null,
+    /// The literals are the whole pattern language, so `ac.check` decides a
+    /// line without a regex (under `ac_mode` for -w / -x).
+    ac_exact: bool = false,
+    ac_mode: msearch.Mode = .any,
 
     pub const Error = error{ OutOfMemory, BadPattern };
 
@@ -339,6 +346,7 @@ pub const Matcher = struct {
                 }
                 return if (best) |p| .{ .at = p } else .none;
             },
+            .ac => return if (m.ac.?.firstEnd(hay, from)) |e| .{ .at = e - 1 } else .none,
             .scan => {
                 const sr: *regex.Searcher = if (m.pre_use_set) &m.set_sr.? else &m.pre_sr.?;
                 const f = &(sr.fwd orelse {
@@ -390,6 +398,51 @@ pub const Matcher = struct {
         return true;
     }
 
+    /// Cap on the Aho-Corasick table.
+    const ac_max_bytes = 96 << 20;
+
+    /// Literals for an Aho-Corasick prefilter: the whole language of every
+    /// pattern when each is a small finite one (then lines are decided
+    /// without the regex), otherwise the longest required literal of each
+    /// pattern or alternative (at least two bytes).
+    fn buildAc(m: *Matcher, options: Options, ao: scan.Opts) bool {
+        const gpa = m.gpa;
+        var lits: std.ArrayList([]u8) = .empty;
+        defer {
+            for (lits.items) |l| gpa.free(l);
+            lits.deinit(gpa);
+        }
+        var exact = true;
+        for (m.staged.items) |st| {
+            if (scan.language(gpa, st.body, ao, &lits) catch return false) continue;
+            exact = false;
+            var found: std.ArrayList(scan.Lit) = .empty;
+            defer {
+                for (found.items) |l| gpa.free(l.text);
+                found.deinit(gpa);
+            }
+            const ok = scan.literals(gpa, st.body, ao, &found) catch return false;
+            if (!ok) return false;
+            for (found.items) |l| {
+                if (l.text.len < 2) return false;
+                const d = gpa.dupe(u8, l.text) catch return false;
+                lits.append(gpa, d) catch {
+                    gpa.free(d);
+                    return false;
+                };
+            }
+        }
+        if (lits.items.len < 2 and exact) return false;
+        if (lits.items.len == 0) return false;
+        const ac = msearch.Ac.build(gpa, lits.items, options.icase, ac_max_bytes) orelse return false;
+        m.ac = ac;
+        m.pre_kind = .ac;
+        m.ac_exact = exact;
+        m.ac_mode = if (options.line) .line else if (options.word) .word else .any;
+        m.pre_exact = exact and m.ac_mode == .any;
+        return true;
+    }
+
     fn buildPre(m: *Matcher, options: Options) void {
         if (m.staged.items.len == 0) return;
         const gpa = m.gpa;
@@ -428,6 +481,7 @@ pub const Matcher = struct {
                 return;
             }
         }
+        if (m.buildAc(options, ao)) return;
         if (m.buildMulti(options, ao)) return;
         if (!all_scan or options.line) return;
         if (m.set != null) {
@@ -465,6 +519,7 @@ pub const Matcher = struct {
     }
 
     pub fn deinit(m: *Matcher) void {
+        if (m.ac) |*a| a.deinit();
         m.gpa.free(m.pre_text);
         for (m.pre_multi_mem.items) |mem| m.gpa.free(mem);
         m.pre_multi_mem.deinit(m.gpa);
@@ -610,6 +665,9 @@ pub const Matcher = struct {
             },
             else => {},
         };
+        if (m.ac_exact) {
+            if (m.ac.?.check(line, m.ac_mode, m.utf8)) |r| return r;
+        }
         if (m.set_sr) |*sr| return sr.matchesAnywhere(line) catch {
             m.noteLimit();
             return false;
@@ -1897,7 +1955,7 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                     g.line_no += vec.count(hay[pos..start], g.eol);
                     g.offset += start - pos;
                     consumed_total += start - pos;
-                    if (g.m.pre_kind == .scan and !g.m.pre_exact) {
+                    if ((g.m.pre_kind == .scan or g.m.pre_kind == .ac) and !g.m.pre_exact) {
                         scan_calls += 1;
                         scan_gap += start - pos;
                         if (scan_calls == 64) {
@@ -2436,6 +2494,9 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
             }
             is_dir = l.isDir();
         }
+        // --include/--exclude need only the name: skip a regular file they
+        // reject without the stat grepFile would do first.
+        if (known_kind == .file and o.globs.len > 0 and matchGlobs(g, disp, n, false)) continue;
         if (o.ignore_vcs and ignored(g, disp, is_dir)) continue;
         if (is_dir) {
             if (!rgFileOk(g, disp, true)) continue;

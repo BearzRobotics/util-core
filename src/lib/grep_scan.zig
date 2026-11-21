@@ -173,6 +173,151 @@ pub fn literals(gpa: std.mem.Allocator, body: []const u8, o: Opts, out: *std.Arr
     return true;
 }
 
+/// Caps of `language`.
+pub const lang_max_strings = 4096;
+pub const lang_max_len = 256;
+
+const Lang = struct {
+    arena: std.mem.Allocator,
+    o: Opts,
+    src: []const u8,
+    i: usize = 0,
+
+    const Set = std.ArrayList([]const u8);
+
+    fn byteOk(l: *const Lang, b: u8) bool {
+        return literalOk(b, l.o);
+    }
+
+    fn alt(l: *Lang, depth: usize) ?Set {
+        if (depth > 32) return null;
+        var out: Set = .empty;
+        while (true) {
+            var sq = l.seq(depth) orelse return null;
+            out.appendSlice(l.arena, sq.items) catch return null;
+            sq.deinit(l.arena);
+            if (out.items.len > lang_max_strings) return null;
+            if (l.i < l.src.len and l.src[l.i] == '|') {
+                l.i += 1;
+                continue;
+            }
+            return out;
+        }
+    }
+
+    fn seq(l: *Lang, depth: usize) ?Set {
+        var cur: Set = .empty;
+        cur.append(l.arena, "") catch return null;
+        while (l.i < l.src.len) {
+            const c = l.src[l.i];
+            if (c == '|' or c == ')') break;
+            var atom: Set = .empty;
+            switch (c) {
+                '(' => {
+                    l.i += 1;
+                    if (l.i < l.src.len and l.src[l.i] == '?') {
+                        if (!(l.i + 1 < l.src.len and l.src[l.i + 1] == ':')) return null;
+                        l.i += 2;
+                    }
+                    atom = l.alt(depth + 1) orelse return null;
+                    if (l.i >= l.src.len or l.src[l.i] != ')') return null;
+                    l.i += 1;
+                },
+                '[' => {
+                    const e = classEnd(l.src, l.i) orelse return null;
+                    const inner = l.src[l.i + 1 .. e - 1];
+                    l.i = e;
+                    if (inner.len == 0 or inner[0] == '^' or inner.len > 40) return null;
+                    var k: usize = 0;
+                    while (k < inner.len) {
+                        const lo = inner[k];
+                        if (lo == '[' or lo == '\\') return null;
+                        var hi = lo;
+                        if (k + 2 < inner.len and inner[k + 1] == '-') {
+                            hi = inner[k + 2];
+                            if (hi == '[' or hi == '\\' or hi < lo) return null;
+                            k += 3;
+                        } else k += 1;
+                        if (@as(usize, hi) - lo > 16) return null;
+                        var b: usize = lo;
+                        while (b <= hi) : (b += 1) {
+                            if (!l.byteOk(@intCast(b))) return null;
+                            const one = l.arena.dupe(u8, &.{@as(u8, @intCast(b))}) catch return null;
+                            atom.append(l.arena, one) catch return null;
+                        }
+                    }
+                    if (atom.items.len > 32) return null;
+                },
+                '.', '^', '$', '*', '+', '?', '{' => return null,
+                else => {
+                    var b = c;
+                    l.i += 1;
+                    if (c == '\\') {
+                        if (l.i >= l.src.len) return null;
+                        const n = l.src[l.i];
+                        l.i += 1;
+                        if (n == 'x') {
+                            if (l.i + 1 >= l.src.len) return null;
+                            const hi = hexVal(l.src[l.i]) orelse return null;
+                            const lo = hexVal(l.src[l.i + 1]) orelse return null;
+                            b = hi * 16 + lo;
+                            l.i += 2;
+                        } else if (std.ascii.isAlphanumeric(n)) return null else b = n;
+                    }
+                    if (!l.byteOk(b)) return null;
+                    atom.append(l.arena, l.arena.dupe(u8, &.{b}) catch return null) catch return null;
+                },
+            }
+            if (l.i < l.src.len and l.src[l.i] == '?') {
+                l.i += 1;
+                atom.append(l.arena, "") catch return null;
+            }
+            if (l.i < l.src.len and std.mem.indexOfScalar(u8, "*+?{", l.src[l.i]) != null) return null;
+            var next: Set = .empty;
+            for (cur.items) |x| for (atom.items) |y| {
+                if (x.len + y.len > lang_max_len or next.items.len >= lang_max_strings) return null;
+                const z = l.arena.alloc(u8, x.len + y.len) catch return null;
+                @memcpy(z[0..x.len], x);
+                @memcpy(z[x.len..], y);
+                next.append(l.arena, z) catch return null;
+            };
+            cur = next;
+        }
+        return cur;
+    }
+};
+
+/// The finite set of strings `body` matches, when it is built only from
+/// literals, `(?:...)`/`(...)` groups, `|`, `?` on an atom and small plain
+/// classes, has no anchors, and no string is empty: a line then matches
+/// exactly when it contains one of them. Appends them (owned) to `out`;
+/// false (with nothing the caller must free beyond `out`) when the pattern
+/// is outside that shape or too large.
+pub fn language(gpa: std.mem.Allocator, body: []const u8, o: Opts, out: *std.ArrayList([]u8)) std.mem.Allocator.Error!bool {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    var l: Lang = .{ .arena = arena_state.allocator(), .o = o, .src = body };
+    var set = l.alt(0) orelse return false;
+    if (l.i != body.len) return false;
+    for (set.items) |s| if (s.len == 0) return false;
+    _ = &set;
+    const start = out.items.len;
+    for (set.items) |s| {
+        const dup = gpa.dupe(u8, s) catch |e| {
+            for (out.items[start..]) |x| gpa.free(x);
+            out.shrinkRetainingCapacity(start);
+            return e;
+        };
+        out.append(gpa, dup) catch |e| {
+            gpa.free(dup);
+            for (out.items[start..]) |x| gpa.free(x);
+            out.shrinkRetainingCapacity(start);
+            return e;
+        };
+    }
+    return true;
+}
+
 pub fn analyze(gpa: std.mem.Allocator, raw_body: []const u8, o: Opts) std.mem.Allocator.Error!Info {
     var flat: std.ArrayList(u8) = .empty;
     defer flat.deinit(gpa);
@@ -382,4 +527,29 @@ test "analyze finds required literals" {
     const fi: Opts = .{ .icase = true, .utf8 = true, .eol = '\n' };
     try expectInfo("the", fi, "the", true, true);
     try expectInfo("kst", fi, "t", false, true);
+}
+
+test "language expands small finite patterns" {
+    const o: Opts = .{ .icase = false, .utf8 = false, .eol = '\n' };
+    var out: std.ArrayList([]u8) = .empty;
+    defer {
+        for (out.items) |x| std.testing.allocator.free(x);
+        out.deinit(std.testing.allocator);
+    }
+    try std.testing.expect(try language(std.testing.allocator, "(two|the)s?", o, &out));
+    try std.testing.expectEqual(@as(usize, 4), out.items.len);
+    try std.testing.expectEqualStrings("twos", out.items[0]);
+    try std.testing.expectEqualStrings("two", out.items[1]);
+    try std.testing.expectEqualStrings("thes", out.items[2]);
+    try std.testing.expectEqualStrings("the", out.items[3]);
+    const n = out.items.len;
+    try std.testing.expect(!try language(std.testing.allocator, "a*b", o, &out));
+    try std.testing.expect(!try language(std.testing.allocator, "a?", o, &out));
+    try std.testing.expect(!try language(std.testing.allocator, "^ab", o, &out));
+    try std.testing.expect(!try language(std.testing.allocator, "a(b", o, &out));
+    try std.testing.expectEqual(n, out.items.len);
+    try std.testing.expect(try language(std.testing.allocator, "[Tt]h\\.e", o, &out));
+    try std.testing.expectEqualStrings("Th.e", out.items[n]);
+    const fi: Opts = .{ .icase = true, .utf8 = true, .eol = '\n' };
+    try std.testing.expect(!try language(std.testing.allocator, "kx", fi, &out));
 }

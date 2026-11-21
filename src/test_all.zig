@@ -127,6 +127,7 @@ test {
     _ = @import("tabs.zig");
     _ = @import("sys.zig");
     _ = @import("bytes.zig");
+    _ = @import("multisearch.zig");
     _ = @import("hash.zig");
     _ = @import("hashsum.zig");
     _ = @import("baseenc.zig");

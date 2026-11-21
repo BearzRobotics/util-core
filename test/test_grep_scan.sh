@@ -69,8 +69,31 @@ for o in -c -vc -n -ov; do
 done
 cat text | gnu -n zqxjv > g.out; cat text | ours -n zqxjv > o.out
 TOTAL=$((TOTAL + 1)); if cmp -s g.out o.out; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo "FAIL pipe"; fi
+# Aho-Corasick multi-literal search: long word lists, folding, -w / -x, finite alternations
+printf 'the\ntwo\nand\nzqxjv\nfoo\nend\nk\nfoobar\n007\nx_y\nss\na.b\nfo\nCafé\nqq\nzz\n' > pats16
+printf 'foo\nfoobar\nfo\nthe\nthes\nss\nZQXJV\nKend\n' > patsov
+for pf in pats16 patsov; do
+    for opts in -F -Fc -Fn -Fv -Fvc -Fi -Fic -Fw -Fwc -Fx -Fxc -Fiw -Fix -Fo -Fob -Fn1 -FA1 -FB1; do
+        run "$opts -f $pf text" $opts -f $pf text
+    done
+    run "-Fc -f $pf long" -Fc -f $pf long
+done
+for pat in '(the|two)s?' '(the|two)s?x' 'the(s|ir)?' '[Tt]h(e|ey)' 'fo(o|obar)?' 'z(q|z)x'; do
+    for opts in -E -Ec -En -Ei -Eic -Ew -Ewc -Ex -Exc -Ev -Evc -Eo; do
+        run "$opts '$pat' text" $opts -e "$pat" text
+    done
+done
+for pat in 'the\|two\|and\|foo\|end\|k\|007\|zqxjv\|ss\|foobar'; do
+    for opts in "" -c -i -w -x -ic -wc -xc; do run "$opts '$pat' text" $opts -e "$pat" text; done
+done
 # UTF-8 locale
 export LC_ALL=C.UTF-8
+for pf in pats16 patsov; do
+    for opts in -F -Fc -Fi -Fic -Fw -Fwc -Fx -Fn; do run "utf8 $opts -f $pf text" $opts -f $pf text; done
+done
+for pat in '(the|two)s?' '(café|ss)s?'; do
+    for opts in -E -Ec -Ei -Ew -Ewc -Ex; do run "utf8 $opts '$pat' text" $opts -e "$pat" text; done
+done
 for pat in 'café' 'ÉTÉ' 'k' 'ss' 'the' 'c.fé'; do
     for opts in "" -i -ic -c -w -x -o -n -vc; do
         run "utf8 $opts '$pat'" $opts -e "$pat" text
