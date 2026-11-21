@@ -32,7 +32,7 @@ jobs:
       - run: zig build -Dmode=${{ matrix.mode }} -Doptimize=ReleaseSafe
       - name: Run the multicall binary
         if: matrix.mode != 'standalone'
-        run: zig-out/bin/util-core --version
+        run: zig-out/bin/util-core echo --version
 
   cross:
     # Compile check only: nothing is run or published from these builds.

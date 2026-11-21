@@ -67,7 +67,7 @@ esac
 if [ "${SMOKE:-1}" = 1 ] && [ "$can_run" = 1 ]; then
     echo "run check: $runner $name$exe"
     mc="$stage/bin/$name$exe"
-    $runner "$mc" --version | head -n1
+    v=$($runner "$mc" echo --version | tr -d "\r" | head -n1); echo "$v"; case $v in "echo ($name) $version"*) ;; *) echo "run check failed: version line" >&2; exit 1 ;; esac
     out=$(printf 'b\na\n' | $runner "$mc" sort | tr -d '\r' | tr '\n' ' ')
     [ "$out" = "a b " ] || { echo "run check failed: sort gave '$out'" >&2; exit 1; }
     out=$($runner "$mc" echo hello | tr -d '\r')

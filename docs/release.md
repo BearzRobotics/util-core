@@ -47,5 +47,5 @@ maintain that platform.
 8. Commit, merge to `main`, then tag and push: `git tag -a vX.Y.Z -m "util-core X.Y.Z"` and
    `git push origin main vX.Y.Z`. The workflow refuses a tag that differs from `build.zig.zon`.
 9. Watch the workflow; check the release page, `SHA256SUMS`, and download one Linux archive
-   and run `bin/util-core --version`.
+   and run `bin/util-core echo --version`.
 10. Optional dry run before tagging: Actions, release, "Run workflow".
