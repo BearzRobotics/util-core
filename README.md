@@ -58,7 +58,7 @@ tar xzf util-core-0.1.0-linux-x86_64.tar.gz
 | Platform | Prebuilt download | Tested |
 |---|---|---|
 | Linux x86_64, aarch64 | yes (static musl) | x86_64: every test suite, differential against GNU |
-| Windows x86_64 | yes | 79 cases under wine; real-Windows recheck before each release |
+| Windows x86_64 | yes | 79 cases under wine; not yet rechecked on real Windows (planned for 0.1.1) |
 | Windows aarch64 | yes | compiled only |
 | macOS x86_64, aarch64 | no | compile-checked in CI only |
 

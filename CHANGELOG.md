@@ -37,8 +37,8 @@ a compatibility record and a differential test suite against the GNU reference.
 **Platforms**
 - Linux x86_64 and aarch64: the reference platform; every test suite runs here.
 - Windows x86_64 and aarch64: the whole library and all commands compile; x86_64 passes
-  `test/test_windows_wine.sh` (79 cases, wine 10.0) under wine; a run on real Windows is part of the release
-  checklist (`docs/release.md`). Windows-specific differences are in `docs/portability.md`.
+  `test/test_windows_wine.sh` (79 cases, wine 10.0) under wine; this release was NOT rechecked on real Windows (the maintainer's VM would not get a network address
+  on release day); it is the first item for 0.1.1. See `docs/release.md`. Windows-specific differences are in `docs/portability.md`.
 - macOS x86_64 and aarch64: builds from source and is compile-checked in CI, but has never
   been run (no maintainer owns a Mac), and no prebuilt macOS binaries are published.
 
