@@ -49,7 +49,7 @@ See docs/compatibility/base64.md for details.
 
 # LIMITATIONS
 
-- `--version` prints `base64 (util-core) 0.0.0-dev`; `--help` is shorter than GNU's.
+- `--version` prints `base64 (util-core) 0.1.0`; `--help` is shorter than GNU's.
 - A directory operand prints `read error: Is a directory` as GNU does.
 
 # SEE ALSO
@@ -58,5 +58,5 @@ docs/compatibility/base64.md, docs/architecture.md
 
 # VERSION
 
-This manual describes the development version 0.0.0-dev; no release exists.
+This manual describes util-core 0.1.0.
 

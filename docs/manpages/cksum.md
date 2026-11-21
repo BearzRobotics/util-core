@@ -68,7 +68,7 @@ See docs/compatibility/cksum.md for details.
 # LIMITATIONS
 
 - `--debug` is accepted and prints nothing (GNU reports which CPU-accelerated implementation it chose).
-- `--version` prints `cksum (util-core) 0.0.0-dev`.
+- `--version` prints `cksum (util-core) 0.1.0`.
 
 # SEE ALSO
 
@@ -76,5 +76,5 @@ docs/compatibility/cksum.md, docs/architecture.md
 
 # VERSION
 
-This manual describes the development version 0.0.0-dev; no release exists.
+This manual describes util-core 0.1.0.
 
