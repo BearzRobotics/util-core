@@ -65,6 +65,9 @@ lit -c two|C|-c two $MID|
 -E alt common|C|-cE (two|the)s? $MID|
 -f 3000 words|C|-c -f $W3 $MID|
 -f 3000 words -F|C|-Fc -f $W3 $MID|
+-f 3000 words -w|C|-cw -f $W3 $MID|
+-F 10 patterns -i|C|-Fci -f $W10 $BIG|
+-E alt 4 lits -x|C|-cxE (two|the)s?|and|zqxjv $MID|
 anchored ^|C|-c ^the $BIG|
 anchored \$|C|-c e\$ $BIG|
 -x regex|C|-cxE [a-z]+[[:space:]][a-z]+[[:space:]][a-z]+[[:space:]][a-z]+ $MID|
