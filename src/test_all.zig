@@ -105,6 +105,7 @@ test {
     _ = @import("lib/tee.zig");
     _ = @import("lib/test.zig");
     _ = @import("lib/timeout.zig");
+    _ = @import("lib/time.zig");
     _ = @import("lib/touch.zig");
     _ = @import("lib/tr.zig");
     _ = @import("lib/tree.zig");

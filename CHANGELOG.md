@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0
+
+A new command, a bat-faithful `cat` view, and a Windows console fix.
+
+**New command: `time`** (104 commands)
+- GNU time 1.9 behaviour: `-f/--format` with every format letter and the `TIME` variable, `-p`,
+  `-v`, `-o`, `-a`, `-q`, the "Command exited with non-zero status" and "Command terminated by
+  signal" lines, exit status 126/127/128+N; differential suite `test/test_time.sh` against
+  `/usr/bin/time`. Linux (wait4 rusage), macOS (compile-checked) and Windows (GetProcessTimes,
+  peak working set; compile-checked).
+- `--bench` (extension, decision 0005): crap-style comparison of commands (mean ± σ, min … max,
+  outliers, delta with significance; hardware counters on Linux where the kernel allows), with
+  hyperfine-style `--runs/--min-runs/--max-runs/--warmup`, `--setup/--prepare/--conclude/--cleanup`,
+  `--parameter-list/--parameter-scan`, `--input`, `--bench-output`, `--env`, `--metrics`,
+  `--export-json` and `--export-csv`. Library module `util_core.time`.
+
+**`cat`**
+- The terminal view now matches bat 0.26.1's default: no `Size:` line (only `--style=full` adds
+  it), and long lines and long file names wrap under a blank line-number column.
+- Windows: the console is switched to ANSI escape processing and UTF-8 output before the view is drawn.
+
+**Library**
+- `sys.waitUsage` (child resource usage), `sys.Perf` (perf_event_open counters) and
+  `sys.enableAnsiOutput` (Windows console setup).
+
 ## 0.1.0
 
 First release. 103 commands (everything in `docs/status.md`), each with a manual page,

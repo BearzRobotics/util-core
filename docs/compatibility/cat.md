@@ -70,6 +70,10 @@ NO_COLOR, TERM=dumb and --color are handled through `cli.colorEnabled` and
 (no-color.org convention); `--color=never` and TERM=dumb remove all escapes.
 Tests in test/test_cat.sh run under script(1).
 
+## Update 2026-11-21
+
+Default style now matches bat 0.26.1: no `Size:` line (only `--style=full` adds it). Long lines and the header wrap at the terminal width under a blank line-number gutter, byte-identical to bat for a 150-byte line at 80 columns. On Windows the console gets ANSI processing and UTF-8 output enabled before the view is drawn (`sys.enableAnsiOutput`); compile-checked for x86_64-windows, not yet run on a real console. Still open: truecolor theme, paging, git markers, bundled grammars.
+
 ## Not yet done
 
 - Not run under multicall dispatch.

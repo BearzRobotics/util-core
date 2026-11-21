@@ -139,8 +139,11 @@ pub fn main(ctx: cli.Context) u8 {
         .never => false,
         .auto => tty,
     };
-    const color_on = cli.colorEnabled(ctx, color, tty);
-    const styled_on = cli.styleEnabled(ctx, color, tty);
+    // On a Windows console escapes work only after enabling VT processing; if
+    // that fails, treat the console as one that cannot show them.
+    const ansi_ok = !tty or sys.enableAnsiOutput();
+    const color_on = ansi_ok and cli.colorEnabled(ctx, color, tty);
+    const styled_on = ansi_ok and cli.styleEnabled(ctx, color, tty);
 
     // Grammars are loaded only when a highlighted bat view is possible.
     var session: syntax.session.Session = syntax.session.Session.init(ctx.gpa);

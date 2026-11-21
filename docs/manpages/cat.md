@@ -41,7 +41,7 @@ Copy each FILE (or standard input when none is given, or for the name -) to stan
 : bat view without header, grid or line numbers.
 
 --style=LIST
-: Comma-separated bat view components: full, plain, header, grid, numbers.
+: Comma-separated bat view components: full, plain, header, header-filesize, grid, numbers. The default is bat's: header (file name), grid and line numbers, without the `Size:` line; `full` adds the size. Long lines, and a long file name in the header, wrap at the terminal width under a blank line-number column, as in bat.
 
 --color=WHEN
 : auto (terminal only), always or never. Colors header, grid and numbers.
@@ -87,7 +87,8 @@ See docs/compatibility/cat.md for details.
 
 # LIMITATIONS
 
-- No syntax highlighting, paging or other bat-inspired features yet (open decision: highlighting backend).
+- No bundled grammars (highlighting needs `--syntax-dir` or `~/.config/cat/syntaxes`; the license audit of grammars to ship is pending), no truecolor themes (16 ANSI colors), no paging, no git change markers, no `--theme`. Column counting for wrapping and tabs counts bytes, not UTF-8 characters.
+- Windows: the console is switched to ANSI escape processing and UTF-8 output before the view is drawn; if that fails, color and style escapes are left off. Verified only under wine and by compiling.
 - Does not detect 'input file is output file'.
 - Short options must be separate or clustered; abbreviated long options are not accepted.
 
@@ -97,7 +98,7 @@ docs/compatibility/cat.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.1.0.
+This manual describes util-core 0.2.0.
 
 # FILES
 

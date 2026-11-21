@@ -147,6 +147,12 @@ pub fn terminalColumns() ?usize {
     return if (rc == 0 and ws.col > 0) ws.col else null;
 }
 
+/// Windows: enable ANSI escapes and UTF-8 on the console. Elsewhere true.
+pub fn enableAnsiOutput() bool {
+    if (comptime is_linux) return true;
+    return other.enableAnsiOutput();
+}
+
 /// True when process `pid` exists (kill(pid, 0)); EPERM counts as existing.
 /// Always true where there is no kill(2).
 pub fn processAlive(pid: i32) bool {
@@ -614,6 +620,140 @@ pub fn waitPid(pid: Pid, block: bool) WaitResult {
         return .none;
     }
 }
+
+/// Resources a finished child used (the fields of getrusage(2), in common
+/// units). Fields a platform cannot report stay 0.
+pub const Usage = struct {
+    user_ns: u64 = 0,
+    sys_ns: u64 = 0,
+    max_rss_kb: u64 = 0,
+    minor_faults: u64 = 0,
+    major_faults: u64 = 0,
+    vol_switches: u64 = 0,
+    invol_switches: u64 = 0,
+    swaps: u64 = 0,
+    in_blocks: u64 = 0,
+    out_blocks: u64 = 0,
+    msgs_sent: u64 = 0,
+    msgs_received: u64 = 0,
+    signals: u64 = 0,
+};
+
+pub const WaitUsage = struct { result: WaitResult, usage: Usage };
+
+/// Block until child `pid` ends and return how it ended with its resource
+/// usage (wait4(2); GetProcessTimes on Windows, where the process handle is
+/// closed). Only for a child the caller started and has not waited for.
+pub fn waitUsage(pid: Pid) WaitUsage {
+    if (comptime !is_linux) return other.waitUsage(pid);
+    var status: i32 = 0;
+    var ru: LX.rusage = std.mem.zeroes(LX.rusage);
+    while (true) {
+        const rc = LX.wait4(pid, &status, 0, &ru);
+        switch (LX.errno(rc)) {
+            .SUCCESS => {},
+            .INTR => continue,
+            else => return .{ .result = .none, .usage = .{} },
+        }
+        const st: u32 = @bitCast(status);
+        const result: WaitResult = if (LX.W.IFEXITED(st))
+            .{ .exited = LX.W.EXITSTATUS(st) }
+        else if (LX.W.IFSIGNALED(st))
+            .{ .signaled = @intCast(@intFromEnum(LX.W.TERMSIG(st))) }
+        else
+            .none;
+        const tv = struct {
+            fn ns(t: LX.timeval) u64 {
+                return @as(u64, @intCast(@max(t.sec, 0))) * 1_000_000_000 + @as(u64, @intCast(@max(t.usec, 0))) * 1000;
+            }
+            fn u(v: isize) u64 {
+                return @intCast(@max(v, 0));
+            }
+        };
+        return .{ .result = result, .usage = .{
+            .user_ns = tv.ns(ru.utime),
+            .sys_ns = tv.ns(ru.stime),
+            .max_rss_kb = tv.u(ru.maxrss),
+            .minor_faults = tv.u(ru.minflt),
+            .major_faults = tv.u(ru.majflt),
+            .vol_switches = tv.u(ru.nvcsw),
+            .invol_switches = tv.u(ru.nivcsw),
+            .swaps = tv.u(ru.nswap),
+            .in_blocks = tv.u(ru.inblock),
+            .out_blocks = tv.u(ru.oublock),
+            .msgs_sent = tv.u(ru.msgsnd),
+            .msgs_received = tv.u(ru.msgrcv),
+            .signals = tv.u(ru.nsignals),
+        } };
+    }
+}
+
+/// Hardware counters (Linux perf_event_open), the way poop and crap use them:
+/// opened before a child is started, they stay off until that child execs
+/// (`enable_on_exec`, inherited), so only the command is counted. One set per
+/// run: `open`, start the child, `read`, `close`. Any counter the kernel or
+/// CPU refuses (perf_event_paranoid, virtual machines, other systems) is null.
+pub const Perf = struct {
+    pub const Kind = enum { cycles, instructions, cache_references, cache_misses, branch_misses };
+    pub const count = 5;
+    pub const Sample = [count]?u64;
+
+    fds: [count]i32 = @splat(-1),
+
+    pub fn open() Perf {
+        var p: Perf = .{};
+        if (comptime !is_linux) return p;
+        const hw = LX.PERF.COUNT.HW;
+        const cfg = [count]hw{ .CPU_CYCLES, .INSTRUCTIONS, .CACHE_REFERENCES, .CACHE_MISSES, .BRANCH_MISSES };
+        for (cfg, 0..) |c, i| {
+            if (i > 0 and p.fds[0] < 0) break; // no group leader
+            var attr: LX.perf_event_attr = .{
+                .type = .HARDWARE,
+                .config = @intFromEnum(c),
+                .flags = .{ .disabled = true, .inherit = true, .exclude_kernel = true, .exclude_hv = true, .enable_on_exec = true },
+            };
+            const leader: i32 = if (i == 0) -1 else p.fds[0];
+            const rc = LX.perf_event_open(&attr, 0, -1, leader, 8); // PERF_FLAG_FD_CLOEXEC
+            if (LX.errno(rc) == .SUCCESS) p.fds[i] = @intCast(rc);
+        }
+        if (p.fds[0] >= 0) {
+            _ = LX.ioctl(p.fds[0], 0x2401, 1); // PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP
+            _ = LX.ioctl(p.fds[0], 0x2403, 1); // PERF_EVENT_IOC_RESET
+        }
+        return p;
+    }
+
+    pub fn available(p: Perf) bool {
+        return p.fds[0] >= 0;
+    }
+
+    /// True when counters can be opened at all (a probe that opens and closes).
+    pub fn probe() bool {
+        var p = open();
+        defer p.close();
+        return p.available();
+    }
+
+    /// Counts so far; call after the child ended.
+    pub fn read(p: Perf) Sample {
+        var out: Sample = @splat(null);
+        if (comptime !is_linux) return out;
+        for (p.fds, 0..) |fd, i| if (fd >= 0) {
+            var v: u64 = 0;
+            const n = LX.read(fd, @ptrCast(&v), 8);
+            if (LX.errno(n) == .SUCCESS and n == 8) out[i] = v;
+        };
+        return out;
+    }
+
+    pub fn close(p: *Perf) void {
+        if (comptime !is_linux) return;
+        for (&p.fds) |*fd| if (fd.* >= 0) {
+            _ = LX.close(fd.*);
+            fd.* = -1;
+        };
+    }
+};
 
 /// An event source for `timeout`: waits until the child exits, a watched
 /// signal arrives, or the timeout passes. Signals are received through a

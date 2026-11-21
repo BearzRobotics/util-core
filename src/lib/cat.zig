@@ -184,9 +184,11 @@ const Formatter = struct {
 /// Which bat decorations to draw (bat --style components that are implemented).
 pub const Style = struct {
     header: bool = true, // File: <name>
-    size: bool = true, // Size: <n>
+    size: bool = false, // Size: <n>; bat's default style has none, `full` does
     grid: bool = true,
     numbers: bool = true,
+
+    pub const full: Style = .{ .size = true };
 
     pub const plain: Style = .{ .header = false, .size = false, .grid = false, .numbers = false };
 
@@ -201,7 +203,9 @@ pub const Style = struct {
         var it = std.mem.splitScalar(u8, list, ',');
         var first = true;
         while (it.next()) |item| {
-            if (std.mem.eql(u8, item, "full") or std.mem.eql(u8, item, "auto")) {
+            if (std.mem.eql(u8, item, "full")) {
+                st = full;
+            } else if (std.mem.eql(u8, item, "auto")) {
                 st = .{};
             } else if (std.mem.eql(u8, item, "plain")) {
                 st = plain;
@@ -342,12 +346,15 @@ const BatView = struct {
         } else if (v.style.grid) {
             // header and grid without numbers: no divider, text starts at column 0
         }
+        v.col = 0;
         v.out.write(label);
+        v.col = label.len;
         v.paintBold();
-        v.out.write(text);
+        for (text) |c| v.putByte(c);
         v.paintReset();
         v.out.write(suffix);
         v.out.writeByte('\n');
+        v.col = 0;
     }
 
     /// Header and top rule, printed lazily so unused inputs print nothing.
@@ -379,18 +386,46 @@ const BatView = struct {
         v.paintReset();
     }
 
-    /// Write text, expanding tabs.
-    fn writeText(v: *BatView, text: []const u8) void {
-        for (text) |c| {
-            if (c == '\t') {
-                const n = tab_width - v.col % tab_width;
-                for (0..n) |_| v.out.writeByte(' ');
-                v.col += n;
-            } else {
-                v.out.writeByte(c);
+    /// Columns available for text next to the gutter (at least 1).
+    fn textWidth(v: *const BatView) usize {
+        const gutter = v.sidebar() + (if (v.style.grid and v.style.numbers) @as(usize, 2) else 0);
+        return @max(v.width, gutter + 1) - gutter;
+    }
+
+    /// Continuation row of a wrapped line: blank sidebar, divider, no number.
+    fn wrapBreak(v: *BatView) void {
+        v.out.writeByte('\n');
+        if (v.style.numbers) {
+            v.paintDim();
+            v.out.write("     ");
+            if (v.style.grid) v.out.write("│ ");
+            v.paintReset();
+        }
+        v.col = 0;
+    }
+
+    /// Write one byte at the current column, wrapping at the text width.
+    /// Tabs expand to the next 4-column stop. Bytes count as columns
+    /// (decision: UTF-8 aware counting is a known gap).
+    fn putByte(v: *BatView, c: u8) void {
+        const tw = v.textWidth();
+        if (c == '\t') {
+            const n = tab_width - v.col % tab_width;
+            for (0..n) |_| {
+                if (v.col >= tw) v.wrapBreak();
+                v.out.writeByte(' ');
                 v.col += 1;
             }
+        } else {
+            if (v.col >= tw) v.wrapBreak();
+            v.out.writeByte(c);
+            v.col += 1;
         }
+    }
+
+    /// Write text, expanding tabs and wrapping.
+    fn writeText(v: *BatView, text: []const u8) void {
+        for (text) |c| v.putByte(c);
     }
 
     const Sink = struct {
@@ -482,15 +517,7 @@ const BatView = struct {
                     v.at_line_start = true;
                     v.col = 0;
                 },
-                '\t' => {
-                    const n = tab_width - v.col % tab_width;
-                    for (0..n) |_| v.out.writeByte(' ');
-                    v.col += n;
-                },
-                else => {
-                    v.out.writeByte(c);
-                    v.col += 1;
-                },
+                else => v.putByte(c),
             }
         }
     }
@@ -639,18 +666,18 @@ test "bat view: full style, as bat 0.26.1 prints it" {
     var aw: Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     var out = testOut(&aw);
-    var v: BatView = .{ .style = .{}, .color = false, .width = 12, .out = &out };
+    var v: BatView = .{ .style = Style.full, .color = false, .width = 20, .out = &out };
     v.begin("f.txt", 5);
     v.feed("a\tb\nc");
     v.finish();
     try std.testing.expectEqualStrings(
-        "─────┬──────\n" ++
+        "─────┬──────────────\n" ++
             "     │ File: f.txt\n" ++
             "     │ Size: 5 B\n" ++
-            "─────┼──────\n" ++
+            "─────┼──────────────\n" ++
             "   1 │ a   b\n" ++
             "   2 │ c\n" ++
-            "─────┴──────\n",
+            "─────┴──────────────\n",
         aw.written(),
     );
 }
@@ -659,22 +686,42 @@ test "bat view: empty file shows <EMPTY> only with a header" {
     var aw: Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     var out = testOut(&aw);
-    var v: BatView = .{ .style = .{}, .color = false, .width = 12, .out = &out };
+    var v: BatView = .{ .style = Style.full, .color = false, .width = 20, .out = &out };
     v.begin("e", 0);
     v.finish();
     try std.testing.expectEqualStrings(
-        "─────┬──────\n" ++
+        "─────┬──────────────\n" ++
             "     │ File: e   <EMPTY>\n" ++
             "     │ Size: 0 B\n" ++
-            "─────┴──────\n",
+            "─────┴──────────────\n",
         aw.written(),
     );
 
     aw.clearRetainingCapacity();
-    var g: BatView = .{ .style = Style.parse("numbers,grid").?, .color = false, .width = 12, .out = &out };
+    var g: BatView = .{ .style = Style.parse("numbers,grid").?, .color = false, .width = 20, .out = &out };
     g.begin("e", 0);
     g.finish();
     try std.testing.expectEqual(@as(usize, 0), aw.written().len);
+}
+
+test "bat view: long lines wrap under a blank gutter" {
+    var aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    var out = testOut(&aw);
+    var v: BatView = .{ .style = .{}, .color = false, .width = 12, .out = &out };
+    v.begin("f", 10);
+    v.feed("abcdefghij\n");
+    v.finish();
+    try std.testing.expectEqualStrings(
+        "─────┬──────\n" ++
+            "     │ File: \n" ++
+            "     │ f\n" ++
+            "─────┼──────\n" ++
+            "   1 │ abcde\n" ++
+            "     │ fghij\n" ++
+            "─────┴──────\n",
+        aw.written(),
+    );
 }
 
 test "human sizes follow bat" {
