@@ -1,0 +1,124 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//! The controlling terminal for interactive input: raw mode, one byte at a
+//! time, and its size. `std.Io` has none of this (decision 0002). POSIX
+//! systems open /dev/tty and use termios; Windows opens CONIN$ and switches
+//! the console to virtual-terminal input (arrow keys arrive as escape
+//! sequences, as on POSIX). Used by the built-in pager of `cat`.
+
+const std = @import("std");
+const builtin = @import("builtin");
+const Io = std.Io;
+
+const is_win = builtin.os.tag == .windows;
+
+pub const Size = struct { rows: usize, cols: usize };
+
+const win = if (is_win) struct {
+    const w = std.os.windows;
+    extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: u32, share: u32, sa: ?*anyopaque, disp: u32, flags: u32, tmpl: ?w.HANDLE) callconv(.winapi) w.HANDLE;
+    extern "kernel32" fn GetConsoleMode(h: w.HANDLE, mode: *u32) callconv(.winapi) c_int;
+    extern "kernel32" fn SetConsoleMode(h: w.HANDLE, mode: u32) callconv(.winapi) c_int;
+    extern "kernel32" fn ReadFile(h: w.HANDLE, buf: [*]u8, n: u32, got: *u32, ov: ?*anyopaque) callconv(.winapi) c_int;
+    extern "kernel32" fn CloseHandle(h: w.HANDLE) callconv(.winapi) c_int;
+    const CSBI = extern struct {
+        size_x: i16,
+        size_y: i16,
+        cursor_x: i16,
+        cursor_y: i16,
+        attributes: u16,
+        left: i16,
+        top: i16,
+        right: i16,
+        bottom: i16,
+        max_x: i16,
+        max_y: i16,
+    };
+    extern "kernel32" fn GetConsoleScreenBufferInfo(h: w.HANDLE, info: *CSBI) callconv(.winapi) c_int;
+} else struct {};
+
+pub const Tty = struct {
+    handle: if (is_win) std.os.windows.HANDLE else std.posix.fd_t,
+    saved_termios: if (is_win) void else std.posix.termios,
+    saved_mode: if (is_win) u32 else void,
+
+    /// Open the terminal and switch it to raw input. Null when there is no
+    /// controlling terminal.
+    pub fn open(io: Io) ?Tty {
+        if (comptime is_win) {
+            const name = std.unicode.utf8ToUtf16LeStringLiteral("CONIN$");
+            const h = win.CreateFileW(name, 0xC0000000, 3, null, 3, 0, null);
+            if (h == std.os.windows.INVALID_HANDLE_VALUE) return null;
+            var mode: u32 = 0;
+            if (win.GetConsoleMode(h, &mode) == 0) {
+                _ = win.CloseHandle(h);
+                return null;
+            }
+            // Clear PROCESSED_INPUT (1), LINE_INPUT (2), ECHO_INPUT (4); set VIRTUAL_TERMINAL_INPUT (0x200).
+            const raw = (mode & ~@as(u32, 7)) | 0x200;
+            if (win.SetConsoleMode(h, raw) == 0) {
+                _ = win.CloseHandle(h);
+                return null;
+            }
+            return .{ .handle = h, .saved_termios = {}, .saved_mode = mode };
+        }
+        const f = Io.Dir.cwd().openFile(io, "/dev/tty", .{ .mode = .read_write }) catch return null;
+        const saved = std.posix.tcgetattr(f.handle) catch {
+            f.close(io);
+            return null;
+        };
+        var raw = saved;
+        raw.lflag.ICANON = false;
+        raw.lflag.ECHO = false;
+        raw.lflag.ISIG = false;
+        raw.lflag.IEXTEN = false;
+        raw.iflag.IXON = false;
+        raw.iflag.ICRNL = false;
+        raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
+        raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+        std.posix.tcsetattr(f.handle, .FLUSH, raw) catch {
+            f.close(io);
+            return null;
+        };
+        return .{ .handle = f.handle, .saved_termios = saved, .saved_mode = {} };
+    }
+
+    /// Restore the terminal mode and close it.
+    pub fn close(t: *Tty, io: Io) void {
+        if (comptime is_win) {
+            _ = win.SetConsoleMode(t.handle, t.saved_mode);
+            _ = win.CloseHandle(t.handle);
+            return;
+        }
+        std.posix.tcsetattr(t.handle, .FLUSH, t.saved_termios) catch {};
+        (Io.File{ .handle = t.handle, .flags = .{ .nonblocking = false } }).close(io);
+    }
+
+    /// Next input byte; null at end of input or on error.
+    pub fn readByte(t: *const Tty) ?u8 {
+        var b: [1]u8 = undefined;
+        if (comptime is_win) {
+            var got: u32 = 0;
+            if (win.ReadFile(t.handle, &b, 1, &got, null) == 0 or got == 0) return null;
+            return b[0];
+        }
+        const n = std.posix.read(t.handle, &b) catch return null;
+        return if (n == 1) b[0] else null;
+    }
+
+    /// Current size of the terminal window.
+    pub fn size(t: *const Tty) ?Size {
+        if (comptime is_win) {
+            var info: win.CSBI = undefined;
+            const out = std.os.windows.peb().ProcessParameters.hStdOutput;
+            if (win.GetConsoleScreenBufferInfo(out, &info) == 0) return null;
+            const rows = @as(i32, info.bottom) - @as(i32, info.top) + 1;
+            const cols = @as(i32, info.right) - @as(i32, info.left) + 1;
+            if (rows <= 0 or cols <= 0) return null;
+            return .{ .rows = @intCast(rows), .cols = @intCast(cols) };
+        }
+        var ws: std.posix.winsize = undefined;
+        const rc = std.posix.system.ioctl(t.handle, std.posix.T.IOCGWINSZ, @intFromPtr(&ws));
+        if (rc != 0 or ws.row == 0 or ws.col == 0) return null;
+        return .{ .rows = ws.row, .cols = ws.col };
+    }
+};

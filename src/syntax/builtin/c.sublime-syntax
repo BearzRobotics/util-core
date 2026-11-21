@@ -1,0 +1,185 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: C
+scope: source.c
+file_extensions:
+  - c
+  - h
+first_line_match: '-\*-\s*c\s*-\*-'
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+
+contexts:
+  main:
+    - include: comments
+    - include: preprocessor
+    - include: code
+
+  code:
+    - include: comments
+    - include: strings
+    - include: numbers
+    - include: attributes
+    - include: keywords
+    - include: functions
+    - include: operators
+
+  comments:
+    - match: '/\*\*(?!/)'
+      scope: punctuation.definition.comment.begin.c
+      push: doc-block-comment
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.c
+      push: block-comment
+    - match: '//[/!].*$'
+      scope: comment.line.documentation.c
+    - match: '//.*$'
+      scope: comment.line.double-slash.c
+
+  block-comment:
+    - meta_scope: comment.block.c
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.c
+      pop: true
+
+  doc-block-comment:
+    - meta_scope: comment.block.documentation.c
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.c
+      pop: true
+
+  preprocessor:
+    - match: '^\s*(#)\s*(include|include_next|import)\b'
+      captures:
+        1: punctuation.definition.directive.c
+        2: keyword.control.import.c
+      push: include-arg
+    - match: '^\s*(#)\s*(define)\b[ \t]*({{ident}})?'
+      captures:
+        1: punctuation.definition.directive.c
+        2: keyword.control.import.define.c
+        3: entity.name.function.preprocessor.c
+      push: pp-body
+    - match: '^\s*(#)\s*(undef|ifdef|ifndef)\b[ \t]*({{ident}})?'
+      captures:
+        1: punctuation.definition.directive.c
+        2: keyword.control.import.c
+        3: entity.name.function.preprocessor.c
+      push: pp-body
+    - match: '^\s*(#)\s*(if|elif|elifdef|elifndef|else|endif|pragma|error|warning|line|ident|sccs|assert|unassert)\b'
+      captures:
+        1: punctuation.definition.directive.c
+        2: keyword.control.import.c
+      push: pp-body
+
+  include-arg:
+    - match: '\\[ \t]*\n'
+      scope: punctuation.separator.continuation.c
+    - match: '<[^>\n]*>'
+      scope: string.quoted.other.lt-gt.include.c
+    - match: '"[^"\n]*"'
+      scope: string.quoted.double.include.c
+    - include: comments
+    - match: '\n'
+      pop: true
+
+  pp-body:
+    - match: '\\[ \t]*\n'
+      scope: punctuation.separator.continuation.c
+    - match: '\bdefined\b'
+      scope: keyword.operator.c
+    - include: code
+    - match: '\n'
+      pop: true
+
+  strings:
+    - match: '(?:u8|u|U|L)?"'
+      scope: punctuation.definition.string.begin.c
+      push: dq-string
+    - match: '(?:u8|u|U|L)?\x27'
+      scope: punctuation.definition.string.begin.c
+      push: char
+
+  dq-string:
+    - meta_scope: string.quoted.double.c
+    - match: '"'
+      scope: punctuation.definition.string.end.c
+      pop: true
+    - include: string-escapes
+    - match: '%[-+ #0]*(?:\d+|\*)?(?:\.(?:\d+|\*))?(?:hh|h|ll|l|j|z|t|L)?[diouxXeEfFgGaAcspn%]'
+      scope: constant.other.placeholder.c
+    - match: '\n'
+      pop: true
+
+  char:
+    - meta_scope: string.quoted.single.c
+    - match: '\x27'
+      scope: punctuation.definition.string.end.c
+      pop: true
+    - include: string-escapes
+    - match: '\n'
+      pop: true
+
+  string-escapes:
+    - match: '\\(?:[abefnrtv\\\x27"?]|[0-7]{1,3}|x\h+|u\h{4}|U\h{8})'
+      scope: constant.character.escape.c
+    - match: '\\\n'
+      scope: constant.character.escape.c
+    - match: '\\.'
+      scope: invalid.illegal.unknown-escape.c
+
+  numbers:
+    - match: '(?<![\w.])0[xX](?:\h+(?:\x27\h+)*)?(?:\.\h*)?(?:[pP][+-]?\d+)?[uUlLfF]*(?![\w])'
+      scope: constant.numeric.hex.c
+    - match: '(?<![\w.])0[bB][01]+(?:\x27[01]+)*[uUlL]*(?!\w)'
+      scope: constant.numeric.binary.c
+    - match: '(?<![\w.])(?:\d+(?:\x27\d+)*\.(?:\d+(?:\x27\d+)*)?|\.\d+(?:\x27\d+)*)(?:[eE][+-]?\d+)?[fFlL]?(?!\w)'
+      scope: constant.numeric.float.c
+    - match: '(?<![\w.])\d+(?:\x27\d+)*[eE][+-]?\d+[fFlL]?(?!\w)'
+      scope: constant.numeric.float.c
+    - match: '(?<![\w.])\d+(?:\x27\d+)*(?:[uU](?:ll|LL|l|L)?|(?:ll|LL|l|L)[uU]?|[fF])?(?!\w)'
+      scope: constant.numeric.integer.c
+
+  attributes:
+    - match: '\[\[[^\]\n]*\]\]'
+      scope: meta.annotation.c
+    - match: '\b__attribute__\b'
+      scope: storage.modifier.attribute.c
+    - match: '\b__declspec\b'
+      scope: storage.modifier.attribute.c
+
+  keywords:
+    - match: '\b(?:if|else|for|while|do|switch|case|default|break|continue|return|goto)\b'
+      scope: keyword.control.c
+    - match: '\b(?:sizeof|_Alignof|alignof|_Generic|_Static_assert|static_assert|typeof|typeof_unqual|__typeof__|_Countof)\b'
+      scope: keyword.operator.word.c
+    - match: '\b(struct|union|enum)\b(?:(\s+)({{ident}}))?'
+      captures:
+        1: storage.type.c
+        3: entity.name.type.c
+    - match: '\b(?:typedef)\b'
+      scope: storage.type.c
+    - match: '\b(?:void|char|short|int|long|float|double|signed|unsigned|_Bool|bool|_Complex|_Imaginary|_Decimal32|_Decimal64|_Decimal128|_BitInt|__int128|__int64|__int32|__int16|__int8|va_list)\b'
+      scope: storage.type.c
+    - match: '\b(?:static|extern|const|volatile|register|inline|restrict|auto|constexpr|_Atomic|_Noreturn|noreturn|_Thread_local|thread_local|_Alignas|alignas|__inline|__inline__|__restrict|__restrict__|__volatile__|__extension__|__asm__|__asm|asm)\b'
+      scope: storage.modifier.c
+    - match: '\b(?:true|false|NULL|nullptr|EOF|stdin|stdout|stderr)\b'
+      scope: constant.language.c
+    - match: '\b(?:__FILE__|__LINE__|__func__|__FUNCTION__|__DATE__|__TIME__|__STDC__|__VA_ARGS__|__COUNTER__)\b'
+      scope: constant.language.c
+    - match: '\b(?:int|uint)(?:8|16|32|64)_t\b|\b(?:u?intptr|u?intmax|ptrdiff|size|ssize|off|time|wchar|sig_atomic|max_align)_t\b|\bFILE\b|\b[a-z][a-z0-9_]*_t\b'
+      scope: support.type.c
+    - match: '\b[A-Z][A-Z0-9_]{2,}\b(?!\s*\()'
+      scope: support.constant.c
+
+  functions:
+    - match: '\b(?:printf|fprintf|sprintf|snprintf|scanf|sscanf|fscanf|puts|putchar|fputs|fgets|getchar|fopen|fclose|fread|fwrite|fflush|fseek|ftell|malloc|calloc|realloc|free|memcpy|memmove|memset|memcmp|memchr|strlen|strcmp|strncmp|strcpy|strncpy|strcat|strncat|strchr|strrchr|strstr|strdup|atoi|atol|strtol|strtoul|strtod|abs|exit|abort|atexit|getenv|qsort|bsearch|assert|va_start|va_end|va_arg|va_copy|perror|open|close|read|write)(?=\s*\()'
+      scope: support.function.c
+    - match: '\b{{ident}}(?=\s*\()'
+      scope: entity.name.function.c
+
+  operators:
+    - match: '->|\+\+|--|<<=?|>>=?|[<>!=+\-*/%&|^]=|&&|\|\||[-+*/%&|^~!<>=?:]'
+      scope: keyword.operator.c

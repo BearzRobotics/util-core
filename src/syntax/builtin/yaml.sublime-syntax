@@ -1,0 +1,321 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: YAML
+scope: source.yaml
+file_extensions: [yaml, yml, clang-format, clang-tidy, yamllint]
+first_line_match: '^%YAML\b'
+contexts:
+  main:
+    - include: comments
+    - match: '^(?:---|\.\.\.)(?=\s|$)'
+      scope: keyword.other.document.yaml
+    - match: '^%[A-Za-z]+'
+      scope: keyword.other.directive.yaml
+      push: directive-line
+    - match: '^(?=.*[|>][-+0-9]*\s*(?:#.*)?$)'
+      push: block-scalar-dispatch
+    - include: main-rest
+
+  main-rest:
+    - match: '-(?=\s|$)'
+      scope: punctuation.definition.block.sequence.item.yaml
+      push: value
+    - match: '\?(?=\s|$)'
+      scope: punctuation.definition.key.yaml
+      push: value
+    - include: key
+    - include: nodes
+
+  plain-line:
+    - match: '$'
+      pop: true
+    - include: comments
+    - include: main-rest
+
+  directive-line:
+    - meta_scope: meta.directive.yaml
+    - match: '$'
+      pop: true
+    - include: comments
+
+  comments:
+    - match: '(?:^|(?<=\s))#.*$'
+      scope: comment.line.number-sign.yaml
+
+  key:
+    - match: '(?<![^\s])(?:("(?:[^"\\\n]|\\.)*")|(''(?:[^''\n]|'''')*'')|((?:[^\s#:\[\]{},&*!|>''"%@`?-]|[?:-](?=\S))(?:[^:#\n]|:(?!\s|$)|(?<=\S)#)*?))(\s*)(:)(?=\s|$)'
+      captures:
+        1: string.quoted.double.yaml entity.name.tag.yaml
+        2: string.quoted.single.yaml entity.name.tag.yaml
+        3: entity.name.tag.yaml
+        5: punctuation.separator.key-value.yaml
+      push: value
+
+
+  nodes:
+    - match: '&[^\s,\[\]{}]+'
+      scope: variable.other.anchor.yaml
+    - match: '\*[^\s,\[\]{}]+'
+      scope: variable.other.alias.yaml
+    - match: '![^\s,\[\]{}]*'
+      scope: storage.type.tag.yaml
+    - match: '"'
+      scope: punctuation.definition.string.begin.yaml
+      push: double-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.yaml
+      push: single-string
+    - match: '\['
+      scope: punctuation.definition.sequence.begin.yaml
+      push: flow-seq
+    - match: '\{'
+      scope: punctuation.definition.mapping.begin.yaml
+      push: flow-map
+
+  value:
+    - match: '$'
+      pop: true
+    - match: '(?=\s*#)'
+      pop: true
+    - include: key
+    - match: '-(?=\s|$)'
+      scope: punctuation.definition.block.sequence.item.yaml
+    - match: '(?:true|True|TRUE|false|False|FALSE)(?=\s*(?:#|$))'
+      scope: constant.language.boolean.yaml
+      pop: true
+    - match: '(?:null|Null|NULL|~)(?=\s*(?:#|$))'
+      scope: constant.language.null.yaml
+      pop: true
+    - match: '[-+]?(?:0x[0-9A-Fa-f_]+|0o[0-7_]+|[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?|\.[0-9][0-9_]*(?:[eE][-+]?[0-9]+)?|\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))(?=\s*(?:#|$))'
+      scope: constant.numeric.yaml
+      pop: true
+    - include: nodes
+    - match: '[^\s&*!"''\[{#][^\n]*?(?=\s+#|$)'
+      scope: string.unquoted.plain.out.yaml
+    - match: '\s+'
+
+  block-scalar-dispatch:
+    - match: '^(?= {0}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-0, block-header]
+    - match: '^(?= {1}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-1, block-header]
+    - match: '^(?= {2}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-2, block-header]
+    - match: '^(?= {3}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-3, block-header]
+    - match: '^(?= {4}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-4, block-header]
+    - match: '^(?= {5}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-5, block-header]
+    - match: '^(?= {6}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-6, block-header]
+    - match: '^(?= {7}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-7, block-header]
+    - match: '^(?= {8}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-8, block-header]
+    - match: '^(?= {9}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-9, block-header]
+    - match: '^(?= {10}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-10, block-header]
+    - match: '^(?= {11}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-11, block-header]
+    - match: '^(?= {12}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-12, block-header]
+    - match: '^(?= {13}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-13, block-header]
+    - match: '^(?= {14}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-14, block-header]
+    - match: '^(?= {15}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-15, block-header]
+    - match: '^(?= {16}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-16, block-header]
+    - match: '^(?= {17,}(?! )(?:-\s+)*(?:(?:\"[^\"]*\"|''[^'']*''|[^\s#''\"\[\]{}][^#\n]*?)\s*:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*(?:#.*)?$)'
+      set: [block-body-17, block-header]
+    - match: '(?=.|$)'
+      set: plain-line
+
+  block-header:
+    - match: '$'
+      pop: true
+    - include: comments
+    - match: '-(?=\s|$)'
+      scope: punctuation.definition.block.sequence.item.yaml
+    - include: key-bare
+    - match: '[&*!]\S*'
+      scope: variable.other.anchor.yaml
+    - match: '[|>][-+0-9]*'
+      scope: keyword.control.flow.block-scalar.yaml
+
+  key-bare:
+    - match: '(?<![^\s])(?:("(?:[^"\\\n]|\\.)*")|(''(?:[^''\n]|'''')*'')|((?:[^\s#:\[\]{},&*!|>''"%@`?-]|[?:-](?=\S))(?:[^:#\n]|:(?!\s|$)|(?<=\S)#)*?))(\s*)(:)(?=\s|$)'
+      captures:
+        1: string.quoted.double.yaml entity.name.tag.yaml
+        2: string.quoted.single.yaml entity.name.tag.yaml
+        3: entity.name.tag.yaml
+        5: punctuation.separator.key-value.yaml
+
+  block-body-0:
+    - match: '^(?! {1}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-1:
+    - match: '^(?! {2}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-2:
+    - match: '^(?! {3}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-3:
+    - match: '^(?! {4}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-4:
+    - match: '^(?! {5}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-5:
+    - match: '^(?! {6}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-6:
+    - match: '^(?! {7}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-7:
+    - match: '^(?! {8}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-8:
+    - match: '^(?! {9}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-9:
+    - match: '^(?! {10}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-10:
+    - match: '^(?! {11}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-11:
+    - match: '^(?! {12}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-12:
+    - match: '^(?! {13}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-13:
+    - match: '^(?! {14}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-14:
+    - match: '^(?! {15}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-15:
+    - match: '^(?! {16}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-16:
+    - match: '^(?! {17}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  block-body-17:
+    - match: '^(?! {18,}|[ \t]*$)'
+      pop: true
+    - match: '.+'
+      scope: string.unquoted.block.yaml
+
+  double-string:
+    - meta_scope: string.quoted.double.yaml
+    - match: '"'
+      scope: punctuation.definition.string.end.yaml
+      pop: true
+    - match: '\\(?:[0abtnvfre "/\\N_LP]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})'
+      scope: constant.character.escape.yaml
+
+  single-string:
+    - meta_scope: string.quoted.single.yaml
+    - match: "''"
+      scope: constant.character.escape.yaml
+    - match: "'"
+      scope: punctuation.definition.string.end.yaml
+      pop: true
+
+  flow-common:
+    - include: comments
+    - match: ','
+      scope: punctuation.separator.sequence.yaml
+    - include: nodes
+    - match: '(?:true|True|TRUE|false|False|FALSE)(?=\s*(?:[,\]}#]|$))'
+      scope: constant.language.boolean.yaml
+    - match: '(?:null|Null|NULL|~)(?=\s*(?:[,\]}#]|$))'
+      scope: constant.language.null.yaml
+    - match: '[-+]?(?:0x[0-9A-Fa-f_]+|[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?|\.[0-9][0-9_]*)(?=\s*(?:[,\]}#]|$))'
+      scope: constant.numeric.yaml
+
+  flow-seq:
+    - meta_scope: meta.flow-sequence.yaml
+    - match: '\]'
+      scope: punctuation.definition.sequence.end.yaml
+      pop: true
+    - include: flow-key
+    - include: flow-common
+    - include: flow-plain
+
+  flow-map:
+    - meta_scope: meta.flow-mapping.yaml
+    - match: '\}'
+      scope: punctuation.definition.mapping.end.yaml
+      pop: true
+    - include: flow-key
+    - include: flow-common
+    - include: flow-plain
+
+  flow-key:
+    - match: '(?:"(?:[^"\\]|\\.)*"|''(?:[^'']|'''')*''|[^\s,\[\]{}#''"&*!:][^,\[\]{}:#]*?)(?=\s*:(?:\s|$|[,\]}]))'
+      scope: entity.name.tag.yaml
+    - match: ':(?=\s|$|[,\]}])'
+      scope: punctuation.separator.key-value.yaml
+
+  flow-plain:
+    - match: '[^\s,\[\]{}#''"&*!][^,\[\]{}#]*?(?=\s*(?:[,\]}#]|$))'
+      scope: string.unquoted.plain.in.yaml
+

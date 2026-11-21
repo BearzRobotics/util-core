@@ -1,0 +1,235 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Rust
+scope: source.rust
+file_extensions:
+  - rs
+first_line_match: '^#!.*\brust-script\b|-\*-\s*rust\s*-\*-'
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+  inttype: '(?:[iu](?:8|16|32|64|128|size))'
+
+contexts:
+  main:
+    - include: comments
+    - include: attributes
+    - include: strings
+    - include: lifetimes
+    - include: numbers
+    - include: keywords
+    - include: types
+    - include: macros
+    - include: functions
+    - include: operators
+
+  comments:
+    - match: '/\*\*/'
+      scope: comment.block.rust
+    - match: '/\*[*!](?![*/])'
+      scope: punctuation.definition.comment.begin.rust
+      push: doc-block-comment
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.rust
+      push: block-comment
+    - match: '//[/!](?!/).*$|///$'
+      scope: comment.line.documentation.rust
+    - match: '//.*$'
+      scope: comment.line.double-slash.rust
+
+  block-comment:
+    - meta_scope: comment.block.rust
+    - match: '/\*'
+      push: block-comment
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.rust
+      pop: true
+
+  doc-block-comment:
+    - meta_scope: comment.block.documentation.rust
+    - match: '/\*'
+      push: block-comment
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.rust
+      pop: true
+
+  attributes:
+    - match: '#!?\['
+      scope: punctuation.definition.annotation.rust
+      push: attribute
+
+  attribute:
+    - meta_scope: meta.annotation.rust
+    - match: '\]'
+      scope: punctuation.definition.annotation.rust
+      pop: true
+    - match: '\['
+      push: attribute-nested
+    - include: strings
+
+  attribute-nested:
+    - match: '\]'
+      pop: true
+    - match: '\['
+      push: attribute-nested
+    - include: strings
+
+  strings:
+    - match: '\br#(?!["#])(?={{ident}})'
+      scope: keyword.other.raw-identifier.rust
+    - match: '\b(?:b|c)?r"'
+      scope: punctuation.definition.string.begin.rust
+      push: raw-string-0
+    - match: '\b(?:b|c)?r#"'
+      scope: punctuation.definition.string.begin.rust
+      push: raw-string-1
+    - match: '\b(?:b|c)?r##"'
+      scope: punctuation.definition.string.begin.rust
+      push: raw-string-2
+    - match: '\b(?:b|c)?r###+"'
+      scope: punctuation.definition.string.begin.rust
+      push: raw-string-3
+    - match: '\b[bc]"|"'
+      scope: punctuation.definition.string.begin.rust
+      push: dq-string
+    - match: '\bb(\x27)(\\(?:x\h{2}|[^\n]))(\x27)'
+      captures:
+        1: punctuation.definition.string.begin.rust
+        2: constant.character.escape.rust
+        3: punctuation.definition.string.end.rust
+      scope: string.quoted.single.rust
+    - match: '\bb(\x27)([^\\\n])(\x27)'
+      scope: string.quoted.single.rust
+    - match: '(\x27)(\\(?:x\h{2}|u\{\h{1,6}\}|[^\n]))(\x27)'
+      scope: string.quoted.single.rust
+      captures:
+        2: constant.character.escape.rust
+    - match: '\x27[^\\\n\x27]\x27'
+      scope: string.quoted.single.rust
+
+  raw-string-0:
+    - meta_scope: string.quoted.double.raw.rust
+    - match: '"'
+      scope: punctuation.definition.string.end.rust
+      pop: true
+
+  raw-string-1:
+    - meta_scope: string.quoted.double.raw.rust
+    - match: '"#'
+      scope: punctuation.definition.string.end.rust
+      pop: true
+
+  raw-string-2:
+    - meta_scope: string.quoted.double.raw.rust
+    - match: '"##'
+      scope: punctuation.definition.string.end.rust
+      pop: true
+
+  raw-string-3:
+    - meta_scope: string.quoted.double.raw.rust
+    - match: '"###+'
+      scope: punctuation.definition.string.end.rust
+      pop: true
+
+  dq-string:
+    - meta_scope: string.quoted.double.rust
+    - match: '"'
+      scope: punctuation.definition.string.end.rust
+      pop: true
+    - match: '\\(?:[nrt0\\\x27"]|x\h{2}|u\{\h{1,6}\})'
+      scope: constant.character.escape.rust
+    - match: '\\$'
+      scope: constant.character.escape.rust
+    - match: '\\.'
+      scope: invalid.illegal.unknown-escape.rust
+    - match: '\{\{|\}\}'
+    - match: '\{(?:{{ident}}|\d+)?(?::[^{}"\\]*)?\}'
+      scope: constant.other.placeholder.rust
+
+  lifetimes:
+    - match: '\x27(?:static|_|{{ident}})\b(?!\x27)'
+      scope: storage.modifier.lifetime.rust
+
+  numbers:
+    - match: '\b0x[\h_]+{{inttype}}?\b'
+      scope: constant.numeric.hex.rust
+    - match: '\b0o[0-7_]+{{inttype}}?\b'
+      scope: constant.numeric.octal.rust
+    - match: '\b0b[01_]+{{inttype}}?\b'
+      scope: constant.numeric.binary.rust
+    - match: '\b\d[\d_]*\.\d[\d_]*(?:[eE][+-]?[\d_]+)?(?:f32|f64)?\b'
+      scope: constant.numeric.float.rust
+    - match: '\b\d[\d_]*[eE][+-]?[\d_]+(?:f32|f64)?\b'
+      scope: constant.numeric.float.rust
+    - match: '\b\d[\d_]*\.(?![.\w])'
+      scope: constant.numeric.float.rust
+    - match: '\b\d[\d_]*(?:f32|f64)\b'
+      scope: constant.numeric.float.rust
+    - match: '\b\d[\d_]*{{inttype}}?\b'
+      scope: constant.numeric.integer.rust
+
+  keywords:
+    - match: '\b(?:if|else|match|loop|while|for|in|break|continue|return|yield|await|try)\b'
+      scope: keyword.control.rust
+    - match: '\b(fn)\b(?:\s+({{ident}}))?'
+      captures:
+        1: storage.type.function.rust
+        2: entity.name.function.rust
+    - match: '\b(struct|enum|union|trait|type)\b(?:\s+({{ident}}))?'
+      captures:
+        1: storage.type.rust
+        2: entity.name.type.rust
+    - match: '\b(mod)\b(?:\s+({{ident}}))?'
+      captures:
+        1: storage.type.module.rust
+        2: entity.name.namespace.rust
+    - match: '\b(macro_rules)(!)(?:\s+({{ident}}))?'
+      captures:
+        1: entity.name.function.macro.rust
+        2: entity.name.function.macro.rust
+        3: entity.name.function.macro.rust
+    - match: '\b(?:impl)\b'
+      scope: storage.type.impl.rust
+    - match: '\b(?:let|const|static)\b'
+      scope: storage.type.rust
+    - match: '\b(?:pub|mut|ref|unsafe|async|move|dyn|extern|default|box|raw|safe)\b'
+      scope: storage.modifier.rust
+    - match: '\b(?:use|crate|where|as)\b'
+      scope: keyword.control.import.rust
+    - match: '\b(?:self|Self)\b'
+      scope: variable.language.self.rust
+    - match: '\bsuper\b'
+      scope: variable.language.super.rust
+    - match: '\b(?:true|false|None)\b'
+      scope: constant.language.rust
+    - match: '\b(?:Some|Ok|Err)\b'
+      scope: support.constant.rust
+
+  types:
+    - match: '\b(?:i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|f16|f128|bool|char|str)\b(?!\s*::\s*{{ident}}\s*\()'
+      scope: support.type.primitive.rust
+    - match: '\b(?:Option|Result|Vec|String|Box|Rc|Arc|Cell|RefCell|Mutex|RwLock|HashMap|HashSet|BTreeMap|BTreeSet|VecDeque|BinaryHeap|Cow|Path|PathBuf|OsString|OsStr|Duration|Instant|Ordering|Default|Clone|Copy|Debug|Display|Iterator|IntoIterator|From|Into|AsRef|AsMut|Send|Sync|Sized|Drop|Fn|FnMut|FnOnce|PhantomData|Error|Read|Write|Hash|Eq|PartialEq|Ord|PartialOrd|ToString|Deref|DerefMut)\b'
+      scope: support.type.rust
+    - match: '\b[A-Z][A-Z0-9_]+\b'
+      scope: support.constant.rust
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: entity.name.type.rust
+    - match: '\b[a-z_][a-z0-9_]*(?=\s*::(?!\s*<))'
+      scope: entity.name.namespace.rust
+
+  macros:
+    - match: '\b{{ident}}!(?=\s*[(\[{])'
+      scope: entity.name.function.macro.rust
+
+  functions:
+    - match: '\b[a-z_][A-Za-z0-9_]*(?=\s*(?:::\s*<[^()]*>\s*)?\()'
+      scope: entity.name.function.rust
+    - match: '\b[a-z_][A-Za-z0-9_]*(?=\s*::\s*<[^()]*>)'
+      scope: entity.name.function.rust
+
+  operators:
+    - match: '::'
+      scope: punctuation.accessor.rust
+    - match: '=>|->|\.\.\.|\.\.=?|&&|\|\||<<=?|>>=?|[-+*/%^&|!<>=]=?|\?|@'
+      scope: keyword.operator.rust

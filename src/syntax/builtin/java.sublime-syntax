@@ -1,0 +1,171 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Java
+scope: source.java
+file_extensions: [java, jsh]
+first_line_match: '^//\s*(?:-\*-.*)?java'
+variables:
+  ident: '[A-Za-z_$][A-Za-z0-9_$]*'
+contexts:
+  main:
+    - include: comments
+    - include: text-block
+    - include: strings
+    - include: annotations
+    - include: package-import
+    - include: type-decl
+    - include: keywords
+    - include: numbers
+    - include: methods
+    - include: types
+    - include: operators
+
+  comments:
+    - match: '/\*\*(?!/)'
+      scope: punctuation.definition.comment.begin.java
+      push: doc-comment
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.java
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.double-slash.java
+
+  block-comment:
+    - meta_scope: comment.block.java
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.java
+      pop: true
+
+  doc-comment:
+    - meta_scope: comment.block.documentation.java
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.java
+      pop: true
+    - match: '@[A-Za-z]+'
+      scope: keyword.other.documentation.javadoc.java
+    - match: '</?[A-Za-z][A-Za-z0-9]*[^>]*>'
+      scope: punctuation.definition.tag.javadoc.java
+    - match: '\{@[A-Za-z]+[^}]*\}'
+      scope: keyword.other.documentation.javadoc.java
+
+  text-block:
+    - match: '"""'
+      scope: punctuation.definition.string.begin.java
+      push: text-block-body
+
+  text-block-body:
+    - meta_scope: string.quoted.triple.java
+    - match: '"""'
+      scope: punctuation.definition.string.end.java
+      pop: true
+    - include: escapes
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.java
+      push: string-body
+    - match: "'(?=(?:[^'\\\\\\n]|\\\\.[A-Za-z0-9]*)')"
+      scope: punctuation.definition.string.begin.java
+      push: char-body
+
+  string-body:
+    - meta_scope: string.quoted.double.java
+    - match: '"'
+      scope: punctuation.definition.string.end.java
+      pop: true
+    - match: '$'
+      pop: true
+    - include: escapes
+
+  char-body:
+    - meta_scope: string.quoted.single.java
+    - match: "'"
+      scope: punctuation.definition.string.end.java
+      pop: true
+    - include: escapes
+
+  escapes:
+    - match: '\\(?:[btnfrs"''\\0]|[0-3][0-7]{0,2}|[4-7][0-7]?|u+[0-9A-Fa-f]{4}|\n)'
+      scope: constant.character.escape.java
+    - match: '\\.'
+      scope: invalid.illegal.escape.java
+
+  annotations:
+    - match: '@(?!interface\b){{ident}}(?:\.{{ident}})*'
+      scope: meta.annotation.java
+
+  package-import:
+    - match: '\b(package|import)\b(?:\s+(static)\b)?'
+      captures:
+        1: keyword.other.import.java
+        2: storage.modifier.java
+      push: import-body
+
+  import-body:
+    - match: ';'
+      scope: punctuation.terminator.java
+      pop: true
+    - match: '\*'
+      scope: keyword.operator.wildcard.java
+    - match: '\b[A-Z][A-Za-z0-9_$]*'
+      scope: entity.name.type.java
+    - match: '\b[a-z_][A-Za-z0-9_$]*'
+      scope: support.type.package.java
+    - match: '$'
+      pop: true
+
+  type-decl:
+    - match: '\b(class|interface|enum|record)\s+({{ident}})'
+      captures:
+        1: storage.type.class.java
+        2: entity.name.class.java
+    - match: '@interface\s+({{ident}})'
+      captures:
+        1: entity.name.class.java
+    - match: '\b(extends|implements|permits|throws)\b'
+      scope: storage.modifier.extends.java
+
+  keywords:
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.java
+    - match: '\bnull\b'
+      scope: constant.language.null.java
+    - match: '\b(?:this|super)\b'
+      scope: variable.language.java
+    - match: '\b(?:boolean|byte|char|short|int|long|float|double|void|var)\b'
+      scope: storage.type.primitive.java
+    - match: '\b(?:public|private|protected|static|final|abstract|native|synchronized|transient|volatile|strictfp|default|sealed|non-sealed)\b'
+      scope: storage.modifier.java
+    - match: '\b(?:if|else|for|while|do|switch|case|break|continue|return|throw|try|catch|finally|assert|yield)\b'
+      scope: keyword.control.java
+    - match: '\b(?:new|instanceof)\b'
+      scope: keyword.operator.new.java
+    - match: '\b(?:goto|const)\b'
+      scope: invalid.illegal.reserved.java
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+(?:\.[0-9A-Fa-f_]*)?(?:[pP][-+]?[0-9]+)?[lLfFdD]?\b'
+      scope: constant.numeric.hex.java
+    - match: '\b0[bB][01_]+[lL]?\b'
+      scope: constant.numeric.binary.java
+    - match: '(?<![A-Za-z0-9_$.])(?:[0-9][0-9_]*\.[0-9_]*|\.[0-9][0-9_]*|[0-9][0-9_]*)(?:[eE][-+]?[0-9_]+)?[lLfFdD]?(?![A-Za-z0-9_$])'
+      scope: constant.numeric.decimal.java
+
+  methods:
+    - match: '\b{{ident}}(?=\s*\()'
+      scope: entity.name.function.java
+    - match: '(?<=::)\s*{{ident}}'
+      scope: entity.name.function.java
+
+  types:
+    - match: '\b[A-Z][A-Z0-9_]+\b(?!\s*[(<])'
+      scope: support.constant.java
+    - match: '\b[A-Z][A-Za-z0-9_$]*\b'
+      scope: entity.name.type.java
+
+  operators:
+    - match: '->|::'
+      scope: keyword.operator.arrow.java
+    - match: '[-+*/%&|^~!<>=?:]+'
+      scope: keyword.operator.java

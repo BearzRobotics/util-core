@@ -9,7 +9,7 @@ cat - concatenate files and print on the standard output
 
 # DESCRIPTION
 
-Copy each FILE (or standard input when none is given, or for the name -) to standard output in order. Without formatting options the data is copied unchanged in 64 KiB chunks. When standard output is a terminal and no GNU formatting option (-A -b -e -E -n -s -t -T -v) is given, cat shows a bat-style view instead: file header, grid and line numbers. In pipes and redirects the output is always the GNU-compatible bytes. With color on and a matching grammar, the text is syntax-highlighted. Paging and git change markers are not implemented yet.
+Copy each FILE (or standard input when none is given, or for the name -) to standard output in order. Without formatting options the data is copied unchanged in 64 KiB chunks. When standard output is a terminal and no GNU formatting option (-A -b -e -E -n -s -t -T -v) is given, cat shows a bat-style view instead: file header, grid and line numbers. In pipes and redirects the output is always the GNU-compatible bytes. With color on and a matching grammar, the text is syntax-highlighted; grammars for about 25 common languages and formats are built in (see `--list-languages`). When the view is longer than the screen it is paged, as bat does: through the program in `$BAT_PAGER` or `$PAGER` (or `--pager`), and otherwise through the built-in pager, which has the keys of less(1) (see less(1) in this package), scrolls while cat is still writing and prints at once, without taking over the screen, when everything fits on one screen. Git change markers are not implemented yet.
 
 # OPTIONS
 
@@ -49,6 +49,15 @@ Copy each FILE (or standard input when none is given, or for the name -) to stan
 --decorations=WHEN
 : auto (terminal only), always or never. always forces the bat view in pipes. A GNU formatting option always selects the GNU path.
 
+--paging=WHEN
+: auto (default: page the bat view on a terminal), always (page whenever standard output is a terminal) or never.
+
+-P, --no-paging
+: Same as `--paging=never`.
+
+--pager=CMD
+: The pager program. Default: `$BAT_PAGER`, then `$PAGER`, then the built-in pager. A bare `less` gets `-FRX`.
+
 -l, --language=NAME
 : Highlight with the grammar NAME: its full name, scope (`source.rust`), the last part of the scope (`rust`) or a file extension (`rs`). Without this option the grammar is chosen from the file name, then from the grammar's first-line pattern. Unknown names are an error. Only used in the bat view with color on.
 
@@ -87,7 +96,7 @@ See docs/compatibility/cat.md for details.
 
 # LIMITATIONS
 
-- No bundled grammars (highlighting needs `--syntax-dir` or `~/.config/cat/syntaxes`; the license audit of grammars to ship is pending), no truecolor themes (16 ANSI colors), no paging, no git change markers, no `--theme`. Column counting for wrapping and tabs counts bytes, not UTF-8 characters.
+- The built-in grammars are our own, basic ones (no embedding, e.g. no JavaScript inside HTML; some heuristics are documented in docs/compatibility/builtin-grammars.md); no truecolor themes (16 ANSI colors), no git change markers, no `--theme`. Column counting for wrapping and tabs counts bytes, not UTF-8 characters.
 - Windows: the console is switched to ANSI escape processing and UTF-8 output before the view is drawn; if that fails, color and style escapes are left off. Verified only under wine and by compiling.
 - Does not detect 'input file is output file'.
 - Short options must be separate or clustered; abbreviated long options are not accepted.
@@ -103,7 +112,7 @@ This manual describes util-core 0.2.0.
 # FILES
 
 
-`$XDG_CONFIG_HOME/cat/syntaxes` or `~/.config/cat/syntaxes`: Sublime Text `.sublime-syntax` grammars. None are bundled yet. Grammars are loaded only when a highlighted view is possible (terminal output, color on), so plain use pays nothing.
+`$XDG_CONFIG_HOME/cat/syntaxes` or `~/.config/cat/syntaxes`: Sublime Text `.sublime-syntax` grammars. Your grammars are found before the built-in ones. Grammars are loaded only when a highlighted view is possible (terminal output, color on), so plain use pays nothing.
 
 Colors come from a built-in theme that uses the terminal's 16 ANSI colors. There is no theme option yet.
 

@@ -1,0 +1,77 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: JSON
+scope: source.json
+file_extensions: [json, jsonc, json5, geojson, webmanifest, har, ipynb, babelrc, eslintrc, code-workspace]
+contexts:
+  main:
+    - include: value
+
+  value:
+    - include: comments
+    - match: '\bnull\b'
+      scope: constant.language.null.json
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.json
+    - match: '-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?(?![A-Za-z0-9_])'
+      scope: constant.numeric.json
+    - match: '"(?=(?:[^"\\]|\\.)*"\s*:)'
+      scope: punctuation.definition.string.begin.json
+      push: key-string
+    - match: '"'
+      scope: punctuation.definition.string.begin.json
+      push: string
+    - match: '\['
+      scope: punctuation.section.sequence.begin.json
+      push: array
+    - match: '\{'
+      scope: punctuation.section.mapping.begin.json
+      push: object
+    - match: '[,:]'
+      scope: punctuation.separator.json
+
+  array:
+    - meta_scope: meta.sequence.json
+    - match: '\]'
+      scope: punctuation.section.sequence.end.json
+      pop: true
+    - include: value
+
+  object:
+    - meta_scope: meta.mapping.json
+    - match: '\}'
+      scope: punctuation.section.mapping.end.json
+      pop: true
+    - include: value
+
+  key-string:
+    - meta_scope: string.quoted.double.json entity.name.tag.json
+    - match: '"'
+      scope: punctuation.definition.string.end.json
+      pop: true
+    - include: escapes
+
+  string:
+    - meta_scope: string.quoted.double.json
+    - match: '"'
+      scope: punctuation.definition.string.end.json
+      pop: true
+    - include: escapes
+
+  escapes:
+    - match: '\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})'
+      scope: constant.character.escape.json
+    - match: '\\.'
+      scope: invalid.illegal.unrecognized-escape.json
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.json
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.json
+      push:
+        - meta_scope: comment.block.json
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.json
+          pop: true

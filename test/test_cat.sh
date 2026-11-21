@@ -69,7 +69,12 @@ if [ "$actual" = "${ESC}[35mif${ESC}[0m" ]; then PASS=$((PASS + 1)); printf "PAS
 check_ours "no color, no escapes" "if \"a
 b\" else" --syntax-dir=/tmp/test_cat_syn --decorations=always --color=never -p /tmp/test_cat5.toy
 check_ours "unknown language" "cat: unknown language 'zzz' (see --list-languages)" $SYN -l zzz /tmp/test_cat5.toy
-check_ours "list languages" "Toy	toy" --syntax-dir=/tmp/test_cat_syn --list-languages
+# The built-in grammars are listed too; the user's toy grammar must be among them.
+if [ "$(ours --syntax-dir=/tmp/test_cat_syn --list-languages 2>&1 | grep '^Toy')" = "Toy	toy" ]; then
+    PASS=$((PASS + 1)); printf "PASS list languages\n"
+else
+    FAIL=$((FAIL + 1)); printf "FAIL list languages\n"
+fi
 check_ours "pipe ignores highlighting" "$(cat /tmp/test_cat5.toy)" --syntax-dir=/tmp/test_cat_syn /tmp/test_cat5.toy
 # NO_COLOR (SPEC 5.4) needs a terminal on stdout, so run under script(1).
 if command -v script >/dev/null 2>&1; then

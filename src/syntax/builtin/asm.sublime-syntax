@@ -1,0 +1,158 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Assembly
+scope: source.asm
+file_extensions: [asm, s, S, nasm, inc]
+first_line_match: '^\s*(?:\.(?:file|text|section|globl|global|intel_syntax|syntax|arch)\b|(?i:bits\s+(?:16|32|64)\b|section\s+\.\w+|global\s+\w+))'
+contexts:
+  main:
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.asm
+      push: block-comment
+    - match: '^\s*#\s*(?:include|define|undef|if|ifdef|ifndef|else|elif|endif|pragma|error|warning|line)\b.*$'
+      scope: meta.preprocessor.asm
+    - match: '^\s*#.*$'
+      scope: comment.line.number-sign.asm
+    - match: '#(?=\s|$).*$'
+      scope: comment.line.number-sign.asm
+    - match: '//.*$'
+      scope: comment.line.double-slash.asm
+    - match: ';.*$'
+      scope: comment.line.semicolon.asm
+    - match: '@(?:function|object|progbits|nobits|notype|note|PLT|plt|GOT|got|GOTPCREL|GOTOFF|GOTTPOFF|TPOFF|NTPOFF|TLSGD|TLSLD|DTPOFF|PAGE|PAGEOFF|GOTPAGE|GOTPAGEOFF)\b'
+      scope: storage.modifier.asm
+    - match: '(?<![\w])@.*$'
+      scope: comment.line.at.asm
+    - match: '^\s*((?:[A-Za-z_.$?][\w.$@?]*)|[0-9]+)(:)'
+      captures:
+        1: entity.name.function.label.asm
+        2: punctuation.separator.label.asm
+    - include: strings
+    - match: '(?<![\w.$])((?:\.(?:globl|global|extern|weak|hidden|protected|internal|local|comm|lcomm|type|size|thumb_func|func))|(?i:global|extern|common))\s+([A-Za-z_.$][\w.$]*)'
+      captures:
+        1: keyword.other.directive.asm
+        2: entity.name.function.label.asm
+    - match: '(?<![\w.$])(\.(?:equ|set|equiv|eqv|macro|req|unreq))\s+([A-Za-z_.$][\w.$]*)'
+      captures:
+        1: keyword.other.directive.asm
+        2: entity.name.function.asm
+    - match: '(?<![\w.$])((?i:%macro|%define|%xdefine|%assign|%idefine))\s+([A-Za-z_.$][\w.$]*)'
+      captures:
+        1: meta.preprocessor.asm
+        2: entity.name.function.asm
+    - match: '(?<![\w.$])(?i:%(?:include|macro|endmacro|define|xdefine|idefine|undef|assign|if|ifn|ifdef|ifndef|ifidn|ifidni|ifnum|ifstr|ifctx|elif|elifdef|elifndef|else|endif|rep|endrep|exitrep|push|pop|repl|rotate|strlen|substr|line|error|warning|fatal|pragma|clear|include|depend|pathsearch|unmacro|imacro|rmacro|local|arg|stacksize|comment|endcomment))\b'
+      scope: meta.preprocessor.asm
+    - match: '%%[A-Za-z_.$?][\w.$?]*|%-?[0-9]+|%[+?!]?\{[^}]*\}'
+      scope: variable.parameter.asm
+    - match: '\\\d+'
+      scope: variable.parameter.asm
+    - match: '(?<![\w.$])\.L[\w.$]*'
+      scope: entity.name.function.label.asm
+    - match: '\b[0-9]+[bf]\b'
+      scope: entity.name.function.label.asm
+    - match: '(?<![\w.$])(?i:b\.(?:eq|ne|cs|cc|hs|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al|nv))(?![\w.$:])'
+      scope: keyword.control.asm
+    - match: '(?<![\w.$])\.(?:text|data|bss|rodata|section|globl|global|extern|weak|hidden|protected|internal|local|comm|lcomm|type|size|file|ident|align|balign|p2align|org|skip|space|zero|fill|byte|short|word|hword|half|long|int|quad|octa|dword|float|single|double|ascii|asciz|string|string8|string16|equ|set|equiv|macro|endm|exitm|rept|endr|irp|irpc|if|ifdef|ifndef|ifc|ifnc|else|elseif|endif|include|incbin|code16|code32|code64|intel_syntax|att_syntax|syntax|arch|cpu|fpu|thumb|arm|thumb_func|cfi_\w+|loc|uleb128|sleb128|set|weakref|pushsection|popsection|previous|subsection|ltorg|pool|req|unreq|func|endfunc|global|attribute|eabi_attribute|option|insn|tls\w*)\b'
+      scope: keyword.other.directive.asm
+    - match: '^\s*\.[A-Za-z_]\w*'
+      scope: keyword.other.directive.asm
+    - match: '(?<![\w.$])\.[A-Za-z_]\w*'
+      scope: entity.name.function.label.asm
+    - match: '(?<![\w.$%])(?i:section|segment|bits|org|default|align|alignb|db|dw|dd|dq|dt|do|dy|dz|resb|resw|resd|resq|rest|reso|resy|resz|equ|times|incbin|struc|endstruc|istruc|iend|at|absolute|use16|use32|use64|cpu|static|ends|endp|assume|proc|end|public|extrn|segment|group|label|struct|union|record|macro|endm|ifdef|include|includelib|model|stack|code|data|db|dup|equ|textequ|org|echo)(?![\w.$:])'
+      scope: keyword.other.directive.asm
+    - match: '(?<![\w.$])(?i:byte|word|dword|qword|tword|oword|yword|zword|xmmword|ymmword|zmmword|fword|tbyte|sbyte|sword|sdword|sqword|real4|real8|real10|short|near|far|offset|rel|abs|seg|flat|nosplit|strict|bnd)(?![\w.$])'
+      scope: storage.type.asm
+    - match: '(?<![\w.$])(?i:ptr)(?![\w.$])'
+      scope: storage.modifier.asm
+    - match: '(?<![\w.$%@#,\[+*\-])(?<!,\s)(?i:bl|bx)(?![\w.$:])(?!\s*,)'
+      scope: keyword.control.asm
+    - match: '(?<=\d)\.[0-9]*[bhsdqBHSDQ](?![\w.])'
+      scope: storage.modifier.asm
+    - match: '%(?:[re]?(?:ax|bx|cx|dx|si|di|bp|sp|ip)|[a-d][lh]|[sd]il|[sb]pl|r(?:[89]|1[0-5])[dwb]?|[c-gs]s|[xyz]mm(?:[0-9]|[12][0-9]|3[01])|mm[0-7]|st(?:\([0-7]\))?|k[0-7]|[cd]r[0-9]+|[re]?flags)(?![\w])'
+      scope: variable.language.register.asm
+    - match: '(?<![\w.$%])(?i:[re]?(?:ax|bx|cx|dx|si|di|bp|sp|ip)|[a-d][lh]|[sd]il|[sb]pl|r(?:[89]|1[0-5])[dwb]?|[c-gs]s|[xyz]mm(?:[0-9]|[12][0-9]|3[01])|mm[0-7]|st[0-7]|st\([0-7]\)|k[0-7]|[cd]r[0-9]+|[re]?flags|[xw](?:[0-9]|[12][0-9]|30)|wzr|xzr|wsp|lr|pc|fp|sl|[bhsdq](?:[0-9]|[12][0-9]|3[01])|[vz](?:[0-9]|[12][0-9]|3[01])|r(?:[0-9]|1[0-5])|cpsr|apsr|spsr|zero|ra|gp|tp|t[0-6]|s(?:[0-9]|1[01])|a[0-7]|f(?:[0-9]|[12][0-9]|3[01])|ft(?:[0-9]|1[01])|fs(?:[0-9]|1[01])|fa[0-7])(?![\w$:])'
+      scope: variable.language.register.asm
+    - match: '\$-?0[xX][0-9A-Fa-f]+'
+      scope: constant.numeric.hex.asm
+    - match: '\$-?[0-9]+(?![\w.])'
+      scope: constant.numeric.integer.asm
+    - match: '\$[0-9A-Fa-f]+(?![\w.])'
+      scope: constant.numeric.hex.asm
+    - match: '\$[A-Za-z_.][\w.$]*'
+      scope: constant.other.asm
+    - match: '\$\$?(?![\w.])'
+      scope: constant.language.asm
+    - match: '#-?(?:0[xX][0-9A-Fa-f]+|0[bB][01]+|[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)'
+      scope: constant.numeric.immediate.asm
+    - match: ':[a-z][a-z0-9_]*:(?=[A-Za-z_.])'
+      scope: storage.modifier.asm
+    - include: numbers
+    - include: flow
+    - include: mnemonics
+    - match: '[\[\](){},:+*/\-!=<>|&^~]'
+      scope: punctuation.asm
+
+  block-comment:
+    - meta_scope: comment.block.asm
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.asm
+      pop: true
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.asm
+      push: dq-string
+    - match: "'(?:\\\\.|[^'\\\\])+'"
+      scope: string.quoted.single.asm
+    - match: '`'
+      scope: punctuation.definition.string.begin.asm
+      push: bt-string
+
+  dq-string:
+    - meta_scope: string.quoted.double.asm
+    - match: '\\(?:[abefnrtv\\''"0]|x[0-9A-Fa-f]{1,2}|[0-7]{1,3})'
+      scope: constant.character.escape.asm
+    - match: '\\.'
+      scope: constant.character.escape.asm
+    - match: '"'
+      scope: punctuation.definition.string.end.asm
+      pop: true
+    - match: '$'
+      pop: true
+
+  bt-string:
+    - meta_scope: string.quoted.other.asm
+    - match: '\\.'
+      scope: constant.character.escape.asm
+    - match: '`'
+      scope: punctuation.definition.string.end.asm
+      pop: true
+    - match: '$'
+      pop: true
+
+  numbers:
+    - match: '(?<![\w.$])-?0[xX][0-9A-Fa-f_]+(?![\w])'
+      scope: constant.numeric.hex.asm
+    - match: '(?<![\w.$])0[bB][01_]+(?![\w])'
+      scope: constant.numeric.binary.asm
+    - match: '(?<![\w.$])[0-9][0-9A-Fa-f_]*[hH](?![\w])'
+      scope: constant.numeric.hex.asm
+    - match: '(?<![\w.$])[01]{2,}[bByY](?![\w])'
+      scope: constant.numeric.binary.asm
+    - match: '(?<![\w.$])[0-7]+[oOqQ](?![\w])'
+      scope: constant.numeric.octal.asm
+    - match: '(?<![\w.$])[0-9][0-9_]*\.[0-9_]*(?:[eE][-+]?[0-9]+)?(?![\w.])'
+      scope: constant.numeric.float.asm
+    - match: '(?<![\w.$])[0-9][0-9_]*(?:[eE][-+]?[0-9]+)?(?![\w.])'
+      scope: constant.numeric.integer.asm
+
+  flow:
+    - match: '(?:^|(?<=:))\s*(?:(?i:lock|rep|repe|repne|repz|repnz|notrack|bnd|data16)\s+)?((?i:(?:call|ret|jmp|iret|lret|lcall|ljmp|retn|retf|iretd|iretq|sysret|sysenter|sysexit|syscall)[bwlq]?|j(?:a|ae|b|be|c|e|g|ge|l|le|na|nae|nb|nbe|nc|ne|ng|nge|nl|nle|no|np|ns|nz|o|p|pe|po|s|z|cxz|ecxz|rcxz)|loop(?:e|ne|z|nz)?|int|int3|into|hlt|ud2|ud1|jr|jal|jalr|j|b|bl|blr|br|bx|blx|bxj|bxl|cbz|cbnz|tbz|tbnz|ret[a-z]{0,2}|b(?:eq|ne|cs|cc|hs|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al)l?|beqz|bnez|bltz|bgez|blez|bgtz|bltu|bgeu|bgtu|bleu|tail|mret|sret|eret|ecall|ebreak|svc|hvc|smc|brk|wfi|wfe|sev|udf|bkpt|swi|dret|uret|wfi))(?![\w.$:])'
+      captures:
+        1: keyword.control.asm
+
+  mnemonics:
+    - match: '(?:^|(?<=:))\s*(?:(?i:lock|rep|repe|repne|repz|repnz|notrack|bnd|data16)\s+)?((?i:(?:mov|add|sub|and|or|xor|cmp|test|lea|push|pop|inc|dec|neg|not|mul|imul|div|idiv|shl|shr|sal|sar|rol|ror|rcl|rcr|adc|sbb|xchg|cmpxchg|xadd|bt|bts|btr|btc|shld|shrd|nop|cmps|movs|stos|lods|scas|ins|outs|in|out|clc|stc|cmc|cld|std|cli|sti|leave|enter|pushf|popf|bswap|bsf|bsr|lzcnt|tzcnt|popcnt|andn|bextr|blsi|blsr|blsmsk|bzhi|pdep|pext|mulx|rorx|sarx|shlx|shrx|adcx|adox|crc32|xlat|lahf|sahf|cwd|cdq|cqo|cbw|cwde|cdqe|movabs|movzb|movzw|movsb|movsw|movsl|movzx|movsx|movsxd|movbe|lgdt|lidt|sgdt|sidt|ltr|str|lldt|sldt|invlpg|wbinvd|invd|rdmsr|wrmsr|rdtsc|rdtscp|rdpmc|cpuid|xgetbv|xsetbv|xsave|xrstor|xsavec|fxsave|fxrstor|rdrand|rdseed|rdfsbase|rdgsbase|wrfsbase|wrgsbase|swapgs|verr|verw|lar|lsl|arpl|bound|aaa|aas|aam|aad|daa|das|pusha|popa|pushad|popad|pusha|xend|xbegin|xabort|xtest|endbr64|endbr32|clflush|clflushopt|clwb|monitor|mwait|pause|lock|rep|repe|repne|repz|repnz|data16|rex|vzeroupper|vzeroall|emms|femms|ud0|prefetch[a-z0-9]*|[ls]fence|mfence)[bwlq]?|cmov[a-z]{1,3}[bwlq]?|set(?:a|ae|b|be|c|e|g|ge|l|le|na|nae|nb|nbe|nc|ne|ng|nge|nl|nle|no|np|ns|nz|o|p|pe|po|s|z)|f(?:ld[a-z0-9]*|st[a-z0-9]*|ild|ist[a-z]*|add[a-z]*|sub[a-z]*|mul[a-z]*|div[a-z]*|xch|u?comi?p*|chs|abs|sqrt|sin|cos|tan|atan|ptan|patan|rndint|scale|prem1?|yl2x|yl2xp1|f2xm1|inc[a-z]*|dec[a-z]*|ree|nop|wait|n?init|n?clex|n?s[a-z]*|ldcw|ldenv|rstor|xtract|cmov[a-z]*|ucom[a-z]*|com[a-z]*|trap)|v?(?:add|sub|mul|div|sqrt|min|max|and|andn|or|xor|mova|movu|movh|movl|rcp|rsqrt|cmp|ucomi|comi|round|unpckl|unpckh|shuf|blend|hadd|hsub|dp|insert|extract|broadcast|permil|perm2|perm|gather|scatter|fmadd|fmsub|fnmadd|fnmsub|fmaddsub|fmsubadd)(?:ss|sd|ps|pd|[0-9]{3}[sp][sd]|f128|i128)|v?mov(?:d|q|dqa|dqu|ntdq|ntdqa|nti|ntps|ntpd|mskps|mskpd|s[sd]|lhps|hlps|ddup|shdup|sldup|[sz]x[a-z]*)?|v?cvtt?[a-z0-9]+2[a-z0-9]+|v?p(?:add|sub|mul|and|andn|or|xor|cmpeq|cmpgt|cmpestr|cmpistr|shuf|unpck|ack|abs|avg|ext|ins|max|min|movmsk|movzx|movsx|sad|sign|sll|srl|sra|test|align|alignr|blend|broadcast|erm|hadd|hsub|maddubs|madd|mulh|mull|mulhu|msk|ermq|erm2|bcast|ternlog|opcnt|lzcnt|conflict)[a-z0-9]*|v(?:zeroupper|zeroall|test[a-z]*|ptest|bro[a-z]*|align[a-z]*|compress[a-z]*|expand[a-z]*|gather[a-z]*|fixup[a-z]*|getexp[a-z]*|getmant[a-z]*|range[a-z]*|reduce[a-z]*|scalef[a-z]*)|k(?:mov|and|andn|or|xor|xnor|not|shift[lr]|test|add|unpck|ortest)[bwdq]|(?:ldr|str|ldur|stur|ldp|stp|ldnp|stnp|ldrs|ldar|stlr|ldxr|stxr|ldaxr|stlxr|ldxp|stxp|ldaxp|stlxp|ldadd|ldclr|ldeor|ldset|swp|cas|casp|prfm|ldtr|sttr|ldrex|strex|ldrexb|strexb|ldrexh|strexh|ldm|stm|ldmia|ldmib|ldmda|ldmdb|stmia|stmib|stmda|stmdb|ldmfd|stmfd|ldrd|strd|pld|pli)[a-z]{0,3}|(?:movz|movk|movn|movi|mvni|mvn|movt|movw|adr|adrp|adds|subs|adcs|sbcs|sbc|rsb|rsc|rsbs|mla|mls|madd|msub|smull|umull|smlal|umlal|smulh|umulh|smaddl|umaddl|smsubl|umsubl|mneg|sdiv|udiv|ands|orr|orn|eor|eon|bic|bics|lsl|lsr|asr|ror|rrx|ubfx|sbfx|ubfiz|sbfiz|bfi|bfxil|bfc|bfm|ubfm|sbfm|extr|cmn|tst|teq|csel|csinc|csinv|csneg|cset|csetm|cinc|cinv|cneg|ccmp|ccmn|clz|cls|rbit|rev|rev16|rev32|rev64|sxtb|sxth|sxtw|uxtb|uxth|uxtw|sxtab|uxtab|mrs|msr|dmb|dsb|isb|dc|ic|tlbi|at|nop|yield|hint|bti|paciasp|autiasp|pacibsp|autibsp|xpaclri|sxt[a-z]*|uxt[a-z]*|qadd|qsub|ssat|usat|pkhbt|sel|cps[a-z]*|setend|vmov|vadd|vsub|vmul|vdiv|vldr|vstr|vldm|vstm|vpush|vpop|vcmp|vcvt|vmla|vmls|vneg|vabs|vsqrt|vmrs|vmsr)[a-z]{0,2}|(?:fmov|fadd|fsub|fmul|fdiv|fsqrt|fcmp|fcmpe|fccmp|fcsel|fcvt[a-z]*|scvtf|ucvtf|fmadd|fmsub|fnmadd|fnmsub|fabs|fneg|fmax|fmin|fmaxnm|fminnm|frint[a-z]*|frecpe|frsqrte|fmla|fmls|fmulx|fabd|facge|facgt|fcm[a-z]*|faddp|fmaxp|fminp|fmaxv|fminv|faddv)|(?:ld|st)[1-4]r?|(?:addv|addp|addhn|subhn|cmeq|cmge|cmgt|cmhi|cmhs|cmle|cmlt|cmtst|dup|ins|umov|smov|ext|zip1|zip2|uzp1|uzp2|trn1|trn2|tbl|tbx|bsl|bit|bif|cnt|not|shl|sshr|ushr|ssra|usra|sli|sri|shrn|xtn|uxtl|sxtl|uaddl|saddl|usubl|ssubl|umlal|smlal|sqadd|uqadd|sqsub|uqsub|abs|neg|sabd|uabd|saba|uaba|smax|umax|smin|umin|rev[0-9]+|pmull|aese|aesd|aesmc|aesimc|sha1[a-z0-9]*|sha256[a-z0-9]*|crc32[a-z]*|ptrue|pfalse|whilelo|whilelt|index|cntb|cnth|cntw|cntd|incb|inch|incw|incd|decb|dech|decw|decd|zip|uzp|trn|cmpeq|cmpne|cmplt|cmple|cmpgt|cmpge|cmphi|cmphs|cmplo|cmpls|sel|splice|compact|lasta|lastb|clasta|clastb|revb|revh|revw|rdvl|addvl|addpl|sdot|udot|smmla|ummla|bfmmla|bfdot|bfcvt|mla|mls|mul|sub|add|and|orr|eor|bic|orn|lsl|lsr|asr)(?=\s)|li|la|lui|auipc|addi|addiw|slti|sltiu|xori|ori|andi|slli|srli|srai|slliw|srliw|sraiw|sll|slt|sltu|srl|sra|addw|subw|sllw|srlw|sraw|mv|neg|negw|seqz|snez|sltz|sgtz|sext\.[bhw]|zext\.[bhw]|lb|lh|lw|ld|lbu|lhu|lwu|sb|sh|sw|sd|fence(?:\.i|\.tso)?|csr[rwsc][ic]?|csr[rwsc]{1,2}i?|mulh|mulhu|mulhsu|mulw|divw|divuw|remw|remuw|divu|rem|remu|f[ls][wdhq]|(?:lr|sc|amo[a-z]+)\.[wd](?:\.[a-z]+)*|(?:fadd|fsub|fmul|fdiv|fsqrt|fmv|fcvt|feq|flt|fle|fmadd|fmsub|fnmadd|fnmsub|fmin|fmax|fsgnj|fsgnjn|fsgnjx|fclass)\.[a-z.]+|c\.[a-z]+|sfence\.vma|v(?:set[a-z]*|l[a-z0-9]*|s[a-z0-9]*)\.?[a-z0-9.]*))(?![\w.$:])'
+      captures:
+        1: support.function.mnemonic.asm

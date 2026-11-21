@@ -7,6 +7,7 @@ pub const definition = @import("definition.zig");
 pub const engine = @import("engine.zig");
 pub const theme = @import("theme.zig");
 pub const session = @import("session.zig");
+pub const builtin = @import("builtin.zig");
 
 test {
     _ = yaml;

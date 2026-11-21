@@ -1,0 +1,152 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Markdown
+scope: text.html.markdown
+file_extensions: [md, markdown, mkd, mkdn, mdown, mdwn, mdx]
+contexts:
+  main:
+    - include: fences
+    - match: '^[ \t]*<!--'
+      scope: punctuation.definition.comment.begin.html
+      push: html-comment
+    - match: '^ {0,3}#{1,6}(?=[ \t]|$)'
+      scope: punctuation.definition.heading.markdown
+      push: heading
+    - match: '^ {0,3}=+[ \t]*$'
+      scope: entity.name.section.markdown markup.heading.markdown
+    - match: '^ {0,3}(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$'
+      scope: meta.separator.markdown keyword.other.thematic-break.markdown
+    - match: '^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$'
+      scope: meta.table.separator.markdown keyword.other.table-delimiter.markdown
+    - match: '^ {0,3}(?:>[ \t]?)+'
+      scope: keyword.other.blockquote.markdown
+    - match: '^[ \t]*(?:[*+-]|[0-9]{1,9}[.)])(?=[ \t])'
+      scope: keyword.other.list-marker.markdown
+      push: list-item-start
+    - match: '^ {0,3}(\[)([^\]\n]+)(\])(:)[ \t]*(\S+)'
+      captures:
+        1: punctuation.definition.reference.begin.markdown
+        2: entity.name.function.reference.markdown
+        3: punctuation.definition.reference.end.markdown
+        4: punctuation.separator.markdown
+        5: support.constant.link-url.markdown
+    - include: inline
+
+  list-item-start:
+    - match: '[ \t]*(\[)([ xX])(\])(?=[ \t])'
+      captures:
+        1: punctuation.definition.checkbox.begin.markdown
+        2: constant.other.checkbox.markdown
+        3: punctuation.definition.checkbox.end.markdown
+      pop: true
+    - match: '(?=.|$)'
+      pop: true
+
+  heading:
+    - meta_content_scope: markup.heading.markdown entity.name.section.markdown
+    - match: '$'
+      pop: true
+    - match: '[ \t]+#+[ \t]*(?=$)'
+      scope: punctuation.definition.heading.end.markdown
+    - include: inline
+
+  html-comment:
+    - meta_scope: comment.block.html
+    - match: '-->'
+      scope: punctuation.definition.comment.end.html
+      pop: true
+
+  fences:
+    - match: '^[ \t]*(````+)[ \t]*([^\s`]*)[^\n`]*$'
+      captures:
+        1: punctuation.definition.raw.begin.markdown
+        2: constant.other.language-name.markdown
+      push: fence-backtick4
+    - match: '^[ \t]*(```)(?!`)[ \t]*([^\s`]*)[^\n`]*$'
+      captures:
+        1: punctuation.definition.raw.begin.markdown
+        2: constant.other.language-name.markdown
+      push: fence-backtick3
+    - match: '^[ \t]*(~~~~+)[ \t]*([^\s]*).*$'
+      captures:
+        1: punctuation.definition.raw.begin.markdown
+        2: constant.other.language-name.markdown
+      push: fence-tilde4
+    - match: '^[ \t]*(~~~)(?!~)[ \t]*([^\s]*).*$'
+      captures:
+        1: punctuation.definition.raw.begin.markdown
+        2: constant.other.language-name.markdown
+      push: fence-tilde3
+
+  fence-backtick3:
+    - meta_content_scope: markup.raw.block.markdown string.unquoted.code.markdown
+    - match: '^[ \t]*```+[ \t]*$'
+      scope: punctuation.definition.raw.end.markdown
+      pop: true
+
+  fence-backtick4:
+    - meta_content_scope: markup.raw.block.markdown string.unquoted.code.markdown
+    - match: '^[ \t]*````+[ \t]*$'
+      scope: punctuation.definition.raw.end.markdown
+      pop: true
+
+  fence-tilde3:
+    - meta_content_scope: markup.raw.block.markdown string.unquoted.code.markdown
+    - match: '^[ \t]*~~~+[ \t]*$'
+      scope: punctuation.definition.raw.end.markdown
+      pop: true
+
+  fence-tilde4:
+    - meta_content_scope: markup.raw.block.markdown string.unquoted.code.markdown
+    - match: '^[ \t]*~~~~+[ \t]*$'
+      scope: punctuation.definition.raw.end.markdown
+      pop: true
+
+  inline:
+    - match: '\\[\\`*_{}\[\]()#+\-.!<>|~"]'
+      scope: constant.character.escape.markdown
+    - match: '(?<!`)``(?!`)[^\n]+?(?<!`)``(?!`)'
+      scope: markup.raw.inline.markdown string.other.inline-code.markdown
+    - match: '(?<!`)`(?!`)[^`\n]+`(?!`)'
+      scope: markup.raw.inline.markdown string.other.inline-code.markdown
+    - match: '(!?)(\[)((?:[^\]\\\n]|\\.)*)(\])(\()([^)\s]*)(?:[ \t]+"[^"\n]*")?(\))'
+      captures:
+        1: punctuation.definition.image.markdown
+        2: punctuation.definition.link.begin.markdown
+        3: entity.name.function.link.markdown
+        4: punctuation.definition.link.end.markdown
+        5: punctuation.definition.metadata.begin.markdown
+        6: support.constant.link-url.markdown
+        7: punctuation.definition.metadata.end.markdown
+    - match: '(!?)(\[)((?:[^\]\\\n]|\\.)*)(\])(\[)([^\]\n]*)(\])'
+      captures:
+        1: punctuation.definition.image.markdown
+        2: punctuation.definition.link.begin.markdown
+        3: entity.name.function.link.markdown
+        4: punctuation.definition.link.end.markdown
+        5: punctuation.definition.reference.begin.markdown
+        6: support.constant.link-ref.markdown
+        7: punctuation.definition.reference.end.markdown
+    - match: '<(?:https?|ftp|mailto):[^>\s]+>'
+      scope: markup.underline.link.markdown support.constant.link-url.markdown
+    - match: '<!--.*?-->'
+      scope: comment.block.html
+    - match: '</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>\n]*)?/?>'
+      scope: meta.tag.inline.html entity.name.tag.html
+    - match: '(?<![\w*\\])\*\*(?=[^\s*])[^\n]*?(?<=[^\s\\])\*\*(?![\w*])'
+      scope: markup.bold.markdown storage.modifier.bold.markdown
+    - match: '(?<![\w\\])__(?=[^\s_])[^\n]*?(?<=[^\s\\])__(?!\w)'
+      scope: markup.bold.markdown storage.modifier.bold.markdown
+    - match: '(?<![\w*\\])\*(?=[^\s*])[^*\n]*?(?<=[^\s\\*])\*(?![\w*])'
+      scope: markup.italic.markdown variable.parameter.italic.markdown
+    - match: '(?<![\w\\])_(?=[^\s_])[^_\n]*?(?<=[^\s\\_])_(?![\w_])'
+      scope: markup.italic.markdown variable.parameter.italic.markdown
+    - match: '~~(?=\S)[^\n]*?(?<=\S)~~'
+      scope: markup.strikethrough.markdown comment.other.strikethrough.markdown
+    - match: 'https?://[^\s<>)\]]+'
+      scope: markup.underline.link.markdown support.constant.link-url.markdown
+    - match: '^[ \t]*\|'
+      scope: punctuation.separator.table.markdown
+    - match: '\|'
+      scope: punctuation.separator.table.markdown

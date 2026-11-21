@@ -1,0 +1,206 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: PowerShell
+scope: source.powershell
+file_extensions: [ps1, psm1, psd1, ps1xml, pssc, psrc, cdxml]
+first_line_match: '^#!.*\bpwsh\b'
+contexts:
+  main:
+    - include: code
+
+  code:
+    - match: '<#'
+      scope: punctuation.definition.comment.begin.powershell
+      push: block-comment
+    - match: '#.*$'
+      scope: comment.line.number-sign.powershell
+    - include: here-strings
+    - include: strings
+    - include: escapes
+    - include: definitions
+    - include: attributes
+    - include: type-literals
+    - include: variables
+    - include: operators
+    - include: parameters
+    - include: keywords
+    - include: numbers
+    - include: cmdlets
+    - include: punctuation
+
+  block-comment:
+    - meta_scope: comment.block.powershell
+    - match: '#>'
+      scope: punctuation.definition.comment.end.powershell
+      pop: true
+    - match: '^\s*\.(?:SYNOPSIS|DESCRIPTION|PARAMETER|EXAMPLE|INPUTS|OUTPUTS|NOTES|LINK|COMPONENT|ROLE|FUNCTIONALITY|FORWARDHELPTARGETNAME|FORWARDHELPCATEGORY|REMOTEHELPRUNSPACE|EXTERNALHELP)\b'
+      scope: keyword.other.documentation.powershell
+
+  # ---- strings ----
+  here-strings:
+    - match: '@"\s*$'
+      scope: punctuation.definition.string.begin.powershell
+      push: here-dq
+    - match: "@'\\s*$"
+      scope: punctuation.definition.string.begin.powershell
+      push: here-sq
+
+  here-dq:
+    - meta_scope: string.quoted.double.heredoc.powershell
+    - match: '^"@'
+      scope: punctuation.definition.string.end.powershell
+      pop: true
+    - include: dq-content
+
+  here-sq:
+    - meta_scope: string.quoted.single.heredoc.powershell
+    - match: "^'@"
+      scope: punctuation.definition.string.end.powershell
+      pop: true
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.powershell
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.powershell
+      push: sq-string
+
+  dq-string:
+    - meta_scope: string.quoted.double.powershell
+    - match: '"(?!")'
+      scope: punctuation.definition.string.end.powershell
+      pop: true
+    - include: dq-content
+
+  dq-content:
+    - match: '""|`.'
+      scope: constant.character.escape.powershell
+    - match: '\$\('
+      scope: punctuation.section.interpolation.begin.powershell
+      push: subexpr
+    - match: '\$\{[^}]*\}'
+      scope: support.constant.variable.powershell
+    - match: '\$(?:env|global|script|local|private|using|variable):[A-Za-z_][A-Za-z0-9_]*'
+      scope: support.constant.variable.powershell
+    - match: '\$(?:[A-Za-z_][A-Za-z0-9_]*|[?^$_])'
+      scope: support.constant.variable.powershell
+
+  subexpr:
+    - meta_scope: meta.interpolation.powershell
+    - match: '\)'
+      scope: punctuation.section.interpolation.end.powershell
+      pop: true
+    - match: '\('
+      push: subexpr-nested
+    - include: code
+
+  subexpr-nested:
+    - match: '\)'
+      pop: true
+    - match: '\('
+      push: subexpr-nested
+    - include: code
+
+  sq-string:
+    - meta_scope: string.quoted.single.powershell
+    - match: "''"
+      scope: constant.character.escape.powershell
+    - match: "'"
+      scope: punctuation.definition.string.end.powershell
+      pop: true
+
+  escapes:
+    - match: '`.'
+      scope: constant.character.escape.powershell
+
+  # ---- definitions, attributes, types ----
+  definitions:
+    - match: '(?i)(?<![\w$.-])(function|filter|workflow|configuration)\s+((?:[A-Za-z_]+:)?[A-Za-z_][A-Za-z0-9_.-]*)'
+      captures:
+        1: keyword.control.powershell
+        2: entity.name.function.powershell
+    - match: '(?i)(?<![\w$.-])(class|enum|interface)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*(:)\s*([A-Za-z_][A-Za-z0-9_.]*))?'
+      captures:
+        1: storage.type.class.powershell
+        2: entity.name.class.powershell
+        3: keyword.operator.powershell
+        4: entity.other.inherited-class.powershell
+
+  attributes:
+    - match: '\[[A-Za-z_][A-Za-z0-9_.]*(?=\()'
+      scope: meta.annotation.powershell
+
+  type-literals:
+    - match: '\[[A-Za-z_][A-Za-z0-9_.]*(?:\[[A-Za-z0-9_.,\s]*\])*(?:\[,*\])*\]'
+      scope: support.type.powershell
+
+  # ---- variables ----
+  variables:
+    - match: '(?i)\$(?:true|false)\b'
+      scope: constant.language.boolean.powershell
+    - match: '(?i)\$null\b'
+      scope: constant.language.null.powershell
+    - match: '(?i)\$(?:_|args|input|this|matches|error|foreach|switch|PSItem|PS[A-Za-z]+|Host|HOME|PID|PWD|LASTEXITCODE|StackTrace|MyInvocation|ExecutionContext|ErrorActionPreference|ProgressPreference|VerbosePreference|WarningPreference|DebugPreference|OFS|Profile)(?![A-Za-z0-9_:])'
+      scope: variable.language.powershell
+    - match: '\$\?'
+      scope: variable.language.powershell
+    - match: '\$\{[^}]*\}'
+      scope: support.constant.variable.powershell
+    - match: '(?i)[$@](?:env|global|script|local|private|using|variable|function|alias|env):[A-Za-z_][A-Za-z0-9_]*'
+      scope: support.constant.variable.powershell
+    - match: '(?i)[$@](?:env|global|script|local|private|using):\{[^}]*\}'
+      scope: support.constant.variable.powershell
+    - match: '[$@][A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)?'
+      scope: support.constant.variable.powershell
+    - match: '\$[$^]'
+      scope: variable.language.powershell
+
+  # ---- operators ----
+  operators:
+    - match: '(?i)(?<![\w$.-])-(?:i|c)?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split)(?![\w-])'
+      scope: keyword.operator.word.powershell
+    - match: '(?i)(?<![\w$.-])-(?:is|isnot|as|and|or|xor|not|band|bor|bxor|bnot|shl|shr|join|f)(?![\w-])'
+      scope: keyword.operator.word.powershell
+    - match: '\d*>>?(?:&\d)?|<(?!#)|\|\|?|&&|&(?![&])|\+\+|--|\.\.|::|[-+*/%]?=|!|\+|\*|/|%'
+      scope: keyword.operator.powershell
+    - match: '\$\(|@\(|@\{|[({\[]'
+      scope: punctuation.section.group.begin.powershell
+    - match: '[)}\]]'
+      scope: punctuation.section.group.end.powershell
+
+  parameters:
+    - match: '(?<![\w$.)\]-])-{1,2}[A-Za-z_][A-Za-z0-9_]*:?'
+      scope: variable.parameter.powershell
+
+  keywords:
+    - match: '(?i)(?<![\w$.:-])(?:begin|process|end|dynamicparam|clean)(?=\s*\{)'
+      scope: keyword.control.powershell
+    - match: '(?i)(?<![\w$.:-])(?:if|elseif|else|switch|foreach|for|while|do|until|break|continue|return|throw|trap|try|catch|finally|exit|param|using|data|parallel|sequence|inlinescript|hidden|static|namespace|module|from|var|in)(?![\w-])'
+      scope: keyword.control.powershell
+
+  numbers:
+    - match: '(?i)(?<![\w$.-])0x[0-9a-f_]+(?:ul|u|l|kb|mb|gb|tb|pb)?\b'
+      scope: constant.numeric.hex.powershell
+    - match: '(?i)(?<![\w$-])(?:[0-9]+\.[0-9]+|[0-9]+)(?:e[-+]?[0-9]+)?(?:ul|u|l|d|n|kb|mb|gb|tb|pb)?(?!\w)'
+      scope: constant.numeric.decimal.powershell
+
+  # ---- command names ----
+  cmdlets:
+    - match: '(?i)(?<![\w$.-])(?:Add|Clear|Close|Compare|Compress|Convert|ConvertFrom|ConvertTo|Copy|Debug|Disable|Enable|Enter|Exit|Expand|Export|Find|Format|Get|Group|Import|Invoke|Join|Limit|Measure|Move|New|Out|Pop|Push|Read|Register|Remove|Rename|Reset|Resolve|Restart|Resume|Select|Send|Set|Show|Sort|Split|Start|Stop|Suspend|Test|Trace|Unblock|Undo|Unregister|Update|Use|Wait|Watch|Write|Where|ForEach|Tee)-[A-Za-z][A-Za-z0-9_]*'
+      scope: support.function.cmdlet.powershell
+    - match: '(?i)(?<![\w$.-])[A-Z][A-Za-z]+-[A-Z][A-Za-z0-9]+(?![\w-])'
+      scope: support.function.powershell
+    - match: '(?<=\.)[A-Za-z_][A-Za-z0-9_]*(?=\()'
+      scope: support.function.method.powershell
+    - match: '(?<=::)[A-Za-z_][A-Za-z0-9_]*'
+      scope: support.function.method.powershell
+    - match: '(?i)(?<![\w$.-])(?:echo|ls|dir|cd|cat|cp|mv|rm|pwd|ps|kill|sleep|sort|select|where|foreach|group|measure|tee|gci|gc|gm|iex|iwr|irm|sls|ft|fl|fw|ogv|saps|sc|ac)(?![\w.-])(?=\s+[-$"''.\\/A-Za-z]|\s*$|\s*\|)'
+      scope: support.function.alias.powershell
+
+  punctuation:
+    - match: '[;,]'
+      scope: punctuation.separator.powershell
+    - match: '\.(?=[A-Za-z_])'
+      scope: punctuation.accessor.powershell

@@ -1,0 +1,36 @@
+Usage: less [OPTION]... [FILE]...
+Page FILE(s), or standard input, on the terminal. The input is shown as it
+arrives, so a pipe can be scrolled while it is still being written. When
+standard output is not a terminal, less copies its input like cat.
+
+  -F, --quit-if-one-screen    quit at once if the text fits on one screen
+  -R, --RAW-CONTROL-CHARS     show colour escape sequences as colours (-r: same)
+  -S, --chop-long-lines       cut long lines at the screen edge instead of
+                              wrapping them
+  -N, --LINE-NUMBERS          number the lines
+  -i, --ignore-case           ignore case in searches unless the pattern has
+                              capital letters
+  -I, --IGNORE-CASE           ignore case in searches always
+  -X -e -E -q -Q -s -c -d -m -M -w -L -K -n
+                              accepted for compatibility, no effect
+      --help                  display this help and exit
+      --version               output version information and exit
+
+Keys:
+  space, f, ^F, PgDn          forward one screen
+  b, ^B, PgUp                 backward one screen
+  d, ^D / u, ^U               forward / backward half a screen
+  j, e, ^N, Enter, Down       forward one row
+  k, y, ^P, Up                backward one row
+  g, <, Home                  top
+  G, >, End                   bottom
+  /PATTERN, ?PATTERN          search forward / backward (plain text)
+  n, N                        repeat the search in the same / other direction
+  F                           follow: keep reading and show new data until a key
+  =                           show the position
+  r, R, ^L                    redraw
+  h                           one-line help
+  q, Q, ^C                    quit
+
+Not implemented: several files as separate buffers (they are shown one after
+the other), regular-expression search, marks, the LESS variable, editing.

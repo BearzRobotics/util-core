@@ -4,7 +4,9 @@
 
 A new command, a bat-faithful `cat` view, and a Windows console fix.
 
-**New command: `time`** (104 commands)
+**New commands: `time` and `less`** (105 commands)
+
+**`time`**
 - GNU time 1.9 behaviour: `-f/--format` with every format letter and the `TIME` variable, `-p`,
   `-v`, `-o`, `-a`, `-q`, the "Command exited with non-zero status" and "Command terminated by
   signal" lines, exit status 126/127/128+N; differential suite `test/test_time.sh` against
@@ -16,7 +18,17 @@ A new command, a bat-faithful `cat` view, and a Windows console fix.
   `--parameter-list/--parameter-scan`, `--input`, `--bench-output`, `--env`, `--metrics`,
   `--export-json` and `--export-csv`. Library module `util_core.time`.
 
+**New command: `less`**
+- A streaming pager with the usual keys (scroll, search, follow), `-F -R -S -N -i -I`; it shows a pipe
+  while it is still being written. Built in so paging works on Windows without a separate download.
+  Library module `util_core.pager`; shared terminal layer `sys.Tty`.
+
 **`cat`**
+- Syntax highlighting out of the box: about 25 built-in grammars of our own (C, C++, Rust, Zig, Go,
+  Java, JavaScript, TypeScript, Python, Ruby, shell, PowerShell, SQL, HTML, CSS, JSON, YAML, TOML,
+  INI, Markdown, diff, Makefile, Odin, Nim, assembly).
+- Paging like bat: a long view goes through `$BAT_PAGER`/`$PAGER` or the built-in pager, which
+  scrolls while `cat` is still writing; `--paging`, `-P`, `--pager`.
 - The terminal view now matches bat 0.26.1's default: no `Size:` line (only `--style=full` adds
   it), and long lines and long file names wrap under a blank line-number column.
 - Windows: the console is switched to ANSI escape processing and UTF-8 output before the view is drawn.

@@ -1,0 +1,196 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Makefile
+scope: source.makefile
+file_extensions: [mk, mak, make, Makefile, makefile, GNUmakefile, BSDmakefile, Makefile.am, Makefile.in, Makefile.inc]
+contexts:
+  main:
+    - match: '^[ \t]*#.*$'
+      scope: comment.line.number-sign.makefile
+    - match: '^(\t)([@+-]*)'
+      captures:
+        2: keyword.operator.recipe-prefix.makefile
+      push: recipe
+    - match: '^[ \t]*(define)[ \t]+([^\s=:#]+)[ \t]*(?:(?:::=|:=|\+=|\?=|=)[ \t]*)?'
+      captures:
+        1: keyword.control.define.makefile
+        2: variable.parameter.makefile
+      push: define-body
+    - match: '^[ \t]*((?:(?:override|export|private|unexport)[ \t]+)*)([A-Za-z0-9_.@%<^+?*|/\-]+|\$[({][^)}\n]*[)}])[ \t]*(::=|:::=|:=|\+=|\?=|!=|=)'
+      captures:
+        1: keyword.control.makefile
+        2: variable.parameter.makefile
+        3: keyword.operator.assignment.makefile
+      push: value-line
+    - match: '^[ \t]*(?:-?include|sinclude|override|export|unexport|private|vpath|undefine)(?=[\s]|$)'
+      scope: keyword.control.import.makefile
+      push: directive-line
+    - match: '^[ \t]*(?:ifeq|ifneq|ifdef|ifndef|else|endif)(?=[\s(]|$)'
+      scope: keyword.control.conditional.makefile
+      push: directive-line
+    - match: '^(\.(?:PHONY|SUFFIXES|DEFAULT|PRECIOUS|INTERMEDIATE|NOTINTERMEDIATE|SECONDARY|SECONDEXPANSION|DELETE_ON_ERROR|IGNORE|LOW_RESOLUTION_TIME|SILENT|EXPORT_ALL_VARIABLES|NOTPARALLEL|ONESHELL|POSIX|WAIT))(?=[ \t]*:)'
+      captures:
+        1: keyword.control.special-target.makefile
+      push: target-list
+    - match: '^(?=(?:[^\s#:=$\\][^#:=$\n]*|\$\([^)\n]*\)|\$\{[^}\n]*\}|\$[^({])+?[ \t]*(?:::|:|&:)(?!=))'
+      push: target-list
+    - include: refs
+
+  # Target names up to the first colon, then the prerequisites.
+  target-list:
+    - include: refs
+    - match: '%'
+      scope: keyword.operator.wildcard.makefile
+    - match: '(?:::|&:|:)'
+      scope: punctuation.separator.rule.makefile
+      set: prereq-line
+    - match: '[^\s:$%#]+'
+      scope: entity.name.function.makefile
+    - match: '$'
+      pop: true
+
+  prereq-line:
+    - match: '(?<!\\)$'
+      pop: true
+    - match: '[ \t]*(;)'
+      captures:
+        1: punctuation.separator.recipe.makefile
+      set: recipe
+    - match: '(?<=\s)#.*$'
+      scope: comment.line.number-sign.makefile
+    - include: refs
+    - match: '\|'
+      scope: keyword.operator.order-only.makefile
+    - match: '%'
+      scope: keyword.operator.wildcard.makefile
+    - match: ':'
+      scope: punctuation.separator.rule.makefile
+
+  value-line:
+    - match: '(?<!\\)$'
+      pop: true
+    - match: '(?<!\\)#.*$'
+      scope: comment.line.number-sign.makefile
+    - include: refs
+
+  directive-line:
+    - match: '(?<!\\)$'
+      pop: true
+    - match: '(?<!\\)#.*$'
+      scope: comment.line.number-sign.makefile
+    - match: '\b(?:ifeq|ifneq|ifdef|ifndef)\b'
+      scope: keyword.control.conditional.makefile
+    - match: '"'
+      scope: punctuation.definition.string.begin.makefile
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.makefile
+      push: sq-string
+    - include: refs
+
+  define-body:
+    - match: '^[ \t]*(endef)\b'
+      captures:
+        1: keyword.control.define.makefile
+      pop: true
+    - include: refs
+
+  recipe:
+    - match: '(?<!\\)$'
+      pop: true
+    - match: '(?<=\s)#.*$'
+      scope: comment.line.number-sign.makefile
+    - match: '"'
+      scope: punctuation.definition.string.begin.makefile
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.makefile
+      push: sq-string
+    - match: '(?<=\s)--?[A-Za-z][\w-]*'
+      scope: variable.parameter.option.makefile
+    - include: refs
+
+  dq-string:
+    - meta_scope: string.quoted.double.makefile
+    - match: '"'
+      scope: punctuation.definition.string.end.makefile
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.makefile
+    - include: refs
+    - match: '(?<!\\)$'
+      pop: true
+
+  sq-string:
+    - meta_scope: string.quoted.single.makefile
+    - match: "'"
+      scope: punctuation.definition.string.end.makefile
+      pop: true
+    - include: refs
+    - match: '(?<!\\)$'
+      pop: true
+
+  refs:
+    - match: '\$\$'
+      scope: constant.character.escape.makefile
+    - match: '(\$[({])([@<^?*+%|][DF]?)([)}])'
+      captures:
+        1: punctuation.definition.variable.makefile
+        2: variable.language.automatic.makefile
+        3: punctuation.definition.variable.makefile
+    - match: '\$[@<^?*+%|]'
+      scope: variable.language.automatic.makefile
+    - match: '(\$[({])([A-Za-z_.][A-Za-z0-9_.\-]*)([)}])'
+      captures:
+        1: punctuation.definition.variable.makefile
+        2: variable.parameter.makefile
+        3: punctuation.definition.variable.makefile
+    - match: '(\$\()(subst|patsubst|strip|findstring|filter-out|filter|sort|word|words|wordlist|firstword|lastword|join|wildcard|dir|notdir|basename|suffix|addsuffix|addprefix|realpath|abspath|if|or|and|foreach|file|call|value|eval|origin|flavor|shell|error|warning|info|let|intcmp)(?=[\s)])'
+      captures:
+        1: punctuation.definition.variable.makefile
+        2: support.function.makefile
+      push: paren-body
+    - match: '(\$\{)(subst|patsubst|strip|findstring|filter-out|filter|sort|word|words|wordlist|firstword|lastword|join|wildcard|dir|notdir|basename|suffix|addsuffix|addprefix|realpath|abspath|if|or|and|foreach|file|call|value|eval|origin|flavor|shell|error|warning|info|let|intcmp)(?=[\s}])'
+      captures:
+        1: punctuation.definition.variable.makefile
+        2: support.function.makefile
+      push: brace-body
+    - match: '(\$\()([A-Za-z_.][A-Za-z0-9_.\-]*)(:)'
+      captures:
+        1: punctuation.definition.variable.makefile
+        2: variable.parameter.makefile
+        3: punctuation.separator.makefile
+      push: paren-body
+    - match: '(\$\{)([A-Za-z_.][A-Za-z0-9_.\-]*)(:)'
+      captures:
+        1: punctuation.definition.variable.makefile
+        2: variable.parameter.makefile
+        3: punctuation.separator.makefile
+      push: brace-body
+    - match: '\$\('
+      scope: punctuation.definition.variable.makefile
+      push: paren-body
+    - match: '\$\{'
+      scope: punctuation.definition.variable.makefile
+      push: brace-body
+    - match: '\$[A-Za-z0-9_]'
+      scope: variable.parameter.makefile
+
+  paren-body:
+    - meta_scope: meta.function-call.makefile
+    - match: '\)'
+      scope: punctuation.definition.variable.makefile
+      pop: true
+    - match: ','
+      scope: punctuation.separator.makefile
+    - include: refs
+
+  brace-body:
+    - meta_scope: meta.function-call.makefile
+    - match: '\}'
+      scope: punctuation.definition.variable.makefile
+      pop: true
+    - match: ','
+      scope: punctuation.separator.makefile
+    - include: refs

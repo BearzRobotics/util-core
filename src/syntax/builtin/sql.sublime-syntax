@@ -1,0 +1,94 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: SQL
+scope: source.sql
+file_extensions:
+  - sql
+  - ddl
+  - dml
+  - psql
+  - pgsql
+  - mysql
+  - sqlite
+  - hql
+first_line_match: '^--\s*(?:MySQL|PostgreSQL|SQLite)\b'
+
+contexts:
+  main:
+    - match: '--.*$'
+      scope: comment.line.double-dash.sql
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.sql
+      push: block-comment
+    - match: "[eE]?'"
+      scope: punctuation.definition.string.begin.sql
+      push: string
+    - match: '\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$'
+      scope: punctuation.definition.string.begin.sql
+      push: dollar-string
+    - match: '"'
+      scope: punctuation.definition.identifier.begin.sql
+      push: quoted-ident
+    - match: '`'
+      scope: punctuation.definition.identifier.begin.sql
+      push: backtick-ident
+    - match: '(?i)\b(?:null|true|false|unknown|current_date|current_time|current_timestamp|localtime|localtimestamp)\b'
+      scope: constant.language.sql
+    - match: '(?i)\b(?:int|integer|bigint|smallint|tinyint|mediumint|serial|bigserial|smallserial|decimal|numeric|real|float|double|precision|money|bit|boolean|bool|char|nchar|varchar|nvarchar|character|varying|text|tinytext|mediumtext|longtext|clob|blob|bytea|binary|varbinary|date|time|timestamp|timestamptz|datetime|interval|year|json|jsonb|xml|uuid|array|enum|inet|cidr|macaddr|geometry|geography|oid|rowid)\b'
+      scope: storage.type.sql
+    - match: '(?i)\b(?:primary|foreign|key|references|unique|check|default|constraint|autoincrement|auto_increment|identity|collate|unsigned|zerofill|temporary|temp|unlogged|engine|charset|comment)\b'
+      scope: storage.modifier.sql
+    - match: '(?i)\b(?:select|from|where|group|order|by|having|limit|offset|fetch|first|next|rows|only|distinct|all|as|on|using|join|inner|left|right|full|outer|cross|natural|lateral|union|intersect|except|minus|insert|into|values|update|set|delete|truncate|merge|returning|with|recursive|window|over|partition|range|unbounded|preceding|following|current|row|case|when|then|else|end|and|or|not|in|is|like|ilike|similar|between|exists|any|some|asc|desc|nulls|escape|glob|regexp|rlike|match|against)\b'
+      scope: keyword.other.dml.sql
+    - match: '(?i)\b(?:create|alter|drop|rename|replace|table|view|materialized|index|database|schema|sequence|trigger|function|procedure|returns|return|language|begin|declare|if|elsif|elseif|loop|while|for|foreach|do|exception|raise|call|execute|prepare|deallocate|cursor|open|close|add|column|modify|change|to|cascade|restrict|no|action|grant|revoke|privileges|role|user|commit|rollback|savepoint|release|transaction|start|work|lock|explain|analyze|vacuum|pragma|use|show|describe|desc|copy|load|attach|detach|reindex|cluster|extension|type|domain|owner|tablespace|after|before|instead|of|each|statement|for|virtual|stored|generated|always|inherits|partitioned|unlogged|if)\b'
+      scope: keyword.other.ddl.sql
+    - match: '(?i)\b(?:count|sum|avg|min|max|abs|ceil|ceiling|floor|round|trunc|mod|power|sqrt|exp|ln|log|sign|random|rand|coalesce|nullif|greatest|least|ifnull|isnull|nvl|iif|cast|convert|extract|date_part|date_trunc|now|date_add|date_sub|datediff|dateadd|datepart|strftime|to_char|to_date|to_timestamp|to_number|length|char_length|upper|lower|trim|ltrim|rtrim|substr|substring|concat|concat_ws|replace|position|instr|left|right|lpad|rpad|reverse|repeat|split_part|regexp_replace|regexp_matches|format|string_agg|group_concat|array_agg|json_agg|jsonb_agg|json_build_object|row_number|rank|dense_rank|ntile|lag|lead|first_value|last_value|nth_value|unnest|generate_series|exists|md5|sha1|sha2|encode|decode|hex|unhex|last_insert_id|lastval|nextval|currval|setval|version|database|user|current_user|session_user)(?=\s*\()'
+      scope: support.function.sql
+    - match: '[:@][A-Za-z_][A-Za-z0-9_]*|\$\d+|\?'
+      scope: variable.parameter.sql
+    - match: '\b0[xX][0-9a-fA-F]+\b|\b(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?\b'
+      scope: constant.numeric.sql
+    - match: '::|\|\||<>|!=|<=|>=|=>|->>?|#>>?|@>|<@|~\*?|!~\*?|<<|>>|[-+*/%<>=^&|~!]'
+      scope: keyword.operator.sql
+
+  block-comment:
+    - meta_scope: comment.block.sql
+    - match: '/\*'
+      push: block-comment
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.sql
+      pop: true
+
+  string:
+    - meta_scope: string.quoted.single.sql
+    - match: "''"
+      scope: constant.character.escape.sql
+    - match: '\\.'
+      scope: constant.character.escape.sql
+    - match: "'"
+      scope: punctuation.definition.string.end.sql
+      pop: true
+
+  dollar-string:
+    - meta_scope: string.quoted.other.dollar.sql
+    - match: '\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$'
+      scope: punctuation.definition.string.end.sql
+      pop: true
+
+  quoted-ident:
+    - meta_scope: string.quoted.double.identifier.sql
+    - match: '""'
+    - match: '"'
+      scope: punctuation.definition.identifier.end.sql
+      pop: true
+    - match: '(?=$)'
+      pop: true
+
+  backtick-ident:
+    - meta_scope: string.quoted.other.identifier.sql
+    - match: '`'
+      scope: punctuation.definition.identifier.end.sql
+      pop: true
+    - match: '(?=$)'
+      pop: true

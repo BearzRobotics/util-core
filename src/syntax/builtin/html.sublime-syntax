@@ -1,0 +1,145 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: HTML
+scope: text.html.basic
+file_extensions:
+  - html
+  - htm
+  - xhtml
+  - shtml
+  - xht
+  - svg
+first_line_match: '^\s*<!DOCTYPE\s+html|^\s*<html'
+
+contexts:
+  main:
+    - match: '<!--'
+      scope: punctuation.definition.comment.begin.html
+      push: comment
+    - match: '(?i)(<!)(DOCTYPE)\b'
+      captures:
+        1: punctuation.definition.tag.begin.html
+        2: keyword.declaration.doctype.html
+      push: doctype
+    - match: '<!\[CDATA\['
+      scope: punctuation.definition.string.begin.html
+      push: cdata
+    - match: '<\?'
+      scope: punctuation.definition.tag.begin.html
+      push: processing
+    - match: '(?i)(<)(script)(?=[\s>/]|$)'
+      captures:
+        1: punctuation.definition.tag.begin.html
+        2: entity.name.tag.script.html
+      push: [script-body, tag-attrs]
+    - match: '(?i)(<)(style)(?=[\s>/]|$)'
+      captures:
+        1: punctuation.definition.tag.begin.html
+        2: entity.name.tag.style.html
+      push: [style-body, tag-attrs]
+    - match: '(</?)([A-Za-z][A-Za-z0-9:._-]*)'
+      captures:
+        1: punctuation.definition.tag.begin.html
+        2: entity.name.tag.html
+      push: tag-attrs
+    - include: entities
+
+  entities:
+    - match: '&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);'
+      scope: constant.character.entity.html
+
+  comment:
+    - meta_scope: comment.block.html
+    - match: '-->'
+      scope: punctuation.definition.comment.end.html
+      pop: true
+
+  doctype:
+    - meta_scope: meta.tag.sgml.doctype.html
+    - match: '>'
+      scope: punctuation.definition.tag.end.html
+      pop: true
+    - match: '"[^"]*"|''[^'']*'''
+      scope: string.quoted.html
+    - match: '\bhtml\b'
+      scope: entity.name.tag.html
+      
+  cdata:
+    - meta_scope: string.unquoted.cdata.html
+    - match: '\]\]>'
+      scope: punctuation.definition.string.end.html
+      pop: true
+
+  processing:
+    - meta_scope: meta.tag.preprocessor.xml.html
+    - match: '\?>'
+      scope: punctuation.definition.tag.end.html
+      pop: true
+    - match: '"[^"]*"|''[^'']*'''
+      scope: string.quoted.html
+    - match: '[A-Za-z_:][\w:.-]*(?==)'
+      scope: support.type.attribute-name.html entity.other.attribute-name.html
+
+  tag-attrs:
+    - meta_scope: meta.tag.html
+    - match: '/?>'
+      scope: punctuation.definition.tag.end.html
+      pop: true
+    - match: '(?=<)'
+      pop: true
+    - match: '"'
+      scope: punctuation.definition.string.begin.html
+      push: dq-value
+    - match: "'"
+      scope: punctuation.definition.string.begin.html
+      push: sq-value
+    - match: '='
+      scope: punctuation.separator.key-value.html
+      push: unquoted-value
+    - match: '[^\s"''<>/=]+'
+      scope: support.type.attribute-name.html entity.other.attribute-name.html
+
+  unquoted-value:
+    - match: '(?=\s|/?>|$)'
+      pop: true
+    - match: '"'
+      scope: punctuation.definition.string.begin.html
+      set: dq-value
+    - match: "'"
+      scope: punctuation.definition.string.begin.html
+      set: sq-value
+    - match: '[^\s"''<>=`]+'
+      scope: string.unquoted.html
+      pop: true
+
+  dq-value:
+    - meta_scope: string.quoted.double.html
+    - match: '"'
+      scope: punctuation.definition.string.end.html
+      pop: true
+    - include: entities
+
+  sq-value:
+    - meta_scope: string.quoted.single.html
+    - match: "'"
+      scope: punctuation.definition.string.end.html
+      pop: true
+    - include: entities
+
+  # Bodies of <script> and <style> are left unhighlighted (no embedding).
+  script-body:
+    - match: '(?i)(</)(script)(\s*>)'
+      captures:
+        1: punctuation.definition.tag.begin.html
+        2: entity.name.tag.script.html
+        3: punctuation.definition.tag.end.html
+      pop: true
+
+  style-body:
+    - match: '(?i)(</)(style)(\s*>)'
+      captures:
+        1: punctuation.definition.tag.begin.html
+        2: entity.name.tag.style.html
+        3: punctuation.definition.tag.end.html
+      pop: true

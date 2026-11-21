@@ -312,8 +312,10 @@ pub fn enableAnsiOutput() bool {
     const h = std.os.windows.peb().ProcessParameters.hStdOutput;
     var mode: u32 = 0;
     if (win.GetConsoleMode(h, &mode) == 0) return false;
-    // ENABLE_VIRTUAL_TERMINAL_PROCESSING (0x4) | DISABLE_NEWLINE_AUTO_RETURN (0x8)
-    if (win.SetConsoleMode(h, mode | 0x4 | 0x8) == 0 and win.SetConsoleMode(h, mode | 0x4) == 0) return false;
+    // ENABLE_VIRTUAL_TERMINAL_PROCESSING (0x4) only. Not DISABLE_NEWLINE_AUTO_RETURN (0x8):
+    // we write plain \n, and with that flag a line feed no longer returns the
+    // cursor to column 0, so text stair-steps after a full-width line.
+    if (win.SetConsoleMode(h, mode | 0x4) == 0) return false;
     _ = win.SetConsoleOutputCP(65001);
     return true;
 }

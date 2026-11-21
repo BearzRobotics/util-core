@@ -6,6 +6,7 @@ const std = @import("std");
 const Io = std.Io;
 const def = @import("definition.zig");
 const Theme = @import("theme.zig").Theme;
+const builtin_set = @import("builtin.zig");
 
 pub const Session = struct {
     gpa: std.mem.Allocator,
@@ -52,6 +53,23 @@ pub const Session = struct {
         return loaded;
     }
 
+    /// Load the grammars built into the binary. Call after `loadDir` so a
+    /// user's grammar is found first. Returns the number loaded.
+    pub fn loadBuiltin(s: *Session) !usize {
+        var loaded: usize = 0;
+        for (builtin_set.grammars) |g| {
+            _ = s.reg.load(g.text, g.file) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    s.failed += 1;
+                    continue;
+                },
+            };
+            loaded += 1;
+        }
+        return loaded;
+    }
+
     /// Find a grammar by what the user typed: full name ("Rust Enhanced"),
     /// scope ("source.rust"), the last part of the scope ("rust") or a file
     /// extension ("rs"), case-insensitively, in that order.
@@ -85,4 +103,39 @@ test "user-supplied names resolve by name, scope, scope tail and extension" {
     try std.testing.expect(s.byUserName("Rust") == syn);
     try std.testing.expect(s.byUserName("RS") == syn);
     try std.testing.expect(s.byUserName("go") == null);
+}
+
+test "every built-in grammar loads without warnings, and common files are detected" {
+    const gpa = std.testing.allocator;
+    var s = Session.init(gpa);
+    defer s.deinit();
+    const n = try s.loadBuiltin();
+    try std.testing.expectEqual(builtin_set.grammars.len, n);
+    try std.testing.expectEqual(@as(usize, 0), s.failed);
+    for (s.reg.syntaxes.items) |syn| {
+        if (syn.warnings.items.len != 0) {
+            std.debug.print("{s}: {s}\n", .{ syn.name, syn.warnings.items[0] });
+            return error.GrammarHasWarnings;
+        }
+    }
+    const cases = [_]struct { path: []const u8, scope: []const u8 }{
+        .{ .path = "main.zig", .scope = "source.zig" },
+        .{ .path = "lib.rs", .scope = "source.rust" },
+        .{ .path = "x.py", .scope = "source.python" },
+        .{ .path = "a.c", .scope = "source.c" },
+        .{ .path = "a.hpp", .scope = "source.cpp" },
+        .{ .path = "Makefile", .scope = "source.makefile" },
+        .{ .path = "x.json", .scope = "source.json" },
+        .{ .path = "README.md", .scope = "text.html.markdown" },
+    };
+    for (cases) |c| {
+        const syn = s.reg.detect(c.path, "") orelse {
+            std.debug.print("no grammar for {s}\n", .{c.path});
+            return error.NotDetected;
+        };
+        if (!std.mem.startsWith(u8, syn.scope_name, c.scope[0..@min(c.scope.len, 8)])) {
+            std.debug.print("{s}: got {s}, wanted {s}\n", .{ c.path, syn.scope_name, c.scope });
+            return error.WrongGrammar;
+        }
+    }
 }

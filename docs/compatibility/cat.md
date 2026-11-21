@@ -31,8 +31,8 @@ Terminal view (decision 0005, presentation on a terminal): when standard output 
 ## Known deviations and gaps
 
 - Deliberate deviation from GNU: on a terminal, with no GNU formatting option, output is the bat-style view (header, grid, line numbers, tabs expanded to 4). Pipes and redirects stay byte-exact GNU.
-- Syntax highlighting: Sublime grammars loaded from disk (see sublime-syntax.md); no grammars bundled, no theme option, no cache (all grammars in the directories are parsed at startup of a highlighted run).
-- Not implemented yet: paging, git change markers, -r/-H/-P, UTF-8 aware column counting (tab stops and the grid count bytes).
+- Syntax highlighting: about 25 built-in grammars of our own (docs/compatibility/builtin-grammars.md) plus Sublime grammars loaded from disk (sublime-syntax.md); no theme option, no cache (all grammars are parsed at the start of a highlighted run).
+- Paging: `--paging`, `-P`, `--pager`; the built-in pager is shared with `less` (docs/compatibility/less.md). Not implemented yet: git change markers, -r/-H, UTF-8 aware column counting (tab stops and the grid count bytes).
 - Lines over 1 MiB are printed without highlighting.
 - Does not detect 'input file is output file'.
 - Short options must be separate or clustered; abbreviated long options are not accepted.
@@ -72,7 +72,7 @@ Tests in test/test_cat.sh run under script(1).
 
 ## Update 2026-11-21
 
-Default style now matches bat 0.26.1: no `Size:` line (only `--style=full` adds it). Long lines and the header wrap at the terminal width under a blank line-number gutter, byte-identical to bat for a 150-byte line at 80 columns. On Windows the console gets ANSI processing and UTF-8 output enabled before the view is drawn (`sys.enableAnsiOutput`); compile-checked for x86_64-windows, not yet run on a real console. Still open: truecolor theme, paging, git markers, bundled grammars.
+Default style now matches bat 0.26.1: no `Size:` line (only `--style=full` adds it). Long lines and the header wrap at the terminal width under a blank line-number gutter, byte-identical to bat for a 150-byte line at 80 columns. On Windows the console gets ANSI processing and UTF-8 output enabled before the view is drawn (`sys.enableAnsiOutput`); compile-checked for x86_64-windows, not yet run on a real console. Paging (built-in streaming pager or `$PAGER`) and built-in grammars were added afterwards. Still open: truecolor theme, git markers.
 
 ## Not yet done
 

@@ -141,6 +141,7 @@ pub const tee = @import("lib/tee.zig");
 pub const test_cmd = @import("lib/test.zig");
 pub const timeout = @import("lib/timeout.zig");
 pub const time = @import("lib/time.zig");
+pub const pager = @import("lib/pager.zig");
 pub const touch = @import("lib/touch.zig");
 pub const tr = @import("lib/tr.zig");
 pub const tree = @import("lib/tree.zig");

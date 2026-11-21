@@ -1,0 +1,373 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Python
+scope: source.python
+file_extensions:
+  - py
+  - pyw
+  - pyi
+  - pyx
+  - pxd
+  - gyp
+  - gypi
+  - SConstruct
+  - SConscript
+  - wscript
+  - tac
+first_line_match: '^#!.*\bpython'
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+
+contexts:
+  main:
+    - include: code
+
+  code:
+    - match: '#.*$'
+      scope: comment.line.number-sign.python
+    - include: strings
+    - match: '^\s*(@)\s*[A-Za-z_][\w.]*'
+      scope: meta.annotation.decorator.python
+      captures:
+        1: punctuation.definition.annotation.python
+    - match: '\b(async\s+)?(def)\s+({{ident}})'
+      captures:
+        1: storage.type.function.async.python
+        2: storage.type.function.python
+        3: entity.name.function.python
+    - match: '\b(class)\s+({{ident}})'
+      captures:
+        1: storage.type.class.python
+        2: entity.name.class.python
+    - include: expr-rules
+    - match: '\b(?:from|import)\b'
+      scope: keyword.control.import.python
+    - match: '\b(?:if|elif|else|for|while|try|except|finally|with|as|pass|break|continue|return|yield|raise|assert|del|global|nonlocal|await|async)\b'
+      scope: keyword.control.flow.python
+    - match: '^\s*(?:match|case)\b(?=\s+[^\s=:,.)\]+\-*/%&|^<>!]|\s*[(\[{"''])'
+      scope: keyword.control.flow.python
+    - match: '\b(?:and|or|not|in|is)\b'
+      scope: keyword.operator.logical.python
+    - match: '\blambda\b'
+      scope: storage.type.function.lambda.python
+    - match: '->'
+      scope: keyword.operator.annotation.python
+    - match: ':='
+      scope: keyword.operator.assignment.python
+    - match: '\*\*=?|//=?|>>=?|<<=?|[-+*/%&|^@]=|[<>=!]=|[-+*/%&|^~<>@=]'
+      scope: keyword.operator.python
+
+  expr-rules:
+    - match: '\b(?:True|False|None|NotImplemented|Ellipsis|__debug__)\b'
+      scope: constant.language.python
+    - match: '\.\.\.'
+      scope: constant.language.ellipsis.python
+    - match: '\b(?:self|cls|mcs|metacls)\b'
+      scope: variable.language.python
+    - match: '\b__(?:name|file|doc|dict|class|all|slots|module|package|spec|path|builtins|loader|qualname|annotations)__\b'
+      scope: variable.language.python
+    - match: '\b(?:ArithmeticError|AssertionError|AttributeError|BaseException|BaseExceptionGroup|BlockingIOError|BrokenPipeError|BufferError|BytesWarning|ChildProcessError|ConnectionAbortedError|ConnectionError|ConnectionRefusedError|ConnectionResetError|DeprecationWarning|EOFError|EnvironmentError|Exception|ExceptionGroup|FileExistsError|FileNotFoundError|FloatingPointError|FutureWarning|GeneratorExit|IOError|ImportError|ImportWarning|IndentationError|IndexError|InterruptedError|IsADirectoryError|KeyError|KeyboardInterrupt|LookupError|MemoryError|ModuleNotFoundError|NameError|NotADirectoryError|NotImplementedError|OSError|OverflowError|PendingDeprecationWarning|PermissionError|ProcessLookupError|PythonFinalizationError|RecursionError|ReferenceError|ResourceWarning|RuntimeError|RuntimeWarning|StopAsyncIteration|StopIteration|SyntaxError|SyntaxWarning|SystemError|SystemExit|TabError|TimeoutError|TypeError|UnboundLocalError|UnicodeDecodeError|UnicodeEncodeError|UnicodeError|UnicodeTranslateError|UnicodeWarning|UserWarning|ValueError|Warning|ZeroDivisionError|EncodingWarning)\b'
+      scope: support.type.exception.python
+    - match: '\b(?:abs|aiter|all|anext|any|ascii|bin|bool|breakpoint|bytearray|bytes|callable|chr|classmethod|compile|complex|copyright|credits|delattr|dict|dir|divmod|enumerate|eval|exec|exit|filter|float|format|frozenset|getattr|globals|hasattr|hash|help|hex|id|input|int|isinstance|issubclass|iter|len|license|list|locals|map|max|memoryview|min|next|object|oct|open|ord|pow|print|property|quit|range|repr|reversed|round|set|setattr|slice|sorted|staticmethod|str|sum|super|tuple|type|vars|zip|__import__)(?=\s*\()'
+      scope: support.function.builtin.python
+    - match: '\b(?:bool|bytearray|bytes|complex|dict|float|frozenset|int|list|object|set|str|tuple|type)\b'
+      scope: support.type.python
+    - include: numbers
+
+  numbers:
+    - match: '\b0[xX][0-9a-fA-F_]+\b'
+      scope: constant.numeric.integer.hexadecimal.python
+    - match: '\b0[oO][0-7_]+\b'
+      scope: constant.numeric.integer.octal.python
+    - match: '\b0[bB][01_]+\b'
+      scope: constant.numeric.integer.binary.python
+    - match: '(?<![\w.])(?:\d[\d_]*\.[\d_]*(?:[eE][+-]?\d[\d_]*)?|\.\d[\d_]*(?:[eE][+-]?\d[\d_]*)?|\d[\d_]*[eE][+-]?\d[\d_]*)[jJ]?(?![\w])'
+      scope: constant.numeric.float.python
+    - match: '\b\d[\d_]*[jJ]?\b'
+      scope: constant.numeric.integer.python
+
+  strings:
+    - match: '(?<![\w])(?:[rR][fF]|[fF][rR])(""")'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-tdq-f-r
+    - match: '(?<![\w])(?:[rR][fF]|[fF][rR])(\x27{3})'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-tsq-f-r
+    - match: '(?<![\w])(?:[rR][fF]|[fF][rR])(")'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-dq-f-r
+    - match: '(?<![\w])(?:[rR][fF]|[fF][rR])(\x27)'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-sq-f-r
+    - match: '(?<![\w])[fF](""")'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-tdq-f
+    - match: '(?<![\w])[fF](\x27{3})'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-tsq-f
+    - match: '(?<![\w])[fF](")'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-dq-f
+    - match: '(?<![\w])[fF](\x27)'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-sq-f
+    - match: '(?<![\w])(?:[rR][bB]?|[bB][rR])(""")'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-tdq-r
+    - match: '(?<![\w])(?:[rR][bB]?|[bB][rR])(\x27{3})'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-tsq-r
+    - match: '(?<![\w])(?:[rR][bB]?|[bB][rR])(")'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-dq-r
+    - match: '(?<![\w])(?:[rR][bB]?|[bB][rR])(\x27)'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-sq-r
+    - match: '(?<![\w])(?:[bBuU])?(""")'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-tdq
+    - match: '(?<![\w])(?:[bBuU])?(\x27{3})'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-tsq
+    - match: '(?<![\w])(?:[bBuU])?(")'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-dq
+    - match: '(?<![\w])(?:[bBuU])?(\x27)'
+      captures:
+        1: punctuation.definition.string.begin.python
+      push: str-sq
+
+  str-tdq-f-r:
+    - meta_scope: string.quoted.double.block.python
+    - match: '\{\{|\}\}'
+      scope: constant.character.escape.python
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.python
+      push: fstring-expr
+    - match: '\\.'
+      scope: constant.character.escape.python
+
+    - match: '"""'
+      scope: punctuation.definition.string.end.python
+      pop: true
+
+  str-tsq-f-r:
+    - meta_scope: string.quoted.single.block.python
+    - match: '\{\{|\}\}'
+      scope: constant.character.escape.python
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.python
+      push: fstring-expr
+    - match: '\\.'
+      scope: constant.character.escape.python
+
+    - match: '\x27{3}'
+      scope: punctuation.definition.string.end.python
+      pop: true
+
+  str-dq-f-r:
+    - meta_scope: string.quoted.double.python
+    - match: '\{\{|\}\}'
+      scope: constant.character.escape.python
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.python
+      push: fstring-expr
+    - match: '\\.'
+      scope: constant.character.escape.python
+
+    - match: '"'
+      scope: punctuation.definition.string.end.python
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true
+
+  str-sq-f-r:
+    - meta_scope: string.quoted.single.python
+    - match: '\{\{|\}\}'
+      scope: constant.character.escape.python
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.python
+      push: fstring-expr
+    - match: '\\.'
+      scope: constant.character.escape.python
+
+    - match: '\x27'
+      scope: punctuation.definition.string.end.python
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true
+
+  str-tdq-f:
+    - meta_scope: string.quoted.double.block.python
+    - match: '\{\{|\}\}'
+      scope: constant.character.escape.python
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.python
+      push: fstring-expr
+    - match: '\\(?:[\\\x27"abfnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|N\{[^}]*\}|\n)'
+      scope: constant.character.escape.python
+    - match: '"""'
+      scope: punctuation.definition.string.end.python
+      pop: true
+
+  str-tsq-f:
+    - meta_scope: string.quoted.single.block.python
+    - match: '\{\{|\}\}'
+      scope: constant.character.escape.python
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.python
+      push: fstring-expr
+    - match: '\\(?:[\\\x27"abfnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|N\{[^}]*\}|\n)'
+      scope: constant.character.escape.python
+    - match: '\x27{3}'
+      scope: punctuation.definition.string.end.python
+      pop: true
+
+  str-dq-f:
+    - meta_scope: string.quoted.double.python
+    - match: '\{\{|\}\}'
+      scope: constant.character.escape.python
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.python
+      push: fstring-expr
+    - match: '\\(?:[\\\x27"abfnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|N\{[^}]*\}|\n)'
+      scope: constant.character.escape.python
+    - match: '"'
+      scope: punctuation.definition.string.end.python
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true
+
+  str-sq-f:
+    - meta_scope: string.quoted.single.python
+    - match: '\{\{|\}\}'
+      scope: constant.character.escape.python
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.python
+      push: fstring-expr
+    - match: '\\(?:[\\\x27"abfnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|N\{[^}]*\}|\n)'
+      scope: constant.character.escape.python
+    - match: '\x27'
+      scope: punctuation.definition.string.end.python
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true
+
+  str-tdq-r:
+    - meta_scope: string.quoted.double.block.python
+    - match: '\\.'
+      scope: constant.character.escape.python
+
+    - match: '"""'
+      scope: punctuation.definition.string.end.python
+      pop: true
+
+  str-tsq-r:
+    - meta_scope: string.quoted.single.block.python
+    - match: '\\.'
+      scope: constant.character.escape.python
+
+    - match: '\x27{3}'
+      scope: punctuation.definition.string.end.python
+      pop: true
+
+  str-dq-r:
+    - meta_scope: string.quoted.double.python
+    - match: '\\.'
+      scope: constant.character.escape.python
+
+    - match: '"'
+      scope: punctuation.definition.string.end.python
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true
+
+  str-sq-r:
+    - meta_scope: string.quoted.single.python
+    - match: '\\.'
+      scope: constant.character.escape.python
+
+    - match: '\x27'
+      scope: punctuation.definition.string.end.python
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true
+
+  str-tdq:
+    - meta_scope: string.quoted.double.block.python
+    - match: '\\(?:[\\\x27"abfnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|N\{[^}]*\}|\n)'
+      scope: constant.character.escape.python
+    - match: '"""'
+      scope: punctuation.definition.string.end.python
+      pop: true
+
+  str-tsq:
+    - meta_scope: string.quoted.single.block.python
+    - match: '\\(?:[\\\x27"abfnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|N\{[^}]*\}|\n)'
+      scope: constant.character.escape.python
+    - match: '\x27{3}'
+      scope: punctuation.definition.string.end.python
+      pop: true
+
+  str-dq:
+    - meta_scope: string.quoted.double.python
+    - match: '\\(?:[\\\x27"abfnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|N\{[^}]*\}|\n)'
+      scope: constant.character.escape.python
+    - match: '"'
+      scope: punctuation.definition.string.end.python
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true
+
+  str-sq:
+    - meta_scope: string.quoted.single.python
+    - match: '\\(?:[\\\x27"abfnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|N\{[^}]*\}|\n)'
+      scope: constant.character.escape.python
+    - match: '\x27'
+      scope: punctuation.definition.string.end.python
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true
+
+  fstring-expr:
+    - meta_scope: meta.interpolation.python
+    - match: '\}'
+      scope: punctuation.section.interpolation.end.python
+      pop: true
+    - match: '\{'
+      push: brace-nest
+    - match: '![rsa]\b'
+      scope: constant.character.escape.python
+    - include: inline-expr
+
+  brace-nest:
+    - match: '\}'
+      pop: true
+    - match: '\{'
+      push: brace-nest
+    - include: inline-expr
+
+  inline-expr:
+    - include: strings
+    - include: expr-rules
+    - match: '\b(?:and|or|not|in|is|if|else|for|lambda|await)\b'
+      scope: keyword.operator.logical.python
+    - match: '[-+*/%&|^~<>=!@]+'
+      scope: keyword.operator.python
