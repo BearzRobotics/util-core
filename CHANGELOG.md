@@ -2,7 +2,7 @@
 
 ## 0.2.0
 
-A new command, a bat-faithful `cat` view, and a Windows console fix.
+Two new commands (`time`, `less`), a bat-faithful `cat` with highlighting for 73 languages, themes, git markers and paging, and a Windows console fix.
 
 **New commands: `time` and `less`** (105 commands)
 
