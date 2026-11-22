@@ -1,0 +1,103 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Groovy
+scope: source.groovy
+file_extensions: [groovy, gradle, gvy, gy, Jenkinsfile]
+first_line_match: '^#!.*\bgroovy\b'
+contexts:
+  main:
+    - match: '^#!.*$'
+      scope: comment.line.shebang.groovy
+    - match: '//.*$'
+      scope: comment.line.double-slash.groovy
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.groovy
+      push: block-comment
+    - match: "'''"
+      scope: punctuation.definition.string.begin.groovy
+      push: sq3
+    - match: '"""'
+      scope: punctuation.definition.string.begin.groovy
+      push: dq3
+    - match: "'"
+      scope: punctuation.definition.string.begin.groovy
+      push: sq
+    - match: '"'
+      scope: punctuation.definition.string.begin.groovy
+      push: dq
+    - match: '/(?![/*\s=])(?:[^/\\\n]|\\.)+/'
+      scope: string.regexp.groovy
+    - match: '@[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*'
+      scope: meta.annotation.groovy
+    - match: '\b(class|interface|trait|enum)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.class.groovy
+        2: entity.name.type.groovy
+    - match: '\b(def)\s+([A-Za-z_]\w*)(?=\s*\()'
+      captures:
+        1: storage.type.groovy
+        2: entity.name.function.groovy
+    - match: '\b(?:if|else|for|while|do|switch|case|default|break|continue|return|try|catch|finally|throw|assert|in|as|instanceof|new|import|package|pipeline)\b'
+      scope: keyword.control.groovy
+    - match: '\b(?:def|var|void|boolean|byte|char|short|int|long|float|double|String|Object|List|Map|Set|Closure)\b'
+      scope: storage.type.groovy
+    - match: '\b(?:public|private|protected|static|final|abstract|synchronized|transient|volatile|native|extends|implements|throws)\b'
+      scope: storage.modifier.groovy
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.groovy
+    - match: '\bnull\b'
+      scope: constant.language.null.groovy
+    - match: '\b(?:this|super|it|delegate|owner)\b'
+      scope: variable.language.groovy
+    - match: '\b(?:plugins|apply|dependencies|repositories|implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|classpath|id|task|buildscript|allprojects|subprojects|sourceSets|configurations|mavenCentral|google|jcenter|mavenLocal|maven|project|rootProject|ext|version|group|sourceCompatibility|targetCompatibility|jar|test|println|print|include|agent|stages|stage|steps|sh|bat|echo|node|script|environment|post|when|parallel|options|parameters|triggers|tools|input|checkout|git|archiveArtifacts|junit|withCredentials|dir|timeout|retry)\b(?=\s*[({''"]|\s+[''"A-Za-z:])'
+      scope: support.function.builtin.groovy
+    - match: '\b[A-Za-z_]\w*(?=\s*\()'
+      scope: entity.name.function.groovy
+    - match: '\b[A-Z]\w*\b'
+      scope: entity.name.type.groovy
+    - match: '\b(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][-+]?[0-9]+)?)[gGlLiIdDfF]?\b'
+      scope: constant.numeric.groovy
+    - match: '\?\.|\*\.|\.&|\.@|\?:|<=>|==~|=~|->|\.\.<?|\*\*|&&|\|\||\+\+|--|[-+*/%<>!=&|^~?:]=?'
+      scope: keyword.operator.groovy
+  block-comment:
+    - meta_scope: comment.block.groovy
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.groovy
+      pop: true
+  interp:
+    - match: '\$\{[^}\n]*\}?|\$[A-Za-z_][\w.]*'
+      scope: variable.parameter.groovy
+  esc:
+    - match: '\\(?:[bfnrts\\''"$]|u[0-9A-Fa-f]{4}|[0-7]{1,3}|\n)'
+      scope: constant.character.escape.groovy
+  sq:
+    - meta_scope: string.quoted.single.groovy
+    - match: "'"
+      scope: punctuation.definition.string.end.groovy
+      pop: true
+    - include: esc
+    - match: '$'
+      pop: true
+  dq:
+    - meta_scope: string.quoted.double.groovy
+    - match: '"'
+      scope: punctuation.definition.string.end.groovy
+      pop: true
+    - include: esc
+    - include: interp
+    - match: '$'
+      pop: true
+  sq3:
+    - meta_scope: string.quoted.triple.groovy
+    - match: "'''"
+      scope: punctuation.definition.string.end.groovy
+      pop: true
+    - include: esc
+  dq3:
+    - meta_scope: string.quoted.triple.groovy
+    - match: '"""'
+      scope: punctuation.definition.string.end.groovy
+      pop: true
+    - include: esc
+    - include: interp

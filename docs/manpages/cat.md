@@ -9,7 +9,7 @@ cat - concatenate files and print on the standard output
 
 # DESCRIPTION
 
-Copy each FILE (or standard input when none is given, or for the name -) to standard output in order. Without formatting options the data is copied unchanged in 64 KiB chunks. When standard output is a terminal and no GNU formatting option (-A -b -e -E -n -s -t -T -v) is given, cat shows a bat-style view instead: file header, grid and line numbers. In pipes and redirects the output is always the GNU-compatible bytes. With color on and a matching grammar, the text is syntax-highlighted; grammars for about 40 common languages and formats are built in (see `--list-languages`). When the view is longer than the screen it is paged, as bat does: through the program in `$BAT_PAGER` or `$PAGER` (or `--pager`), and otherwise through the built-in pager, which has the keys of less(1) (see less(1) in this package), scrolls while cat is still writing and prints at once, without taking over the screen, when everything fits on one screen. Git change markers are not implemented yet.
+Copy each FILE (or standard input when none is given, or for the name -) to standard output in order. Without formatting options the data is copied unchanged in 64 KiB chunks. When standard output is a terminal and no GNU formatting option (-A -b -e -E -n -s -t -T -v) is given, cat shows a bat-style view instead: file header, grid and line numbers. In pipes and redirects the output is always the GNU-compatible bytes. With color on and a matching grammar, the text is syntax-highlighted; grammars for about 70 common languages and formats are built in (see `--list-languages`). When the view is longer than the screen it is paged, as bat does: through the program in `$BAT_PAGER` or `$PAGER` (or `--pager`), and otherwise through the built-in pager, which has the keys of less(1) (see less(1) in this package), scrolls while cat is still writing and prints at once, without taking over the screen, when everything fits on one screen. Git change markers (`changes` style, default) need `git` on the PATH: a file with differences from the git index gets a marker column (`+` added, `~` modified, `‾`/`_` lines removed above/below).
 
 # OPTIONS
 
@@ -41,7 +41,7 @@ Copy each FILE (or standard input when none is given, or for the name -) to stan
 : bat view without header, grid or line numbers.
 
 --style=LIST
-: Comma-separated bat view components: full, plain, header, header-filesize, grid, numbers. The default is bat's: header (file name), grid and line numbers, without the `Size:` line; `full` adds the size. Long lines, and a long file name in the header, wrap at the terminal width under a blank line-number column, as in bat.
+: Comma-separated bat view components: full, plain, header, header-filesize, grid, numbers, changes. The default is bat's: header (file name), grid and line numbers, without the `Size:` line; `full` adds the size. Long lines, and a long file name in the header, wrap at the terminal width under a blank line-number column, as in bat.
 
 --color=WHEN
 : auto (terminal only), always or never. Colors header, grid and numbers.
@@ -66,6 +66,15 @@ Copy each FILE (or standard input when none is given, or for the name -) to stan
 
 --list-languages
 : Print the loaded grammars (name, tab, extensions) and exit.
+
+--theme=NAME
+: Color theme: `auto` (default: dark or light by the terminal background), `dark`, `light`, or a name from `--list-themes`. Also `$BAT_THEME`.
+
+--theme-dark=NAME, --theme-light=NAME
+: The themes `auto`/`dark`/`light` choose (defaults `night` and `day`; also `$BAT_THEME_DARK`, `$BAT_THEME_LIGHT`).
+
+--list-themes
+: Print the themes (built in and in `~/.config/cat/themes`) and exit.
 
 -u
 : Ignored.
@@ -96,7 +105,7 @@ See docs/compatibility/cat.md for details.
 
 # LIMITATIONS
 
-- The built-in grammars are our own, basic ones (no embedding, e.g. no JavaScript inside HTML; some heuristics are documented in docs/compatibility/builtin-grammars.md); no truecolor themes (16 ANSI colors), no git change markers, no `--theme`. Column counting for wrapping and tabs counts bytes, not UTF-8 characters.
+- The built-in grammars are our own, basic ones (no embedding, e.g. no JavaScript inside HTML; some heuristics are documented in docs/compatibility/builtin-grammars.md); no tmTheme files. Column counting for wrapping and tabs counts bytes, not UTF-8 characters.
 - Windows: the console is switched to ANSI escape processing and UTF-8 output before the view is drawn; if that fails, color and style escapes are left off. Verified only under wine and by compiling.
 - Does not detect 'input file is output file'.
 - Short options must be separate or clustered; abbreviated long options are not accepted.
@@ -114,7 +123,7 @@ This manual describes util-core 0.2.0.
 
 `$XDG_CONFIG_HOME/cat/syntaxes` or `~/.config/cat/syntaxes`: Sublime Text `.sublime-syntax` grammars. Your grammars are found before the built-in ones. Grammars are loaded only when a highlighted view is possible (terminal output, color on), so plain use pays nothing.
 
-Colors come from a built-in theme that uses the terminal's 16 ANSI colors. There is no theme option yet.
+`$XDG_CONFIG_HOME/cat/themes/NAME.theme` or `~/.config/cat/themes/NAME.theme`: your themes, one rule per line (`comment = #6c7a8c italic`, `keyword = 5 bold`, `string = #9ece6a on 0`, `extends = night`). Built-in themes: ansi (the terminal's 16 palette colors), night, ember, day, paper. With 24-bit colors the terminal is recognised from `$COLORTERM`, `$WT_SESSION` and similar; otherwise colors are reduced to 256 or 16. `auto` queries the terminal for its background color (OSC 11); terminals that do not answer are treated as dark unless `$COLORFGBG` says otherwise.
 
 # ENVIRONMENT
 

@@ -1,0 +1,137 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Scala
+scope: source.scala
+file_extensions: [scala, sc, sbt]
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: annotations
+    - include: decls
+    - include: keywords
+    - include: numbers
+    - include: methods
+    - include: types
+    - include: operators
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.scala
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.scala
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.scala
+    - match: '/\*'
+      push: block-comment
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.scala
+      pop: true
+
+  strings:
+    - match: '(?:[a-z]+)?"""'
+      scope: punctuation.definition.string.begin.scala
+      push: triple
+    - match: '[a-z]+"'
+      scope: punctuation.definition.string.begin.scala
+      push: interp-str
+    - match: '"'
+      scope: punctuation.definition.string.begin.scala
+      push: dq
+    - match: "'(?:\\\\.|[^'\\\\\\n])'"
+      scope: string.quoted.single.scala
+    - match: "'[A-Za-z_]\\w*"
+      scope: constant.other.symbol.scala
+
+  triple:
+    - meta_scope: string.quoted.triple.scala
+    - match: '"""+'
+      scope: punctuation.definition.string.end.scala
+      pop: true
+    - include: interp
+
+  interp-str:
+    - meta_scope: string.quoted.double.scala
+    - match: '"'
+      scope: punctuation.definition.string.end.scala
+      pop: true
+    - match: '$'
+      pop: true
+    - include: escapes
+    - include: interp
+
+  dq:
+    - meta_scope: string.quoted.double.scala
+    - match: '"'
+      scope: punctuation.definition.string.end.scala
+      pop: true
+    - match: '$'
+      pop: true
+    - include: escapes
+
+  escapes:
+    - match: '\\(?:[btnfr"''\\]|u+[0-9A-Fa-f]{4}|[0-7]{1,3})'
+      scope: constant.character.escape.scala
+
+  interp:
+    - match: '\$\$'
+      scope: constant.character.escape.scala
+    - match: '\$\{[^}]*\}|\$[A-Za-z_]\w*'
+      scope: variable.parameter.interpolation.scala
+
+  annotations:
+    - match: '@[A-Za-z_][\w.]*'
+      scope: meta.annotation.scala
+
+  decls:
+    - match: '\b(class|trait|object|enum|type|package|import)\s+([A-Za-z_][\w.]*)'
+      captures:
+        1: storage.type.scala
+        2: entity.name.class.scala
+    - match: '\b(def)\s+([A-Za-z_]\w*|`[^`]+`)'
+      captures:
+        1: storage.type.function.scala
+        2: entity.name.function.scala
+    - match: '\b(val|var|given)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.scala
+        2: variable.parameter.scala
+
+  keywords:
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.scala
+    - match: '\bnull\b'
+      scope: constant.language.null.scala
+    - match: '\b(?:this|super)\b'
+      scope: variable.language.scala
+    - match: '\b(?:Int|Long|Short|Byte|Float|Double|Boolean|Char|String|Unit|Any|AnyRef|AnyVal|Nothing|Null|Option|Some|None|List|Seq|Map|Set|Vector|Array|Either|Left|Right|Try|Success|Failure|Future)\b'
+      scope: storage.type.primitive.scala
+    - match: '\b(?:abstract|final|sealed|implicit|lazy|override|private|protected|case|inline|opaque|transparent|open|using|extension|erased|infix)\b'
+      scope: storage.modifier.scala
+    - match: '\b(?:if|else|for|while|do|match|return|throw|try|catch|finally|yield|then|end)\b'
+      scope: keyword.control.scala
+    - match: '\b(?:extends|with|forSome|new|derives|as)\b'
+      scope: keyword.operator.word.scala
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+[lL]?\b'
+      scope: constant.numeric.hex.scala
+    - match: '(?<![A-Za-z0-9_.])(?:[0-9][0-9_]*\.[0-9][0-9_]*|[0-9][0-9_]*)(?:[eE][-+]?[0-9_]+)?[lLfFdD]?(?![A-Za-z0-9_])'
+      scope: constant.numeric.decimal.scala
+
+  methods:
+    - match: '\b(println|print|require|assert|assume|printf|identity)(?=\s*\()'
+      scope: support.function.scala
+    - match: '\b[a-z_]\w*(?=\s*[(\[])'
+      scope: entity.name.function.scala
+
+  types:
+    - match: '\b[A-Z]\w*\b'
+      scope: entity.name.type.scala
+
+  operators:
+    - match: '=>>?|<-|->|<:|>:|<%|\+\+|::|[-+*/%&|^<>=!~?:]+|#'
+      scope: keyword.operator.scala

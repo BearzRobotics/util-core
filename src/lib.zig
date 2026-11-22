@@ -55,6 +55,7 @@ pub const basename = @import("lib/basename.zig");
 pub const basenc = @import("lib/basenc.zig");
 pub const bracket = @import("lib/bracket.zig");
 pub const cat = @import("lib/cat.zig");
+pub const gitchanges = @import("lib/gitchanges.zig");
 pub const chroot = @import("lib/chroot.zig");
 pub const cksum = @import("lib/cksum.zig");
 pub const cmp = @import("lib/cmp.zig");

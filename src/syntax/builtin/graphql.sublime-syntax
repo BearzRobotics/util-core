@@ -1,0 +1,58 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: GraphQL
+scope: source.graphql
+file_extensions: [graphql, gql, graphqls]
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.graphql
+    - match: '"""'
+      scope: punctuation.definition.string.begin.graphql
+      push: blockstr
+    - match: '"'
+      scope: punctuation.definition.string.begin.graphql
+      push: dq
+    - match: '\b(type|interface|union|enum|input|scalar|schema|directive|extend|fragment|query|mutation|subscription)\b(?:\s+([A-Za-z_]\w*))?'
+      captures:
+        1: storage.type.graphql
+        2: entity.name.type.graphql
+    - match: '\b(?:on|implements|repeatable)\b'
+      scope: keyword.control.graphql
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.graphql
+    - match: '\bnull\b'
+      scope: constant.language.null.graphql
+    - match: '\b(?:Int|Float|String|Boolean|ID)\b'
+      scope: storage.type.primitive.graphql
+    - match: '@[A-Za-z_]\w*'
+      scope: meta.annotation.graphql
+    - match: '\$[A-Za-z_]\w*'
+      scope: variable.parameter.graphql
+    - match: '\b[A-Za-z_]\w*(?=\s*(?:\([^)]*\))?\s*:)'
+      scope: entity.name.function.graphql
+    - match: '\b[A-Z]\w*\b'
+      scope: entity.name.type.graphql
+    - match: '\.\.\.'
+      scope: keyword.operator.spread.graphql
+    - match: '-?\b[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.graphql
+    - match: '[=!|&]'
+      scope: keyword.operator.graphql
+  blockstr:
+    - meta_scope: string.quoted.triple.graphql
+    - match: '\\"""'
+      scope: constant.character.escape.graphql
+    - match: '"""'
+      scope: punctuation.definition.string.end.graphql
+      pop: true
+  dq:
+    - meta_scope: string.quoted.double.graphql
+    - match: '"'
+      scope: punctuation.definition.string.end.graphql
+      pop: true
+    - match: '\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})'
+      scope: constant.character.escape.graphql
+    - match: '$'
+      pop: true

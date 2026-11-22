@@ -21,6 +21,7 @@ const Io = std.Io;
 const common = @import("common.zig");
 const stickyout = @import("stickyout.zig");
 const syntax = @import("../syntax/root.zig");
+const gitchanges = @import("gitchanges.zig");
 
 pub const Env = common.Env;
 pub const Input = common.Input;
@@ -187,13 +188,14 @@ pub const Style = struct {
     size: bool = false, // Size: <n>; bat's default style has none, `full` does
     grid: bool = true,
     numbers: bool = true,
+    changes: bool = true, // git markers in the gutter
 
     pub const full: Style = .{ .size = true };
 
-    pub const plain: Style = .{ .header = false, .size = false, .grid = false, .numbers = false };
+    pub const plain: Style = .{ .header = false, .size = false, .grid = false, .numbers = false, .changes = false };
 
     pub fn none(s: Style) bool {
-        return !(s.header or s.size or s.grid or s.numbers);
+        return !(s.header or s.size or s.grid or s.numbers or s.changes);
     }
 
     /// Parse a comma-separated bat --style list. Later items add to earlier
@@ -219,6 +221,8 @@ pub const Style = struct {
                     st.grid = true;
                 } else if (std.mem.eql(u8, item, "numbers")) {
                     st.numbers = true;
+                } else if (std.mem.eql(u8, item, "changes")) {
+                    st.changes = true;
                 } else return null;
             }
             first = false;
@@ -257,6 +261,7 @@ const ActiveHighlight = struct {
 /// bat-style view of one file at a time. Line numbers restart per file, and
 /// the header/grid are emitted lazily so an empty file prints nothing.
 const BatView = struct {
+    gpa: std.mem.Allocator,
     style: Style,
     /// Color escapes allowed (syntax colors, gray gutter).
     color: bool,
@@ -275,6 +280,9 @@ const BatView = struct {
     size: ?u64 = null,
     /// A previous file produced output (for the blank line between headers).
     printed_any: bool = false,
+    /// Git change marks of the current file; the marker column exists only
+    /// when this is set.
+    changes: ?gitchanges.Changes = null,
 
     /// Highlight the current file with `syn`. Needs v.session.
     fn attach(v: *BatView, gpa: std.mem.Allocator, syn: *syntax.definition.Syntax) !void {
@@ -288,6 +296,10 @@ const BatView = struct {
 
     /// End of a file: flush pending output and drop highlighting state.
     fn endFile(v: *BatView) void {
+        defer if (v.changes) |*c| {
+            c.deinit(v.gpa);
+            v.changes = null;
+        };
         if (v.active) |*a| {
             if (a.line.items.len > 0 and !a.overflow) v.renderLine(a);
             v.finish();
@@ -296,8 +308,9 @@ const BatView = struct {
         } else v.finish();
     }
 
-    fn begin(v: *BatView, name: []const u8, size: ?u64) void {
+    fn begin(v: *BatView, name: []const u8, size: ?u64, changes: ?gitchanges.Changes) void {
         v.name = name;
+        v.changes = changes;
         v.size = size;
         v.line_no = 0;
         v.col = 0;
@@ -318,8 +331,19 @@ const BatView = struct {
         if (v.color or v.styled) v.out.write(reset);
     }
 
+    /// Width of the line-number and marker columns together.
     fn sidebar(v: *const BatView) usize {
-        return if (v.style.numbers) sidebar_width else 0;
+        const nums: usize = if (v.style.numbers) sidebar_width else 0;
+        const marks: usize = if (v.changes != null) 2 else 0;
+        return nums + marks;
+    }
+
+    fn hasSidebar(v: *const BatView) bool {
+        return v.sidebar() != 0;
+    }
+
+    fn spaces(v: *BatView, n: usize) void {
+        for (0..n) |_| v.out.writeByte(' ');
     }
 
     /// Horizontal rule; `joint` is drawn above the sidebar/content divider.
@@ -336,10 +360,8 @@ const BatView = struct {
 
     /// One header line: the gutter, the divider when there is a grid, then text.
     fn headerLine(v: *BatView, label: []const u8, text: []const u8, suffix: []const u8) void {
-        if (v.style.numbers) {
-            v.out.write("     "); // sidebar_width spaces
-        }
-        if (v.style.grid and v.style.numbers) {
+        v.spaces(v.sidebar());
+        if (v.style.grid and v.hasSidebar()) {
             v.paintDim();
             v.out.write("│ ");
             v.paintReset();
@@ -379,25 +401,41 @@ const BatView = struct {
 
     fn linePrefix(v: *BatView) void {
         v.line_no += 1;
-        if (!v.style.numbers and !v.style.grid) return;
+        if (!v.hasSidebar() and !v.style.grid) return;
         v.paintDim();
         if (v.style.numbers) v.out.print("{d: >4} ", .{v.line_no});
-        if (v.style.grid and v.style.numbers) v.out.write("│ ");
         v.paintReset();
+        if (v.changes) |*c| {
+            if (c.at(v.line_no)) |m| {
+                if (v.color) v.out.write(switch (m) {
+                    .added => "\x1b[32m",
+                    .modified => "\x1b[33m",
+                    .removed_above, .removed_below => "\x1b[31m",
+                });
+                v.out.write(m.char());
+                if (v.color) v.out.write(reset);
+            } else v.out.writeByte(' ');
+            v.out.writeByte(' ');
+        }
+        if (v.style.grid and v.hasSidebar()) {
+            v.paintDim();
+            v.out.write("│ ");
+            v.paintReset();
+        }
     }
 
     /// Columns available for text next to the gutter (at least 1).
     fn textWidth(v: *const BatView) usize {
-        const gutter = v.sidebar() + (if (v.style.grid and v.style.numbers) @as(usize, 2) else 0);
+        const gutter = v.sidebar() + (if (v.style.grid and v.hasSidebar()) @as(usize, 2) else 0);
         return @max(v.width, gutter + 1) - gutter;
     }
 
     /// Continuation row of a wrapped line: blank sidebar, divider, no number.
     fn wrapBreak(v: *BatView) void {
         v.out.writeByte('\n');
-        if (v.style.numbers) {
+        if (v.hasSidebar()) {
             v.paintDim();
-            v.out.write("     ");
+            v.spaces(v.sidebar());
             if (v.style.grid) v.out.write("│ ");
             v.paintReset();
         }
@@ -580,13 +618,14 @@ pub fn run(env: Env, options: Options, inputs: []const Input, writer: *Io.Writer
     var fmt: Formatter = .{ .opts = options, .out = &out };
     const bat_view = options.view != null;
     var view: BatView = if (options.view) |v| .{
+        .gpa = env.gpa,
         .style = v.style,
         .color = v.color,
         .styled = v.styled,
         .width = v.width,
         .out = &out,
         .session = v.session,
-    } else .{ .style = .{}, .color = false, .width = 80, .out = &out };
+    } else .{ .gpa = env.gpa, .style = .{}, .color = false, .width = 80, .out = &out };
     const color_on = view.color;
     const forced: ?*syntax.definition.Syntax = if (options.view) |v| v.forced else null;
     var result: Result = .{};
@@ -602,7 +641,8 @@ pub fn run(env: Env, options: Options, inputs: []const Input, writer: *Io.Writer
         defer opened.close(env.io);
         const file = opened.file;
 
-        if (bat_view) view.begin(path, fileSize(env, file));
+        const marks: ?gitchanges.Changes = if (bat_view and view.style.changes and in.source == .path) gitchanges.load(env, path) else null;
+        if (bat_view) view.begin(path, fileSize(env, file), marks);
         defer if (bat_view) view.endFile();
         var first_chunk = true;
 
@@ -666,8 +706,8 @@ test "bat view: full style, as bat 0.26.1 prints it" {
     var aw: Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     var out = testOut(&aw);
-    var v: BatView = .{ .style = Style.full, .color = false, .width = 20, .out = &out };
-    v.begin("f.txt", 5);
+    var v: BatView = .{ .gpa = std.testing.allocator, .style = Style.full, .color = false, .width = 20, .out = &out };
+    v.begin("f.txt", 5, null);
     v.feed("a\tb\nc");
     v.finish();
     try std.testing.expectEqualStrings(
@@ -686,8 +726,8 @@ test "bat view: empty file shows <EMPTY> only with a header" {
     var aw: Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     var out = testOut(&aw);
-    var v: BatView = .{ .style = Style.full, .color = false, .width = 20, .out = &out };
-    v.begin("e", 0);
+    var v: BatView = .{ .gpa = std.testing.allocator, .style = Style.full, .color = false, .width = 20, .out = &out };
+    v.begin("e", 0, null);
     v.finish();
     try std.testing.expectEqualStrings(
         "─────┬──────────────\n" ++
@@ -698,8 +738,8 @@ test "bat view: empty file shows <EMPTY> only with a header" {
     );
 
     aw.clearRetainingCapacity();
-    var g: BatView = .{ .style = Style.parse("numbers,grid").?, .color = false, .width = 20, .out = &out };
-    g.begin("e", 0);
+    var g: BatView = .{ .gpa = std.testing.allocator, .style = Style.parse("numbers,grid").?, .color = false, .width = 20, .out = &out };
+    g.begin("e", 0, null);
     g.finish();
     try std.testing.expectEqual(@as(usize, 0), aw.written().len);
 }
@@ -708,8 +748,8 @@ test "bat view: long lines wrap under a blank gutter" {
     var aw: Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     var out = testOut(&aw);
-    var v: BatView = .{ .style = .{}, .color = false, .width = 12, .out = &out };
-    v.begin("f", 10);
+    var v: BatView = .{ .gpa = std.testing.allocator, .style = .{}, .color = false, .width = 12, .out = &out };
+    v.begin("f", 10, null);
     v.feed("abcdefghij\n");
     v.finish();
     try std.testing.expectEqualStrings(

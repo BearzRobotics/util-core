@@ -137,6 +137,6 @@ src = os.path.join(tmp, 'pty_sample.zig')
 with open(src, 'w') as f:
     f.write('const std = @import("std");\npub fn main() void {\n    // hi\n    const x: u32 = 42;\n}\n')
 out, st, _ = session([cat, src], [])
-check("cat: built-in Zig grammar colours the source", re.search(r'\x1b\[3[0-9]m', out) is not None and st == 0)
+check("cat: built-in Zig grammar colours the source", re.search(r'\x1b\[(?:3[0-9]|38;[25];[0-9;]+)m', out) is not None and st == 0)
 
 sys.exit(1 if failures else 0)

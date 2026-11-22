@@ -22,6 +22,7 @@ const sys = @import("../sys.zig");
 const syntax = @import("../syntax/root.zig");
 const cat = @import("../lib/cat.zig");
 const pager_ui = @import("../pager_ui.zig");
+const termcolors = @import("../termcolors.zig");
 
 const Options = cat.Options;
 const Style = cat.Style;
@@ -49,6 +50,10 @@ pub fn main(ctx: cli.Context) u8 {
     var pager_cmd: ?[]const u8 = null;
     var language: ?[]const u8 = null;
     var list_languages = false;
+    var list_themes = false;
+    var theme_name: ?[]const u8 = null;
+    var theme_dark: ?[]const u8 = null;
+    var theme_light: ?[]const u8 = null;
     var syntax_dirs: std.ArrayList([]const u8) = .empty;
     defer syntax_dirs.deinit(ctx.gpa);
 
@@ -97,6 +102,14 @@ pub fn main(ctx: cli.Context) u8 {
                 language = v;
             } else if (valueOf(ctx.args, &i, "--syntax-dir")) |v| {
                 syntax_dirs.append(ctx.gpa, v) catch return fail(ctx, "out of memory");
+            } else if (valueOf(ctx.args, &i, "--theme")) |v| {
+                theme_name = v;
+            } else if (valueOf(ctx.args, &i, "--theme-dark")) |v| {
+                theme_dark = v;
+            } else if (valueOf(ctx.args, &i, "--theme-light")) |v| {
+                theme_light = v;
+            } else if (std.mem.eql(u8, a, "--list-themes")) {
+                list_themes = true;
             } else if (std.mem.eql(u8, a, "--list-languages")) {
                 list_languages = true;
             } else return badOption(ctx, a);
@@ -167,6 +180,11 @@ pub fn main(ctx: cli.Context) u8 {
             cli.warn(ctx, "{d} syntax file(s) could not be loaded", .{session.failed});
     }
     if (list_languages) return listLanguages(ctx, &session);
+    if (list_themes) return listThemes(ctx);
+    // Colors for the highlighted view: the theme, at the terminal's color depth.
+    if (have_session and color_on and decorated) {
+        if (!selectTheme(ctx, &session, theme_name, theme_dark, theme_light, tty)) return 1;
+    }
     if (language) |name| if (have_session) {
         forced = session.byUserName(name) orelse {
             cli.warn(ctx, "unknown language '{s}' (see --list-languages)", .{name});
@@ -287,16 +305,92 @@ fn report(context: ?*anyopaque, ev: cat.Event) void {
     cli.warn(ctx.*, "{s}: {s}", .{ ev.name, cli.errText(ev.err) });
 }
 
+/// A directory under the user's cat configuration ($XDG_CONFIG_HOME/cat or
+/// ~/.config/cat, and %APPDATA%\cat on Windows). Caller frees.
+fn configDir(ctx: cli.Context, sub: []const u8) ?[]u8 {
+    if (cli.getenv(ctx, "XDG_CONFIG_HOME")) |x| return std.Io.Dir.path.join(ctx.gpa, &.{ x, "cat", sub }) catch null;
+    if (cli.getenv(ctx, "HOME")) |h| return std.Io.Dir.path.join(ctx.gpa, &.{ h, ".config", "cat", sub }) catch null;
+    if (cli.getenv(ctx, "APPDATA")) |a| return std.Io.Dir.path.join(ctx.gpa, &.{ a, "cat", sub }) catch null;
+    return null;
+}
+
+/// Pick the theme: --theme, else $BAT_THEME, else `auto` (a light or dark
+/// theme by the terminal background, only when the terminal shows more than
+/// the 16 palette colors; otherwise the palette-following `ansi`). False
+/// (after a message) when the named theme does not exist.
+fn selectTheme(ctx: cli.Context, session: *syntax.session.Session, given: ?[]const u8, dark: ?[]const u8, light: ?[]const u8, tty: bool) bool {
+    const requested = given orelse cli.getenv(ctx, "BAT_THEME") orelse "auto";
+    const depth = termcolors.depth(ctx);
+    var name = requested;
+    const is_auto = std.ascii.eqlIgnoreCase(requested, "auto");
+    if (is_auto or std.ascii.eqlIgnoreCase(requested, "dark") or std.ascii.eqlIgnoreCase(requested, "light")) {
+        if (is_auto and depth == .ansi16) {
+            session.theme.use(ctx.gpa, &syntax.theme.default_rules, false, depth);
+            return true;
+        }
+        const look: termcolors.Appearance = if (is_auto)
+            termcolors.appearance(ctx, tty)
+        else if (std.ascii.eqlIgnoreCase(requested, "light")) .light else .dark;
+        name = switch (look) {
+            .light => light orelse cli.getenv(ctx, "BAT_THEME_LIGHT") orelse "day",
+            .dark => dark orelse cli.getenv(ctx, "BAT_THEME_DARK") orelse "night",
+        };
+    }
+    if (syntax.theme.findBuiltin(name)) |b| {
+        session.theme.use(ctx.gpa, b.rules, false, depth);
+        return true;
+    }
+    if (loadUserTheme(ctx, name)) |rules| {
+        session.theme.use(ctx.gpa, rules, true, depth);
+        return true;
+    }
+    cli.warn(ctx, "unknown theme '{s}' (see --list-themes)", .{name});
+    return false;
+}
+
+fn loadUserTheme(ctx: cli.Context, name: []const u8) ?[]syntax.theme.Rule {
+    if (std.mem.indexOfAny(u8, name, "/\\") != null or name.len == 0) return null;
+    const dir = configDir(ctx, "themes") orelse return null;
+    defer ctx.gpa.free(dir);
+    const file = std.fmt.allocPrint(ctx.gpa, "{s}.theme", .{name}) catch return null;
+    defer ctx.gpa.free(file);
+    const full = std.Io.Dir.path.join(ctx.gpa, &.{ dir, file }) catch return null;
+    defer ctx.gpa.free(full);
+    const text = Io.Dir.cwd().readFileAlloc(ctx.io, full, ctx.gpa, .limited(1 << 20)) catch return null;
+    defer ctx.gpa.free(text);
+    const parsed = syntax.theme.parse(ctx.gpa, text) catch return null;
+    if (parsed == null) cli.warn(ctx, "{s}: malformed theme file", .{full});
+    return parsed;
+}
+
+fn listThemes(ctx: cli.Context) u8 {
+    var out = cli.Out.init(ctx.io);
+    for (syntax.theme.builtin_themes) |t| {
+        out.write(t.name);
+        out.write(if (std.mem.eql(u8, t.name, "ansi")) "\tfollows the terminal palette\n" else if (t.light) "\tlight\n" else "\tdark\n");
+    }
+    if (configDir(ctx, "themes")) |dir| {
+        defer ctx.gpa.free(dir);
+        if (Io.Dir.cwd().openDir(ctx.io, dir, .{ .iterate = true })) |d_const| {
+            var d = d_const;
+            defer d.close(ctx.io);
+            var it = d.iterate();
+            while (it.next(ctx.io) catch null) |entry| {
+                if (!std.mem.endsWith(u8, entry.name, ".theme")) continue;
+                out.write(entry.name[0 .. entry.name.len - ".theme".len]);
+                out.write("\tuser theme\n");
+            }
+        } else |_| {}
+    }
+    out.flush();
+    return if (out.failed) 1 else 0;
+}
+
 /// Load grammars from --syntax-dir directories and the user config directory
 /// ($XDG_CONFIG_HOME/cat/syntaxes or ~/.config/cat/syntaxes).
 fn loadGrammars(ctx: cli.Context, session: *syntax.session.Session, extra_dirs: []const []const u8) void {
     for (extra_dirs) |d| _ = session.loadDir(ctx.io, d) catch {};
-    const dir: ?[]u8 = if (cli.getenv(ctx, "XDG_CONFIG_HOME")) |x|
-        std.Io.Dir.path.join(ctx.gpa, &.{ x, "cat", "syntaxes" }) catch null
-    else if (cli.getenv(ctx, "HOME")) |h|
-        std.Io.Dir.path.join(ctx.gpa, &.{ h, ".config", "cat", "syntaxes" }) catch null
-    else
-        null;
+    const dir: ?[]u8 = configDir(ctx, "syntaxes");
     if (dir) |d| {
         defer ctx.gpa.free(d);
         _ = session.loadDir(ctx.io, d) catch {};
@@ -336,7 +430,7 @@ fn help(ctx: cli.Context) u8 {
         "  -v, --show-nonprinting   use ^ and M- notation, except for LFD and TAB\n\n" ++
         "bat-style view (default on a terminal unless a GNU option above is used):\n" ++
         "  -p, --plain              no header, grid or line numbers\n" ++
-        "      --style=LIST         comma list of: full, plain, header, grid, numbers\n" ++
+        "      --style=LIST         comma list of: full, plain, header, grid, numbers, changes\n" ++
         "      --color=WHEN         auto, always or never\n" ++
         "      --decorations=WHEN   auto, always or never (always forces the view in pipes)\n" ++
         "      --paging=WHEN        auto (terminal view), always or never; pages through\n" ++
@@ -346,9 +440,16 @@ fn help(ctx: cli.Context) u8 {
         "      --pager=CMD          the pager command\n" ++
         "  -l, --language=NAME      highlight as NAME (language, scope or extension)\n" ++
         "      --syntax-dir=DIR     also load .sublime-syntax grammars from DIR\n" ++
-        "      --list-languages     list loaded grammars\n\n" ++
-        "Grammars are read from --syntax-dir and ~/.config/cat/syntaxes. Highlighting\n" ++
-        "is used only in the bat view with color on; no grammars are bundled yet.\n")) 0 else 1;
+        "      --list-languages     list loaded grammars\n" ++
+        "      --theme=NAME         color theme: auto (default), dark, light, or a name from\n" ++
+        "                           --list-themes ($BAT_THEME); auto asks the terminal whether\n" ++
+        "                           its background is dark or light\n" ++
+        "      --theme-dark=NAME    theme used when the background is dark (default night)\n" ++
+        "      --theme-light=NAME   theme used when it is light (default day)\n" ++
+        "      --list-themes        list the themes\n\n" ++
+        "Grammars are read from --syntax-dir and ~/.config/cat/syntaxes (about 70 are\n" ++
+        "built in); themes from ~/.config/cat/themes/NAME.theme. Highlighting is used\n" ++
+        "only in the bat view with color on.\n")) 0 else 1;
 }
 
 fn fail(ctx: cli.Context, msg: []const u8) u8 {

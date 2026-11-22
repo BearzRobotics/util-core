@@ -1,0 +1,67 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: GLSL
+scope: source.glsl
+file_extensions: [glsl, vert, frag, geom, tesc, tese, comp]
+first_line_match: '^\s*#version\b'
+contexts:
+  main:
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.glsl
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.double-slash.glsl
+    - match: '^\s*#\s*(?:version|extension|define|undef|include|if|ifdef|ifndef|elif|else|endif|error|pragma|line)\b'
+      scope: keyword.control.import.glsl
+      push: preproc
+    - match: '"'
+      scope: punctuation.definition.string.begin.glsl
+      push: dq
+    - match: '\b0[xX][0-9A-Fa-f]+[uU]?\b|(?:\b[0-9]+\.[0-9]*|\.[0-9]+|\b[0-9]+)(?:[eE][-+]?[0-9]+)?(?:[fF]|lf|LF|[uU])?\b'
+      scope: constant.numeric.glsl
+    - match: '\blayout\b'
+      scope: storage.modifier.glsl
+    - match: '\b(struct|interface)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.glsl
+        2: entity.name.type.glsl
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.glsl
+    - match: '\b(?:if|else|for|while|do|switch|case|default|break|continue|return|discard|demote|terminateInvocation)\b'
+      scope: keyword.control.glsl
+    - match: '\b(?:const|uniform|buffer|shared|attribute|varying|in|out|inout|centroid|flat|smooth|noperspective|patch|sample|invariant|precise|coherent|volatile|restrict|readonly|writeonly|subroutine|highp|mediump|lowp|precision|location|binding|std140|std430|packed|row_major|column_major|push_constant|early_fragment_tests)\b'
+      scope: storage.modifier.glsl
+    - match: '\b(?:void|bool|int|uint|float|double|[biud]?vec[234]|d?mat[234](?:x[234])?|[iu]?sampler(?:[123]D|Cube|2DRect|[12]DArray|CubeArray|Buffer|2DMS|2DMSArray)(?:Shadow)?|sampler(?:Shadow)?|[iu]?image(?:[123]D|Cube|2DRect|[12]DArray|CubeArray|Buffer|2DMS|2DMSArray)|atomic_uint|[iu]?texture(?:[123]D|Cube|2DArray|Buffer)|subpassInput)\b'
+      scope: storage.type.builtin.glsl
+    - match: '\bgl_[A-Za-z_]\w*'
+      scope: support.variable.glsl
+    - match: '\b(?:radians|degrees|sin|cos|tan|asin|acos|atan|sinh|cosh|tanh|pow|exp|log|exp2|log2|sqrt|inversesqrt|abs|sign|floor|trunc|round|ceil|fract|mod|modf|min|max|clamp|mix|step|smoothstep|isnan|isinf|length|distance|dot|cross|normalize|faceforward|reflect|refract|matrixCompMult|outerProduct|transpose|determinant|inverse|lessThan|lessThanEqual|greaterThan|greaterThanEqual|equal|notEqual|any|all|not|texture|textureLod|textureProj|textureGrad|textureOffset|texelFetch|textureSize|textureGather|textureQueryLod|texture2D|texture2DLod|textureCube|dFdx|dFdy|fwidth|noise1|noise2|noise3|noise4|EmitVertex|EndPrimitive|barrier|memoryBarrier|imageLoad|imageStore|imageSize|atomicAdd|atomicMin|atomicMax|atomicAnd|atomicOr|atomicXor|atomicExchange|atomicCompSwap|bitfieldExtract|bitfieldInsert|bitfieldReverse|bitCount|findLSB|findMSB|floatBitsToInt|intBitsToFloat|packUnorm4x8|unpackUnorm4x8|fma|frexp|ldexp)\b(?=\s*\()'
+      scope: support.function.builtin.glsl
+    - match: '\b[A-Za-z_]\w*(?=\s*\()'
+      scope: entity.name.function.glsl
+    - match: '<<=?|>>=?|\+\+|--|&&|\|\||\^\^|[-+*/%&|^<>!=]=?|[~?:]'
+      scope: keyword.operator.glsl
+  preproc:
+    - meta_scope: meta.preprocessor.glsl
+    - match: '\\\n'
+    - match: '/\*'
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.double-slash.glsl
+    - match: '$'
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.glsl
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.glsl
+      pop: true
+  dq:
+    - meta_scope: string.quoted.double.glsl
+    - match: '"'
+      scope: punctuation.definition.string.end.glsl
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.glsl
+    - match: '$'
+      pop: true

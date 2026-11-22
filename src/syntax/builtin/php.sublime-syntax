@@ -3,7 +3,7 @@
 # Original grammar written for util-core (GPL-2.0-or-later).
 name: PHP
 scope: source.php
-file_extensions: [php, phtml, php3, php4, php5, phps, phpt, inc]
+file_extensions: [php, phtml, php3, php4, php5, phps, phpt]
 first_line_match: '^#!.*\bphp\b|^<\?php'
 contexts:
   main:

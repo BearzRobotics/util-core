@@ -1,6 +1,6 @@
 # Built-in syntax grammars for cat
 
-Status: 40 grammars, original work; unverified against any reference highlighter. Date: 2026-11-21
+Status: 73 grammars, original work; unverified against any reference highlighter. Date: 2026-11-21
 
 ## Provenance
 
@@ -50,6 +50,39 @@ Every file in `src/syntax/builtin/` was written for util-core from knowledge of 
 | swift | swift | `swift` shebang |
 | vim | vim vimrc gvimrc nvimrc exrc | `" vim:` |
 | xml | xml svg xsd xsl xslt xaml axaml csproj vbproj fsproj vcxproj props targets plist rss atom wsdl resx nuspec kml gpx xliff glade ui manifest appxmanifest mobileconfig storyboard xib config | `<?xml` |
+| asciidoc | adoc asciidoc asc |  |
+| awk | awk gawk | first-line match |
+| clojure | clj cljs cljc edn bb | first-line match |
+| csv | csv tsv |  |
+| dart | dart |  |
+| elixir | ex exs eex | first-line match |
+| erlang | erl hrl escript rebar.config app.src | first-line match |
+| fsharp | fs fsi fsx fsscript |  |
+| glsl | glsl vert frag geom tesc tese comp | first-line match |
+| graphql | graphql gql graphqls |  |
+| groovy | groovy gradle gvy gy Jenkinsfile | first-line match |
+| handlebars | hbs handlebars mustache |  |
+| hcl | tf tfvars hcl nomad |  |
+| hlsl | hlsl hlsli fx fxh cginc compute usf |  |
+| jinja | j2 jinja jinja2 twig njk liquid | first-line match |
+| julia | jl | first-line match |
+| latex | tex latex sty cls bib ltx dtx | first-line match |
+| less | less |  |
+| meson | meson meson.build meson_options.txt meson.options |  |
+| ninja | ninja build.ninja |  |
+| nix | nix |  |
+| pascal | pas pp dpr lpr |  |
+| protobuf | proto |  |
+| qmake | pro pri prf prl |  |
+| r | r R Rprofile | first-line match |
+| rst | rst rest |  |
+| sass | sass |  |
+| scala | scala sc sbt |  |
+| scss | scss |  |
+| tcl | tcl tk itcl exp | first-line match |
+| vb | vb vbs bas vba frm |  |
+| verilog | v vh sv svh |  |
+| vhdl | vhd vhdl |  |
 
 `cat --list-languages` prints what is loaded.
 

@@ -98,7 +98,7 @@ grammars are bundled, pending the license audit (step 5).
 
 ## Step 5 status (2026-11-21)
 
-The embedded grammar set exists and needs no license audit: 40 grammars written
+The embedded grammar set exists and needs no license audit: 73 grammars written
 for this project (src/syntax/builtin/, listed in docs/compatibility/builtin-grammars.md),
 embedded by `src/syntax/builtin.zig` and loaded after the user's grammars. The
 audit remains the precondition only for any third-party grammar added later.

@@ -24,10 +24,15 @@ A new command, a bat-faithful `cat` view, and a Windows console fix.
   Library module `util_core.pager`; shared terminal layer `sys.Tty`.
 
 **`cat`**
-- Syntax highlighting out of the box: 40 built-in grammars of our own (C, C++, Rust, Zig, Go,
-  Java, JavaScript, TypeScript, Python, Ruby, shell, PowerShell, SQL, HTML, CSS, JSON, YAML, TOML,
-  INI, Markdown, diff, Makefile, Odin, Nim, assembly, batch, C#, Kotlin, Swift, PHP, Perl, Lua, Haskell,
-  Vim script, CMake, Dockerfile, XML, git ignore, .env and generic config files).
+- Syntax highlighting out of the box: 73 built-in grammars of our own: C, C++, C#, Rust, Zig, Go, Java,
+  Kotlin, Scala, Swift, Dart, Groovy, JavaScript, TypeScript, Python, Ruby, Perl, PHP, Lua, Julia, R,
+  Elixir, Erlang, Clojure, Haskell, F#, Visual Basic, Pascal, Odin, Nim, Tcl, AWK, shell, PowerShell,
+  batch, Vim script, SQL, HTML, XML, CSS, SCSS, Sass, Less, JSON, YAML, TOML, INI, generic config
+  files, `.env`, Markdown, reStructuredText, AsciiDoc, LaTeX, Jinja, Handlebars, CSV, diff, Makefile,
+  CMake, qmake, Meson, Ninja, Terraform/HCL, Nix, Protobuf, GraphQL, Dockerfile, git ignore,
+  Verilog, VHDL, GLSL, HLSL and assembly.
+- Themes: `--theme`, `--theme-dark`, `--theme-light`, `--list-themes`, `$BAT_THEME`; five built-in themes (`ansi`, `night`, `ember`, `day`, `paper`) with 24-bit colors reduced to 256/16 colors as the terminal allows; `auto` asks the terminal for its background color. User themes in `~/.config/cat/themes`.
+- Git change markers in the line-number gutter (`changes` style, on by default), as in bat.
 - Paging like bat: a long view goes through `$BAT_PAGER`/`$PAGER` or the built-in pager, which
   scrolls while `cat` is still writing; `--paging`, `-P`, `--pager`.
 - The terminal view now matches bat 0.26.1's default: no `Size:` line (only `--style=full` adds
@@ -37,6 +42,10 @@ A new command, a bat-faithful `cat` view, and a Windows console fix.
 **Library**
 - `sys.waitUsage` (child resource usage), `sys.Perf` (perf_event_open counters) and
   `sys.enableAnsiOutput` (Windows console setup).
+
+**Platforms**
+- The Windows console view of `cat` and the built-in pager (`less`) were checked on real Windows
+  (Windows Terminal) with the 0.2.0 release candidate: ANSI colors, no stair-stepping, key input, scrolling.
 
 ## 0.1.0
 

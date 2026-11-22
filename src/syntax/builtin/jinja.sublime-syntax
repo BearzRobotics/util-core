@@ -1,0 +1,128 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+# Template delimiters, tags, expressions, comments and strings only: the
+# surrounding text (HTML, plain text, ...) is left unscoped except for
+# minimal HTML tag names.
+name: Jinja
+scope: text.jinja
+file_extensions: [j2, jinja, jinja2, twig, njk, liquid]
+first_line_match: '^\s*\{%[-+~]?\s*(?:extends|block|set|include|import|from|macro|if|for)\b'
+contexts:
+  main:
+    - match: '\{#[-+]?'
+      scope: punctuation.definition.comment.begin.jinja
+      push: template-comment
+    - match: '(\{%[-+~]?)[ \t]*(raw|verbatim|comment)(?=[-+~]?[ \t]*%\})([^%\n]*%\})'
+      captures:
+        1: punctuation.definition.tag.begin.jinja
+        2: keyword.control.jinja
+        3: punctuation.definition.tag.end.jinja
+      push: raw-block
+    - match: '\{%[-+~]?'
+      scope: punctuation.definition.tag.begin.jinja
+      push: [statement, statement-name]
+    - match: '\{\{[-+~]?'
+      scope: punctuation.definition.variable.begin.jinja
+      push: expression
+    - match: '<!--'
+      scope: punctuation.definition.comment.begin.html
+      push: html-comment
+    - match: '</?[A-Za-z][-A-Za-z0-9:]*'
+      scope: entity.name.tag.html
+    - match: '/?>'
+      scope: entity.name.tag.html
+
+  html-comment:
+    - meta_scope: comment.block.html
+    - match: '-->'
+      scope: punctuation.definition.comment.end.html
+      pop: true
+    - match: '\{%[-+~]?|\{\{[-+~]?'
+      scope: punctuation.definition.tag.begin.jinja
+
+  template-comment:
+    - meta_scope: comment.block.jinja
+    - match: '[-+]?#\}'
+      scope: punctuation.definition.comment.end.jinja
+      pop: true
+
+  raw-block:
+    - meta_content_scope: string.unquoted.raw.jinja
+    - match: '(\{%[-+~]?)[ \t]*(endraw|endverbatim|endcomment)[ \t]*([-+~]?%\})'
+      captures:
+        1: punctuation.definition.tag.begin.jinja
+        2: keyword.control.jinja
+        3: punctuation.definition.tag.end.jinja
+      pop: true
+
+  statement-name:
+    - match: '[ \t]*(end[a-z_]+|[A-Za-z_][A-Za-z_0-9]*)'
+      scope: keyword.control.tag.jinja
+      pop: true
+    - match: '(?=\S)'
+      pop: true
+    - match: '$'
+      pop: true
+
+  statement:
+    - match: '[-+~]?%\}'
+      scope: punctuation.definition.tag.end.jinja
+      pop: true
+    - match: '\b(?:in|as|if|else|elif|elseif|endif|with|without|context|ignore|missing|scoped|recursive|import|from|extends|include|only|and|or|not|is|when|unless|case)\b'
+      scope: keyword.control.jinja
+    - include: expr-bits
+
+  expression:
+    - match: '[-+~]?\}\}'
+      scope: punctuation.definition.variable.end.jinja
+      pop: true
+    - match: '\b(?:if|else|and|or|not|is|in)\b'
+      scope: keyword.operator.word.jinja
+    - include: expr-bits
+
+  expr-bits:
+    - match: '"'
+      scope: punctuation.definition.string.begin.jinja
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.jinja
+      push: sq-string
+    - match: '\b(?:true|false|none|null|True|False|None|nil|empty|blank)\b'
+      scope: constant.language.jinja
+    - match: '(?<![\w.])[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.jinja
+    - match: '(\|)[ \t]*([A-Za-z_][A-Za-z_0-9]*)'
+      captures:
+        1: keyword.operator.filter.jinja
+        2: support.function.filter.jinja
+    - match: '(?<=\.)[A-Za-z_][A-Za-z_0-9]*(?=\()'
+      scope: support.function.jinja
+    - match: '\b(?:loop|super|self|caller|varargs|kwargs)\b'
+      scope: variable.language.jinja
+    - match: '(?<![\w.])(?:range|lipsum|dict|cycler|joiner|namespace|url|static|csrf_token|url_for)(?=\()'
+      scope: support.function.builtin.jinja
+    - match: '[-+*/%=<>!~]=?|//|\*\*|\.\.'
+      scope: keyword.operator.jinja
+    - match: '[()\[\]{},:.]'
+      scope: punctuation.separator.jinja
+
+  dq-string:
+    - meta_scope: string.quoted.double.jinja
+    - match: '"'
+      scope: punctuation.definition.string.end.jinja
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.jinja
+    - match: '$'
+      pop: true
+
+  sq-string:
+    - meta_scope: string.quoted.single.jinja
+    - match: "'"
+      scope: punctuation.definition.string.end.jinja
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.jinja
+    - match: '$'
+      pop: true

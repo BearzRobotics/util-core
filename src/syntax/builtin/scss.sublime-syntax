@@ -1,0 +1,172 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: SCSS
+scope: source.scss
+file_extensions: [scss]
+contexts:
+  main:
+    - include: common
+    - match: '\}'
+      scope: punctuation.section.block.end.scss
+    - include: block-item
+
+  common:
+    - match: '//.*$'
+      scope: comment.line.double-slash.scss
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.scss
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.scss
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.scss
+      pop: true
+
+  block-item:
+    - match: '(\$[-\w]+)[ \t]*(:)'
+      captures:
+        1: variable.parameter.scss
+        2: punctuation.separator.key-value.scss
+      push: value
+    - match: '(@)(mixin|function)\b'
+      scope: keyword.control.at-rule.scss
+      push: definition-head
+    - match: '(@)(include)\b'
+      scope: keyword.control.at-rule.scss
+      push: include-head
+    - match: '(@)(if|else|each|for|while|return|extend|use|forward|import|media|supports|font-face|keyframes|charset|content|debug|warn|error|at-root|page|layer|container)\b'
+      scope: keyword.control.at-rule.scss
+      push: at-prelude
+    - match: '@[-\w]+'
+      scope: keyword.control.at-rule.scss
+      push: at-prelude
+    - match: '--[-\w]+(?=[ \t]*:)'
+      scope: variable.parameter.custom-property.scss
+    - match: '([-\w]+|#\{[^}\n]*\}[-\w]*)[ \t]*(:)(?![^;{}\n]*\{)'
+      captures:
+        1: support.type.property-name.scss
+        2: punctuation.separator.key-value.scss
+      push: value
+    - match: '\{'
+      scope: punctuation.section.block.begin.scss
+      push: block
+    - include: selector-bits
+
+  block:
+    - include: common
+    - match: '\}'
+      scope: punctuation.section.block.end.scss
+      pop: true
+    - include: block-item
+
+  selector-bits:
+    - include: interpolation
+    - match: '%[-\w]+'
+      scope: entity.name.class.placeholder.scss
+    - match: '\.[-\w]+'
+      scope: entity.name.class.scss
+    - match: '#[-\w]+'
+      scope: entity.name.class.id.scss
+    - match: '::?[-\w]+'
+      scope: support.type.pseudo-class.scss
+    - match: '&'
+      scope: keyword.operator.parent-selector.scss
+    - match: '\[[^\]\n]*\]'
+      scope: meta.attribute-selector.scss support.type.attribute.scss
+    - match: '(?<![-\w$])[A-Za-z][-\w]*'
+      scope: entity.name.tag.scss
+    - match: '[>+~*]'
+      scope: keyword.operator.combinator.scss
+    - match: '"'
+      scope: punctuation.definition.string.begin.scss
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.scss
+      push: sq-string
+    - match: '\$[-\w]+'
+      scope: variable.parameter.scss
+
+  definition-head:
+    - match: '[ \t]*([-\w]+)'
+      captures:
+        1: entity.name.function.scss
+      set: at-prelude
+
+  include-head:
+    - match: '[ \t]*([-\w.]+)'
+      captures:
+        1: entity.name.function.scss
+      set: at-prelude
+
+  at-prelude:
+    - match: '(?=\{|;|\})'
+      pop: true
+    - match: '\b(?:and|or|not|only|in|from|through|to|as|with|using|if)\b'
+      scope: keyword.operator.word.scss
+    - include: value-bits
+
+  value:
+    - match: ';'
+      scope: punctuation.terminator.rule.scss
+      pop: true
+    - match: '(?=\})'
+      pop: true
+    - match: '\{'
+      scope: punctuation.section.block.begin.scss
+      set: block
+    - include: common
+    - include: value-bits
+
+  value-bits:
+    - include: interpolation
+    - match: '"'
+      scope: punctuation.definition.string.begin.scss
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.scss
+      push: sq-string
+    - match: '\$[-\w]+'
+      scope: variable.parameter.scss
+    - match: '!(?:important|default|global|optional)\b'
+      scope: keyword.other.important.scss
+    - match: '#[0-9A-Fa-f]{3,8}\b'
+      scope: constant.other.color.scss
+    - match: '(?<![-\w])[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?(?:%|[A-Za-z]+)?'
+      scope: constant.numeric.scss
+    - match: '\b(?:true|false|null|auto|none|inherit|initial|unset|transparent|currentColor)\b'
+      scope: constant.language.scss
+    - match: '([-\w]+)(?=\()'
+      scope: support.function.scss
+    - match: '(?<![-\w])[A-Za-z_][-\w]*'
+    - match: '[-+*/%=<>!]=?|\.\.\.'
+      scope: keyword.operator.scss
+    - match: '\b(?:and|or|not)\b'
+      scope: keyword.operator.word.scss
+
+  interpolation:
+    - match: '#\{[^}\n]*\}'
+      scope: variable.parameter.interpolation.scss
+
+  dq-string:
+    - meta_scope: string.quoted.double.scss
+    - match: '"'
+      scope: punctuation.definition.string.end.scss
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.scss
+    - match: '#\{[^}\n]*\}'
+      scope: variable.parameter.interpolation.scss
+    - match: '$'
+      pop: true
+
+  sq-string:
+    - meta_scope: string.quoted.single.scss
+    - match: "'"
+      scope: punctuation.definition.string.end.scss
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.scss
+    - match: '$'
+      pop: true

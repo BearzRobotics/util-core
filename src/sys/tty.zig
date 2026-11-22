@@ -20,6 +20,7 @@ const win = if (is_win) struct {
     extern "kernel32" fn SetConsoleMode(h: w.HANDLE, mode: u32) callconv(.winapi) c_int;
     extern "kernel32" fn ReadFile(h: w.HANDLE, buf: [*]u8, n: u32, got: *u32, ov: ?*anyopaque) callconv(.winapi) c_int;
     extern "kernel32" fn CloseHandle(h: w.HANDLE) callconv(.winapi) c_int;
+    extern "kernel32" fn WaitForSingleObject(h: w.HANDLE, ms: u32) callconv(.winapi) u32;
     const CSBI = extern struct {
         size_x: i16,
         size_y: i16,
@@ -103,6 +104,19 @@ pub const Tty = struct {
         }
         const n = std.posix.read(t.handle, &b) catch return null;
         return if (n == 1) b[0] else null;
+    }
+
+    /// Next input byte, waiting at most `ms` milliseconds; null on timeout,
+    /// end of input or error.
+    pub fn readByteTimeout(t: *const Tty, ms: u32) ?u8 {
+        if (comptime is_win) {
+            if (win.WaitForSingleObject(t.handle, ms) != 0) return null;
+            return t.readByte();
+        }
+        var fds = [1]std.posix.pollfd{.{ .fd = t.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+        const n = std.posix.poll(&fds, @intCast(ms)) catch return null;
+        if (n == 0) return null;
+        return t.readByte();
     }
 
     /// Current size of the terminal window.

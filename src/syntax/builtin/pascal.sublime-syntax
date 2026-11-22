@@ -1,0 +1,88 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Pascal
+scope: source.pascal
+file_extensions: [pas, pp, dpr, lpr]
+contexts:
+  main:
+    - match: '\(\*\$'
+      scope: punctuation.definition.comment.begin.pascal
+      push: directive-paren
+    - match: '\(\*'
+      scope: punctuation.definition.comment.begin.pascal
+      push: comment-paren
+    - match: '\{\$'
+      scope: punctuation.definition.comment.begin.pascal
+      push: directive-brace
+    - match: '\{'
+      scope: punctuation.definition.comment.begin.pascal
+      push: comment-brace
+    - match: '//.*$'
+      scope: comment.line.double-slash.pascal
+    - match: "'"
+      scope: punctuation.definition.string.begin.pascal
+      push: string
+    - match: '#(?:\$[0-9A-Fa-f]+|[0-9]+)'
+      scope: constant.character.pascal
+    - match: '\^[A-Za-z]'
+      scope: constant.character.control.pascal
+    - match: '\$[0-9A-Fa-f_]+|%[01_]+|&[0-7]+|\b[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.pascal
+    - match: '(?i)\b(function|procedure|constructor|destructor|operator)\s+(?:([A-Za-z_]\w*)\.)?([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.function.pascal
+        2: entity.name.type.pascal
+        3: entity.name.function.pascal
+    - match: '(?i)\b(program|unit|library|package|uses|contains|requires)\s+([A-Za-z_][\w.]*)'
+      captures:
+        1: keyword.control.pascal
+        2: entity.name.namespace.pascal
+    - match: '(?i)\b([A-Za-z_]\w*)\s*(=)\s*(?=(?:packed\s+)?(?:class|record|object|interface|dispinterface|set\s+of|array|file\s+of|\^)\b)'
+      captures:
+        1: entity.name.type.pascal
+        2: keyword.operator.pascal
+    - match: '(?i)\b(?:true|false|nil|self|inherited|result)\b'
+      scope: constant.language.pascal
+    - match: '(?i)\b(?:and|or|xor|not|div|mod|shl|shr|in|is|as)\b'
+      scope: keyword.operator.word.pascal
+    - match: '(?i)\b(?:begin|end|if|then|else|case|of|for|to|downto|do|while|repeat|until|with|try|except|finally|raise|on|goto|label|exit|break|continue|asm|initialization|finalization|interface|implementation|forward|external|exports)\b'
+      scope: keyword.control.pascal
+    - match: '(?i)\b(?:var|const|type|threadvar|resourcestring|class|record|object|packed|array|set|file|string|function|procedure|constructor|destructor|property|absolute|out)\b'
+      scope: storage.type.pascal
+    - match: '(?i)\b(?:private|protected|public|published|strict|virtual|override|abstract|overload|reintroduce|static|inline|cdecl|stdcall|register|pascal|safecall|dynamic|sealed|final|read|write|default|stored|index|implements|nodefault|message|platform|deprecated|far|near)\b'
+      scope: storage.modifier.pascal
+    - match: '(?i)\b(?:integer|cardinal|shortint|smallint|longint|int64|byte|word|longword|qword|uint64|boolean|bytebool|wordbool|longbool|char|ansichar|widechar|real|single|double|extended|comp|currency|pointer|pchar|pansichar|pwidechar|variant|ansistring|widestring|unicodestring|shortstring|text|tobject|tclass|texception|tstringlist|tstrings|nativeint|nativeuint|int8|int16|int32|uint8|uint16|uint32|utf8string|string)\b'
+      scope: storage.type.builtin.pascal
+    - match: '(?i)\b(?:writeln|write|readln|read|new|dispose|getmem|freemem|reallocmem|length|setlength|copy|pos|delete|insert|inc|dec|ord|chr|succ|pred|abs|sqr|sqrt|sin|cos|arctan|ln|exp|round|trunc|frac|int|odd|upcase|lowercase|uppercase|inttostr|strtoint|strtointdef|floattostr|strtofloat|format|assign|reset|rewrite|append|close|eof|eoln|halt|sizeof|high|low|assigned|include|exclude|fillchar|move|paramstr|paramcount|val|str|randomize|random|freeandnil|create|free|destroy)\b(?=\s*[(;.\s]|$)'
+      scope: support.function.builtin.pascal
+    - match: ':=|<>|<=|>=|\+=|-=|\*=|/=|\.\.|[-+*/=<>@^]'
+      scope: keyword.operator.pascal
+
+  string:
+    - meta_scope: string.quoted.single.pascal
+    - match: "''"
+      scope: constant.character.escape.pascal
+    - match: "'"
+      scope: punctuation.definition.string.end.pascal
+      pop: true
+    - match: '$'
+      pop: true
+  comment-paren:
+    - meta_scope: comment.block.pascal
+    - match: '\*\)'
+      scope: punctuation.definition.comment.end.pascal
+      pop: true
+  comment-brace:
+    - meta_scope: comment.block.pascal
+    - match: '\}'
+      scope: punctuation.definition.comment.end.pascal
+      pop: true
+  directive-paren:
+    - meta_scope: keyword.control.import.pascal
+    - match: '\*\)'
+      pop: true
+  directive-brace:
+    - meta_scope: keyword.control.import.pascal
+    - match: '\}'
+      pop: true

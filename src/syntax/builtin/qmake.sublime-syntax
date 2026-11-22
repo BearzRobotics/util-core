@@ -1,0 +1,56 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: qmake
+scope: source.qmake
+file_extensions: [pro, pri, prf, prl]
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.qmake
+    - match: '"'
+      scope: punctuation.definition.string.begin.qmake
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.qmake
+      push: sq
+    - include: vars
+    - match: '^\s*([A-Za-z_][\w.]*)\s*(\+=|-=|\*=|~=|=)'
+      captures:
+        1: variable.other.qmake
+        2: keyword.operator.assignment.qmake
+    - match: '\b(?:else|for|if|isEmpty|contains|equals|greaterThan|lessThan|exists|defined|include|load|requires|error|warning|message|return|eval|export|isEqual|infile|clear|unset|system|CONFIG|debug|release|win32|unix|macx|linux|android|ios|msvc|mingw|clang|gcc|macos|darwin|bsd|freebsd)\b(?=\s*[({:|]|\s*$)'
+      scope: keyword.control.qmake
+    - match: '\b(?:defineReplace|defineTest)\b'
+      scope: storage.type.function.qmake
+    - match: '\b(?:TEMPLATE|TARGET|QT|CONFIG|SOURCES|HEADERS|FORMS|RESOURCES|INCLUDEPATH|DEPENDPATH|LIBS|DEFINES|DESTDIR|OBJECTS_DIR|MOC_DIR|RCC_DIR|UI_DIR|VERSION|SUBDIRS|OTHER_FILES|DISTFILES|TRANSLATIONS|INSTALLS|QMAKE_[A-Z_]+|PKGCONFIG|LIBS_PRIVATE|VPATH|RC_ICONS|ICON)\b'
+      scope: support.constant.qmake
+    - match: '\b[A-Za-z_]\w*(?=\s*\()'
+      scope: entity.name.function.qmake
+    - match: '\b(?:app|lib|subdirs|vcapp|vclib|aux|static|shared|plugin|c\+\+[0-9a-z]+|console|gui|widgets|core|network|qml|quick|sql|xml|testlib|release|debug|ordered)\b'
+      scope: constant.language.qmake
+    - match: '(?<![\w.])[0-9]+(?:\.[0-9]+)*\b'
+      scope: constant.numeric.qmake
+    - match: '\\$'
+      scope: punctuation.separator.continuation.qmake
+    - match: '[:|!{}]'
+      scope: keyword.operator.qmake
+
+  vars:
+    - match: '\$\$\{[^}\n]*\}|\$\$\[[^\]\n]*\]|\$\$\([^)\n]*\)|\$\$[A-Za-z_][\w.]*(?:\([^)\n]*\))?'
+      scope: variable.parameter.qmake
+
+  dq:
+    - meta_scope: string.quoted.double.qmake
+    - match: '"'
+      scope: punctuation.definition.string.end.qmake
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.qmake
+    - include: vars
+
+  sq:
+    - meta_scope: string.quoted.single.qmake
+    - match: "'"
+      scope: punctuation.definition.string.end.qmake
+      pop: true

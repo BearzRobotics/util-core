@@ -1,0 +1,62 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Verilog
+scope: source.verilog
+file_extensions: [v, vh, sv, svh]
+contexts:
+  main:
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.verilog
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.double-slash.verilog
+    - match: '"'
+      scope: punctuation.definition.string.begin.verilog
+      push: dq
+    - match: '^\s*`(?:define|undef|include|ifdef|ifndef|elsif|else|endif|timescale|default_nettype|resetall|celldefine|endcelldefine|pragma|line|begin_keywords|end_keywords|unconnected_drive|nounconnected_drive|__FILE__|__LINE__)\b'
+      scope: keyword.control.import.verilog
+    - match: '`[A-Za-z_]\w*'
+      scope: entity.name.function.preprocessor.verilog
+    - match: '\$[A-Za-z_]\w*'
+      scope: support.function.system.verilog
+    - match: "(?i)\\b\\d*\\s*'[sS]?[bBoOdDhH]\\s*[0-9a-fA-FxXzZ_?]+|'[01xXzZ]\\b"
+      scope: constant.numeric.verilog
+    - match: '\b[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][-+]?[0-9]+)?(?:[munpf]?s)?\b'
+      scope: constant.numeric.verilog
+    - match: '\b(module|macromodule|primitive|interface|program|package|class|checker|config)\s+(?:automatic\s+)?([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.verilog
+        2: entity.name.type.verilog
+    - match: '\b(function|task)\b(?:\s+(?:automatic\s+|static\s+)?(?:(?:signed|unsigned)\s+)?(?:\[[^\]]*\]\s*)?(?:[A-Za-z_]\w*\s+)?)?([A-Za-z_]\w*)\s*(?=[(;])'
+      captures:
+        1: storage.type.verilog
+        2: entity.name.function.verilog
+    - match: '\b(?:endmodule|endmacromodule|endprimitive|endinterface|endprogram|endpackage|endclass|endchecker|endconfig|endfunction|endtask|endcase|endgenerate|endtable|endspecify|endclocking|endsequence|endproperty|endgroup)\b'
+      scope: storage.type.verilog
+    - match: '\b(?:begin|end|fork|join|join_any|join_none|if|else|case|casex|casez|endcase|default|for|foreach|forever|repeat|while|do|break|continue|return|wait|disable|always|always_comb|always_ff|always_latch|initial|final|assign|deassign|force|release|generate|genvar|posedge|negedge|edge|iff|or|and|assert|assume|cover|property|sequence|import|export|unique|unique0|priority|inside|new|extends|implements|specify|table|clocking|modport|constraint|randomize|with|dist|solve|before)\b'
+      scope: keyword.control.verilog
+    - match: '\b(?:input|output|inout|ref|wire|wand|wor|tri|tri0|tri1|triand|trior|trireg|supply0|supply1|reg|logic|bit|byte|shortint|int|longint|integer|time|real|realtime|shortreal|string|event|chandle|void|enum|struct|union|packed|typedef|signed|unsigned|parameter|localparam|specparam|defparam|var|const|static|automatic|local|protected|virtual|rand|randc|pure|extern|tagged|type|interconnect|nettype|scalared|vectored|small|medium|large|strong0|strong1|weak0|weak1|pull0|pull1|highz0|highz1)\b'
+      scope: storage.modifier.verilog
+    - match: '\b(?:and|nand|or|nor|xor|xnor|buf|not|bufif0|bufif1|notif0|notif1|nmos|pmos|cmos|rnmos|rpmos|rcmos|tran|rtran|tranif0|tranif1|rtranif0|rtranif1|pullup|pulldown)\b(?=\s*(?:#|\(|[A-Za-z_]))'
+      scope: support.function.gate.verilog
+    - match: '\b[A-Za-z_]\w*(?=\s*\()'
+      scope: entity.name.function.verilog
+    - match: '<<<=?|>>>=?|===|!==|==\?|!=\?|<->|\|->|\|=>|##|\+\+|--|\*\*|&&|\|\||~&|~\||~\^|\^~|<<=?|>>=?|[-+*/%&|^]=|[<>!=]=?|[-+*/%&|^~?:@#]'
+      scope: keyword.operator.verilog
+  block-comment:
+    - meta_scope: comment.block.verilog
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.verilog
+      pop: true
+  dq:
+    - meta_scope: string.quoted.double.verilog
+    - match: '"'
+      scope: punctuation.definition.string.end.verilog
+      pop: true
+    - match: '\\(?:[ntvfa\\"]|[0-7]{1,3}|x[0-9A-Fa-f]{1,2}|\n)'
+      scope: constant.character.escape.verilog
+    - match: '%[-0-9.]*[bBoOdDhHxXeEfFgGsStTmMcCvVuUzZ%]'
+      scope: constant.other.placeholder.verilog
+    - match: '$'
+      pop: true

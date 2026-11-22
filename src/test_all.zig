@@ -21,6 +21,8 @@ test {
     _ = @import("lib/basenc.zig");
     _ = @import("lib/bracket.zig");
     _ = @import("lib/cat.zig");
+    _ = @import("lib/gitchanges.zig");
+    _ = @import("termcolors.zig");
     _ = @import("lib/chroot.zig");
     _ = @import("lib/cksum.zig");
     _ = @import("lib/cmp.zig");
