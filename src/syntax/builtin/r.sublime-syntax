@@ -1,0 +1,100 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: R
+scope: source.r
+file_extensions: [r, R, Rprofile]
+first_line_match: '^#!.*\bRscript\b'
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: decls
+    - include: keywords
+    - include: numbers
+    - include: functions
+    - include: operators
+
+  comments:
+    - match: '#.*$'
+      scope: comment.line.number-sign.r
+
+  strings:
+    - match: '[rR]"(-*)[\(\[\{]'
+      scope: punctuation.definition.string.begin.r
+      push: raw-dq
+    - match: "[rR]'(-*)[\\(\\[\\{]"
+      scope: punctuation.definition.string.begin.r
+      push: raw-sq
+    - match: '"'
+      scope: punctuation.definition.string.begin.r
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.r
+      push: sq
+    - match: '`[^`\n]*`'
+      scope: variable.parameter.r
+
+  raw-dq:
+    - meta_scope: string.quoted.raw.r
+    - match: '[\)\]\}]-*"'
+      scope: punctuation.definition.string.end.r
+      pop: true
+  raw-sq:
+    - meta_scope: string.quoted.raw.r
+    - match: "[\\)\\]\\}]-*'"
+      scope: punctuation.definition.string.end.r
+      pop: true
+
+  dq:
+    - meta_scope: string.quoted.double.r
+    - match: '"'
+      scope: punctuation.definition.string.end.r
+      pop: true
+    - include: escapes
+  sq:
+    - meta_scope: string.quoted.single.r
+    - match: "'"
+      scope: punctuation.definition.string.end.r
+      pop: true
+    - include: escapes
+
+  escapes:
+    - match: '\\(?:[abfnrtv0"''`\\ ]|x[0-9A-Fa-f]{1,2}|u\{?[0-9A-Fa-f]{1,4}\}?|U\{?[0-9A-Fa-f]{1,8}\}?|[0-7]{1,3})'
+      scope: constant.character.escape.r
+
+  decls:
+    - match: '([A-Za-z_.][\w.]*|`[^`]+`)\s*(?:<-|=|<<-)\s*(function)\b'
+      captures:
+        1: entity.name.function.r
+        2: storage.type.function.r
+    - match: '\bfunction\b'
+      scope: storage.type.function.r
+
+  keywords:
+    - match: '\b(?:TRUE|FALSE|T|F)\b'
+      scope: constant.language.boolean.r
+    - match: '\b(?:NULL|NA|NA_integer_|NA_real_|NA_character_|NA_complex_|Inf|NaN)\b'
+      scope: constant.language.null.r
+    - match: '\b(?:if|else|for|while|repeat|break|next|return|in)\b'
+      scope: keyword.control.r
+    - match: '\b(?:library|require|requireNamespace|loadNamespace|source|suppressWarnings|suppressMessages)(?=\s*\()'
+      scope: keyword.control.import.r
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f]+[Li]?\b'
+      scope: constant.numeric.hex.r
+    - match: '(?<![A-Za-z0-9_.])(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?[Li]?(?![A-Za-z0-9_.])'
+      scope: constant.numeric.decimal.r
+
+  functions:
+    - match: '\b(?:c|print|cat|paste|paste0|length|names|list|vector|matrix|data\.frame|lapply|sapply|vapply|mapply|Map|Filter|Reduce|apply|tapply|seq|seq_len|seq_along|rep|sum|mean|median|min|max|sd|var|round|nchar|substr|sprintf|format|stop|warning|message|tryCatch|try|is\.na|is\.null|ifelse|which|order|sort|unique|rev|head|tail|nrow|ncol|dim|str|summary|class|factor|as\.numeric|as\.character|as\.integer|do\.call|Sys\.time|Sys\.getenv|exists|get|assign|invisible|identical|setdiff|union|intersect|grepl|gsub|sub|regmatches|strsplit|toupper|tolower|file\.path|readLines|writeLines|read\.csv|write\.csv|plot|lines|points|hist|ggplot)(?=\s*\()'
+      scope: support.function.r
+    - match: '[A-Za-z_.][\w.]*(?=\s*\()'
+      scope: entity.name.function.r
+    - match: '[A-Za-z]\w*(?=::)'
+      scope: entity.name.namespace.r
+
+  operators:
+    - match: '<<-|->>|<-|->|\|>|%[^%\n]*%|::?:?|[-+*/^<>=!&|~?:$@]+'
+      scope: keyword.operator.r

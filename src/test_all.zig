@@ -21,6 +21,8 @@ test {
     _ = @import("lib/basenc.zig");
     _ = @import("lib/bracket.zig");
     _ = @import("lib/cat.zig");
+    _ = @import("lib/gitchanges.zig");
+    _ = @import("termcolors.zig");
     _ = @import("lib/chroot.zig");
     _ = @import("lib/cksum.zig");
     _ = @import("lib/cmp.zig");
@@ -105,6 +107,8 @@ test {
     _ = @import("lib/tee.zig");
     _ = @import("lib/test.zig");
     _ = @import("lib/timeout.zig");
+    _ = @import("lib/time.zig");
+    _ = @import("lib/pager.zig");
     _ = @import("lib/touch.zig");
     _ = @import("lib/tr.zig");
     _ = @import("lib/tree.zig");

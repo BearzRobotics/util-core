@@ -1,0 +1,255 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: C++
+scope: source.cpp
+file_extensions:
+  - cpp
+  - cc
+  - cxx
+  - c++
+  - hpp
+  - hh
+  - hxx
+  - h++
+  - ipp
+  - tpp
+  - inl
+first_line_match: '-\*-\s*c\+\+\s*-\*-'
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+
+contexts:
+  main:
+    - include: comments
+    - include: preprocessor
+    - include: code
+
+  code:
+    - include: comments
+    - include: strings
+    - include: numbers
+    - include: attributes
+    - include: keywords
+    - include: functions
+    - include: operators
+
+  comments:
+    - match: '/\*\*(?!/)'
+      scope: punctuation.definition.comment.begin.cpp
+      push: doc-block-comment
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.cpp
+      push: block-comment
+    - match: '//[/!].*$'
+      scope: comment.line.documentation.cpp
+    - match: '//.*$'
+      scope: comment.line.double-slash.cpp
+
+  block-comment:
+    - meta_scope: comment.block.cpp
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.cpp
+      pop: true
+
+  doc-block-comment:
+    - meta_scope: comment.block.documentation.cpp
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.cpp
+      pop: true
+
+  preprocessor:
+    - match: '^\s*(#)\s*(include|include_next|import)\b'
+      captures:
+        1: punctuation.definition.directive.cpp
+        2: keyword.control.import.cpp
+      push: include-arg
+    - match: '^\s*(#)\s*(define)\b[ \t]*({{ident}})?'
+      captures:
+        1: punctuation.definition.directive.cpp
+        2: keyword.control.import.define.cpp
+        3: entity.name.function.preprocessor.cpp
+      push: pp-body
+    - match: '^\s*(#)\s*(undef|ifdef|ifndef)\b[ \t]*({{ident}})?'
+      captures:
+        1: punctuation.definition.directive.cpp
+        2: keyword.control.import.cpp
+        3: entity.name.function.preprocessor.cpp
+      push: pp-body
+    - match: '^\s*(#)\s*(if|elif|elifdef|elifndef|else|endif|pragma|error|warning|line|ident|sccs|assert|unassert)\b'
+      captures:
+        1: punctuation.definition.directive.cpp
+        2: keyword.control.import.cpp
+      push: pp-body
+
+  include-arg:
+    - match: '\\[ \t]*\n'
+      scope: punctuation.separator.continuation.cpp
+    - match: '<[^>\n]*>'
+      scope: string.quoted.other.lt-gt.include.cpp
+    - match: '"[^"\n]*"'
+      scope: string.quoted.double.include.cpp
+    - include: comments
+    - match: '\n'
+      pop: true
+
+  pp-body:
+    - match: '\\[ \t]*\n'
+      scope: punctuation.separator.continuation.cpp
+    - match: '\bdefined\b'
+      scope: keyword.operator.cpp
+    - include: code
+    - match: '\n'
+      pop: true
+
+  strings:
+    - match: '(?:u8|u|U|L)?R"(?=[^()\\\s"]{0,16}\()'
+      scope: punctuation.definition.string.begin.cpp
+      push: raw-string-delim
+    - match: '(?:u8|u|U|L)?"'
+      scope: punctuation.definition.string.begin.cpp
+      push: dq-string
+    - match: '(?:u8|u|U|L)?\x27'
+      scope: punctuation.definition.string.begin.cpp
+      push: char
+
+  raw-string-delim:
+    - meta_scope: string.quoted.other.raw.cpp
+    - match: '\('
+      scope: punctuation.definition.string.begin.cpp
+      set: raw-string-plain
+    - match: '[^()\\\s"]{1,16}\('
+      scope: punctuation.definition.string.begin.cpp
+      set: raw-string-delimited
+
+  raw-string-plain:
+    - meta_scope: string.quoted.other.raw.cpp
+    - match: '\)"'
+      scope: punctuation.definition.string.end.cpp
+      pop: true
+
+  raw-string-delimited:
+    - meta_scope: string.quoted.other.raw.cpp
+    - match: '\)[^()\\\s"]{1,16}"'
+      scope: punctuation.definition.string.end.cpp
+      pop: true
+
+  dq-string:
+    - meta_scope: string.quoted.double.cpp
+    - match: '"'
+      scope: punctuation.definition.string.end.cpp
+      pop: true
+    - include: string-escapes
+    - match: '%[-+ #0]*(?:\d+|\*)?(?:\.(?:\d+|\*))?(?:hh|h|ll|l|j|z|t|L)?[diouxXeEfFgGaAcspn%]'
+      scope: constant.other.placeholder.cpp
+    - match: '\n'
+      pop: true
+
+  char:
+    - meta_scope: string.quoted.single.cpp
+    - match: '\x27'
+      scope: punctuation.definition.string.end.cpp
+      pop: true
+    - include: string-escapes
+    - match: '\n'
+      pop: true
+
+  string-escapes:
+    - match: '\\(?:[abefnrtv\\\x27"?]|[0-7]{1,3}|x\h+|u\h{4}|U\h{8})'
+      scope: constant.character.escape.cpp
+    - match: '\\\n'
+      scope: constant.character.escape.cpp
+    - match: '\\.'
+      scope: invalid.illegal.unknown-escape.cpp
+
+  numbers:
+    - match: '(?<![\w.])0[xX](?:\h+(?:\x27\h+)*)?(?:\.\h*)?(?:[pP][+-]?\d+)?[uUlLfF]*(?![\w])'
+      scope: constant.numeric.hex.cpp
+    - match: '(?<![\w.])0[bB][01]+(?:\x27[01]+)*[uUlL]*(?!\w)'
+      scope: constant.numeric.binary.cpp
+    - match: '(?<![\w.])(?:\d+(?:\x27\d+)*\.(?:\d+(?:\x27\d+)*)?|\.\d+(?:\x27\d+)*)(?:[eE][+-]?\d+)?[fFlL]?(?!\w)'
+      scope: constant.numeric.float.cpp
+    - match: '(?<![\w.])\d+(?:\x27\d+)*[eE][+-]?\d+[fFlL]?(?!\w)'
+      scope: constant.numeric.float.cpp
+    - match: '(?<![\w.])\d+(?:\x27\d+)*(?:[uU](?:ll|LL|l|L|z|Z)?|(?:ll|LL|l|L|z|Z)[uU]?|[fF])?(?:_?[a-zA-Z]\w*)?(?!\w)'
+      scope: constant.numeric.integer.cpp
+
+  attributes:
+    - match: '\[\[[^\]\n]*\]\]'
+      scope: meta.annotation.cpp
+    - match: '\b__attribute__\b'
+      scope: storage.modifier.attribute.cpp
+    - match: '\b__declspec\b'
+      scope: storage.modifier.attribute.cpp
+
+  keywords:
+    - match: '\b(?:if|else|for|while|do|switch|case|default|break|continue|return|goto|try|catch|throw|co_await|co_yield|co_return|requires)\b'
+      scope: keyword.control.cpp
+    - match: '\b(?:sizeof|alignof|typeid|decltype|noexcept|typeof|__typeof__|static_assert|new|delete|and|or|not|xor|bitand|bitor|compl|and_eq|or_eq|xor_eq|not_eq)\b'
+      scope: keyword.operator.word.cpp
+    - match: '\b(?:static_cast|dynamic_cast|const_cast|reinterpret_cast|bit_cast)\b'
+      scope: keyword.operator.cast.cpp
+    - match: '\boperator\b'
+      scope: keyword.operator.word.cpp
+    - match: '\b(namespace)\b(?:\s+({{ident}}(?:\s*::\s*{{ident}})*))?'
+      captures:
+        1: storage.type.namespace.cpp
+        2: entity.name.namespace.cpp
+    - match: '\b(using)\b\s+(?:(namespace)\b|({{ident}})(?=\s*=))'
+      captures:
+        1: keyword.control.import.using.cpp
+        2: storage.type.namespace.cpp
+        3: entity.name.type.alias.cpp
+    - match: '\b(using|typedef)\b'
+      scope: keyword.control.import.cpp
+    - match: '\b(class|struct|union|enum(?:\s+(?:class|struct))?)\b(?:\s+(?:alignas\s*\([^)]*\)\s*)?({{ident}}))?'
+      captures:
+        1: storage.type.class.cpp
+        2: entity.name.type.class.cpp
+    - match: '\b(template|typename|concept)\b'
+      scope: storage.type.template.cpp
+    - match: '\b(?:public|private|protected)\b(?=\s*(?::(?!:)|\{|$))'
+      scope: storage.modifier.access.cpp
+    - match: '\b(?:public|private|protected)\b'
+      scope: storage.modifier.access.cpp
+    - match: '\b(?:void|char|char8_t|char16_t|char32_t|wchar_t|short|int|long|float|double|signed|unsigned|bool|_Bool|auto|__int128|__int64|__int32|__int16|__int8|va_list)\b'
+      scope: storage.type.cpp
+    - match: '\b(?:static|extern|const|constexpr|consteval|constinit|volatile|register|inline|mutable|virtual|explicit|friend|override|final|thread_local|export|_Noreturn|alignas|__inline|__inline__|__restrict|__restrict__|__volatile__|__extension__|__asm__|__asm|asm)\b'
+      scope: storage.modifier.cpp
+    - match: '\b__attribute__\b'
+      scope: storage.modifier.attribute.cpp
+    - match: '\b(?:true|false|NULL|nullptr|EOF)\b'
+      scope: constant.language.cpp
+    - match: '\bthis\b'
+      scope: variable.language.this.cpp
+    - match: '\b(?:__FILE__|__LINE__|__func__|__FUNCTION__|__PRETTY_FUNCTION__|__DATE__|__TIME__|__cplusplus|__VA_ARGS__|__COUNTER__)\b'
+      scope: constant.language.cpp
+    - match: '\b(std)\s*(::)\s*({{ident}})\b(?!\s*\()'
+      captures:
+        1: support.other.namespace.std.cpp
+        2: punctuation.accessor.cpp
+        3: support.type.cpp
+    - match: '\bstd(?=\s*::)'
+      scope: support.other.namespace.std.cpp
+    - match: '\b({{ident}})\s*(?=::)'
+      captures:
+        1: entity.name.namespace.cpp
+    - match: '\b(?:int|uint)(?:8|16|32|64)_t\b|\b(?:u?intptr|u?intmax|ptrdiff|size|ssize|off|time|sig_atomic|max_align)_t\b|\bFILE\b|\b[a-z][a-z0-9_]*_t\b'
+      scope: support.type.cpp
+    - match: '\b[A-Z][A-Z0-9_]{2,}\b(?!\s*\()'
+      scope: support.constant.cpp
+
+  functions:
+    - match: '\b(?:printf|fprintf|sprintf|snprintf|scanf|puts|fputs|fopen|fclose|malloc|calloc|realloc|free|memcpy|memmove|memset|memcmp|strlen|strcmp|strncmp|strcpy|strncpy|exit|abort|assert)(?=\s*\()'
+      scope: support.function.cpp
+    - match: '~?\b{{ident}}(?=\s*\()'
+      scope: entity.name.function.cpp
+    - match: '\b{{ident}}(?=\s*<[^;(){}<]*>\s*\()'
+      scope: entity.name.function.cpp
+
+  operators:
+    - match: '::'
+      scope: punctuation.accessor.cpp
+    - match: '<=>|->\*?|\.\*|\+\+|--|<<=?|>>=?|[<>!=+\-*/%&|^]=|&&|\|\||[-+*/%&|^~!<>=?:]'
+      scope: keyword.operator.cpp

@@ -1,0 +1,266 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: CSS
+scope: source.css
+file_extensions:
+  - css
+  - pcss
+first_line_match: '^\s*@charset\b'
+
+contexts:
+  main:
+    - include: rules
+
+  comments:
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.css
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.css
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.css
+      pop: true
+
+  # Top level (and inside conditional group rules such as @media).
+  rules:
+    - include: comments
+    - match: '(?i)(@)(media|supports|layer|container|document|scope|starting-style)\b'
+      scope: keyword.control.at-rule.css
+      captures:
+        1: punctuation.definition.keyword.css
+      push: [rules-block, at-prelude]
+    - match: '(?i)(@)(-\w+-)?(keyframes)\b'
+      scope: keyword.control.at-rule.css
+      captures:
+        1: punctuation.definition.keyword.css
+      push: [keyframes-block, at-prelude]
+    - match: '(@)[-\w]+'
+      scope: keyword.control.at-rule.css
+      captures:
+        1: punctuation.definition.keyword.css
+      push: [decl-block, at-prelude]
+    - include: selectors
+    - match: '\}'
+      scope: punctuation.section.block.end.css
+      pop: true
+
+  selectors:
+    - match: '\{'
+      scope: punctuation.section.block.begin.css
+      push: declarations
+    - match: '\.[-\w]+'
+      scope: entity.name.class.css
+    - match: '#[-\w]+'
+      scope: entity.name.class.id.css
+    - match: '::?[-\w]+'
+      scope: support.type.pseudo-class.css
+    - match: '\['
+      scope: punctuation.definition.attribute-selector.begin.css
+      push: attribute-selector
+    - match: '(?<![-\w])[A-Za-z][-\w]*'
+      scope: entity.name.tag.css
+    - match: '[>+~*&]|\|\|'
+      scope: keyword.operator.combinator.css
+
+  attribute-selector:
+    - meta_scope: meta.attribute-selector.css
+    - match: '\]'
+      scope: punctuation.definition.attribute-selector.end.css
+      pop: true
+    - match: '"'
+      scope: punctuation.definition.string.begin.css
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.css
+      push: sq-string
+    - match: '[~|^$*]?='
+      scope: keyword.operator.css
+    - match: '[-\w]+'
+      scope: support.type.attribute-name.css
+
+  at-prelude:
+    - meta_scope: meta.at-rule.prelude.css
+    - match: '(?=[{;])'
+      pop: true
+    - match: '(?=\})'
+      pop: true
+    - include: comments
+    - include: strings
+    - match: '(?i)\burl(?=\()'
+      scope: support.function.url.css
+    - match: '\('
+      push: at-paren
+    - match: '(?i)\b(?:and|or|not|only|screen|print|all|from|to|selector|layer)\b'
+      scope: keyword.operator.logical.css
+    - include: numbers
+    - match: '[-\w]+'
+      scope: support.constant.property-value.css
+
+  at-paren:
+    - match: '\)'
+      pop: true
+    - match: '\('
+      push: at-paren
+    - include: comments
+    - include: strings
+    - match: '(?<![-\w])[-\w]+(?=\s*:)'
+      scope: support.type.property-name.css
+    - include: numbers
+    - match: '(?i)\b(?:and|or|not)\b'
+      scope: keyword.operator.logical.css
+    - match: '[-\w]+'
+      scope: support.constant.property-value.css
+
+  rules-block:
+    - match: '\{'
+      scope: punctuation.section.block.begin.css
+      set: rules
+    - match: '(?=\S)'
+      pop: true
+
+  keyframes-block:
+    - match: '\{'
+      scope: punctuation.section.block.begin.css
+      set: keyframe-steps
+    - match: '(?=\S)'
+      pop: true
+
+  keyframe-steps:
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.css
+      pop: true
+    - match: '(?i)\b(?:from|to)\b'
+      scope: entity.name.tag.keyframe.css
+    - match: '[-+]?(?:\d*\.)?\d+%'
+      scope: constant.numeric.css
+    - match: '\{'
+      scope: punctuation.section.block.begin.css
+      push: declarations
+
+  decl-block:
+    - match: '\{'
+      scope: punctuation.section.block.begin.css
+      set: declarations
+    - match: '(?=\S)'
+      pop: true
+
+  declarations:
+    - meta_scope: meta.block.css
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.css
+      pop: true
+    - match: '(?<![-\w])(--[-\w]+)\s*(:)'
+      captures:
+        1: support.type.custom-property.css
+        2: punctuation.separator.key-value.css
+      push: value
+    - match: '(?<![-\w])(-?[A-Za-z][-\w]*)\s*(:)(?=[^{};]*(?:[;}]|$))'
+      captures:
+        1: support.type.property-name.css
+        2: punctuation.separator.key-value.css
+      push: value
+    - match: '(?i)(@)(media|supports|layer|container|scope|starting-style)\b'
+      scope: keyword.control.at-rule.css
+      push: [declarations-nested, at-prelude]
+    - match: '(@)[-\w]+'
+      scope: keyword.control.at-rule.css
+      push: [decl-block, at-prelude]
+    - include: selectors
+    - match: ';'
+      scope: punctuation.terminator.rule.css
+
+  declarations-nested:
+    - match: '\{'
+      scope: punctuation.section.block.begin.css
+      set: declarations
+    - match: '(?=\S)'
+      pop: true
+
+  value:
+    - meta_scope: meta.property-value.css
+    - match: ';'
+      scope: punctuation.terminator.rule.css
+      pop: true
+    - match: '(?=\})'
+      pop: true
+    - include: value-rules
+
+  value-rules:
+    - include: comments
+    - include: strings
+    - match: '(?i)\b(url)(\()\s*(?=[^\s"''])'
+      captures:
+        1: support.function.url.css
+        2: punctuation.section.function.begin.css
+      push: url-body
+    - match: '(?i)\b(var)(\()'
+      captures:
+        1: support.function.var.css
+        2: punctuation.section.function.begin.css
+      push: paren
+    - match: '(?<![-\w])([-A-Za-z_][-\w]*)(\()'
+      captures:
+        1: support.function.css
+        2: punctuation.section.function.begin.css
+      push: paren
+    - match: '#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b'
+      scope: constant.other.color.css
+    - match: '!\s*important\b'
+      scope: keyword.other.important.css
+    - include: numbers
+    - match: '(?<![-\w])--[-\w]+'
+      scope: support.type.custom-property.css
+    - match: '(?<![-\w])-?[A-Za-z_][-\w]*'
+      scope: support.constant.property-value.css
+    - match: '[+*/]'
+      scope: keyword.operator.css
+
+  numbers:
+    - match: '(?<![-\w.])([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)(%|[A-Za-z]+)?'
+      captures:
+        1: constant.numeric.css
+        2: keyword.other.unit.css
+
+  paren:
+    - match: '\)'
+      scope: punctuation.section.function.end.css
+      pop: true
+    - include: value-rules
+
+  url-body:
+    - meta_scope: string.unquoted.url.css
+    - match: '\)'
+      scope: punctuation.section.function.end.css
+      pop: true
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.css
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.css
+      push: sq-string
+
+  dq-string:
+    - meta_scope: string.quoted.double.css
+    - match: '\\.'
+      scope: constant.character.escape.css
+    - match: '"'
+      scope: punctuation.definition.string.end.css
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true
+
+  sq-string:
+    - meta_scope: string.quoted.single.css
+    - match: '\\.'
+      scope: constant.character.escape.css
+    - match: "'"
+      scope: punctuation.definition.string.end.css
+      pop: true
+    - match: '(?<!\\)$'
+      pop: true

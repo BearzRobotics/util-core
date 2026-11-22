@@ -1,0 +1,155 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: F#
+scope: source.fsharp
+file_extensions: [fs, fsi, fsx, fsscript]
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: attrs
+    - include: directives
+    - include: decls
+    - include: keywords
+    - include: numbers
+    - include: functions
+    - include: types
+    - include: operators
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.fsharp
+    - match: '\(\*(?!\))'
+      scope: punctuation.definition.comment.begin.fsharp
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.fsharp
+    - match: '\(\*(?!\))'
+      push: block-comment
+    - match: '\*\)'
+      scope: punctuation.definition.comment.end.fsharp
+      pop: true
+
+  strings:
+    - match: '[$@]*"""'
+      scope: punctuation.definition.string.begin.fsharp
+      push: triple
+    - match: '@"|\$@"|@\$"'
+      scope: punctuation.definition.string.begin.fsharp
+      push: verbatim
+    - match: '\$"'
+      scope: punctuation.definition.string.begin.fsharp
+      push: interp-dq
+    - match: '"'
+      scope: punctuation.definition.string.begin.fsharp
+      push: dq
+    - match: "'(?:\\\\(?:.|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[0-9]{3})|[^'\\\\\\n])'"
+      scope: string.quoted.single.fsharp
+
+  triple:
+    - meta_scope: string.quoted.triple.fsharp
+    - match: '"""'
+      scope: punctuation.definition.string.end.fsharp
+      pop: true
+    - include: interp
+
+  verbatim:
+    - meta_scope: string.quoted.double.fsharp
+    - match: '""'
+      scope: constant.character.escape.fsharp
+    - match: '"'
+      scope: punctuation.definition.string.end.fsharp
+      pop: true
+    - include: interp
+
+  interp-dq:
+    - meta_scope: string.quoted.double.fsharp
+    - match: '"'
+      scope: punctuation.definition.string.end.fsharp
+      pop: true
+    - match: '$'
+      pop: true
+    - include: escapes
+    - include: interp
+
+  dq:
+    - meta_scope: string.quoted.double.fsharp
+    - match: '"'
+      scope: punctuation.definition.string.end.fsharp
+      pop: true
+    - match: '$'
+      pop: true
+    - include: escapes
+    - match: '%[-+0 #]*[0-9]*(?:\.[0-9]+)?[a-zA-Z]'
+      scope: constant.other.placeholder.fsharp
+
+  escapes:
+    - match: '\\(?:[ntbrafv"''\\]|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|x[0-9A-Fa-f]{2}|[0-9]{3})'
+      scope: constant.character.escape.fsharp
+
+  interp:
+    - match: '\{\{|\}\}'
+    - match: '\{[^{}\n]*\}'
+      scope: variable.parameter.interpolation.fsharp
+
+  attrs:
+    - match: '\[<[^\]\n]*>\]'
+      scope: meta.annotation.fsharp
+
+  directives:
+    - match: '^\s*#(?:if|else|endif|nowarn|warnon|load|r|I|time|light|line|help|quit)\b.*$'
+      scope: meta.preprocessor.fsharp
+
+  decls:
+    - match: '\b(type|module|namespace|exception)\s+(?:rec\s+|internal\s+|private\s+|public\s+)?([A-Za-z_][\w.]*)'
+      captures:
+        1: storage.type.fsharp
+        2: entity.name.class.fsharp
+    - match: '\b(let|and|member|override|default|abstract|static member|new)\s+(?:inline\s+|rec\s+|private\s+|internal\s+|public\s+|mutable\s+)*(?:[a-z_]\w*\.)?([A-Za-z_]\w*)(?!\w)(?=\s*(?:[(:<]|[a-z_]\w*\s|=\s*fun\b))'
+      captures:
+        1: storage.type.function.fsharp
+        2: entity.name.function.fsharp
+
+  keywords:
+    - match: '\b(?:let|member|and)\b'
+      scope: storage.type.function.fsharp
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.fsharp
+    - match: '\b(?:null|None)\b'
+      scope: constant.language.null.fsharp
+    - match: '\b(?:this|base|__SOURCE_DIRECTORY__|__SOURCE_FILE__|__LINE__)\b'
+      scope: variable.language.fsharp
+    - match: '\b(?:int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|byte|sbyte|float|float32|double|decimal|bool|char|string|unit|obj|exn|bigint|nativeint|list|array|seq|option|voption|Option|Some|Result|Ok|Error|Map|Set|List|Seq|Array|Async|Task)\b'
+      scope: storage.type.primitive.fsharp
+    - match: '\b(?:abstract|private|internal|public|mutable|inline|static|sealed|rec|lazy|volatile|extern|override|default|const|fixed|global|inherit|interface|class|struct|end|begin|delegate|of|val|use|use!|let!|do!|return!|yield!|match!|param|protected)\b'
+      scope: storage.modifier.fsharp
+    - match: '\b(?:if|then|elif|else|for|while|do|to|downto|in|match|with|when|function|fun|try|finally|raise|failwith|reraise|return|yield|async|task|assert|open|exception|done|upcast|downcast|select|use)\b'
+      scope: keyword.control.fsharp
+    - match: '\b(?:and|or|not|as|isnot|mod|land|lor|lxor|lsl|lsr|asr|new|typeof|sizeof|nameof|box|unbox|ignore|ref|fst|snd|id)\b'
+      scope: keyword.operator.word.fsharp
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+(?:[uUlL]|uy|y|us|s|un|n|UL|uL|lf|LF)?\b'
+      scope: constant.numeric.hex.fsharp
+    - match: '\b0[bB][01_]+[a-zA-Z]*\b|\b0[oO][0-7_]+[a-zA-Z]*\b'
+      scope: constant.numeric.binary.fsharp
+    - match: '(?<![A-Za-z0-9_.])[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][-+]?[0-9_]+)?(?:uy|y|us|s|ul|UL|un|u|l|L|n|I|M|m|f|F)?(?![A-Za-z0-9_])'
+      scope: constant.numeric.decimal.fsharp
+
+  functions:
+    - match: '\b(?:printf|printfn|eprintf|eprintfn|sprintf|failwithf|stdin|stdout|stderr|List\.[a-z]\w*|Seq\.[a-z]\w*|Array\.[a-z]\w*|Map\.[a-z]\w*|Set\.[a-z]\w*|String\.[a-z]\w*|Option\.[a-z]\w*|Async\.[A-Z]\w*|Result\.[a-z]\w*)\b'
+      scope: support.function.fsharp
+    - match: '\b[a-z_]\w*(?=\s*\()'
+      scope: entity.name.function.fsharp
+
+  types:
+    - match: '\b[A-Z]\w*\b'
+      scope: entity.name.type.fsharp
+    - match: "'[a-zA-Z_]\\w*"
+      scope: entity.name.type.fsharp
+
+  operators:
+    - match: '\|>|<\||>>|<<|->|<-|::|\.\.|:>|:\?>|\|\||&&|[-+*/%&|^<>=!~?:@$]+'
+      scope: keyword.operator.fsharp

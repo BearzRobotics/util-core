@@ -1,0 +1,215 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+# Columns cycle through five scopes so neighbouring fields differ in colour;
+# the first line (header) is scoped as a section name. The delimiter (comma or
+# tab) is chosen from the first line. Quoted fields may span lines.
+name: CSV
+scope: text.csv
+file_extensions: [csv, tsv]
+contexts:
+  main:
+    - match: '^(?=[^\t\n]*\t)'
+      set: [tsv-body, tsv-h1]
+    - match: '^(?=.)'
+      set: [csv-body, csv-h1]
+
+  csv-body:
+    - match: '(?=.)'
+      push: csv-f1
+
+  csv-h1:
+    - meta_content_scope: entity.name.section.header.csv
+    - match: ','
+      scope: punctuation.separator.csv
+      set: csv-h2
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: csv-q
+    - match: '$'
+      set: csv-body
+
+  csv-h2:
+    - meta_content_scope: entity.name.section.header.csv
+    - match: ','
+      scope: punctuation.separator.csv
+      set: csv-h3
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: csv-q
+    - match: '$'
+      set: csv-body
+
+  csv-h3:
+    - meta_content_scope: entity.name.section.header.csv
+    - match: ','
+      scope: punctuation.separator.csv
+      set: csv-h4
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: csv-q
+    - match: '$'
+      set: csv-body
+
+  csv-h4:
+    - meta_content_scope: entity.name.section.header.csv
+    - match: ','
+      scope: punctuation.separator.csv
+      set: csv-h1
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: csv-q
+    - match: '$'
+      set: csv-body
+
+  csv-f1:
+    - meta_content_scope: string.unquoted.column1.csv
+    - match: ','
+      scope: punctuation.separator.csv
+      set: csv-f2
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: csv-q
+    - match: '$'
+      pop: true
+
+  csv-f2:
+    - meta_content_scope: constant.other.column2.csv
+    - match: ','
+      scope: punctuation.separator.csv
+      set: csv-f3
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: csv-q
+    - match: '$'
+      pop: true
+
+  csv-f3:
+    - meta_content_scope: keyword.other.column3.csv
+    - match: ','
+      scope: punctuation.separator.csv
+      set: csv-f4
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: csv-q
+    - match: '$'
+      pop: true
+
+  csv-f4:
+    - meta_content_scope: support.function.column4.csv
+    - match: ','
+      scope: punctuation.separator.csv
+      set: csv-f1
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: csv-q
+    - match: '$'
+      pop: true
+
+  csv-q:
+    - meta_scope: string.quoted.double.csv
+    - match: '""'
+      scope: constant.character.escape.csv
+    - match: '"'
+      scope: punctuation.definition.string.end.csv
+      pop: true
+
+  tsv-body:
+    - match: '(?=.)'
+      push: tsv-f1
+
+  tsv-h1:
+    - meta_content_scope: entity.name.section.header.csv
+    - match: '\t'
+      scope: punctuation.separator.csv
+      set: tsv-h2
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: tsv-q
+    - match: '$'
+      set: tsv-body
+
+  tsv-h2:
+    - meta_content_scope: entity.name.section.header.csv
+    - match: '\t'
+      scope: punctuation.separator.csv
+      set: tsv-h3
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: tsv-q
+    - match: '$'
+      set: tsv-body
+
+  tsv-h3:
+    - meta_content_scope: entity.name.section.header.csv
+    - match: '\t'
+      scope: punctuation.separator.csv
+      set: tsv-h4
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: tsv-q
+    - match: '$'
+      set: tsv-body
+
+  tsv-h4:
+    - meta_content_scope: entity.name.section.header.csv
+    - match: '\t'
+      scope: punctuation.separator.csv
+      set: tsv-h1
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: tsv-q
+    - match: '$'
+      set: tsv-body
+
+  tsv-f1:
+    - meta_content_scope: string.unquoted.column1.csv
+    - match: '\t'
+      scope: punctuation.separator.csv
+      set: tsv-f2
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: tsv-q
+    - match: '$'
+      pop: true
+
+  tsv-f2:
+    - meta_content_scope: constant.other.column2.csv
+    - match: '\t'
+      scope: punctuation.separator.csv
+      set: tsv-f3
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: tsv-q
+    - match: '$'
+      pop: true
+
+  tsv-f3:
+    - meta_content_scope: keyword.other.column3.csv
+    - match: '\t'
+      scope: punctuation.separator.csv
+      set: tsv-f4
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: tsv-q
+    - match: '$'
+      pop: true
+
+  tsv-f4:
+    - meta_content_scope: support.function.column4.csv
+    - match: '\t'
+      scope: punctuation.separator.csv
+      set: tsv-f1
+    - match: '"'
+      scope: punctuation.definition.string.begin.csv
+      push: tsv-q
+    - match: '$'
+      pop: true
+
+  tsv-q:
+    - meta_scope: string.quoted.double.csv
+    - match: '""'
+      scope: constant.character.escape.csv
+    - match: '"'
+      scope: punctuation.definition.string.end.csv
+      pop: true

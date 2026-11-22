@@ -1,0 +1,60 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Diff
+scope: source.diff
+file_extensions: [diff, patch, rej]
+first_line_match: '^(diff |Index: |--- |From [0-9a-f]{40} )'
+contexts:
+  main:
+    - match: '^(?:diff |Index: |index [0-9a-f]+\.\.|new file mode|deleted file mode|old mode|new mode|similarity index|dissimilarity index|rename (?:from|to) |copy (?:from|to) |Binary files |GIT binary patch|Only in |={20,}$).*$'
+      scope: comment.line.header.diff
+    - match: '^(?:---|\+\+\+|\*\*\*) \S.*$'
+      scope: comment.line.file-header.diff
+    - match: '^\*{15}\s*$'
+      scope: comment.line.separator.diff
+    - match: '^(@@+)([^@\n]*)(@@+)(.*)$'
+      scope: meta.diff.range.unified.diff
+      captures:
+        1: entity.name.function.diff
+        2: entity.name.function.diff
+        3: entity.name.function.diff
+        4: entity.name.section.diff
+      push: hunk
+    - match: '^\d+(?:,\d+)?[acd]\d+(?:,\d+)?\s*$'
+      scope: meta.diff.range.normal.diff entity.name.function.diff
+      push: hunk
+    - match: '^\*\*\* \d+(?:,\d+)? \*\*\*\*\s*$'
+      scope: meta.diff.range.context.diff entity.name.function.diff
+      push: hunk
+    - match: '^--- \d+(?:,\d+)? ----\s*$'
+      scope: meta.diff.range.context.diff entity.name.function.diff
+      push: hunk
+
+  hunk:
+    - meta_scope: meta.diff.hunk.diff
+    - match: '^(?=diff |Index: |From [0-9a-f]{40} )'
+      pop: true
+    - match: '^(@@+)([^@\n]*)(@@+)(.*)$'
+      scope: meta.diff.range.unified.diff
+      captures:
+        1: entity.name.function.diff
+        2: entity.name.function.diff
+        3: entity.name.function.diff
+        4: entity.name.section.diff
+    - match: '^\d+(?:,\d+)?[acd]\d+(?:,\d+)?\s*$'
+      scope: meta.diff.range.normal.diff entity.name.function.diff
+    - match: '^\*\*\* \d+(?:,\d+)? \*\*\*\*\s*$'
+      scope: meta.diff.range.context.diff entity.name.function.diff
+    - match: '^--- \d+(?:,\d+)? ----\s*$'
+      scope: meta.diff.range.context.diff entity.name.function.diff
+    - match: '^\\.*$'
+      scope: comment.line.no-newline.diff
+    - match: '^---\s*$'
+      scope: comment.line.separator.diff
+    - match: '^[+>].*$'
+      scope: markup.inserted.diff string.diff.inserted
+    - match: '^[-<].*$'
+      scope: markup.deleted.diff keyword.operator.diff.deleted
+    - match: '^!.*$'
+      scope: markup.changed.diff constant.other.changed.diff

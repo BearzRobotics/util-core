@@ -74,4 +74,4 @@ diff(1), sdiff(1), docs/compatibility/diff3.md
 
 # VERSION
 
-This manual describes util-core 0.1.0.
+This manual describes util-core 0.2.0.

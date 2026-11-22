@@ -1,0 +1,127 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: PHP
+scope: source.php
+file_extensions: [php, phtml, php3, php4, php5, phps, phpt]
+first_line_match: '^#!.*\bphp\b|^<\?php'
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: annotations
+    - include: vars
+    - include: decls
+    - include: keywords
+    - include: numbers
+    - include: methods
+    - include: types
+    - include: operators
+
+  comments:
+    - match: '#.*$'
+      scope: comment.line.number-sign.php
+    - match: '//.*$'
+      scope: comment.line.double-slash.php
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.php
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.php
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.php
+      pop: true
+
+  strings:
+    - match: '\$?"'
+      scope: punctuation.definition.string.begin.php
+      push: string-body
+    - match: "'"
+      scope: punctuation.definition.string.begin.php
+      push: sq-body
+
+  sq-body:
+    - meta_scope: string.quoted.single.php
+    - match: "'"
+      scope: punctuation.definition.string.end.php
+      pop: true
+    - match: '$'
+      pop: true
+    - include: escapes
+
+  string-body:
+    - meta_scope: string.quoted.double.php
+    - match: '"'
+      scope: punctuation.definition.string.end.php
+      pop: true
+    - match: '$'
+      pop: true
+    - include: interp
+    - include: escapes
+
+  escapes:
+    - match: '\\(?:[abfnrtv0"''\\$]|x[0-9A-Fa-f]{1,4}|u\{?[0-9A-Fa-f]{1,8}\}?|U[0-9A-Fa-f]{8})'
+      scope: constant.character.escape.php
+
+  interp:
+    - match: '\$\{[^}\n]*\}|\$[A-Za-z_]\w*|\{[^{}\n]*\}'
+      scope: meta.interpolation.php
+
+  annotations:
+    - match: '#\[[^\]\n]*\]'
+      scope: meta.annotation.php
+
+  vars:
+    - match: '\$+[A-Za-z_]\w*'
+      scope: variable.other.php
+
+  decls:
+    - match: '\b(class|interface|trait|enum|namespace|use|extends|implements)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.php
+        2: entity.name.class.php
+    - match: '\b(fun|func|function|def)\s+(?:[A-Za-z_][\w.<>?]*\.)?([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.function.php
+        2: entity.name.function.php
+
+  keywords:
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.php
+    - match: '\b(?:null|NULL)\b'
+      scope: constant.language.null.php
+    - match: '\b(?:this|self|parent|static)\b'
+      scope: variable.language.php
+    - match: '\b(?:int|float|string|bool|array|object|callable|iterable|mixed|void|never|null)\b'
+      scope: storage.type.primitive.php
+    - match: '\b(?:public|private|protected|static|final|abstract|readonly|const|var|global)\b'
+      scope: storage.modifier.php
+    - match: '\b(?:if|else|elseif|for|foreach|while|do|switch|case|default|break|continue|return|throw|try|catch|finally|match|yield|die|exit|require|require_once|include|include_once|echo|print|declare|endif|endforeach|endwhile|endfor|endswitch)\b'
+      scope: keyword.control.php
+    - match: '\b(?:new|instanceof|clone|and|or|xor|isset|unset|empty|list|fn)\b'
+      scope: keyword.operator.word.php
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+[uUlL]*\b'
+      scope: constant.numeric.hex.php
+    - match: '\b0[bB][01_]+[uUlL]*\b'
+      scope: constant.numeric.binary.php
+    - match: '(?<![A-Za-z0-9_.])(?:[0-9][0-9_]*\.[0-9][0-9_]*|\.[0-9][0-9_]*|[0-9][0-9_]*)(?:[eE][-+]?[0-9_]+)?[uUlLfFdDmM]*(?![A-Za-z0-9_])'
+      scope: constant.numeric.decimal.php
+
+  methods:
+    - match: '\b[A-Za-z_]\w*(?=\s*(?:<[^<>()\n]*>)?\()'
+      scope: entity.name.function.php
+
+  types:
+    - match: '\b[A-Z][A-Z0-9_]+\b(?!\s*[(<])'
+      scope: support.constant.php
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: entity.name.type.php
+
+  operators:
+    - match: '=>|->|::|\?\.|\?\?|\.\.[.<]?'
+      scope: keyword.operator.arrow.php
+    - match: '[-+*/%&|^~!<>=?:]+'
+      scope: keyword.operator.php

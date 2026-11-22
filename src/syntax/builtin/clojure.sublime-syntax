@@ -1,0 +1,85 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Clojure
+scope: source.clojure
+file_extensions: [clj, cljs, cljc, edn, bb]
+first_line_match: '^#!.*\b(?:bb|clojure)\b'
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: numbers
+    - include: constants
+    - include: decls
+    - include: forms
+    - include: keywords
+    - include: meta
+    - include: symbols
+
+  comments:
+    - match: ';.*$'
+      scope: comment.line.semicolon.clojure
+    - match: '#_'
+      scope: comment.line.discard.clojure
+
+  strings:
+    - match: '#?"'
+      scope: punctuation.definition.string.begin.clojure
+      push: dq
+    - match: '\\(?:newline|space|tab|return|backspace|formfeed|u[0-9A-Fa-f]{4}|o[0-7]{1,3}|.)(?![A-Za-z])'
+      scope: constant.character.clojure
+
+  dq:
+    - meta_scope: string.quoted.double.clojure
+    - match: '"'
+      scope: punctuation.definition.string.end.clojure
+      pop: true
+    - match: '\\(?:[tnrbf"\\]|u[0-9A-Fa-f]{4}|[0-7]{1,3})'
+      scope: constant.character.escape.clojure
+
+  numbers:
+    - match: '(?<![\w.-])[-+]?0[xX][0-9A-Fa-f]+N?(?![\w])'
+      scope: constant.numeric.hex.clojure
+    - match: '(?<![\w.-])[-+]?[0-9]+[rR][0-9A-Za-z]+(?![\w])'
+      scope: constant.numeric.radix.clojure
+    - match: '(?<![\w.-])[-+]?[0-9]+(?:/[0-9]+|(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?[NM]?)(?![\w.])'
+      scope: constant.numeric.decimal.clojure
+
+  constants:
+    - match: '(?<![\w.*+!?<>=/-])(?:true|false)(?![\w.*+!?<>=/-])'
+      scope: constant.language.boolean.clojure
+    - match: '(?<![\w.*+!?<>=/-])nil(?![\w.*+!?<>=/-])'
+      scope: constant.language.null.clojure
+
+  decls:
+    - match: '(?<=\()(defn-?|defmacro|defmulti|defmethod|defprotocol|definline|fn|defn\^?)\s+(?:\^[\w.:/-]+\s+)*([^\s()\[\]{}"'';,]+)'
+      captures:
+        1: storage.type.function.clojure
+        2: entity.name.function.clojure
+    - match: '(?<=\()(def|defonce|defrecord|deftype|defstruct|definterface|ns|in-ns|declare)\s+(?:\^[\w.:/-]+\s+)*([^\s()\[\]{}"'';,]+)'
+      captures:
+        1: storage.type.clojure
+        2: entity.name.class.clojure
+
+  forms:
+    - match: '(?<=\()(?:if|if-not|if-let|if-some|when|when-not|when-let|when-some|when-first|cond|condp|case|do|let|letfn|loop|recur|for|doseq|dotimes|while|try|catch|finally|throw|binding|with-open|with-redefs|with-local-vars|and|or|not|quote|var|fn|fn\*|let\*|loop\*|monitor-enter|monitor-exit|new|set!|delay|future|promise|go|go-loop|->|->>|some->|some->>|cond->|cond->>|as->|doto|comment|assert|require|import|use|refer|refer-clojure|gen-class|binding|locking)(?![\w.*+!?<>=/-])'
+      scope: keyword.control.clojure
+    - match: '(?<=\()(?:map|mapv|filter|filterv|remove|reduce|reduce-kv|apply|partial|comp|juxt|complement|identity|constantly|first|second|rest|next|last|butlast|cons|conj|concat|into|assoc|assoc-in|dissoc|get|get-in|update|update-in|merge|merge-with|select-keys|keys|vals|count|seq|vec|vector|list|hash-map|hash-set|sorted-map|set|take|drop|take-while|drop-while|range|repeat|iterate|interleave|partition|group-by|sort|sort-by|reverse|nth|contains\?|empty\?|not-empty|some|every\?|str|subs|println|print|prn|pr|pr-str|format|inc|dec|max|min|mod|rem|quot|atom|deref|reset!|swap!|ref|dosync|alter|agent|send|nil\?|zero\?|pos\?|neg\?|even\?|odd\?|number\?|string\?|keyword\?|symbol\?|map\?|vector\?|seq\?|fn\?|name|namespace|keyword|symbol|meta|with-meta|type|class|slurp|spit|read-string|eval|resolve|doall|dorun|lazy-seq|ex-info|ex-message|ex-data|mapcat|distinct|frequencies|flatten|zipmap|run!)(?![\w.*+!?<>=/-])'
+      scope: support.function.clojure
+
+  keywords:
+    - match: '::?[^\s()\[\]{}"'';,@^`~\\]+'
+      scope: variable.parameter.keyword.clojure
+
+  meta:
+    - match: '\^:?[^\s()\[\]{}"'';,]+'
+      scope: meta.annotation.clojure
+    - match: '#[A-Za-z][^\s()\[\]{}"'';,]*'
+      scope: meta.annotation.clojure
+    - match: "#'|#\\{|#\\(|~@|[~@`']"
+      scope: keyword.operator.clojure
+
+  symbols:
+    - match: '(?<=\()[^\s()\[\]{}"'';,@^`~\\0-9:#][^\s()\[\]{}"'';,@^`~\\]*'
+      scope: entity.name.function.clojure

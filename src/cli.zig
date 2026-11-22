@@ -10,7 +10,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 
-pub const version = "0.1.0";
+pub const version = "0.2.0";
 
 /// Everything a command frontend needs for one invocation.
 pub const Context = struct {

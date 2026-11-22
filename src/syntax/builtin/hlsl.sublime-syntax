@@ -1,0 +1,69 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: HLSL
+scope: source.hlsl
+file_extensions: [hlsl, hlsli, fx, fxh, cginc, compute, usf]
+contexts:
+  main:
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.hlsl
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.double-slash.hlsl
+    - match: '^\s*#\s*(?:define|undef|include|if|ifdef|ifndef|elif|else|endif|error|pragma|line)\b'
+      scope: keyword.control.import.hlsl
+      push: preproc
+    - match: '"'
+      scope: punctuation.definition.string.begin.hlsl
+      push: dq
+    - match: '\b0[xX][0-9A-Fa-f]+[uUlL]*\b|(?:\b[0-9]+\.[0-9]*|\.[0-9]+|\b[0-9]+)(?:[eE][-+]?[0-9]+)?[fFhHuUlL]?\b'
+      scope: constant.numeric.hlsl
+    - match: '\[\s*(?:numthreads|maxvertexcount|domain|partitioning|outputtopology|outputcontrolpoints|patchconstantfunc|unroll|loop|branch|flatten|fastopt|forcecase|call|earlydepthstencil|instance|RootSignature|WaveSize|shader)\b'
+      scope: storage.modifier.attribute.hlsl
+    - match: '\b(struct|class|interface|cbuffer|tbuffer|namespace)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.hlsl
+        2: entity.name.type.hlsl
+    - match: '\b(?:technique(?:11)?|pass)\s+([A-Za-z_]\w*)'
+      captures:
+        1: entity.name.function.hlsl
+    - match: '\b(?:true|false|NULL)\b'
+      scope: constant.language.boolean.hlsl
+    - match: '\b(?:if|else|for|while|do|switch|case|default|break|continue|return|discard|goto)\b'
+      scope: keyword.control.hlsl
+    - match: '\b(?:static|const|uniform|extern|shared|groupshared|volatile|precise|in|out|inout|linear|centroid|nointerpolation|noperspective|sample|snorm|unorm|row_major|column_major|inline|register|packoffset|globallycoherent|nointerpolation|point|line|triangle|lineadj|triangleadj|typedef|vertices|indices|primitives|payload)\b'
+      scope: storage.modifier.hlsl
+    - match: '\b(?:void|bool|int|uint|dword|half|float|double|min16float|min10float|min16int|min12int|min16uint|(?:bool|int|uint|half|float|double|min16float|min16int|min16uint)[1-4](?:x[1-4])?|matrix|vector|string|sampler|sampler1D|sampler2D|sampler3D|samplerCUBE|SamplerState|SamplerComparisonState|Texture(?:1D|2D|3D|Cube|2DMS)(?:Array)?|Buffer|StructuredBuffer|ByteAddressBuffer|RWTexture(?:1D|2D|3D)(?:Array)?|RWBuffer|RWStructuredBuffer|RWByteAddressBuffer|AppendStructuredBuffer|ConsumeStructuredBuffer|RaytracingAccelerationStructure|ConstantBuffer|InputPatch|OutputPatch|PointStream|LineStream|TriangleStream|RayDesc)(?:<[^>;]*>)?\b'
+      scope: storage.type.builtin.hlsl
+    - match: '\b(?:SV_[A-Za-z]+[0-9]*|POSITION[0-9]*|NORMAL[0-9]*|TEXCOORD[0-9]*|COLOR[0-9]*|TANGENT[0-9]*|BINORMAL[0-9]*|BLENDWEIGHT[0-9]*|BLENDINDICES[0-9]*|PSIZE[0-9]*|FOG|DEPTH[0-9]*|VPOS|VFACE)\b'
+      scope: variable.parameter.semantic.hlsl
+    - match: '\b(?:abs|acos|all|any|asin|asfloat|asint|asuint|atan|atan2|ceil|clamp|clip|cos|cosh|cross|ddx|ddy|degrees|determinant|distance|dot|exp|exp2|faceforward|floor|fmod|frac|frexp|fwidth|isfinite|isinf|isnan|ldexp|length|lerp|lit|log|log10|log2|mad|max|min|modf|mul|normalize|pow|radians|rcp|reflect|refract|round|rsqrt|saturate|sign|sin|sincos|sinh|smoothstep|sqrt|step|tan|tanh|transpose|trunc|tex1D|tex2D|tex3D|texCUBE|tex2Dlod|tex2Dbias|tex2Dproj|Sample|SampleLevel|SampleBias|SampleGrad|SampleCmp|Load|Gather|GetDimensions|InterlockedAdd|InterlockedMin|InterlockedMax|InterlockedOr|InterlockedAnd|InterlockedXor|InterlockedExchange|InterlockedCompareExchange|GroupMemoryBarrierWithGroupSync|GroupMemoryBarrier|DeviceMemoryBarrier|AllMemoryBarrier|countbits|firstbithigh|firstbitlow|reversebits|f16tof32|f32tof16|TraceRay|ReportHit|CallShader|DispatchRays|WaveActiveSum|WaveGetLaneIndex|Append|RestartStrip|UNITY_[A-Z_]+|TRANSFORM_TEX)\b(?=\s*\()'
+      scope: support.function.builtin.hlsl
+    - match: '\b[A-Za-z_]\w*(?=\s*\()'
+      scope: entity.name.function.hlsl
+    - match: '<<=?|>>=?|\+\+|--|&&|\|\||[-+*/%&|^<>!=]=?|[~?:]'
+      scope: keyword.operator.hlsl
+  preproc:
+    - meta_scope: meta.preprocessor.hlsl
+    - match: '\\\n'
+    - match: '/\*'
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.double-slash.hlsl
+    - match: '$'
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.hlsl
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.hlsl
+      pop: true
+  dq:
+    - meta_scope: string.quoted.double.hlsl
+    - match: '"'
+      scope: punctuation.definition.string.end.hlsl
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.hlsl
+    - match: '$'
+      pop: true

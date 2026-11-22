@@ -61,7 +61,7 @@ contexts:
 GRAMMAR
 printf 'if "a\nb" else\n' > /tmp/test_cat5.toy
 ESC=$(printf '\033')
-SYN="--syntax-dir=/tmp/test_cat_syn --decorations=always --color=always -p"
+SYN="--syntax-dir=/tmp/test_cat_syn --decorations=always --color=always --theme=ansi -p"
 check_ours "highlight by extension" "${ESC}[35mif${ESC}[0m ${ESC}[32m\"${ESC}[0m${ESC}[32ma${ESC}[0m
 ${ESC}[32mb${ESC}[0m${ESC}[32m\"${ESC}[0m ${ESC}[35melse${ESC}[0m" $SYN /tmp/test_cat5.toy
 actual=$(printf 'if\n' | ours $SYN -l toy 2>&1)
@@ -69,7 +69,12 @@ if [ "$actual" = "${ESC}[35mif${ESC}[0m" ]; then PASS=$((PASS + 1)); printf "PAS
 check_ours "no color, no escapes" "if \"a
 b\" else" --syntax-dir=/tmp/test_cat_syn --decorations=always --color=never -p /tmp/test_cat5.toy
 check_ours "unknown language" "cat: unknown language 'zzz' (see --list-languages)" $SYN -l zzz /tmp/test_cat5.toy
-check_ours "list languages" "Toy	toy" --syntax-dir=/tmp/test_cat_syn --list-languages
+# The built-in grammars are listed too; the user's toy grammar must be among them.
+if [ "$(ours --syntax-dir=/tmp/test_cat_syn --list-languages 2>&1 | grep '^Toy')" = "Toy	toy" ]; then
+    PASS=$((PASS + 1)); printf "PASS list languages\n"
+else
+    FAIL=$((FAIL + 1)); printf "FAIL list languages\n"
+fi
 check_ours "pipe ignores highlighting" "$(cat /tmp/test_cat5.toy)" --syntax-dir=/tmp/test_cat_syn /tmp/test_cat5.toy
 # NO_COLOR (SPEC 5.4) needs a terminal on stdout, so run under script(1).
 if command -v script >/dev/null 2>&1; then
@@ -136,5 +141,32 @@ awk 'BEGIN { for (i = 0; i < 1000050; i++) print "x" }' > "$W/million"
 r=$(ours -n "$W/million" | md5sum); g=$(gnu -n "$W/million" | md5sum)
 [ "$r" = "$g" ] && { PASS=$((PASS+1)); echo "PASS -n past 999999 lines"; } || { FAIL=$((FAIL+1)); echo "FAIL -n past 999999 lines"; }
 rm -rf "$W"
+
+printf "\n[ themes and git markers ]\n"
+check_ours "list themes" "ansi	follows the terminal palette
+night	dark
+ember	dark
+day	light
+paper	light" --list-themes
+actual=$(printf 'return\n' | COLORTERM=truecolor ours --decorations=always --color=always --theme=night -p -l lua 2>&1)
+if [ "$actual" = "${ESC}[38;2;247;118;142mreturn${ESC}[0m" ]; then PASS=$((PASS + 1)); printf "PASS truecolor theme\n"; else FAIL=$((FAIL + 1)); printf "FAIL truecolor theme\n"; fi
+actual=$(printf 'return\n' | env -u COLORTERM TERM=xterm-256color "$BIN_DIR/$UTIL" --decorations=always --color=always --theme=night -p -l lua 2>&1)
+if [ "$actual" = "${ESC}[38;5;210mreturn${ESC}[0m" ]; then PASS=$((PASS + 1)); printf "PASS 256-color theme\n"; else FAIL=$((FAIL + 1)); printf "FAIL 256-color theme\n"; fi
+check_ours "unknown theme" "cat: unknown theme 'nope' (see --list-themes)" --syntax-dir=/tmp/test_cat_syn --decorations=always --color=always --theme=nope -p /tmp/test_cat5.toy
+if command -v git >/dev/null 2>&1; then
+    G=$(mktemp -d)
+    ( cd "$G" && git init -q . && printf 'one\ntwo\nthree\nfour\n' > f.txt && git add f.txt &&
+      git -c user.name=t -c user.email=t@t commit -qm i && printf 'one\nTWO\nthree\nnew\n' > f.txt )
+    actual=$(cd "$G" && ours --decorations=always --color=never f.txt 2>&1 | sed -n 4,7p)
+    expected="   1   │ one
+   2 ~ │ TWO
+   3   │ three
+   4 ~ │ new"
+    if [ "$actual" = "$expected" ]; then PASS=$((PASS + 1)); printf "PASS git change markers\n"; else FAIL=$((FAIL + 1)); printf "FAIL git change markers\n"; fi
+    printf 'x\n' > "$G/u.txt"
+    actual=$(cd "$G" && ours --decorations=always --color=never u.txt 2>&1 | sed -n 4p)
+    if [ "$actual" = "   1 │ x" ]; then PASS=$((PASS + 1)); printf "PASS no markers for untracked file\n"; else FAIL=$((FAIL + 1)); printf "FAIL no markers for untracked file\n"; fi
+    rm -rf "$G"
+fi
 
 print_summary

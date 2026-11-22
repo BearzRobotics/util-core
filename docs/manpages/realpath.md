@@ -66,5 +66,5 @@ docs/compatibility/realpath.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.1.0.
+This manual describes util-core 0.2.0.
 

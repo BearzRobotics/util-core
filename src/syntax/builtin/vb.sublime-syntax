@@ -1,0 +1,48 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Visual Basic
+scope: source.vb
+file_extensions: [vb, vbs, bas, vba, frm]
+contexts:
+  main:
+    - match: '(?i)^\s*#(?:const|if|elseif|else|end\s+if|region|end\s+region|externalsource|disable|enable)\b.*$'
+      scope: keyword.control.import.vb
+    - match: '(?i)\brem\b.*$'
+      scope: comment.line.rem.vb
+    - match: "'.*$"
+      scope: comment.line.apostrophe.vb
+    - match: '\$?"'
+      scope: punctuation.definition.string.begin.vb
+      push: string
+    - match: '#\s*\d{1,2}/\d{1,2}/\d{2,4}[^#]*#'
+      scope: constant.other.date.vb
+    - match: '(?i)&h[0-9a-f]+&?|&o[0-7]+&?|\b\d+\.?\d*(?:e[-+]?\d+)?[%&!#@]?|\.\d+(?:e[-+]?\d+)?[!#@]?'
+      scope: constant.numeric.vb
+    - match: '(?i)\b(function|sub|property|class|module|structure|interface|enum|namespace|event|delegate)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.vb
+        2: entity.name.function.vb
+    - match: '(?i)\b(?:true|false|nothing|null|empty|vbcrlf|vbnewline|vbtab|vbcr|vblf|vbnullstring|me|mybase|myclass)\b'
+      scope: constant.language.vb
+    - match: '(?i)\b(?:and|andalso|or|orelse|xor|not|mod|is|isnot|like|eqv|imp|typeof|addressof)\b'
+      scope: keyword.operator.word.vb
+    - match: '(?i)\b(?:if|then|else|elseif|end|select|case|for|each|to|step|next|while|wend|do|loop|until|in|exit|return|goto|gosub|resume|on|error|call|with|try|catch|finally|throw|using|continue|stop|option|explicit|strict|compare|base|imports|inherits|implements|handles|raiseevent|redim|preserve|erase|set|let|get|open|close|print|input|line|put|seek|lock|unlock|width|write|lset|rset|name|kill|mkdir|rmdir|chdir|load|unload|attribute|version|begin)\b'
+      scope: keyword.control.vb
+    - match: '(?i)\b(?:dim|const|static|public|private|protected|friend|shared|global|readonly|writeonly|overrides|overridable|overloads|notoverridable|mustinherit|mustoverride|notinheritable|withevents|byval|byref|optional|paramarray|declare|lib|alias|new|partial|default|async|await|iterator|yield|widening|narrowing|operator|ctype|directcast|trycast|as|of|ansi|unicode|auto)\b'
+      scope: storage.modifier.vb
+    - match: '(?i)\b(?:boolean|byte|char|date|decimal|double|integer|long|object|sbyte|short|single|string|uinteger|ulong|ushort|variant|currency|any)\b'
+      scope: storage.type.vb
+    - match: '(?i)\b(?:msgbox|inputbox|len|left|right|mid|trim|ltrim|rtrim|ucase|lcase|instr|instrrev|replace|split|join|chr|asc|cstr|cint|clng|cdbl|csng|cbool|cdate|cbyte|ccur|cdec|cvar|val|str|abs|sqr|sin|cos|tan|atn|log|exp|rnd|randomize|int|fix|sgn|round|now|timer|year|month|day|hour|minute|second|dateadd|datediff|datepart|format|isnumeric|isdate|isarray|isempty|isnull|isobject|ubound|lbound|array|createobject|getobject|typename|vartype|space|eof|lof|freefile|dir|environ|shell|doevents|console|debug|err|wscript)\b'
+      scope: support.function.builtin.vb
+    - match: '<>|<=|>=|=>|<<|>>|[-+*/\\^&=<>:]'
+      scope: keyword.operator.vb
+  string:
+    - meta_scope: string.quoted.double.vb
+    - match: '""'
+      scope: constant.character.escape.vb
+    - match: '"[cC]?'
+      scope: punctuation.definition.string.end.vb
+      pop: true
+    - match: '$'
+      pop: true

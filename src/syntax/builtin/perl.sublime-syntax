@@ -1,0 +1,89 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Perl
+scope: source.perl
+file_extensions: [pl, pm, pod, t, psgi, cgi, perl, ph]
+first_line_match: '^#!.*\bperl\b'
+contexts:
+  main:
+    - match: '^#!.*$'
+      scope: comment.line.shebang.perl
+    - match: '^=[a-zA-Z]\w*'
+      scope: punctuation.definition.comment.begin.perl
+      push: pod
+    - match: '#.*$'
+      scope: comment.line.number-sign.perl
+    - match: '<<~?(["'']?)([A-Z_][A-Z0-9_]*)\1'
+      scope: punctuation.definition.string.begin.perl
+    - match: '"'
+      scope: punctuation.definition.string.begin.perl
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.perl
+      push: sq
+    - match: '`'
+      scope: punctuation.definition.string.begin.perl
+      push: bq
+    - match: '\b(?:qw|q|qq)\s*\(([^)\n]*)\)|\b(?:qw|q|qq)\s*\{[^}\n]*\}|\b(?:qw|q|qq)\s*\[[^\]\n]*\]|\b(?:qw|q|qq)\s*/[^/\n]*/'
+      scope: string.quoted.other.perl
+    - match: '\b(?:s|tr|y)\s*/(?:[^/\\\n]|\\.)*/(?:[^/\\\n]|\\.)*/[a-z]*'
+      scope: string.regexp.replace.perl
+    - match: '\b(?:m|qr)\s*(?:/(?:[^/\\\n]|\\.)*/|\{[^}\n]*\}|\([^)\n]*\)|#(?:[^#\\\n]|\\.)*#)[a-z]*'
+      scope: string.regexp.perl
+    - match: '(?<![\w)\]}$@%&])/(?![/*\s=])(?:[^/\\\n]|\\.)+/[a-z]*'
+      scope: string.regexp.perl
+    - match: '\b(sub)\s+([A-Za-z_][\w:]*)'
+      captures:
+        1: storage.type.function.perl
+        2: entity.name.function.perl
+    - match: '\b(package)\s+([A-Za-z_][\w:]*)'
+      captures:
+        1: storage.type.class.perl
+        2: entity.name.class.perl
+    - match: '\b(?:use|no|require|our|my|local|state)\b'
+      scope: storage.modifier.perl
+    - match: '\b(?:if|elsif|else|unless|while|until|for|foreach|do|last|next|redo|return|goto|given|when|default|die|eval|BEGIN|END|continue)\b'
+      scope: keyword.control.perl
+    - match: '\b(?:and|or|not|xor|eq|ne|lt|gt|le|ge|cmp|x|isa)\b'
+      scope: keyword.operator.word.perl
+    - match: '\b(?:print|printf|say|push|pop|shift|unshift|splice|keys|values|each|delete|exists|defined|undef|scalar|ref|bless|length|substr|index|rindex|join|split|map|grep|sort|reverse|sprintf|lc|uc|lcfirst|ucfirst|chomp|chop|chr|ord|abs|int|sqrt|open|close|binmode|eof|read|seek|tell|unlink|mkdir|rmdir|opendir|readdir|closedir|warn|exit|sleep|time|localtime|gmtime|wantarray|local)\b'
+      scope: support.function.builtin.perl
+    - match: '[$@%&]\$*\{?\^?[A-Za-z_][\w:]*\}?|\$[0-9&`''+!@/\\,;.]|\$#\{?\$?[A-Za-z_]\w*\}?|@_|%\+'
+      scope: variable.other.perl
+    - match: '\b0[xX][0-9A-Fa-f_]+\b|\b0[bB][01_]+\b|(?<![\w.])(?:[0-9][0-9_]*\.?[0-9_]*|\.[0-9][0-9_]*)(?:[eE][-+]?[0-9_]+)?\b'
+      scope: constant.numeric.perl
+    - match: '=>|->|::|<=>|\.\.\.?|[-+*/%&|^~!<>=?:.]+'
+      scope: keyword.operator.perl
+
+  pod:
+    - meta_scope: comment.block.documentation.perl
+    - match: '^=cut\b.*$'
+      scope: punctuation.definition.comment.end.perl
+      pop: true
+
+  dq:
+    - meta_scope: string.quoted.double.perl
+    - match: '"'
+      scope: punctuation.definition.string.end.perl
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.perl
+    - match: '[$@]\{?[A-Za-z_][\w:]*\}?(?:(?:->)?(?:\[[^\]\n]*\]|\{[^}\n]*\}))*'
+      scope: variable.other.perl
+
+  sq:
+    - meta_scope: string.quoted.single.perl
+    - match: "'"
+      scope: punctuation.definition.string.end.perl
+      pop: true
+    - match: '\\[\\'']'
+      scope: constant.character.escape.perl
+
+  bq:
+    - meta_scope: string.interpolated.perl
+    - match: '`'
+      scope: punctuation.definition.string.end.perl
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.perl

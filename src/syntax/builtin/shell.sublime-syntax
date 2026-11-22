@@ -1,0 +1,719 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Shell
+scope: source.shell
+file_extensions:
+  - sh
+  - bash
+  - zsh
+  - ksh
+  - dash
+  - ash
+  - bashrc
+  - bash_profile
+  - bash_login
+  - bash_logout
+  - bash_aliases
+  - profile
+  - zshrc
+  - zshenv
+  - zprofile
+  - zlogin
+  - kshrc
+  - .bashrc
+  - .bash_profile
+  - .bash_aliases
+  - .profile
+  - .zshrc
+  - .zshenv
+  - .zprofile
+  - .kshrc
+  - PKGBUILD
+  - APKBUILD
+  - ebuild
+  - eclass
+first_line_match: '^#!.*\b(ba|z|k|da|a)?sh\b|^#!/usr/bin/env\s+(ba|z|k|da)?sh'
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+
+contexts:
+  main:
+    - include: line-rules
+
+  # Everything that can appear in a command line.
+  line-rules:
+    - match: '^#!.*$'
+      scope: comment.line.shebang.shell
+    - match: '(?<![^\s;&|()])#.*$'
+      scope: comment.line.number-sign.shell
+    - include: heredoc-start
+    - include: strings
+    - include: expansions
+    - match: '\\.'
+      scope: constant.character.escape.shell
+    - match: '\b(?:function)\s+({{ident}}(?:[.:-]\w+)*)'
+      captures:
+        0: storage.type.function.shell
+        1: entity.name.function.shell
+    - match: '^\s*({{ident}}(?:[.:-]\w+)*)\s*(\(\))\s*(?=[{(]|$|#)'
+      captures:
+        1: entity.name.function.shell
+        2: punctuation.definition.parameters.shell
+    - match: '\b(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|in|function|select|time|coproc)(?![\w.-])(?!=)'
+      scope: keyword.control.shell
+    - match: '(?<![\w.-])(?:echo|cd|export|local|declare|typeset|readonly|read|printf|test|set|unset|shift|return|exit|trap|source|eval|exec|alias|unalias|break|continue|pwd|pushd|popd|wait|kill|true|false|type|command|builtin|getopts|umask|ulimit|let|hash|bg|fg|jobs|history|shopt|enable|help|mapfile|readarray|fc|dirs|disown|bind|caller|compgen|complete|logout|times|ulimit)(?![\w.-])(?!=)'
+      scope: support.function.builtin.shell
+    - match: '(?<![\w.-])(?:\[\[|\[)(?=\s)|(?<=\s)(?:\]\]|\])(?![\w])|(?<![\w.-]):(?=\s|$)'
+      scope: support.function.builtin.shell
+    - match: '(?<![\w.-])({{ident}})(\+?=)'
+      captures:
+        1: variable.parameter.assignment.shell
+        2: keyword.operator.assignment.shell
+    - match: '(?<=\s)--?[A-Za-z][\w-]*'
+      scope: variable.parameter.option.shell
+    - match: '(?<![\w.-])(?:0[xX][0-9a-fA-F]+|[0-9]+)(?![\w.-])'
+      scope: constant.numeric.shell
+    - match: '&&|\|\||;;&?|;&|!(?=\s)'
+      scope: keyword.operator.logical.shell
+    - match: '\d*(?:&>>?|>>|>&|<&|<>|>\||<<<|[<>])'
+      scope: keyword.operator.redirection.shell
+    - match: '[|&;]'
+      scope: keyword.operator.control.shell
+    - match: '=~|==|!=|(?<=\s)=(?=\s)'
+      scope: keyword.operator.comparison.shell
+
+  strings:
+    - match: "'"
+      scope: punctuation.definition.string.begin.shell
+      push: single-string
+    - match: '\$(?=")'
+      scope: punctuation.definition.string.begin.shell
+    - match: '"'
+      scope: punctuation.definition.string.begin.shell
+      push: double-string
+    - match: "\\$'"
+      scope: punctuation.definition.string.begin.shell
+      push: ansi-string
+
+  single-string:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.single.shell
+    - match: "'"
+      scope: punctuation.definition.string.end.shell
+      pop: true
+
+  ansi-string:
+    - meta_scope: string.quoted.single.ansi-c.shell
+    - match: '\\(?:[abeEfnrtv\\''"?]|[0-7]{1,3}|x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|c.)'
+      scope: constant.character.escape.shell
+    - match: "'"
+      scope: punctuation.definition.string.end.shell
+      pop: true
+
+  double-string:
+    - meta_scope: string.quoted.double.shell
+    - match: '\\[$`"\\]'
+      scope: constant.character.escape.shell
+    - match: '\\$'
+      scope: constant.character.escape.shell
+    - match: '"'
+      scope: punctuation.definition.string.end.shell
+      pop: true
+    - include: expansions
+
+  expansions:
+    - match: '\$\(\('
+      scope: punctuation.section.arithmetic.begin.shell
+      push: arithmetic
+    - match: '\$\('
+      scope: punctuation.section.subshell.begin.shell
+      push: subshell
+    - match: '\$\{'
+      scope: punctuation.section.variable.begin.shell
+      push: param-expansion
+    - match: '`'
+      scope: punctuation.section.backtick.begin.shell
+      push: backticks
+    - match: '(\$)(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!_-])'
+      scope: support.constant.variable.shell
+      captures:
+        1: punctuation.definition.variable.shell
+
+  subshell:
+    - meta_scope: meta.subshell.shell
+    - match: '\)'
+      scope: punctuation.section.subshell.end.shell
+      pop: true
+    - match: '\('
+      push: subshell-inner
+    - include: line-rules
+
+  subshell-inner:
+    - match: '\)'
+      pop: true
+    - match: '\('
+      push: subshell-inner
+    - include: line-rules
+
+  arithmetic:
+    - meta_scope: meta.arithmetic.shell
+    - match: '\)\)'
+      scope: punctuation.section.arithmetic.end.shell
+      pop: true
+    - match: '\('
+      push: arith-paren
+    - include: expansions
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+)\b'
+      scope: constant.numeric.shell
+    - match: '\b{{ident}}\b'
+      scope: support.constant.variable.shell
+    - match: '\*\*|<<|>>|&&|\|\||[-+*/%<>=!&|^~?:]+'
+      scope: keyword.operator.arithmetic.shell
+
+  arith-paren:
+    - match: '\)'
+      pop: true
+    - match: '\('
+      push: arith-paren
+    - include: expansions
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+)\b'
+      scope: constant.numeric.shell
+    - match: '\b{{ident}}\b'
+      scope: support.constant.variable.shell
+    - match: '\*\*|<<|>>|&&|\|\||[-+*/%<>=!&|^~?:]+'
+      scope: keyword.operator.arithmetic.shell
+
+  param-expansion:
+    - meta_scope: support.constant.variable.shell
+    - match: '\}'
+      scope: punctuation.section.variable.end.shell
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.shell
+    - match: "'"
+      push: single-string
+    - match: '"'
+      push: param-dq
+    - match: '\$\('
+      push: subshell
+    - match: '\$\{'
+      push: param-expansion
+    - match: '\$[A-Za-z_][A-Za-z0-9_]*'
+    - match: ':?[-+=?]|##?|%%?|//?|\^\^?|,,?|[:@*]'
+      scope: keyword.operator.expansion.shell
+    - match: '\b[0-9]+\b'
+      scope: constant.numeric.shell
+
+  param-dq:
+    - meta_scope: string.quoted.double.shell
+    - match: '\\.'
+      scope: constant.character.escape.shell
+    - match: '"'
+      pop: true
+    - include: expansions
+
+  backticks:
+    - meta_scope: meta.backtick.shell
+    - match: '`'
+      scope: punctuation.section.backtick.end.shell
+      pop: true
+    - include: line-rules
+
+  # The engine has no backreferences into a pushed context, so the common
+  # delimiter words each get their own body context; any other word falls back
+  # to a generic bare-word terminator. The rest of the introducing line is
+  # still ordinary shell (rest-of-line sits on top and pops at end of line).
+  heredoc-start:
+    - match: '(<<-?)\s*(?:(["''])EOF\2|\\EOF)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-eof-raw, rest-of-line]
+    - match: '(<<-?)\s*EOF(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-eof-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])EOT\2|\\EOT)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-eot-raw, rest-of-line]
+    - match: '(<<-?)\s*EOT(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-eot-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])END\2|\\END)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-end-raw, rest-of-line]
+    - match: '(<<-?)\s*END(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-end-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])EOL\2|\\EOL)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-eol-raw, rest-of-line]
+    - match: '(<<-?)\s*EOL(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-eol-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])EOS\2|\\EOS)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-eos-raw, rest-of-line]
+    - match: '(<<-?)\s*EOS(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-eos-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])EOM\2|\\EOM)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-eom-raw, rest-of-line]
+    - match: '(<<-?)\s*EOM(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-eom-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])HERE\2|\\HERE)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-here-raw, rest-of-line]
+    - match: '(<<-?)\s*HERE(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-here-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])HEREDOC\2|\\HEREDOC)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-heredoc-raw, rest-of-line]
+    - match: '(<<-?)\s*HEREDOC(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-heredoc-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])DOC\2|\\DOC)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-doc-raw, rest-of-line]
+    - match: '(<<-?)\s*DOC(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-doc-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])TEXT\2|\\TEXT)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-text-raw, rest-of-line]
+    - match: '(<<-?)\s*TEXT(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-text-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])USAGE\2|\\USAGE)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-usage-raw, rest-of-line]
+    - match: '(<<-?)\s*USAGE(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-usage-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])HELP\2|\\HELP)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-help-raw, rest-of-line]
+    - match: '(<<-?)\s*HELP(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-help-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])SQL\2|\\SQL)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-sql-raw, rest-of-line]
+    - match: '(<<-?)\s*SQL(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-sql-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])EOSQL\2|\\EOSQL)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-eosql-raw, rest-of-line]
+    - match: '(<<-?)\s*EOSQL(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-eosql-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])MSG\2|\\MSG)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-msg-raw, rest-of-line]
+    - match: '(<<-?)\s*MSG(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-msg-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])STOP\2|\\STOP)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-stop-raw, rest-of-line]
+    - match: '(<<-?)\s*STOP(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-stop-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])_EOF_\2|\\_EOF_)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-eof_-raw, rest-of-line]
+    - match: '(<<-?)\s*_EOF_(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-eof_-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])ENDOFFILE\2|\\ENDOFFILE)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-endoffile-raw, rest-of-line]
+    - match: '(<<-?)\s*ENDOFFILE(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-endoffile-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])EOC\2|\\EOC)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-eoc-raw, rest-of-line]
+    - match: '(<<-?)\s*EOC(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-eoc-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])CONFIG\2|\\CONFIG)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-config-raw, rest-of-line]
+    - match: '(<<-?)\s*CONFIG(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-config-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])EOD\2|\\EOD)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-eod-raw, rest-of-line]
+    - match: '(<<-?)\s*EOD(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-eod-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])DATA\2|\\DATA)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-data-raw, rest-of-line]
+    - match: '(<<-?)\s*DATA(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-data-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])INPUT\2|\\INPUT)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-input-raw, rest-of-line]
+    - match: '(<<-?)\s*INPUT(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-input-exp, rest-of-line]
+    - match: '(<<-?)\s*(?:(["''])[A-Za-z_][A-Za-z0-9_.-]*\2|\\[A-Za-z_][A-Za-z0-9_.-]*)(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+        2: punctuation.definition.string.begin.shell
+      push: [hd-generic-raw, rest-of-line]
+    - match: '(<<-?)\s*[A-Za-z_][A-Za-z0-9_.-]*(?![\w.-])'
+      captures:
+        1: keyword.operator.redirection.shell
+      push: [hd-generic-exp, rest-of-line]
+
+  rest-of-line:
+    - match: '(?=$)'
+      pop: true
+    - include: line-rules
+
+  hd-eof-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOF\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-eof-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOF\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-eot-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOT\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-eot-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOT\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-end-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*END\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-end-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*END\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-eol-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOL\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-eol-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOL\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-eos-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOS\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-eos-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOS\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-eom-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOM\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-eom-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOM\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-here-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*HERE\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-here-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*HERE\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-heredoc-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*HEREDOC\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-heredoc-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*HEREDOC\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-doc-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*DOC\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-doc-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*DOC\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-text-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*TEXT\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-text-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*TEXT\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-usage-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*USAGE\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-usage-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*USAGE\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-help-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*HELP\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-help-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*HELP\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-sql-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*SQL\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-sql-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*SQL\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-eosql-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOSQL\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-eosql-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOSQL\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-msg-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*MSG\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-msg-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*MSG\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-stop-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*STOP\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-stop-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*STOP\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-eof_-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*_EOF_\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-eof_-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*_EOF_\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-endoffile-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*ENDOFFILE\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-endoffile-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*ENDOFFILE\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-eoc-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOC\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-eoc-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOC\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-config-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*CONFIG\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-config-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*CONFIG\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-eod-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOD\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-eod-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*EOD\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-data-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*DATA\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-data-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*DATA\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-input-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*INPUT\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-input-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*INPUT\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+  hd-generic-raw:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*[A-Za-z_][A-Za-z0-9_.-]*\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+  hd-generic-exp:
+    - meta_scope: string.unquoted.heredoc.shell
+    - match: '^\t*[A-Za-z_][A-Za-z0-9_.-]*\s*$'
+      scope: constant.other.heredoc-delimiter.shell
+      pop: true
+    - include: heredoc-expansions
+
+  heredoc-expansions:
+    - match: '\\[$`\\]'
+      scope: constant.character.escape.shell
+    - include: expansions

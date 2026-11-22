@@ -113,6 +113,23 @@ const win = if (is_win) struct {
         max_y: i16,
     };
     extern "kernel32" fn GetConsoleScreenBufferInfo(h: w.HANDLE, info: *CONSOLE_SCREEN_BUFFER_INFO) callconv(.winapi) c_int;
+    extern "kernel32" fn GetConsoleMode(h: w.HANDLE, mode: *u32) callconv(.winapi) c_int;
+    extern "kernel32" fn SetConsoleMode(h: w.HANDLE, mode: u32) callconv(.winapi) c_int;
+    extern "kernel32" fn SetConsoleOutputCP(cp: u32) callconv(.winapi) c_int;
+    extern "kernel32" fn GetProcessTimes(h: w.HANDLE, creation: *u64, exit: *u64, kernel: *u64, user: *u64) callconv(.winapi) c_int;
+    const PROCESS_MEMORY_COUNTERS = extern struct {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set: usize,
+        working_set: usize,
+        quota_peak_paged: usize,
+        quota_paged: usize,
+        quota_peak_nonpaged: usize,
+        quota_nonpaged: usize,
+        pagefile: usize,
+        peak_pagefile: usize,
+    };
+    extern "kernel32" fn K32GetProcessMemoryInfo(h: w.HANDLE, pmc: *PROCESS_MEMORY_COUNTERS, cb: u32) callconv(.winapi) c_int;
     extern "kernel32" fn WaitForSingleObject(h: w.HANDLE, ms: u32) callconv(.winapi) u32;
     extern "kernel32" fn TerminateProcess(h: w.HANDLE, code: u32) callconv(.winapi) c_int;
     extern "kernel32" fn GetExitCodeProcess(h: w.HANDLE, code: *u32) callconv(.winapi) c_int;
@@ -284,6 +301,23 @@ pub fn terminalColumns() ?usize {
     var ws: std.posix.winsize = undefined;
     const rc = c.ioctl(1, c.T.IOCGWINSZ, @intFromPtr(&ws));
     return if (rc == 0 and ws.col > 0) ws.col else null;
+}
+
+/// Prepare a Windows console for ANSI output: turn on virtual terminal
+/// processing (escape sequences) and UTF-8 output (box-drawing characters).
+/// Returns false when stdout is not a console or the console refuses (very
+/// old conhost); callers then keep escapes off. A no-op returning true elsewhere.
+pub fn enableAnsiOutput() bool {
+    if (comptime !is_win) return true;
+    const h = std.os.windows.peb().ProcessParameters.hStdOutput;
+    var mode: u32 = 0;
+    if (win.GetConsoleMode(h, &mode) == 0) return false;
+    // ENABLE_VIRTUAL_TERMINAL_PROCESSING (0x4) only. Not DISABLE_NEWLINE_AUTO_RETURN (0x8):
+    // we write plain \n, and with that flag a line feed no longer returns the
+    // cursor to column 0, so text stair-steps after a full-width line.
+    if (win.SetConsoleMode(h, mode | 0x4) == 0) return false;
+    _ = win.SetConsoleOutputCP(65001);
+    return true;
 }
 
 pub fn processAlive(pid: i32) bool {
@@ -838,6 +872,75 @@ pub fn waitPid(pid: Pid, block: bool) sys.WaitResult {
         if (sg == 0) return .{ .exited = @truncate(st >> 8) };
         if (sg != 0x7f) return .{ .signaled = @intCast(sg) };
         return .none;
+    }
+}
+
+/// Wait for a child and report its usage: GetProcessTimes and the peak
+/// working set on Windows, wait4(2) on libc POSIX systems.
+pub fn waitUsage(pid: Pid) sys.WaitUsage {
+    var u: sys.Usage = .{};
+    if (comptime is_win) {
+        if (win.WaitForSingleObject(pid, 0xFFFFFFFF) != 0) return .{ .result = .none, .usage = u };
+        defer _ = win.CloseHandle(pid);
+        var code: u32 = 0;
+        if (win.GetExitCodeProcess(pid, &code) == 0) return .{ .result = .none, .usage = u };
+        var creation: u64 = 0;
+        var exit: u64 = 0;
+        var kernel: u64 = 0;
+        var user: u64 = 0;
+        if (win.GetProcessTimes(pid, &creation, &exit, &kernel, &user) != 0) {
+            u.user_ns = user * 100; // FILETIME ticks are 100 ns
+            u.sys_ns = kernel * 100;
+        }
+        var pmc: win.PROCESS_MEMORY_COUNTERS = std.mem.zeroes(win.PROCESS_MEMORY_COUNTERS);
+        pmc.cb = @sizeOf(win.PROCESS_MEMORY_COUNTERS);
+        if (win.K32GetProcessMemoryInfo(pid, &pmc, pmc.cb) != 0) {
+            u.max_rss_kb = pmc.peak_working_set / 1024;
+            u.minor_faults = pmc.page_fault_count;
+        }
+        return .{ .result = .{ .exited = @truncate(code) }, .usage = u };
+    }
+    var status: c_int = 0;
+    var ru: c.rusage = std.mem.zeroes(c.rusage);
+    while (true) {
+        const rc = c.wait4(pid, &status, 0, &ru);
+        if (rc < 0) {
+            if (c.errno(rc) == .INTR) continue;
+            return .{ .result = .none, .usage = u };
+        }
+        const st: u32 = @bitCast(status);
+        const sg: u32 = st & 0x7f;
+        const result: sys.WaitResult = if (sg == 0)
+            .{ .exited = @truncate(st >> 8) }
+        else if (sg != 0x7f)
+            .{ .signaled = @intCast(sg) }
+        else
+            .none;
+        const tvns = struct {
+            fn f(t: c.timeval) u64 {
+                return @as(u64, @intCast(@max(t.sec, 0))) * 1_000_000_000 + @as(u64, @intCast(@max(t.usec, 0))) * 1000;
+            }
+            fn n(v: isize) u64 {
+                return @intCast(@max(v, 0));
+            }
+        };
+        u = .{
+            .user_ns = tvns.f(ru.utime),
+            .sys_ns = tvns.f(ru.stime),
+            // macOS reports bytes, the other systems kilobytes.
+            .max_rss_kb = if (is_darwin) tvns.n(ru.maxrss) / 1024 else tvns.n(ru.maxrss),
+            .minor_faults = tvns.n(ru.minflt),
+            .major_faults = tvns.n(ru.majflt),
+            .vol_switches = tvns.n(ru.nvcsw),
+            .invol_switches = tvns.n(ru.nivcsw),
+            .swaps = tvns.n(ru.nswap),
+            .in_blocks = tvns.n(ru.inblock),
+            .out_blocks = tvns.n(ru.oublock),
+            .msgs_sent = tvns.n(ru.msgsnd),
+            .msgs_received = tvns.n(ru.msgrcv),
+            .signals = tvns.n(ru.nsignals),
+        };
+        return .{ .result = result, .usage = u };
     }
 }
 

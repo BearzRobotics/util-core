@@ -1,0 +1,92 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Go
+scope: source.go
+file_extensions:
+  - go
+first_line_match: '^//\s*Code generated .* DO NOT EDIT\.'
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+
+contexts:
+  main:
+    - match: '//.*$'
+      scope: comment.line.double-slash.go
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.go
+      push: block-comment
+    - match: '"'
+      scope: punctuation.definition.string.begin.go
+      push: string
+    - match: '`'
+      scope: punctuation.definition.string.begin.go
+      push: raw-string
+    - match: "'(?:[^'\\\\]|\\\\(?:[abfnrtv\\\\'\"]|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}))'"
+      scope: string.quoted.single.go
+    - match: '\b(package)\s+({{ident}})'
+      captures:
+        1: keyword.control.package.go
+        2: entity.name.namespace.go
+    - match: '\b(import)\b'
+      scope: keyword.control.import.go
+    - match: '\b(func)\s*(\([^)]*\))\s*({{ident}})'
+      captures:
+        1: storage.type.function.go
+        2: meta.receiver.go
+        3: entity.name.function.go
+    - match: '\b(func)\s+({{ident}})'
+      captures:
+        1: storage.type.function.go
+        2: entity.name.function.go
+    - match: '\bfunc\b'
+      scope: storage.type.function.go
+    - match: '\b(type)\s+({{ident}})'
+      captures:
+        1: storage.type.go
+        2: entity.name.type.go
+    - match: '\b(?:struct|interface|map|chan)\b'
+      scope: storage.type.go
+    - match: '\b(?:var|const|type)\b'
+      scope: storage.type.go
+    - match: '\b(?:break|case|continue|default|defer|else|fallthrough|for|go|goto|if|range|return|select|switch)\b'
+      scope: keyword.control.go
+    - match: '\b(?:true|false|nil|iota)\b'
+      scope: constant.language.go
+    - match: '\b(?:bool|byte|rune|string|error|any|comparable|int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|uintptr|float32|float64|complex64|complex128)\b'
+      scope: storage.type.go
+    - match: '\b(?:append|cap|clear|close|complex|copy|delete|imag|len|make|max|min|new|panic|print|println|real|recover)(?=\s*\()'
+      scope: support.function.builtin.go
+    - match: '\b(?:0[xX][0-9a-fA-F_]*(?:\.[0-9a-fA-F_]*)?(?:[pP][+-]?\d+)?|0[bB][01_]+|0[oO][0-7_]+|(?:\d[\d_]*\.?[\d_]*|\.\d[\d_]*)(?:[eE][+-]?\d+)?)i?\b'
+      scope: constant.numeric.go
+    - match: '\.\d[\d_]*(?:[eE][+-]?\d+)?i?\b'
+      scope: constant.numeric.go
+    - match: '<-|:=|\.\.\.|&&|\|\||<<=?|>>=?|&\^=?|\+\+|--|[-+*/%&|^<>=!]=?|~'
+      scope: keyword.operator.go
+
+  block-comment:
+    - meta_scope: comment.block.go
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.go
+      pop: true
+
+  string:
+    - meta_scope: string.quoted.double.go
+    - match: '\\(?:[abfnrtv\\''"]|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})'
+      scope: constant.character.escape.go
+    - match: '%[-+# 0]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[vTtbcdoOqxXUeEfFgGsp%]'
+      scope: constant.other.placeholder.go
+    - match: '"'
+      scope: punctuation.definition.string.end.go
+      pop: true
+    - match: '(?=$)'
+      pop: true
+
+  raw-string:
+    - meta_scope: string.quoted.other.raw.go
+    - match: '%[-+# 0]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[vTtbcdoOqxXUeEfFgGsp%]'
+      scope: constant.other.placeholder.go
+    - match: '`'
+      scope: punctuation.definition.string.end.go
+      pop: true

@@ -7,6 +7,7 @@ opt-in or terminal-only departure. Per-command detail is in each
 | Command | Extension | Applies when | Turn off |
 |---|---|---|---|
 | cat | bat-style view (header, grid, line numbers, syntax highlighting) | stdout is a terminal and no GNU formatting option is given | pipe/redirect, or any GNU formatting option |
+| time | `--bench`: poop/crap-style comparison of commands with `--duration`, `--runs`, `--warmup`, `--shell` and more (see the man page) | `--bench` is given | do not pass it |
 | ls, dir, vdir, stat, df, du, wc, date, printenv, md5sum..b2sum, cksum | `--json` structured output (listed in `--help` and the man page as "not in GNU") | the option is given | do not pass it |
 | ls, dir, vdir | diagnostic: `memory exhausted: the listing is incomplete` (GNU: `memory exhausted`; same exit status 2) | an allocation fails | n/a |
 | cmp, diff, diff3, sdiff | `--json` structured output: the comparison as data (listed in `--help` and the man page as "not in GNU"); refused with the options that define a text layout | the option is given | do not pass it |

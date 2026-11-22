@@ -1,0 +1,211 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: LaTeX
+scope: text.tex.latex
+file_extensions: [tex, latex, sty, cls, bib, ltx, dtx]
+first_line_match: '^\\(?:documentclass|usepackage|input|RequirePackage|ProvidesPackage|NeedsTeXFormat)\b'
+contexts:
+  main:
+    - include: comments
+    # BibTeX entries
+    - match: '^[ \t]*(@)(?i:comment|preamble|string)\b'
+      scope: keyword.control.entry-type.bibtex
+    - match: '^[ \t]*(@)([A-Za-z]+)[ \t]*(\{|\()[ \t]*([^,\s{}()]*)'
+      captures:
+        1: punctuation.definition.entry.bibtex
+        2: storage.type.entry-type.bibtex
+        3: punctuation.section.entry.begin.bibtex
+        4: entity.name.function.citation-key.bibtex
+    - match: '^[ \t]*([A-Za-z][-A-Za-z0-9_:]*)[ \t]*(=)(?=[ \t]*[{"0-9A-Za-z])'
+      captures:
+        1: support.type.property-name.bibtex
+        2: keyword.operator.assignment.bibtex
+    - include: body
+
+  comments:
+    - match: '%.*$'
+      scope: comment.line.percentage.tex
+
+  body:
+    - include: comments
+    - match: '(\\begin)(\{)(verbatim\*?|Verbatim\*?|lstlisting|minted|alltt|BVerbatim|LVerbatim)(\})'
+      captures:
+        1: keyword.control.begin.latex
+        2: punctuation.definition.group.begin.latex
+        3: entity.name.tag.environment.latex
+        4: punctuation.definition.group.end.latex
+      push: verbatim-block
+    - match: '(\\begin)(\{)(comment)(\})'
+      captures:
+        1: keyword.control.begin.latex
+        2: punctuation.definition.group.begin.latex
+        3: entity.name.tag.environment.latex
+        4: punctuation.definition.group.end.latex
+      push: comment-block
+    - match: '(\\begin)(\{)((?:equation|align|alignat|gather|multline|flalign|eqnarray|displaymath|math)\*?)(\})'
+      captures:
+        1: keyword.control.begin.latex
+        2: punctuation.definition.group.begin.latex
+        3: entity.name.tag.environment.latex
+        4: punctuation.definition.group.end.latex
+      push: math-env
+    - match: '(\\(?:begin|end))(\{)([^}\n]*)(\})'
+      captures:
+        1: keyword.control.environment.latex
+        2: punctuation.definition.group.begin.latex
+        3: entity.name.tag.environment.latex
+        4: punctuation.definition.group.end.latex
+    - match: '(\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?)(\[[^\]\n]*\])?[ \t]*(\{)'
+      captures:
+        1: keyword.control.section.latex
+        3: punctuation.definition.group.begin.latex
+      push: section-title
+    - match: '(\\(?:label|ref|eqref|pageref|autoref|cref|Cref|nameref|vref|cite[a-zA-Z]*|nocite|footcite|parencite|textcite))(\*?)(?:\[[^\]\n]*\]){0,2}(\{)'
+      captures:
+        1: support.function.reference.latex
+        3: punctuation.definition.group.begin.latex
+      push: reference-arg
+    - match: '(\\(?:usepackage|RequirePackage|documentclass|input|include|includegraphics|bibliography|bibliographystyle|includeonly|usetikzlibrary))(?:\[[^\]\n]*\])?(\{)'
+      captures:
+        1: keyword.control.import.latex
+        2: punctuation.definition.group.begin.latex
+      push: reference-arg
+    - match: '\\(?:newcommand|renewcommand|providecommand|DeclareMathOperator|newenvironment|renewenvironment|newtheorem|def|edef|gdef|xdef|let|newif|DeclareRobustCommand|NewDocumentCommand)\b\*?'
+      scope: storage.type.function.latex
+    - match: '\\verb\*?([^A-Za-z*\s]).*?\1'
+      scope: string.other.verb.latex
+    - match: '\$\$'
+      scope: punctuation.definition.math.begin.latex
+      push: display-math-dollar
+    - match: '\$'
+      scope: punctuation.definition.math.begin.latex
+      push: inline-math-dollar
+    - match: '\\\['
+      scope: punctuation.definition.math.begin.latex
+      push: display-math-bracket
+    - match: '\\\('
+      scope: punctuation.definition.math.begin.latex
+      push: inline-math-paren
+    - match: '\\[\\%&$#_{}^~ ,;:!>/@|]'
+      scope: constant.character.escape.latex
+    - match: '\\[A-Za-z@]+\*?'
+      scope: support.function.latex
+    - match: '\\.'
+      scope: support.function.latex
+    - match: '[{}\[\]]'
+      scope: punctuation.definition.group.latex
+    - match: '(?<!\\)[&~]'
+      scope: keyword.operator.latex
+    - match: '(?<![\w\\])-{2,3}(?!\w)'
+      scope: constant.character.dash.latex
+
+  verbatim-block:
+    - meta_content_scope: string.unquoted.verbatim.latex
+    - match: '(\\end)(\{)(verbatim\*?|Verbatim\*?|lstlisting|minted|alltt|BVerbatim|LVerbatim)(\})'
+      captures:
+        1: keyword.control.end.latex
+        2: punctuation.definition.group.begin.latex
+        3: entity.name.tag.environment.latex
+        4: punctuation.definition.group.end.latex
+      pop: true
+
+  comment-block:
+    - meta_content_scope: comment.block.latex
+    - match: '(\\end)(\{)(comment)(\})'
+      captures:
+        1: keyword.control.end.latex
+        2: punctuation.definition.group.begin.latex
+        3: entity.name.tag.environment.latex
+        4: punctuation.definition.group.end.latex
+      pop: true
+
+  section-title:
+    - meta_content_scope: entity.name.section.latex
+    - match: '\}'
+      scope: punctuation.definition.group.end.latex
+      pop: true
+    - match: '\{'
+      push: section-nested
+    - match: '%.*$'
+      scope: comment.line.percentage.tex
+    - match: '\\[A-Za-z@]+'
+      scope: support.function.latex
+    - match: '\\.'
+      scope: constant.character.escape.latex
+
+  section-nested:
+    - meta_content_scope: entity.name.section.latex
+    - match: '\}'
+      pop: true
+    - match: '\{'
+      push: section-nested
+    - match: '\\[A-Za-z@]+'
+      scope: support.function.latex
+    - match: '\\.'
+      scope: constant.character.escape.latex
+
+  reference-arg:
+    - meta_content_scope: variable.parameter.latex
+    - match: '\}'
+      scope: punctuation.definition.group.end.latex
+      pop: true
+    - match: '%.*$'
+      scope: comment.line.percentage.tex
+
+  math-env:
+    - meta_content_scope: string.other.math.latex
+    - match: '(\\end)(\{)((?:equation|align|alignat|gather|multline|flalign|eqnarray|displaymath|math)\*?)(\})'
+      captures:
+        1: keyword.control.end.latex
+        2: punctuation.definition.group.begin.latex
+        3: entity.name.tag.environment.latex
+        4: punctuation.definition.group.end.latex
+      pop: true
+    - include: math-body
+
+  display-math-dollar:
+    - meta_content_scope: string.other.math.latex
+    - match: '\$\$'
+      scope: punctuation.definition.math.end.latex
+      pop: true
+    - include: math-body
+
+  inline-math-dollar:
+    - meta_content_scope: string.other.math.latex
+    - match: '\$'
+      scope: punctuation.definition.math.end.latex
+      pop: true
+    - include: math-body
+
+  display-math-bracket:
+    - meta_content_scope: string.other.math.latex
+    - match: '\\\]'
+      scope: punctuation.definition.math.end.latex
+      pop: true
+    - include: math-body
+
+  inline-math-paren:
+    - meta_content_scope: string.other.math.latex
+    - match: '\\\)'
+      scope: punctuation.definition.math.end.latex
+      pop: true
+    - include: math-body
+
+  math-body:
+    - match: '%.*$'
+      scope: comment.line.percentage.tex
+    - match: '\\(?:text|mathrm|mathbf|mathit|mathsf|mathtt|mbox|textbf|textit|operatorname)\b'
+      scope: support.function.latex
+    - match: '\\[\\%&$#_{}, ;:!]'
+      scope: constant.character.escape.latex
+    - match: '\\(?:frac|sqrt|sum|prod|int|oint|lim|infty|partial|nabla|left|right|cdot|times|leq|geq|neq|approx|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|phi|omega|Delta|Omega|sin|cos|tan|log|ln|exp|begin|end)(?![A-Za-z])'
+      scope: keyword.operator.math.latex
+    - match: '\\[A-Za-z@]+'
+      scope: support.function.latex
+    - match: '\\.'
+      scope: support.function.latex
+    - match: '(?<![A-Za-z])[0-9]+(?:\.[0-9]+)?'
+      scope: constant.numeric.latex
+    - match: '[\^_&=<>+\-*/|]'
+      scope: keyword.operator.math.latex

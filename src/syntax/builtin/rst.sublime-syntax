@@ -1,0 +1,116 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: reStructuredText
+scope: text.restructuredtext
+file_extensions: [rst, rest]
+contexts:
+  main:
+    # Section adornment lines (the title line itself cannot be seen from a
+    # single-line match, so only the underline/overline is scoped).
+    - match: '^(?:={3,}|-{3,}|`{3,}|:{3,}|''{3,}|"{3,}|~{3,}|\^{3,}|_{3,}|\*{3,}|\+{3,}|#{3,}|\.{3,})[ \t]*$'
+      scope: entity.name.section.adornment.rst
+    # Comments: ".." followed by text that is not a directive, target or substitution
+    - match: '^[ \t]*\.\.[ \t]*$'
+      scope: comment.block.rst
+      push: comment-body
+    - match: '^[ \t]*\.\.[ \t]+(?![A-Za-z0-9_|\[-]+[:\]]|_|\|)'
+      scope: comment.block.rst
+      push: comment-body
+    # Code-like directives: body is literal text
+    - match: '^[ \t]*(\.\.)[ \t]+(code-block|code|sourcecode|parsed-literal|literalinclude|highlight|math|raw|productionlist)(::)[ \t]*(.*)$'
+      captures:
+        1: punctuation.definition.directive.rst
+        2: keyword.control.directive.rst
+        3: punctuation.separator.rst
+        4: constant.other.language-name.rst
+      push: literal-body
+    - match: '^[ \t]*(\.\.)[ \t]+([A-Za-z0-9][-A-Za-z0-9_+:.]*)(::)'
+      captures:
+        1: punctuation.definition.directive.rst
+        2: keyword.control.directive.rst
+        3: punctuation.separator.rst
+    - match: '^[ \t]*(\.\.)[ \t]+(\|[^|\n]+\|)[ \t]+([A-Za-z][-A-Za-z0-9_]*)(::)'
+      captures:
+        1: punctuation.definition.directive.rst
+        2: variable.parameter.substitution.rst
+        3: keyword.control.directive.rst
+        4: punctuation.separator.rst
+    - match: '^[ \t]*(\.\.)[ \t]+(_)(`[^`\n]+`|(?:\\.|[^:\n\\])+)(:)'
+      captures:
+        1: punctuation.definition.directive.rst
+        2: punctuation.definition.target.rst
+        3: entity.name.function.target.rst
+        4: punctuation.separator.rst
+    - match: '^[ \t]*(\.\.)[ \t]+(\[)([^\]\n]+)(\])'
+      captures:
+        1: punctuation.definition.directive.rst
+        2: punctuation.definition.reference.begin.rst
+        3: entity.name.function.footnote.rst
+        4: punctuation.definition.reference.end.rst
+    - match: '^__[ \t]+\S+'
+      scope: entity.name.function.target.rst
+    # Field lists / directive options
+    - match: '^([ \t]*)(:)([^:\n`]+?)(:)(?=[ \t]|$)'
+      captures:
+        2: punctuation.definition.field.begin.rst
+        3: support.type.property-name.field.rst
+        4: punctuation.definition.field.end.rst
+    # Lists
+    - match: '^[ \t]*(?:[-*+•]|\(?(?:[0-9]+|[A-Za-z]|#|[ivxlcdmIVXLCDM]+)[.)])(?=[ \t])'
+      scope: keyword.other.list-marker.rst
+    - match: '^[ \t]*\|(?=[ \t]|$)'
+      scope: keyword.other.line-block.rst
+    # Grid and simple table borders
+    - match: '^[ \t]*\+(?:[-=]+\+)+[ \t]*$'
+      scope: keyword.other.table-border.rst
+    - match: '^[ \t]*=+(?:[ \t]+=+)+[ \t]*$'
+      scope: keyword.other.table-border.rst
+    # Paragraph ending in "::" introduces a literal block
+    - match: '(?<=\S)::[ \t]*$'
+      scope: punctuation.definition.literal-block.rst
+      push: literal-body
+    - match: '^[ \t]*::[ \t]*$'
+      scope: punctuation.definition.literal-block.rst
+      push: literal-body
+    - include: inline
+
+  comment-body:
+    - meta_content_scope: comment.block.rst
+    - match: '^(?=\S)'
+      pop: true
+
+  literal-body:
+    - meta_content_scope: string.unquoted.literal-block.rst
+    - match: '^(?=\S)'
+      pop: true
+
+  inline:
+    - match: '(:[A-Za-z][-A-Za-z0-9_+:.]*:)(`)([^`\n]*)(`)'
+      captures:
+        1: keyword.other.role.rst
+        2: punctuation.definition.role.begin.rst
+        3: string.other.role-target.rst
+        4: punctuation.definition.role.end.rst
+    - match: '``[^`\n]+``'
+      scope: string.other.literal.rst
+    - match: '(?<![\w*])\*\*[^\s*][^*\n]*\*\*(?![\w*])'
+      scope: keyword.other.strong.rst
+    - match: '(?<![\w*])\*[^\s*][^*\n]*\*(?![\w*])'
+      scope: variable.parameter.emphasis.rst
+    - match: '`[^`\n]+`__?(?![\w])'
+      scope: entity.name.function.link.rst
+    - match: '`[^`\n]+`(?:\\.)?'
+      scope: string.other.interpreted.rst
+    - match: '(?<![\w])_`[^`\n]+`'
+      scope: entity.name.function.target.rst
+    - match: '\|[^|\s][^|\n]*\|_{0,2}'
+      scope: variable.parameter.substitution.rst
+    - match: '\[(?:[0-9]+|#[A-Za-z0-9_]*|\*)\]_|\[[A-Za-z][-A-Za-z0-9_.]*\]_'
+      scope: entity.name.function.footnote-ref.rst
+    - match: '\b[A-Za-z0-9][-A-Za-z0-9_.]*[A-Za-z0-9]__?(?![\w.])'
+      scope: entity.name.function.link.rst
+    - match: '(?:https?|ftp)://[^\s<>)\]]+|\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+'
+      scope: string.other.url.rst
+    - match: '\\.'
+      scope: constant.character.escape.rst

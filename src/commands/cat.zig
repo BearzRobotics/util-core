@@ -21,6 +21,8 @@ const cli = @import("../cli.zig");
 const sys = @import("../sys.zig");
 const syntax = @import("../syntax/root.zig");
 const cat = @import("../lib/cat.zig");
+const pager_ui = @import("../pager_ui.zig");
+const termcolors = @import("../termcolors.zig");
 
 const Options = cat.Options;
 const Style = cat.Style;
@@ -44,8 +46,14 @@ pub fn main(ctx: cli.Context) u8 {
     var style: Style = .{};
     var color: When = .auto;
     var decorations: When = .auto;
+    var paging: When = .auto;
+    var pager_cmd: ?[]const u8 = null;
     var language: ?[]const u8 = null;
     var list_languages = false;
+    var list_themes = false;
+    var theme_name: ?[]const u8 = null;
+    var theme_dark: ?[]const u8 = null;
+    var theme_light: ?[]const u8 = null;
     var syntax_dirs: std.ArrayList([]const u8) = .empty;
     defer syntax_dirs.deinit(ctx.gpa);
 
@@ -82,12 +90,26 @@ pub fn main(ctx: cli.Context) u8 {
                 style = Style.parse(v) orelse return badValue(ctx, "--style", v);
             } else if (valueOf(ctx.args, &i, "--color")) |v| {
                 color = parseWhen(v) orelse return badValue(ctx, "--color", v);
+            } else if (std.mem.eql(u8, a, "--no-paging")) {
+                paging = .never;
+            } else if (valueOf(ctx.args, &i, "--paging")) |v| {
+                paging = parseWhen(v) orelse return badValue(ctx, "--paging", v);
+            } else if (valueOf(ctx.args, &i, "--pager")) |v| {
+                pager_cmd = v;
             } else if (valueOf(ctx.args, &i, "--decorations")) |v| {
                 decorations = parseWhen(v) orelse return badValue(ctx, "--decorations", v);
             } else if (valueOf(ctx.args, &i, "--language")) |v| {
                 language = v;
             } else if (valueOf(ctx.args, &i, "--syntax-dir")) |v| {
                 syntax_dirs.append(ctx.gpa, v) catch return fail(ctx, "out of memory");
+            } else if (valueOf(ctx.args, &i, "--theme")) |v| {
+                theme_name = v;
+            } else if (valueOf(ctx.args, &i, "--theme-dark")) |v| {
+                theme_dark = v;
+            } else if (valueOf(ctx.args, &i, "--theme-light")) |v| {
+                theme_light = v;
+            } else if (std.mem.eql(u8, a, "--list-themes")) {
+                list_themes = true;
             } else if (std.mem.eql(u8, a, "--list-languages")) {
                 list_languages = true;
             } else return badOption(ctx, a);
@@ -113,6 +135,7 @@ pub fn main(ctx: cli.Context) u8 {
                 },
                 'T' => opts.show_tabs = true,
                 'p' => style = Style.plain,
+                'P' => paging = .never,
                 'l' => {
                     // -lNAME or -l NAME; the rest of the cluster is the value.
                     if (j + 1 < a.len) {
@@ -139,8 +162,11 @@ pub fn main(ctx: cli.Context) u8 {
         .never => false,
         .auto => tty,
     };
-    const color_on = cli.colorEnabled(ctx, color, tty);
-    const styled_on = cli.styleEnabled(ctx, color, tty);
+    // On a Windows console escapes work only after enabling VT processing; if
+    // that fails, treat the console as one that cannot show them.
+    const ansi_ok = !tty or sys.enableAnsiOutput();
+    const color_on = ansi_ok and cli.colorEnabled(ctx, color, tty);
+    const styled_on = ansi_ok and cli.styleEnabled(ctx, color, tty);
 
     // Grammars are loaded only when a highlighted bat view is possible.
     var session: syntax.session.Session = syntax.session.Session.init(ctx.gpa);
@@ -154,6 +180,11 @@ pub fn main(ctx: cli.Context) u8 {
             cli.warn(ctx, "{d} syntax file(s) could not be loaded", .{session.failed});
     }
     if (list_languages) return listLanguages(ctx, &session);
+    if (list_themes) return listThemes(ctx);
+    // Colors for the highlighted view: the theme, at the terminal's color depth.
+    if (have_session and color_on and decorated) {
+        if (!selectTheme(ctx, &session, theme_name, theme_dark, theme_light, tty)) return 1;
+    }
     if (language) |name| if (have_session) {
         forced = session.byUserName(name) orelse {
             cli.warn(ctx, "unknown language '{s}' (see --list-languages)", .{name});
@@ -186,41 +217,186 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     var buf: [8192]u8 = undefined;
-    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    // bat pages a terminal view: `less -FRX` quits at once when it fits on one screen.
+    const want_pager = switch (paging) {
+        .never => false,
+        .auto => bat_view and tty,
+        .always => tty,
+    };
+    // A pager given by --pager, $BAT_PAGER or $PAGER runs as a process; with
+    // none configured, the built-in one (the same as `less`) takes over and
+    // scrolls while cat is still writing.
+    var pager: ?Pager = if (want_pager) Pager.start(ctx, pager_cmd) else null;
+    defer if (pager) |*p| p.finish(ctx);
+    var ui: ?*pager_ui.Ui = if (want_pager and pager == null)
+        pager_ui.Ui.start(ctx.gpa, ctx.io, .{ .raw = true }, "", true)
+    else
+        null;
+    var sink_buf: [16384]u8 = undefined;
+    var stdout = (if (pager) |p| p.stdin else Io.File.stdout()).writerStreaming(ctx.io, &buf);
+    const sink: *Io.Writer = if (ui) |u| u.sink(&sink_buf) else &stdout.interface;
     const env: cat.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
-    const result = cat.run(env, lib_opts, lib_inputs.items, &stdout.interface, .{
+    const result = cat.run(env, lib_opts, lib_inputs.items, sink, .{
         .context = @constCast(&ctx),
         .func = report,
     }) catch |e| switch (e) {
         error.OutOfMemory => return fail(ctx, "out of memory"),
         error.WriteFailed => {
+            // The user left the pager before the end: not an error.
+            if (pager != null) return 0;
             // `cli.finish` words the write error.
             cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
             return 1;
         },
     };
+    if (ui) |u| {
+        sink.flush() catch {};
+        _ = u.finish(true);
+        u.deinit();
+        ui = null;
+    }
     return if (result.failed) 1 else 0;
 }
+
+/// A pager process fed through a pipe. Started only for a terminal view and only
+/// when one is configured; if it cannot be started the built-in pager is used.
+const Pager = struct {
+    child: std.process.Child,
+    stdin: Io.File,
+
+    /// --pager, $BAT_PAGER, then $PAGER; null when none is set. `less` without arguments gets
+    /// `-FRX` (quit if one screen, pass colors, keep the screen) as in bat.
+    fn start(ctx: cli.Context, given: ?[]const u8) ?Pager {
+        const cmd = given orelse cli.getenv(ctx, "BAT_PAGER") orelse cli.getenv(ctx, "PAGER") orelse return null;
+        var argv: [8][]const u8 = undefined;
+        var n: usize = 0;
+        var it = std.mem.tokenizeAny(u8, cmd, " \t");
+        while (it.next()) |w| {
+            if (n == argv.len) break;
+            argv[n] = w;
+            n += 1;
+        }
+        if (n == 0) return null; // an empty value means no pager
+        const base = std.Io.Dir.path.basename(argv[0]);
+        if (n == 1 and (std.mem.eql(u8, base, "less") or std.mem.eql(u8, base, "less.exe"))) {
+            argv[1] = "-FRX";
+            n = 2;
+        }
+        const child = std.process.spawn(ctx.io, .{
+            .argv = argv[0..n],
+            .stdin = .pipe,
+        }) catch return null;
+        const f = child.stdin orelse return null;
+        // Ctrl-C belongs to the pager while it runs (it uses it for searches).
+        _ = sys.setSignal(sys.signo.INT, .ignore);
+        return .{ .child = child, .stdin = f };
+    }
+
+    /// Close the pipe and wait until the user leaves the pager.
+    fn finish(p: *Pager, ctx: cli.Context) void {
+        p.stdin.close(ctx.io);
+        p.child.stdin = null;
+        _ = p.child.wait(ctx.io) catch {};
+    }
+};
 
 fn report(context: ?*anyopaque, ev: cat.Event) void {
     const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
     cli.warn(ctx.*, "{s}: {s}", .{ ev.name, cli.errText(ev.err) });
 }
 
+/// A directory under the user's cat configuration ($XDG_CONFIG_HOME/cat or
+/// ~/.config/cat, and %APPDATA%\cat on Windows). Caller frees.
+fn configDir(ctx: cli.Context, sub: []const u8) ?[]u8 {
+    if (cli.getenv(ctx, "XDG_CONFIG_HOME")) |x| return std.Io.Dir.path.join(ctx.gpa, &.{ x, "cat", sub }) catch null;
+    if (cli.getenv(ctx, "HOME")) |h| return std.Io.Dir.path.join(ctx.gpa, &.{ h, ".config", "cat", sub }) catch null;
+    if (cli.getenv(ctx, "APPDATA")) |a| return std.Io.Dir.path.join(ctx.gpa, &.{ a, "cat", sub }) catch null;
+    return null;
+}
+
+/// Pick the theme: --theme, else $BAT_THEME, else `auto` (a light or dark
+/// theme by the terminal background, only when the terminal shows more than
+/// the 16 palette colors; otherwise the palette-following `ansi`). False
+/// (after a message) when the named theme does not exist.
+fn selectTheme(ctx: cli.Context, session: *syntax.session.Session, given: ?[]const u8, dark: ?[]const u8, light: ?[]const u8, tty: bool) bool {
+    const requested = given orelse cli.getenv(ctx, "BAT_THEME") orelse "auto";
+    const depth = termcolors.depth(ctx);
+    var name = requested;
+    const is_auto = std.ascii.eqlIgnoreCase(requested, "auto");
+    if (is_auto or std.ascii.eqlIgnoreCase(requested, "dark") or std.ascii.eqlIgnoreCase(requested, "light")) {
+        if (is_auto and depth == .ansi16) {
+            session.theme.use(ctx.gpa, &syntax.theme.default_rules, false, depth);
+            return true;
+        }
+        const look: termcolors.Appearance = if (is_auto)
+            termcolors.appearance(ctx, tty)
+        else if (std.ascii.eqlIgnoreCase(requested, "light")) .light else .dark;
+        name = switch (look) {
+            .light => light orelse cli.getenv(ctx, "BAT_THEME_LIGHT") orelse "day",
+            .dark => dark orelse cli.getenv(ctx, "BAT_THEME_DARK") orelse "night",
+        };
+    }
+    if (syntax.theme.findBuiltin(name)) |b| {
+        session.theme.use(ctx.gpa, b.rules, false, depth);
+        return true;
+    }
+    if (loadUserTheme(ctx, name)) |rules| {
+        session.theme.use(ctx.gpa, rules, true, depth);
+        return true;
+    }
+    cli.warn(ctx, "unknown theme '{s}' (see --list-themes)", .{name});
+    return false;
+}
+
+fn loadUserTheme(ctx: cli.Context, name: []const u8) ?[]syntax.theme.Rule {
+    if (std.mem.indexOfAny(u8, name, "/\\") != null or name.len == 0) return null;
+    const dir = configDir(ctx, "themes") orelse return null;
+    defer ctx.gpa.free(dir);
+    const file = std.fmt.allocPrint(ctx.gpa, "{s}.theme", .{name}) catch return null;
+    defer ctx.gpa.free(file);
+    const full = std.Io.Dir.path.join(ctx.gpa, &.{ dir, file }) catch return null;
+    defer ctx.gpa.free(full);
+    const text = Io.Dir.cwd().readFileAlloc(ctx.io, full, ctx.gpa, .limited(1 << 20)) catch return null;
+    defer ctx.gpa.free(text);
+    const parsed = syntax.theme.parse(ctx.gpa, text) catch return null;
+    if (parsed == null) cli.warn(ctx, "{s}: malformed theme file", .{full});
+    return parsed;
+}
+
+fn listThemes(ctx: cli.Context) u8 {
+    var out = cli.Out.init(ctx.io);
+    for (syntax.theme.builtin_themes) |t| {
+        out.write(t.name);
+        out.write(if (std.mem.eql(u8, t.name, "ansi")) "\tfollows the terminal palette\n" else if (t.light) "\tlight\n" else "\tdark\n");
+    }
+    if (configDir(ctx, "themes")) |dir| {
+        defer ctx.gpa.free(dir);
+        if (Io.Dir.cwd().openDir(ctx.io, dir, .{ .iterate = true })) |d_const| {
+            var d = d_const;
+            defer d.close(ctx.io);
+            var it = d.iterate();
+            while (it.next(ctx.io) catch null) |entry| {
+                if (!std.mem.endsWith(u8, entry.name, ".theme")) continue;
+                out.write(entry.name[0 .. entry.name.len - ".theme".len]);
+                out.write("\tuser theme\n");
+            }
+        } else |_| {}
+    }
+    out.flush();
+    return if (out.failed) 1 else 0;
+}
+
 /// Load grammars from --syntax-dir directories and the user config directory
 /// ($XDG_CONFIG_HOME/cat/syntaxes or ~/.config/cat/syntaxes).
 fn loadGrammars(ctx: cli.Context, session: *syntax.session.Session, extra_dirs: []const []const u8) void {
     for (extra_dirs) |d| _ = session.loadDir(ctx.io, d) catch {};
-    const dir: ?[]u8 = if (cli.getenv(ctx, "XDG_CONFIG_HOME")) |x|
-        std.Io.Dir.path.join(ctx.gpa, &.{ x, "cat", "syntaxes" }) catch null
-    else if (cli.getenv(ctx, "HOME")) |h|
-        std.Io.Dir.path.join(ctx.gpa, &.{ h, ".config", "cat", "syntaxes" }) catch null
-    else
-        null;
+    const dir: ?[]u8 = configDir(ctx, "syntaxes");
     if (dir) |d| {
         defer ctx.gpa.free(d);
         _ = session.loadDir(ctx.io, d) catch {};
     }
+    // Built-in grammars last: the user's own are found first.
+    _ = session.loadBuiltin() catch {};
 }
 
 fn listLanguages(ctx: cli.Context, session: *syntax.session.Session) u8 {
@@ -254,14 +430,26 @@ fn help(ctx: cli.Context) u8 {
         "  -v, --show-nonprinting   use ^ and M- notation, except for LFD and TAB\n\n" ++
         "bat-style view (default on a terminal unless a GNU option above is used):\n" ++
         "  -p, --plain              no header, grid or line numbers\n" ++
-        "      --style=LIST         comma list of: full, plain, header, grid, numbers\n" ++
+        "      --style=LIST         comma list of: full, plain, header, grid, numbers, changes\n" ++
         "      --color=WHEN         auto, always or never\n" ++
         "      --decorations=WHEN   auto, always or never (always forces the view in pipes)\n" ++
+        "      --paging=WHEN        auto (terminal view), always or never; pages through\n" ++
+        "                           $BAT_PAGER, $PAGER or `less -FRX`; with none set, the\n" ++
+        "                           built-in pager (see less --help) scrolls while cat writes\n" ++
+        "  -P, --no-paging          same as --paging=never\n" ++
+        "      --pager=CMD          the pager command\n" ++
         "  -l, --language=NAME      highlight as NAME (language, scope or extension)\n" ++
         "      --syntax-dir=DIR     also load .sublime-syntax grammars from DIR\n" ++
-        "      --list-languages     list loaded grammars\n\n" ++
-        "Grammars are read from --syntax-dir and ~/.config/cat/syntaxes. Highlighting\n" ++
-        "is used only in the bat view with color on; no grammars are bundled yet.\n")) 0 else 1;
+        "      --list-languages     list loaded grammars\n" ++
+        "      --theme=NAME         color theme: auto (default), dark, light, or a name from\n" ++
+        "                           --list-themes ($BAT_THEME); auto asks the terminal whether\n" ++
+        "                           its background is dark or light\n" ++
+        "      --theme-dark=NAME    theme used when the background is dark (default night)\n" ++
+        "      --theme-light=NAME   theme used when it is light (default day)\n" ++
+        "      --list-themes        list the themes\n\n" ++
+        "Grammars are read from --syntax-dir and ~/.config/cat/syntaxes (about 70 are\n" ++
+        "built in); themes from ~/.config/cat/themes/NAME.theme. Highlighting is used\n" ++
+        "only in the bat view with color on.\n")) 0 else 1;
 }
 
 fn fail(ctx: cli.Context, msg: []const u8) u8 {

@@ -1,0 +1,146 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Nim
+scope: source.nim
+file_extensions: [nim, nims, nimble]
+first_line_match: '^#!.*\bnim\b'
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: pragmas
+    - match: '\b(proc|func|method|iterator|template|macro|converter)\s+(?:`([^`]+)`|([A-Za-z_]\w*))'
+      captures:
+        1: keyword.control.nim
+        2: entity.name.function.nim
+        3: entity.name.function.nim
+    - match: '\b([A-Za-z_]\w*)(\*)?(?:\[[^\]=]*\])?\s*(=)\s*(?=(?:ref\s+|ptr\s+)?(?:object|enum|tuple|distinct|concept)\b)'
+      captures:
+        1: entity.name.type.nim
+        2: keyword.operator.nim
+        3: keyword.operator.nim
+    - match: '\b(type)\s+([A-Za-z_]\w*)'
+      captures:
+        1: keyword.control.nim
+        2: entity.name.type.nim
+    - include: numbers
+    - match: '\b(?:proc|func|method|iterator|template|macro|converter|type|var|let|const|if|elif|else|when|case|of|for|while|block|try|except|finally|raise|return|yield|discard|import|from|include|export|using|defer|static|mixin|bind|cast|addr|end|as|asm|interface|concept|object|enum|tuple|distinct|ref|ptr|out)\b'
+      scope: keyword.control.nim
+    - match: '\b(?:in|notin|is|isnot|not|and|or|xor|shl|shr|div|mod)\b'
+      scope: keyword.operator.word.nim
+    - match: '\b(?:true|false|nil|NaN|Inf|NegInf)\b'
+      scope: constant.language.nim
+    - match: '\b(?:int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|float|float32|float64|string|cstring|char|bool|byte|seq|array|set|openArray|varargs|void|auto|typedesc|any|untyped|typed|pointer|range|Natural|Positive|SomeInteger|SomeNumber|SomeFloat|Ordinal|cint|clong|csize_t|cdouble|cfloat|cchar|cuchar|cstringArray|Table|OrderedTable|HashSet|Option|Rune|Slice|Exception|CatchableError|Defect|ValueError|IOError|OSError|KeyError)\b'
+      scope: storage.type.nim
+    - match: '\b(?:echo|assert|doAssert|len|add|inc|dec|new|newSeq|newString|setLen|high|low|ord|chr|repr|sizeof|typeof|isNil|contains|quit|readLine|readFile|writeFile|open|close|write|writeLine|min|max|abs|swap|pairs|items|mpairs|toSeq|map|filter|sort|sorted|join|split|strip|parseInt|parseFloat|fmt|format|dbg|debugEcho|stdout|stderr|stdin|defined|declared|compiles|result)\b'
+      scope: support.function.builtin.nim
+    - match: '\b([A-Za-z_]\w*)(?=\()'
+      scope: support.function.call.nim
+    - match: '\b[A-Z][A-Za-z0-9]*\b'
+      scope: support.type.nim
+    - match: '[-+*/<>=@$~&%|!?^.:\\]+'
+      scope: keyword.operator.nim
+    - match: '[{}()\[\];,`]'
+      scope: punctuation.nim
+
+  comments:
+    - match: '##\['
+      scope: punctuation.definition.comment.begin.nim
+      push: block-doc
+    - match: '#\['
+      scope: punctuation.definition.comment.begin.nim
+      push: block-comment
+    - match: '##.*$'
+      scope: comment.line.documentation.nim
+    - match: '#.*$'
+      scope: comment.line.number-sign.nim
+
+  block-comment:
+    - meta_scope: comment.block.nim
+    - match: '#{1,2}\['
+      push: block-comment
+    - match: '\]#{1,2}'
+      scope: punctuation.definition.comment.end.nim
+      pop: true
+
+  block-doc:
+    - meta_scope: comment.block.documentation.nim
+    - match: '#{1,2}\['
+      push: block-doc
+    - match: '\]#{1,2}'
+      scope: punctuation.definition.comment.end.nim
+      pop: true
+
+  strings:
+    - match: '[rR]?"""'
+      scope: punctuation.definition.string.begin.nim
+      push: triple-string
+    - match: '\b[rR]"'
+      scope: punctuation.definition.string.begin.nim
+      push: raw-string
+    - match: '\b([A-Za-z_]\w*)(")'
+      captures:
+        1: support.function.call.nim
+        2: punctuation.definition.string.begin.nim
+      push: raw-string
+    - match: '"'
+      scope: punctuation.definition.string.begin.nim
+      push: dq-string
+    - match: "'(?:\\\\(?:x[0-9A-Fa-f]{2}|[0-9]{1,3}|[^x0-9])|[^'\\\\])'"
+      scope: string.quoted.single.nim
+
+  triple-string:
+    - meta_scope: string.quoted.triple.nim
+    - match: '"{3,}'
+      scope: punctuation.definition.string.end.nim
+      pop: true
+
+  raw-string:
+    - meta_scope: string.quoted.double.raw.nim
+    - match: '""'
+    - match: '"'
+      scope: punctuation.definition.string.end.nim
+      pop: true
+    - match: '$'
+      pop: true
+
+  dq-string:
+    - meta_scope: string.quoted.double.nim
+    - match: '\\(?:[abceflnrtv\\''"]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|u\{[0-9A-Fa-f]+\}|[0-9]+)'
+      scope: constant.character.escape.nim
+    - match: '\\.'
+      scope: invalid.illegal.escape.nim
+    - match: '"'
+      scope: punctuation.definition.string.end.nim
+      pop: true
+    - match: '$'
+      pop: true
+
+  pragmas:
+    - match: '\{\.'
+      scope: meta.annotation.nim
+      push: pragma
+
+  pragma:
+    - meta_scope: meta.annotation.nim
+    - match: '\.?\}'
+      pop: true
+    - include: strings
+    - include: numbers
+    - match: '[A-Za-z_]\w*'
+      scope: meta.annotation.nim
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+(?:''?[iIuUfF](?:8|16|32|64))?'
+      scope: constant.numeric.hex.nim
+    - match: '\b0[oOcC][0-7_]+(?:''?[iIuU](?:8|16|32|64))?'
+      scope: constant.numeric.octal.nim
+    - match: '\b0[bB][01_]+(?:''?[iIuU](?:8|16|32|64))?'
+      scope: constant.numeric.binary.nim
+    - match: '\b[0-9][0-9_]*\.[0-9][0-9_]*(?:[eE][-+]?[0-9_]+)?(?:''?[fFdD](?:32|64|128)?)?'
+      scope: constant.numeric.float.nim
+    - match: '\b[0-9][0-9_]*[eE][-+]?[0-9_]+(?:''?[fFdD](?:32|64|128)?)?'
+      scope: constant.numeric.float.nim
+    - match: '\b[0-9][0-9_]*(?:''?[iIuUfFdD](?:8|16|32|64|128)?)?'
+      scope: constant.numeric.integer.nim

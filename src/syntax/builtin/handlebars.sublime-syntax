@@ -1,0 +1,146 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+# Mustache/Handlebars delimiters, blocks, helpers, comments and strings only;
+# surrounding markup is left unscoped except for minimal HTML tag names.
+name: Handlebars
+scope: text.handlebars
+file_extensions: [hbs, handlebars, mustache]
+contexts:
+  main:
+    - match: '\{\{!--'
+      scope: punctuation.definition.comment.begin.handlebars
+      push: long-comment
+    - match: '\{\{~?!'
+      scope: punctuation.definition.comment.begin.handlebars
+      push: short-comment
+    - match: '\{\{\{\{'
+      scope: punctuation.definition.tag.begin.handlebars
+      push: raw-open
+    - match: '\{\{\{'
+      scope: punctuation.definition.tag.begin.handlebars
+      push: triple
+    - match: '(\{\{~?)([#^/>&])?[ \t]*'
+      captures:
+        1: punctuation.definition.tag.begin.handlebars
+        2: keyword.control.sigil.handlebars
+      push: [mustache, tag-name]
+    - match: '<!--'
+      scope: punctuation.definition.comment.begin.html
+      push: html-comment
+    - match: '</?[A-Za-z][-A-Za-z0-9:]*'
+      scope: entity.name.tag.html
+    - match: '/?>'
+      scope: entity.name.tag.html
+
+  html-comment:
+    - meta_scope: comment.block.html
+    - match: '-->'
+      scope: punctuation.definition.comment.end.html
+      pop: true
+
+  long-comment:
+    - meta_scope: comment.block.handlebars
+    - match: '--~?\}\}'
+      scope: punctuation.definition.comment.end.handlebars
+      pop: true
+
+  short-comment:
+    - meta_scope: comment.block.handlebars
+    - match: '~?\}\}'
+      scope: punctuation.definition.comment.end.handlebars
+      pop: true
+
+  raw-open:
+    - match: '[^}\n]+'
+      scope: keyword.control.handlebars
+    - match: '\}\}\}\}'
+      scope: punctuation.definition.tag.end.handlebars
+      set: raw-body
+
+  raw-body:
+    - meta_content_scope: string.unquoted.raw.handlebars
+    - match: '(\{\{\{\{)(/[^}\n]*)(\}\}\}\})'
+      captures:
+        1: punctuation.definition.tag.begin.handlebars
+        2: keyword.control.handlebars
+        3: punctuation.definition.tag.end.handlebars
+      pop: true
+
+  triple:
+    - match: '\}\}\}'
+      scope: punctuation.definition.tag.end.handlebars
+      pop: true
+    - include: expr-bits
+
+  # First identifier of a tag: helper, block name or partial name.
+  tag-name:
+    - match: '(?:else|this)(?=[\s}~]|$)'
+      scope: keyword.control.handlebars
+      pop: true
+    - match: '[A-Za-z_@][-\w./@]*'
+      scope: entity.name.function.handlebars
+      pop: true
+    - match: '(?=\S)'
+      pop: true
+    - match: '$'
+      pop: true
+
+  mustache:
+    - match: '~?\}\}'
+      scope: punctuation.definition.tag.end.handlebars
+      pop: true
+    - match: '\bas[ \t]*(\|)([^|\n]*)(\|)'
+      captures:
+        1: punctuation.definition.block-params.begin.handlebars
+        2: variable.parameter.block-param.handlebars
+        3: punctuation.definition.block-params.end.handlebars
+    - include: expr-bits
+
+  expr-bits:
+    - match: '"'
+      scope: punctuation.definition.string.begin.handlebars
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.handlebars
+      push: sq-string
+    - match: '\b(?:true|false|null|undefined)\b'
+      scope: constant.language.handlebars
+    - match: '(?<![\w.@-])-?[0-9]+(?:\.[0-9]+)?\b'
+      scope: constant.numeric.handlebars
+    - match: '([-\w]+)(=)'
+      captures:
+        1: variable.parameter.hash-key.handlebars
+        2: keyword.operator.assignment.handlebars
+    - match: '(\()([-\w./]+)'
+      captures:
+        1: punctuation.section.subexpression.begin.handlebars
+        2: entity.name.function.handlebars
+    - match: '\)'
+      scope: punctuation.section.subexpression.end.handlebars
+    - match: '@[-\w]+'
+      scope: variable.language.data.handlebars
+    - match: '\b(?:this|else)\b|\.\./|\./'
+      scope: variable.language.handlebars
+    - match: '[|\[\]]'
+      scope: punctuation.separator.handlebars
+
+  dq-string:
+    - meta_scope: string.quoted.double.handlebars
+    - match: '"'
+      scope: punctuation.definition.string.end.handlebars
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.handlebars
+    - match: '$'
+      pop: true
+
+  sq-string:
+    - meta_scope: string.quoted.single.handlebars
+    - match: "'"
+      scope: punctuation.definition.string.end.handlebars
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.handlebars
+    - match: '$'
+      pop: true

@@ -1,0 +1,51 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Tcl
+scope: source.tcl
+file_extensions: [tcl, tk, itcl, exp]
+first_line_match: '^#!.*\b(?:tclsh|wish|expect)\b'
+contexts:
+  main:
+    - match: '^#!.*$'
+      scope: comment.line.shebang.tcl
+    - match: '(?:^|(?<=[;{\s]))#(?:[^\n]*\\\n)*.*$'
+      scope: comment.line.number-sign.tcl
+    - match: '"'
+      scope: punctuation.definition.string.begin.tcl
+      push: dq
+    - match: '\\(?:[abfnrtv\\{}\[\]"$ ;]|x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|[0-7]{1,3})'
+      scope: constant.character.escape.tcl
+    - match: '\$\{[^}]*\}|\$(?:::)?[A-Za-z_]\w*(?:::\w+)*'
+      scope: variable.parameter.tcl
+    - match: '\b(proc)\s+([^\s{]+)'
+      captures:
+        1: storage.type.function.tcl
+        2: entity.name.function.tcl
+    - match: '\b(namespace\s+eval|oo::class\s+create|oo::object\s+create|itcl::class|class)\s+([^\s{]+)'
+      captures:
+        1: storage.type.tcl
+        2: entity.name.type.tcl
+    - match: '\b(?:if|then|else|elseif|for|foreach|while|switch|default|break|continue|return|catch|try|finally|on|trap|error|throw|after|vwait|exit|break)\b'
+      scope: keyword.control.tcl
+    - match: '\b(?:set|unset|global|variable|upvar|uplevel|array|incr|append|lappend|expr|eval|source|package|namespace|rename|proc|public|private|protected|constructor|destructor|method|inherit|oo::class|oo::define|my|self|next)\b'
+      scope: storage.modifier.tcl
+    - match: '\b(?:puts|gets|open|close|read|seek|tell|flush|eof|fconfigure|fileevent|file|glob|cd|pwd|exec|pid|string|regexp|regsub|scan|format|split|join|list|lindex|llength|lrange|lsearch|lsort|lreplace|linsert|lset|lassign|lmap|lrepeat|concat|dict|info|clock|binary|subst|trace|interp|socket|encoding|chan|apply|time|env|argv|argc|bind|pack|grid|place|wm|button|label|entry|frame|canvas|text|toplevel|menu|listbox|scrollbar|checkbutton|radiobutton|scale|spawn|expect|send|interact|expect_before|expect_after)\b'
+      scope: support.function.builtin.tcl
+    - match: '\b(?:true|false|yes|no|on|off)\b'
+      scope: constant.language.tcl
+    - match: '\b0[xX][0-9A-Fa-f]+\b|\b0[bBoO][0-9]+\b|\b[0-9]+(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.tcl
+    - match: '(?<=\s)-[A-Za-z_]\w*'
+      scope: variable.parameter.option.tcl
+    - match: '\*\*|==|!=|<=|>=|&&|\|\||<<|>>|[-+*/%<>!~&|^?:]'
+      scope: keyword.operator.tcl
+  dq:
+    - meta_scope: string.quoted.double.tcl
+    - match: '"'
+      scope: punctuation.definition.string.end.tcl
+      pop: true
+    - match: '\\(?:[abfnrtv\\{}\[\]"$ ;]|x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|[0-7]{1,3}|\n)'
+      scope: constant.character.escape.tcl
+    - match: '\$\{[^}]*\}|\$(?:::)?[A-Za-z_]\w*(?:::\w+)*'
+      scope: variable.parameter.tcl

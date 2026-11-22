@@ -1,0 +1,41 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Ninja
+scope: source.ninja
+file_extensions: [ninja, build.ninja]
+contexts:
+  main:
+    - match: '^\s*#.*$'
+      scope: comment.line.number-sign.ninja
+    - match: '^(rule|pool)\s+(\S+)'
+      captures:
+        1: storage.type.ninja
+        2: entity.name.function.ninja
+    - match: '^(build)\b'
+      scope: storage.type.ninja
+      push: build-line
+    - match: '^(?:default|include|subninja)\b'
+      scope: keyword.control.ninja
+    - match: '^\s*(?:command|description|depfile|deps|generator|restat|rspfile|rspfile_content|msvc_deps_prefix|pool|depth|dyndep)\b(?=\s*=)'
+      scope: support.function.builtin.ninja
+    - match: '^\s*([A-Za-z_][\w.-]*)\s*(=)'
+      captures:
+        1: variable.other.ninja
+        2: keyword.operator.ninja
+    - include: vars
+    - match: '\$[$ :]'
+      scope: constant.character.escape.ninja
+  build-line:
+    - match: '$'
+      pop: true
+    - match: '(?<=[ \t])(?:\|\||\|@|\|)(?=[ \t])'
+      scope: keyword.operator.ninja
+    - match: ':'
+      scope: keyword.operator.ninja
+    - include: vars
+    - match: '\$[$ :]'
+      scope: constant.character.escape.ninja
+  vars:
+    - match: '\$\{[A-Za-z_][\w.-]*\}|\$[A-Za-z_][\w-]*'
+      scope: variable.parameter.ninja

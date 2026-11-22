@@ -1,0 +1,90 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Erlang
+scope: source.erlang
+file_extensions: [erl, hrl, escript, rebar.config, app.src]
+first_line_match: '^#!.*\bescript\b'
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: attrs
+    - include: keywords
+    - include: numbers
+    - include: macros
+    - include: variables
+    - include: functions
+    - include: atoms
+    - include: operators
+
+  comments:
+    - match: '%.*$'
+      scope: comment.line.percentage.erlang
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.erlang
+      push: dq
+    - match: '\$(?:\\(?:x\{[0-9A-Fa-f]+\}|x[0-9A-Fa-f]{2}|\^.|[0-7]{1,3}|.)|[^\\\s])'
+      scope: constant.character.erlang
+
+  dq:
+    - meta_scope: string.quoted.double.erlang
+    - match: '"'
+      scope: punctuation.definition.string.end.erlang
+      pop: true
+    - match: '\\(?:x\{[0-9A-Fa-f]+\}|x[0-9A-Fa-f]{2}|\^.|[0-7]{1,3}|.)'
+      scope: constant.character.escape.erlang
+    - match: '~[-0-9.*]*[a-zA-Z~]'
+      scope: constant.other.placeholder.erlang
+
+  attrs:
+    - match: '^(-)\s*([a-z]\w*)'
+      captures:
+        1: punctuation.definition.attribute.erlang
+        2: meta.annotation.erlang
+    - match: '^([a-z]\w*|''[^'']*'')(?=\s*\()'
+      scope: entity.name.function.erlang
+
+  keywords:
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.erlang
+    - match: '\bundefined\b'
+      scope: constant.language.null.erlang
+    - match: '\b(?:after|begin|case|catch|cond|end|fun|if|let|of|receive|try|when|maybe|else)\b'
+      scope: keyword.control.erlang
+    - match: '\b(?:and|andalso|band|bnot|bor|bsl|bsr|bxor|div|not|or|orelse|rem|xor)\b'
+      scope: keyword.operator.word.erlang
+
+  numbers:
+    - match: '\b[0-9]+#[0-9A-Za-z]+\b'
+      scope: constant.numeric.radix.erlang
+    - match: '\b[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.decimal.erlang
+
+  macros:
+    - match: '\?\??[A-Za-z_]\w*'
+      scope: meta.annotation.erlang
+
+  variables:
+    - match: '\b[A-Z_]\w*\b'
+      scope: variable.parameter.erlang
+
+  functions:
+    - match: '\b(?:erlang|lists|maps|io|io_lib|string|binary|ets|file|gen_server|gen_statem|gen_event|supervisor|application|proplists|dict|sets|timer|code|os|re|unicode|crypto|logger)(?=:)'
+      scope: support.class.erlang
+    - match: '(?<=:)[a-z]\w*(?=\()'
+      scope: support.function.erlang
+    - match: '\b(?:spawn|spawn_link|spawn_monitor|self|send|exit|throw|error|element|setelement|hd|tl|length|size|byte_size|tuple_size|map_size|is_atom|is_binary|is_list|is_integer|is_float|is_number|is_pid|is_function|is_tuple|is_map|is_record|atom_to_list|list_to_atom|integer_to_list|list_to_integer|binary_to_list|list_to_binary|abs|round|trunc|apply|node|register|whereis|monitor|link|process_flag)(?=\()'
+      scope: support.function.erlang
+    - match: '\b[a-z]\w*(?=\()'
+      scope: entity.name.function.erlang
+
+  atoms:
+    - match: "'(?:\\\\.|[^'\\\\\\n])*'"
+      scope: constant.other.atom.erlang
+
+  operators:
+    - match: '->|<-|<=|=>|:=|::|\|\||\+\+|--|=:=|=/=|==|/=|=<|>=|[-+*/<>=!|#:.;,]+'
+      scope: keyword.operator.erlang

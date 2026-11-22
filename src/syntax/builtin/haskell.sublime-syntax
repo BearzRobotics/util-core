@@ -1,0 +1,74 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Haskell
+scope: source.haskell
+file_extensions: [hs, hsc, lhs, hs-boot, purs]
+first_line_match: '^#!.*\brunhaskell\b'
+contexts:
+  main:
+    - match: '\{-#'
+      scope: punctuation.definition.comment.begin.haskell
+      push: pragma
+    - match: '\{-'
+      scope: punctuation.definition.comment.begin.haskell
+      push: block-comment
+    - match: '--+(?![!#$%&*+./<=>?@\\^|~:-]).*$'
+      scope: comment.line.double-dash.haskell
+    - match: '"'
+      scope: punctuation.definition.string.begin.haskell
+      push: dq
+    - match: "'(?:[^'\\\\\\n]|\\\\[^'\\n]*)'"
+      scope: string.quoted.single.haskell
+    - match: '^\s*(module|import)\b'
+      captures:
+        1: keyword.other.import.haskell
+      push: import-line
+    - match: '\b(?:data|newtype|type|class|instance|deriving|family|forall)\b'
+      scope: storage.type.haskell
+    - match: '\b(?:if|then|else|case|of|let|in|do|where|infix|infixl|infixr|default|foreign|qualified|as|hiding|mdo|rec|proc)\b'
+      scope: keyword.control.haskell
+    - match: '^([a-z_][A-Za-z0-9_'']*)(?=\s*::)'
+      scope: entity.name.function.haskell
+    - match: '\b(?:True|False)\b'
+      scope: constant.language.boolean.haskell
+    - match: '\b(?:Nothing|Just|Left|Right|LT|EQ|GT)\b'
+      scope: constant.language.haskell
+    - match: '\b[A-Z][A-Za-z0-9_'']*(?:\.[A-Z][A-Za-z0-9_'']*)*'
+      scope: entity.name.type.haskell
+    - match: '\b0[xX][0-9A-Fa-f_]+\b|\b0[oO][0-7_]+\b|\b0[bB][01_]+\b|\b[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][-+]?[0-9_]+)?\b'
+      scope: constant.numeric.haskell
+    - match: '`[A-Za-z_][\w'']*`'
+      scope: keyword.operator.infix.haskell
+    - match: '->|<-|=>|::|\.\.|[!#$%&*+./<=>?@\\^|~:-]+'
+      scope: keyword.operator.haskell
+
+  import-line:
+    - match: '$'
+      pop: true
+    - match: '\b(?:qualified|as|hiding|where)\b'
+      scope: keyword.control.haskell
+    - match: '\b[A-Z][A-Za-z0-9_'']*(?:\.[A-Z][A-Za-z0-9_'']*)*'
+      scope: entity.name.namespace.haskell
+
+  pragma:
+    - meta_scope: meta.preprocessor.haskell
+    - match: '#-\}'
+      scope: punctuation.definition.comment.end.haskell
+      pop: true
+
+  block-comment:
+    - meta_scope: comment.block.haskell
+    - match: '\{-'
+      push: block-comment
+    - match: '-\}'
+      scope: punctuation.definition.comment.end.haskell
+      pop: true
+
+  dq:
+    - meta_scope: string.quoted.double.haskell
+    - match: '"'
+      scope: punctuation.definition.string.end.haskell
+      pop: true
+    - match: '\\(?:[abfnrtv\\"''&]|[0-9]+|x[0-9A-Fa-f]+|o[0-7]+|\^[A-Z@\[\\\]^_]|[A-Z]{2,3}|\s*\\)'
+      scope: constant.character.escape.haskell

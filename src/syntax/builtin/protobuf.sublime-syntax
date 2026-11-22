@@ -1,0 +1,60 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Protocol Buffers
+scope: source.protobuf
+file_extensions: [proto]
+contexts:
+  main:
+    - match: '//.*$'
+      scope: comment.line.double-slash.protobuf
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.protobuf
+      push: block-comment
+    - match: '"'
+      scope: punctuation.definition.string.begin.protobuf
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.protobuf
+      push: sq
+    - match: '\b(syntax|edition|package|import|option|extensions|reserved|to|max|public|weak)\b'
+      scope: keyword.control.protobuf
+    - match: '\b(message|enum|service|rpc|returns|oneof|extend|group|stream|map)\b(?:\s+([A-Za-z_]\w*))?'
+      captures:
+        1: storage.type.protobuf
+        2: entity.name.type.protobuf
+    - match: '\b(?:repeated|optional|required)\b'
+      scope: storage.modifier.protobuf
+    - match: '\b(?:double|float|int32|int64|uint32|uint64|sint32|sint64|fixed32|fixed64|sfixed32|sfixed64|bool|string|bytes)\b'
+      scope: storage.type.primitive.protobuf
+    - match: '\b(?:true|false|inf|nan)\b'
+      scope: constant.language.protobuf
+    - match: '\b[A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_]\w*)*\b'
+      scope: entity.name.type.protobuf
+    - match: '[-+]?\b(?:0[xX][0-9A-Fa-f]+|[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)\b'
+      scope: constant.numeric.protobuf
+    - match: '[=<>]'
+      scope: keyword.operator.protobuf
+  block-comment:
+    - meta_scope: comment.block.protobuf
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.protobuf
+      pop: true
+  dq:
+    - meta_scope: string.quoted.double.protobuf
+    - match: '"'
+      scope: punctuation.definition.string.end.protobuf
+      pop: true
+    - match: '\\(?:[abfnrtv\\''"?]|x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{4})'
+      scope: constant.character.escape.protobuf
+    - match: '$'
+      pop: true
+  sq:
+    - meta_scope: string.quoted.single.protobuf
+    - match: "'"
+      scope: punctuation.definition.string.end.protobuf
+      pop: true
+    - match: '\\(?:[abfnrtv\\''"?]|x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{4})'
+      scope: constant.character.escape.protobuf
+    - match: '$'
+      pop: true

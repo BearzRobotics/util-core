@@ -1,0 +1,51 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Batch File
+scope: source.batchfile
+file_extensions: [bat, cmd, btm]
+contexts:
+  main:
+    - match: '(?i)^\s*@?rem\b.*$'
+      scope: comment.line.rem.batchfile
+    - match: '^\s*::.*$'
+      scope: comment.line.colon.batchfile
+    - match: '^\s*(:)(?!:)([^\s:&|<>]+)'
+      captures:
+        1: punctuation.definition.label.batchfile
+        2: entity.name.label.batchfile
+    - match: '"'
+      scope: punctuation.definition.string.begin.batchfile
+      push: string
+    - include: variables
+    - match: '(?i)\b(?:if|else|for|in|do|goto|call|exit|not|exist|defined|errorlevel|cmdextversion|equ|neq|lss|leq|gtr|geq)\b'
+      scope: keyword.control.batchfile
+    - match: '(?i)\b(?:set|setlocal|endlocal|enabledelayedexpansion|disabledelayedexpansion|enableextensions|disableextensions|echo|pause|shift|title|cd|chdir|md|mkdir|rd|rmdir|del|erase|copy|xcopy|robocopy|move|ren|rename|type|cls|dir|path|pushd|popd|start|color|ver|vol|assoc|ftype|mklink|find|findstr|more|sort|where|timeout|choice|taskkill|tasklist|reg|attrib|icacls|net|sc|schtasks|ping|ipconfig|powershell|pwsh|cmd)\b'
+      scope: support.function.builtin.batchfile
+    - match: '@'
+      scope: keyword.operator.at.batchfile
+    - match: '(?<![\w.])-?\b\d+\b'
+      scope: constant.numeric.batchfile
+    - match: '/[A-Za-z?]\b|(?<=\s)--?[A-Za-z][\w-]*'
+      scope: variable.parameter.option.batchfile
+    - match: '>>?|<|\|\|?|&&?|\^'
+      scope: keyword.operator.batchfile
+
+  variables:
+    - match: '%(?:~[a-zA-Z]*)?[0-9*]'
+      scope: variable.parameter.batchfile
+    - match: '%%~?[a-zA-Z]+'
+      scope: variable.parameter.loop.batchfile
+    - match: '%[^%\s"]+%'
+      scope: variable.parameter.env.batchfile
+    - match: '![^!\s"]+!'
+      scope: variable.parameter.delayed.batchfile
+
+  string:
+    - meta_scope: string.quoted.double.batchfile
+    - match: '"'
+      scope: punctuation.definition.string.end.batchfile
+      pop: true
+    - include: variables
+    - match: '$'
+      pop: true

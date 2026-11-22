@@ -1,0 +1,127 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: AsciiDoc
+scope: text.asciidoc
+file_extensions: [adoc, asciidoc, asc]
+contexts:
+  main:
+    - match: '^/{4,}[ \t]*$'
+      scope: punctuation.definition.comment.begin.asciidoc
+      push: comment-block
+    - match: '^//.*$'
+      scope: comment.line.double-slash.asciidoc
+    - match: '^-{4,}[ \t]*$'
+      scope: punctuation.definition.raw.begin.asciidoc
+      push: listing-block
+    - match: '^\.{4,}[ \t]*$'
+      scope: punctuation.definition.raw.begin.asciidoc
+      push: literal-block
+    - match: '^\+{4,}[ \t]*$'
+      scope: punctuation.definition.raw.begin.asciidoc
+      push: passthrough-block
+    - match: '^(?:={4,}|\*{4,}|_{4,}|--|\|={3,}|,={3,}|:={3,}|!={3,})[ \t]*$'
+      scope: keyword.other.block-delimiter.asciidoc
+    - match: '^(={1,6}|#{1,6})([ \t]+.*)$'
+      captures:
+        1: punctuation.definition.heading.asciidoc
+        2: entity.name.section.asciidoc
+    - match: '^(\[\[)([^\]\n]+)(\]\])'
+      captures:
+        1: punctuation.definition.anchor.begin.asciidoc
+        2: entity.name.function.anchor.asciidoc
+        3: punctuation.definition.anchor.end.asciidoc
+    - match: '^(\[)(source|listing|literal|verse|quote|example|sidebar|NOTE|TIP|IMPORTANT|WARNING|CAUTION|abstract|partintro|appendix|glossary|bibliography|index|cols|%[a-z]+|[#.][-\w]+|\w+=)([^\]\n]*)(\])[ \t]*$'
+      captures:
+        1: punctuation.definition.attributes.begin.asciidoc
+        2: storage.type.block-style.asciidoc
+        3: variable.parameter.attributes.asciidoc
+        4: punctuation.definition.attributes.end.asciidoc
+    - match: '^(:)(!?[A-Za-z0-9_][-\w]*!?)(:)'
+      captures:
+        1: punctuation.definition.attribute.begin.asciidoc
+        2: support.type.property-name.attribute.asciidoc
+        3: punctuation.definition.attribute.end.asciidoc
+    - match: '^\.(?=[^\s.])[^\n]*$'
+      scope: entity.name.section.block-title.asciidoc
+    - match: '^(NOTE|TIP|IMPORTANT|WARNING|CAUTION)(:)'
+      captures:
+        1: keyword.control.admonition.asciidoc
+        2: punctuation.separator.asciidoc
+    - match: '^[ \t]*(?:\*{1,6}|-{1}|\.{1,6}|[0-9]+\.|[a-zA-Z]\.|<[0-9]+>)(?=[ \t]+\S)'
+      scope: keyword.other.list-marker.asciidoc
+    - match: '^[ \t]*[^\n:]+?(?:::|;;)(?=[ \t]|$)'
+      scope: keyword.other.description-term.asciidoc
+    - match: '^(\s*)(image|video|audio|include|toc)(::)([^\[\n]*)(\[)([^\]\n]*)(\])'
+      captures:
+        2: keyword.control.block-macro.asciidoc
+        3: punctuation.separator.asciidoc
+        4: string.other.url.asciidoc
+        5: punctuation.definition.attributes.begin.asciidoc
+        6: variable.parameter.attributes.asciidoc
+        7: punctuation.definition.attributes.end.asciidoc
+    - match: "^'{3,}[ \t]*$|^<{3,}[ \t]*$"
+      scope: keyword.other.thematic-break.asciidoc
+    - match: '^\|(?==)|^\|'
+      scope: keyword.operator.table-cell.asciidoc
+    - include: inline
+
+  comment-block:
+    - meta_content_scope: comment.block.asciidoc
+    - match: '^/{4,}[ \t]*$'
+      scope: punctuation.definition.comment.end.asciidoc
+      pop: true
+
+  listing-block:
+    - meta_content_scope: string.unquoted.listing.asciidoc
+    - match: '^-{4,}[ \t]*$'
+      scope: punctuation.definition.raw.end.asciidoc
+      pop: true
+
+  literal-block:
+    - meta_content_scope: string.unquoted.literal.asciidoc
+    - match: '^\.{4,}[ \t]*$'
+      scope: punctuation.definition.raw.end.asciidoc
+      pop: true
+
+  passthrough-block:
+    - meta_content_scope: string.unquoted.passthrough.asciidoc
+    - match: '^\+{4,}[ \t]*$'
+      scope: punctuation.definition.raw.end.asciidoc
+      pop: true
+
+  inline:
+    - match: '\\[*_`#{<\[+]'
+      scope: constant.character.escape.asciidoc
+    - match: '\{[A-Za-z0-9_][-\w]*\}'
+      scope: variable.parameter.attribute-reference.asciidoc
+    - match: '(?<![\w`])`[^`\s][^`\n]*`(?![\w`])|``[^`\n]+``'
+      scope: string.other.monospace.asciidoc
+    - match: '\+\+\+[^+\n]+\+\+\+|\+\+[^+\n]+\+\+|(?<![\w+])\+[^+\s][^+\n]*\+(?![\w+])'
+      scope: string.other.passthrough.asciidoc
+    - match: '(?<![\w*])\*\*?[^\s*][^*\n]*\*\*?(?![\w*])'
+      scope: keyword.other.strong.asciidoc
+    - match: '(?<![\w_])__?[^\s_][^_\n]*__?(?![\w_])'
+      scope: variable.parameter.emphasis.asciidoc
+    - match: '(?<![\w#])##?[^\s#][^#\n]*##?(?![\w#])'
+      scope: constant.other.highlight.asciidoc
+    - match: '<<[^>\n]+>>'
+      scope: entity.name.function.xref.asciidoc
+    - match: '(\b(?:xref|link|mailto|image|icon|kbd|btn|menu|footnote|anchor|pass|stem|latexmath|asciimath|indexterm)(:{1,2}))([^\[\s]*)(\[)([^\]\n]*)(\])'
+      captures:
+        1: keyword.control.inline-macro.asciidoc
+        3: string.other.url.asciidoc
+        4: punctuation.definition.attributes.begin.asciidoc
+        5: entity.name.function.link.asciidoc
+        6: punctuation.definition.attributes.end.asciidoc
+    - match: '(?:https?|ftp|irc|file)://[^\s\[<>]+(?:\[[^\]\n]*\])?'
+      scope: string.other.url.asciidoc
+    - match: '(\[)([^\]\n]*)(\])(?=#|\*|_|`)'
+      captures:
+        1: punctuation.definition.attributes.begin.asciidoc
+        2: variable.parameter.attributes.asciidoc
+        3: punctuation.definition.attributes.end.asciidoc
+    - match: '\(\([^)\n]+\)\)|\(\(\([^)\n]+\)\)\)'
+      scope: string.other.index-term.asciidoc
+    - match: '[ \t]\+[ \t]*$'
+      scope: keyword.other.line-break.asciidoc

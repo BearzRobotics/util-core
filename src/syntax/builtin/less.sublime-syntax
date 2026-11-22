@@ -1,0 +1,161 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Less
+scope: source.less
+file_extensions: [less]
+contexts:
+  main:
+    - include: common
+    - match: '\}'
+      scope: punctuation.section.block.end.less
+    - include: block-item
+
+  common:
+    - match: '//.*$'
+      scope: comment.line.double-slash.less
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.less
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.less
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.less
+      pop: true
+
+  block-item:
+    - match: '(@[-\w]+)[ \t]*(:)'
+      captures:
+        1: variable.parameter.less
+        2: punctuation.separator.key-value.less
+      push: value
+    - match: '(@)(import|media|supports|font-face|keyframes|-webkit-keyframes|charset|namespace|plugin|page|document|container|layer)\b'
+      scope: keyword.control.at-rule.less
+      push: at-prelude
+    - match: '--[-\w]+(?=[ \t]*:)'
+      scope: variable.parameter.custom-property.less
+    - match: '([-\w]+|@\{[-\w]+\}[-\w]*)[ \t]*(\+_?)?(:)(?![^;{}\n]*\{)'
+      captures:
+        1: support.type.property-name.less
+        2: keyword.operator.less
+        3: punctuation.separator.key-value.less
+      push: value
+    - match: '\{'
+      scope: punctuation.section.block.begin.less
+      push: block
+    - match: '\b(?:when|and|not)\b'
+      scope: keyword.control.guard.less
+    - match: '(&)(:extend)\b'
+      captures:
+        1: keyword.operator.parent-selector.less
+        2: keyword.control.extend.less
+    - match: '(?<![-\w])((?:[.#][-\w]+)+)(?=[ \t]*\([^)\n]*\)[ \t]*(?:!important[ \t]*)?;)'
+      scope: entity.name.function.mixin-call.less
+    - match: '(?<![-\w])((?:[.#][-\w]+)+)(?=[ \t]*\([^)\n]*\)[ \t]*(?:when\b[^{\n]*)?\{)'
+      scope: entity.name.function.mixin.less
+    - include: selector-bits
+
+  block:
+    - include: common
+    - match: '\}'
+      scope: punctuation.section.block.end.less
+      pop: true
+    - include: block-item
+
+  selector-bits:
+    - include: interpolation
+    - match: '\.[-\w]+'
+      scope: entity.name.class.less
+    - match: '#[-\w]+'
+      scope: entity.name.class.id.less
+    - match: '::?[-\w]+'
+      scope: support.type.pseudo-class.less
+    - match: '&'
+      scope: keyword.operator.parent-selector.less
+    - match: '\[[^\]\n]*\]'
+      scope: support.type.attribute.less
+    - match: '(?<![-\w@])[A-Za-z][-\w]*'
+      scope: entity.name.tag.less
+    - match: '[>+~*]'
+      scope: keyword.operator.combinator.less
+    - match: '"'
+      scope: punctuation.definition.string.begin.less
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.less
+      push: sq-string
+    - match: '@@?[-\w]+'
+      scope: variable.parameter.less
+    - match: '[;,]'
+
+  at-prelude:
+    - match: '(?=\{|;|\})'
+      pop: true
+    - match: '\b(?:and|or|not|only|reference|inline|less|css|once|multiple|optional)\b'
+      scope: keyword.operator.word.less
+    - include: value-bits
+
+  value:
+    - match: ';'
+      scope: punctuation.terminator.rule.less
+      pop: true
+    - match: '(?=\})'
+      pop: true
+    - match: '\{'
+      scope: punctuation.section.block.begin.less
+      set: block
+    - include: common
+    - include: value-bits
+
+  value-bits:
+    - include: interpolation
+    - match: '~(?=["''])'
+      scope: keyword.operator.escape.less
+    - match: '"'
+      scope: punctuation.definition.string.begin.less
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.less
+      push: sq-string
+    - match: '@@?[-\w]+'
+      scope: variable.parameter.less
+    - match: '!important\b'
+      scope: keyword.other.important.less
+    - match: '#[0-9A-Fa-f]{3,8}\b'
+      scope: constant.other.color.less
+    - match: '(?<![-\w])[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?(?:%|[A-Za-z]+)?'
+      scope: constant.numeric.less
+    - match: '\b(?:true|false|auto|none|inherit|initial|unset|transparent|currentColor)\b'
+      scope: constant.language.less
+    - match: '([-\w]+)(?=\()'
+      scope: support.function.less
+    - match: '(?<![-\w])[A-Za-z_][-\w]*'
+    - match: '[-+*/=<>]=?|\.\.\.'
+      scope: keyword.operator.less
+
+  interpolation:
+    - match: '@\{[-\w]+\}'
+      scope: variable.parameter.interpolation.less
+
+  dq-string:
+    - meta_scope: string.quoted.double.less
+    - match: '"'
+      scope: punctuation.definition.string.end.less
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.less
+    - match: '@\{[-\w]+\}'
+      scope: variable.parameter.interpolation.less
+    - match: '$'
+      pop: true
+
+  sq-string:
+    - meta_scope: string.quoted.single.less
+    - match: "'"
+      scope: punctuation.definition.string.end.less
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.less
+    - match: '$'
+      pop: true

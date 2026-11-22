@@ -1,0 +1,66 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: VHDL
+scope: source.vhdl
+file_extensions: [vhd, vhdl]
+contexts:
+  main:
+    - match: '--.*$'
+      scope: comment.line.double-dash.vhdl
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.vhdl
+      push: block-comment
+    - match: '"'
+      scope: punctuation.definition.string.begin.vhdl
+      push: dq
+    - match: '(?i)\b[0-9]*[bBoOxX]"[0-9a-fA-FuUxXzZwWlLhH_-]*"'
+      scope: string.quoted.double.bitstring.vhdl
+    - match: "'[^'\\n]'"
+      scope: string.quoted.single.vhdl
+    - match: '\b[0-9][0-9_]*#[0-9a-fA-F_.]+#(?:[eE][-+]?[0-9]+)?|\b[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.vhdl
+    - match: '(?i)\b(entity|architecture|package(?:\s+body)?|configuration|component|context|library|use)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.vhdl
+        2: entity.name.type.vhdl
+    - match: '(?i)\b(function|procedure)\s+("[^"]+"|[A-Za-z_]\w*)'
+      captures:
+        1: storage.type.function.vhdl
+        2: entity.name.function.vhdl
+    - match: '(?i)\b(type|subtype)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.vhdl
+        2: entity.name.type.vhdl
+    - match: '(?i)^\s*([A-Za-z_]\w*)\s*:(?!=)(?=\s*(?:process|block|if|for|case|while|loop|generate|assert|[A-Za-z_]\w*\s+(?:port|generic)))'
+      scope: entity.name.label.vhdl
+    - match: '(?i)\b(?:true|false|null|open|others|note|warning|error|failure)\b'
+      scope: constant.language.vhdl
+    - match: '(?i)\b(?:and|or|nand|nor|xor|xnor|not|mod|rem|abs|sll|srl|sla|sra|rol|ror)\b'
+      scope: keyword.operator.word.vhdl
+    - match: '(?i)\b(?:begin|end|if|then|else|elsif|case|when|for|while|loop|next|exit|return|process|block|generate|wait|until|on|after|assert|report|severity|select|with|is|of|in|to|downto|map|port|generic|force|release|transport|inertial|reject|guarded|postponed|pure|impure|new|units|body|all)\b'
+      scope: keyword.control.vhdl
+    - match: '(?i)\b(?:signal|variable|constant|shared|file|alias|attribute|group|inout|out|buffer|linkage|bus|register|disconnect|label|literal|range|record|array|access|protected|vunit|sequence|property|default)\b'
+      scope: storage.modifier.vhdl
+    - match: '(?i)\b(?:std_logic_vector|std_ulogic_vector|std_logic|std_ulogic|bit_vector|bit|boolean|integer|natural|positive|real|time|string|character|signed|unsigned|severity_level|line|text|delay_length|unresolved_signed|unresolved_unsigned)\b'
+      scope: storage.type.builtin.vhdl
+    - match: '(?i)\b(?:rising_edge|falling_edge|to_integer|to_unsigned|to_signed|to_stdlogicvector|to_stdulogic|to_bitvector|resize|conv_integer|conv_std_logic_vector|shift_left|shift_right|std_match|now|read|write|readline|writeline|hread|hwrite|endfile|textio|to_string|to_hstring|image|length|range|event|left|right|high|low|ascending|stable|active|last_value|last_event|pos|val|succ|pred|base)\b(?=\s*[(;,)]|\s*$)'
+      scope: support.function.builtin.vhdl
+    - match: "'(?i:event|range|length|left|right|high|low|ascending|stable|active|last_value|last_event|pos|val|succ|pred|base|image|subtype|element|path_name|instance_name)\\b"
+      scope: support.function.attribute.vhdl
+    - match: '=>|<=|>=|/=|:=|\*\*|<>|\?\?|\?[=<>/]=?|[-+*/&=<>|:]'
+      scope: keyword.operator.vhdl
+  block-comment:
+    - meta_scope: comment.block.vhdl
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.vhdl
+      pop: true
+  dq:
+    - meta_scope: string.quoted.double.vhdl
+    - match: '""'
+      scope: constant.character.escape.vhdl
+    - match: '"'
+      scope: punctuation.definition.string.end.vhdl
+      pop: true
+    - match: '$'
+      pop: true

@@ -1,0 +1,67 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: INI
+scope: source.ini
+file_extensions: [ini, desktop, service, socket, timer, mount, target, path, gitconfig, editorconfig, properties, repo, inf, reg, theme, directory]
+contexts:
+  main:
+    - match: '^[ \t]*[;#].*$'
+      scope: comment.line.ini
+    - match: '^[ \t]*(\[)([^\]\n]*)(\])'
+      captures:
+        1: punctuation.definition.section.begin.ini
+        2: entity.name.section.ini
+        3: punctuation.definition.section.end.ini
+    - match: '^[ \t]*([^\s=;#\[:][^=\n]*?)[ \t]*(=)'
+      captures:
+        1: entity.name.tag.ini
+        2: keyword.operator.assignment.ini
+      push: value
+    - match: '^[ \t]*([A-Za-z_][A-Za-z0-9_.\-]*)[ \t]*(:)(?=\s)'
+      captures:
+        1: entity.name.tag.ini
+        2: keyword.operator.assignment.ini
+      push: value
+
+  value:
+    - match: '$'
+      pop: true
+    - match: '(?<=\s)[;#].*$'
+      scope: comment.line.ini
+    - match: '"'
+      scope: punctuation.definition.string.begin.ini
+      push: dq-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.ini
+      push: sq-string
+    - match: '\\(?:[\\"''nrt0abfv=:;#]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4})'
+      scope: constant.character.escape.ini
+    - match: '\$\{[^}\n]*\}|\$\([^)\n]*\)|%\([^)\n]*\)s'
+      scope: variable.parameter.ini
+    - match: '%[A-Za-z%]'
+      scope: constant.other.placeholder.ini
+    - match: '(?<![\w.\-])(?:true|false|yes|no|on|off|null|none)(?![\w.\-])'
+      scope: constant.language.boolean.ini
+    - match: '(?<![\w.\-/])[-+]?(?:0[xX][0-9A-Fa-f]+|[0-9]+(?:\.[0-9]+)?)(?![\w.\-/])'
+      scope: constant.numeric.ini
+    - match: '[^\s"''$%\;#]+|[$%\;#]'
+      scope: string.unquoted.ini
+
+  dq-string:
+    - meta_scope: string.quoted.double.ini
+    - match: '"'
+      scope: punctuation.definition.string.end.ini
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.ini
+    - match: '$'
+      pop: true
+
+  sq-string:
+    - meta_scope: string.quoted.single.ini
+    - match: "'"
+      scope: punctuation.definition.string.end.ini
+      pop: true
+    - match: '$'
+      pop: true

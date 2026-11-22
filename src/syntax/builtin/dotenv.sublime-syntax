@@ -1,0 +1,54 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Dotenv
+scope: source.dotenv
+file_extensions: [env, .env, envrc, .envrc, env.example, env.local, env.development, env.production, env.test, env.sample]
+contexts:
+  main:
+    - match: '^\s*#.*$'
+      scope: comment.line.number-sign.dotenv
+    - match: '^\s*(export)\s+'
+      captures:
+        1: keyword.control.export.dotenv
+    - match: '^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(=)'
+      captures:
+        1: variable.other.dotenv
+        2: keyword.operator.assignment.dotenv
+      push: value
+
+  value:
+    - match: '$'
+      pop: true
+    - match: '(?<=\s)#.*$'
+      scope: comment.line.number-sign.dotenv
+    - match: '"'
+      scope: punctuation.definition.string.begin.dotenv
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.dotenv
+      push: sq
+    - match: '\$\{[^}\n]*\}|\$[A-Za-z_]\w*'
+      scope: variable.parameter.dotenv
+    - match: '(?<![\w.-])(?:true|false)(?![\w.-])'
+      scope: constant.language.boolean.dotenv
+    - match: '(?<![\w.-])-?[0-9]+(?:\.[0-9]+)?(?![\w.-])'
+      scope: constant.numeric.dotenv
+    - match: '[^\s"''$#]+|[$#]'
+      scope: string.unquoted.dotenv
+
+  dq:
+    - meta_scope: string.quoted.double.dotenv
+    - match: '"'
+      scope: punctuation.definition.string.end.dotenv
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.dotenv
+    - match: '\$\{[^}\n]*\}|\$[A-Za-z_]\w*'
+      scope: variable.parameter.dotenv
+
+  sq:
+    - meta_scope: string.quoted.single.dotenv
+    - match: "'"
+      scope: punctuation.definition.string.end.dotenv
+      pop: true

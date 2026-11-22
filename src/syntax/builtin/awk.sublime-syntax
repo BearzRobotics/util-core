@@ -1,0 +1,59 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: AWK
+scope: source.awk
+file_extensions: [awk, gawk]
+first_line_match: '^#!.*\b[gmn]?awk\b'
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.awk
+    - match: '"'
+      scope: punctuation.definition.string.begin.awk
+      push: dq
+    - match: '(?<=[=(,~!&|{;:?]|^|\s)/(?![/*=\s])(?=(?:[^/\\\n]|\\.)+/)'
+      scope: punctuation.definition.string.begin.awk
+      push: regex
+    - match: '\b(BEGIN|END|BEGINFILE|ENDFILE)\b'
+      scope: keyword.control.special.awk
+    - match: '\b(function|func)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.function.awk
+        2: entity.name.function.awk
+    - match: '\b(?:if|else|while|for|do|in|break|continue|next|nextfile|exit|return|delete|switch|case|default|getline|printf|print)\b'
+      scope: keyword.control.awk
+    - match: '@(?:include|load|namespace)\b'
+      scope: keyword.control.import.awk
+    - match: '\b(?:ARGC|ARGV|ARGIND|CONVFMT|ENVIRON|ERRNO|FIELDWIDTHS|FILENAME|FNR|FPAT|FS|IGNORECASE|NF|NR|OFMT|OFS|ORS|PROCINFO|RLENGTH|RS|RSTART|RT|SUBSEP|TEXTDOMAIN|BINMODE|LINT|PREC|ROUNDMODE|SYMTAB|FUNCTAB)\b'
+      scope: variable.language.awk
+    - match: '\b(?:length|substr|index|split|sub|gsub|gensub|match|sprintf|sin|cos|atan2|exp|log|sqrt|int|rand|srand|tolower|toupper|system|close|fflush|systime|strftime|mktime|and|or|xor|lshift|rshift|compl|strtonum|asort|asorti|patsplit|isarray|typeof|substr|printf)\b(?=\s*\()'
+      scope: support.function.builtin.awk
+    - match: '\b[A-Za-z_]\w*(?=\()'
+      scope: entity.name.function.awk
+    - match: '\$(?:[A-Za-z_]\w*|\d+|(?=\())'
+      scope: variable.parameter.field.awk
+    - match: '\b0[xX][0-9A-Fa-f]+\b|(?:\b[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.awk
+    - match: '\*\*=?|\+\+|--|&&|\|\||[-+*/%^!<>=]=?|~|!~|[?:|]'
+      scope: keyword.operator.awk
+  dq:
+    - meta_scope: string.quoted.double.awk
+    - match: '"'
+      scope: punctuation.definition.string.end.awk
+      pop: true
+    - match: '\\(?:["\\/abfnrtv]|[0-7]{1,3}|x[0-9A-Fa-f]{1,2}|\n)'
+      scope: constant.character.escape.awk
+    - match: '\\$'
+    - match: '$'
+      pop: true
+  regex:
+    - meta_scope: string.regexp.awk
+    - match: '/'
+      scope: punctuation.definition.string.end.awk
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.awk
+    - match: '\[(?:\^?\]?)(?:[^\]\\\n]|\\.)*\]'
+    - match: '$'
+      pop: true

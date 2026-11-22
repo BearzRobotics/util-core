@@ -1,0 +1,78 @@
+Usage: time [OPTION]... COMMAND [ARG]...
+Run COMMAND, then print system resource usage.
+
+  -a, --append              with -o FILE, append instead of overwriting
+  -f, --format=FORMAT       use FORMAT instead of the default
+  -o, --output=FILE         write to FILE instead of standard error
+  -p, --portability         print the POSIX format:
+                              real %e
+                              user %U
+                              sys %S
+  -q, --quiet               do not report a non-zero exit status or a signal
+  -v, --verbose             print all resource usage information
+  -h, --help                display this help and exit
+  -V, --version             output version information and exit
+
+Format sequences for -f/--format (also taken from the TIME variable):
+  %%   a literal '%'
+  %C   command line and arguments
+  %c   involuntary context switches
+  %D   average unshared data size in KB (always 0)
+  %E   elapsed real time (wall clock) in [hour:]min:sec
+  %e   elapsed real time (wall clock) in seconds
+  %F   major page faults
+  %I   file system inputs
+  %K   average total memory use in KB (always 0)
+  %k   signals delivered
+  %M   maximum resident set size in KB
+  %O   file system outputs
+  %P   percent of CPU this job got
+  %p   average unshared stack size in KB (always 0)
+  %R   minor page faults
+  %r   socket messages received
+  %S   system (kernel) time in seconds
+  %s   socket messages sent
+  %t   average resident set size in KB (always 0)
+  %U   user time in seconds
+  %W   swaps
+  %w   voluntary context switches
+  %X   average shared text size in KB (always 0)
+  %x   exit status of the command
+  %Z   system page size in bytes
+  Backslash escapes: \n \t \\
+
+Benchmark view (extension, not in GNU time; modelled on crap, with options from
+hyperfine). Every operand is a command line; quotes group words.
+      --bench               repeat each command with its output discarded and
+                            compare them: mean ± σ, min … max and outliers per
+                            measurement, with a delta against the first command
+      --duration=MS         (default 5000) how long to sample each command
+      --runs=N              run exactly N times
+      --min-runs=N          at least N runs (default 3)
+      --max-runs=N          at most N runs (default 10000)
+      --warmup=N            runs before sampling, not measured (default 0)
+      --shell=SHELL         run each command as SHELL -c COMMAND
+      --allow-failures      compare commands that exit non-zero
+      --setup=CMD           run once before each command's runs
+      --prepare=CMD         run before every run (also warm-ups)
+      --conclude=CMD        run after every run
+      --cleanup=CMD         run once after each command's runs
+                            (the four hooks run through sh -c, or --shell; give
+                            one value for all commands, or one per command)
+      --parameter-list=NAME=V1,V2,...
+                            run every command once per value, replacing {NAME}
+      --parameter-scan=NAME:MIN:MAX[:STEP]
+                            the same for the numbers MIN to MAX
+      --input=FILE          standard input of the commands (default: none)
+      --bench-output=WHERE  standard output of the commands: null (default),
+                            inherit or a file
+      --env=ASSIGNMENTS     environment for the commands, e.g. 'A=1 B="x y"'
+      --metrics=LIST        rows to show: default, time, all, or names from
+                            wall_time cpu_time user_time system_time peak_rss
+                            cpu_cycles instructions cache_references
+                            cache_misses branch_misses (hyperfine's time_wall_clock,
+                            time_cpu, time_user, time_system and
+                            memory_peak_resident work too)
+      --export-json=FILE    write the results as JSON (times in seconds)
+      --export-csv=FILE     write the results as CSV
+      --color=WHEN          auto (default), never or ansi

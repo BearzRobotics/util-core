@@ -1,0 +1,128 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Zig
+scope: source.zig
+file_extensions:
+  - zig
+  - zon
+first_line_match: '^#!.*\bzig\b|-\*-\s*zig\s*-\*-'
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: numbers
+    - include: builtins
+    - include: keywords
+    - include: types
+    - include: functions
+    - include: operators
+
+  comments:
+    - match: '//[/!](?!/).*$|///$'
+      scope: comment.line.documentation.zig
+    - match: '//.*$'
+      scope: comment.line.double-slash.zig
+
+  strings:
+    - match: '\\\\.*$'
+      scope: string.quoted.other.multiline.zig
+    - match: '@"'
+      scope: punctuation.definition.string.begin.zig
+      push: quoted-identifier
+    - match: '"'
+      scope: punctuation.definition.string.begin.zig
+      push: dq-string
+    - match: '(\x27)(\\(?:[nrt\\\x27"]|x\h{2}|u\{\h+\}))(\x27)'
+      scope: string.quoted.single.zig
+      captures:
+        2: constant.character.escape.zig
+    - match: '\x27[^\\\x27\n]+\x27'
+      scope: string.quoted.single.zig
+
+  dq-string:
+    - meta_scope: string.quoted.double.zig
+    - match: '"'
+      scope: punctuation.definition.string.end.zig
+      pop: true
+    - match: '\\(?:[nrt\\\x27"]|x\h{2}|u\{\h+\})'
+      scope: constant.character.escape.zig
+    - match: '\\.'
+      scope: invalid.illegal.unknown-escape.zig
+    - match: '\{\{|\}\}'
+    - match: '\{[A-Za-z0-9_*:.,<>^ ?!#+-]*\}'
+      scope: constant.other.placeholder.zig
+    - match: '(?=\n)|$'
+      pop: true
+
+  quoted-identifier:
+    - meta_scope: variable.other.quoted-identifier.zig
+    - match: '"'
+      scope: punctuation.definition.string.end.zig
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.zig
+    - match: '(?=\n)|$'
+      pop: true
+
+  numbers:
+    - match: '\b0x\h[\h_]*(?:\.\h[\h_]*)?(?:[pP][+-]?\d[\d_]*)?\b'
+      scope: constant.numeric.hex.zig
+    - match: '\b0o[0-7][0-7_]*\b'
+      scope: constant.numeric.octal.zig
+    - match: '\b0b[01][01_]*\b'
+      scope: constant.numeric.binary.zig
+    - match: '\b\d[\d_]*\.\d[\d_]*(?:[eE][+-]?\d[\d_]*)?\b'
+      scope: constant.numeric.float.zig
+    - match: '\b\d[\d_]*[eE][+-]?\d[\d_]*\b'
+      scope: constant.numeric.float.zig
+    - match: '\b\d[\d_]*\b'
+      scope: constant.numeric.integer.zig
+
+  builtins:
+    - match: '@{{ident}}'
+      scope: support.function.builtin.zig
+
+  keywords:
+    - match: '\b(?:if|else|switch|while|for|break|continue|return|defer|errdefer|try|catch|orelse|unreachable|async|await|suspend|resume|nosuspend)\b'
+      scope: keyword.control.zig
+    - match: '\b(?:and|or)\b'
+      scope: keyword.operator.word.zig
+    - match: '\b(fn)\b(?:\s+({{ident}}|@"[^"\n]*"))?'
+      captures:
+        1: storage.type.function.zig
+        2: entity.name.function.zig
+    - match: '\b(const|var)\b(?:\s+({{ident}})(?=\s*(?::[^=;]*)?=\s*(?:(?:packed|extern)\s+)?(?:struct|enum|union|opaque)\b|error\s*\{))?'
+      captures:
+        1: storage.type.zig
+        2: entity.name.type.zig
+    - match: '\b(?:struct|enum|union|opaque|error)\b'
+      scope: storage.type.zig
+    - match: '\b(test)\b'
+      scope: keyword.control.zig
+    - match: '\b(?:pub|extern|export|inline|noinline|comptime|threadlocal|align|allowzero|volatile|packed|callconv|linksection|noalias|usingnamespace|addrspace)\b'
+      scope: storage.modifier.zig
+    - match: '\b(?:true|false|null|undefined)\b'
+      scope: constant.language.zig
+
+  types:
+    - match: '\b(?:[iu][0-9]+|f16|f32|f64|f80|f128|usize|isize|c_char|c_short|c_ushort|c_int|c_uint|c_long|c_ulong|c_longlong|c_ulonglong|c_longdouble|anyopaque|anyerror|anytype|anyframe|bool|void|noreturn|type|comptime_int|comptime_float)\b'
+      scope: support.type.zig
+    - match: '\b[A-Z][A-Z0-9_]+\b'
+      scope: support.constant.zig
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: entity.name.type.zig
+    - match: '(?<![\w)\]}.\x27"@])\.{{ident}}'
+      scope: constant.other.enum-literal.zig
+
+  functions:
+    - match: '\b[a-z_][A-Za-z0-9_]*(?=\s*\()'
+      scope: entity.name.function.zig
+
+  operators:
+    - match: '=>|\+\+|\*\*|\|\||\.\.\.|\.\.|\.\*|\.\?|<<\|?=?|>>=?|[-+*]%=?|[-+*]\|=?|[-+*/%&|^!<>=]=?|\?|~'
+      scope: keyword.operator.zig

@@ -1,0 +1,75 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+# Generic Unix configuration files: "# comment", "[section]", "key = value"
+# or "key value" lines (sshd_config, nginx, sysctl, fstab, ...).
+name: Config
+scope: source.conf
+file_extensions: [conf, cfg, sshd_config, ssh_config, sysctl, fstab, crontab, hosts, resolv, exports, limits, motd, rc, rules, nanorc, htaccess, vimrc-conf, wgetrc, curlrc, inputrc, gemrc, npmrc, netrc, pam]
+contexts:
+  main:
+    - match: '^[ \t]*#.*$'
+      scope: comment.line.number-sign.conf
+    - match: '^[ \t]*(\[)([^\]\n]*)(\])'
+      captures:
+        1: punctuation.definition.section.begin.conf
+        2: entity.name.section.conf
+        3: punctuation.definition.section.end.conf
+    - match: '^[ \t]*(</?)([A-Za-z][\w-]*)'
+      captures:
+        1: punctuation.definition.tag.begin.conf
+        2: entity.name.tag.conf
+      push: tag-args
+    - match: '^[ \t]*([A-Za-z_@][\w.\-@/:]*)[ \t]*(=|:)?(?=[ \t]|$)'
+      captures:
+        1: entity.name.tag.conf
+        2: keyword.operator.assignment.conf
+      push: value
+
+  tag-args:
+    - match: '>'
+      pop: true
+    - match: '$'
+      pop: true
+    - include: value-items
+
+  value:
+    - match: '$'
+      pop: true
+    - match: '(?<=\s)#.*$'
+      scope: comment.line.number-sign.conf
+    - include: value-items
+
+  value-items:
+    - match: '"'
+      scope: punctuation.definition.string.begin.conf
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.conf
+      push: sq
+    - match: '\$\{[^}\n]*\}|\$[A-Za-z_]\w*'
+      scope: variable.parameter.conf
+    - match: '(?<![\w.\-])(?i:true|false|yes|no|on|off|null|none|enabled|disabled|auto)(?![\w.\-])'
+      scope: constant.language.boolean.conf
+    - match: '(?<![\w.\-/])[-+]?(?:0[xX][0-9A-Fa-f]+|[0-9]+(?:\.[0-9]+)?[KMGTkmgt]?)(?![\w.\-/])'
+      scope: constant.numeric.conf
+    - match: '[^\s"''$#]+|[$#]'
+      scope: string.unquoted.conf
+
+  dq:
+    - meta_scope: string.quoted.double.conf
+    - match: '"'
+      scope: punctuation.definition.string.end.conf
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.conf
+    - match: '$'
+      pop: true
+
+  sq:
+    - meta_scope: string.quoted.single.conf
+    - match: "'"
+      scope: punctuation.definition.string.end.conf
+      pop: true
+    - match: '$'
+      pop: true

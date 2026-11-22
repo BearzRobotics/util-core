@@ -1,0 +1,171 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Dart
+scope: source.dart
+file_extensions: [dart]
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: annotations
+    - include: decls
+    - include: keywords
+    - include: numbers
+    - include: methods
+    - include: types
+    - include: operators
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.dart
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.dart
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.dart
+    - match: '/\*'
+      push: block-comment
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.dart
+      pop: true
+
+  strings:
+    - match: 'r"""'
+      scope: punctuation.definition.string.begin.dart
+      push: raw-dq3
+    - match: "r'''"
+      scope: punctuation.definition.string.begin.dart
+      push: raw-sq3
+    - match: '"""'
+      scope: punctuation.definition.string.begin.dart
+      push: dq3
+    - match: "'''"
+      scope: punctuation.definition.string.begin.dart
+      push: sq3
+    - match: 'r"'
+      scope: punctuation.definition.string.begin.dart
+      push: raw-dq
+    - match: "r'"
+      scope: punctuation.definition.string.begin.dart
+      push: raw-sq
+    - match: '"'
+      scope: punctuation.definition.string.begin.dart
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.dart
+      push: sq
+
+  raw-dq3:
+    - meta_scope: string.quoted.triple.dart
+    - match: '"""'
+      scope: punctuation.definition.string.end.dart
+      pop: true
+  raw-sq3:
+    - meta_scope: string.quoted.triple.dart
+    - match: "'''"
+      scope: punctuation.definition.string.end.dart
+      pop: true
+  dq3:
+    - meta_scope: string.quoted.triple.dart
+    - match: '"""'
+      scope: punctuation.definition.string.end.dart
+      pop: true
+    - include: escapes
+    - include: interp
+  sq3:
+    - meta_scope: string.quoted.triple.dart
+    - match: "'''"
+      scope: punctuation.definition.string.end.dart
+      pop: true
+    - include: escapes
+    - include: interp
+  raw-dq:
+    - meta_scope: string.quoted.double.dart
+    - match: '"'
+      scope: punctuation.definition.string.end.dart
+      pop: true
+    - match: '$'
+      pop: true
+  raw-sq:
+    - meta_scope: string.quoted.single.dart
+    - match: "'"
+      scope: punctuation.definition.string.end.dart
+      pop: true
+    - match: '$'
+      pop: true
+  dq:
+    - meta_scope: string.quoted.double.dart
+    - match: '"'
+      scope: punctuation.definition.string.end.dart
+      pop: true
+    - match: '$'
+      pop: true
+    - include: escapes
+    - include: interp
+  sq:
+    - meta_scope: string.quoted.single.dart
+    - match: "'"
+      scope: punctuation.definition.string.end.dart
+      pop: true
+    - match: '$'
+      pop: true
+    - include: escapes
+    - include: interp
+
+  escapes:
+    - match: '\\(?:[nrtbfv"''\\$]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|u\{[0-9A-Fa-f]+\})'
+      scope: constant.character.escape.dart
+
+  interp:
+    - match: '\$\{[^}]*\}|\$[A-Za-z_]\w*'
+      scope: variable.parameter.interpolation.dart
+
+  annotations:
+    - match: '@[A-Za-z_][\w.]*'
+      scope: meta.annotation.dart
+
+  decls:
+    - match: '\b(class|mixin|enum|extension|typedef)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.dart
+        2: entity.name.class.dart
+    - match: '\b(import|export|library|part|of)\b'
+      scope: keyword.control.import.dart
+
+  keywords:
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.dart
+    - match: '\bnull\b'
+      scope: constant.language.null.dart
+    - match: '\b(?:this|super)\b'
+      scope: variable.language.dart
+    - match: '\b(?:int|double|num|bool|String|void|dynamic|var|Object|List|Map|Set|Future|Stream|Iterable|Function|Never|Null|Type|Symbol|Duration|DateTime|Record)\b'
+      scope: storage.type.primitive.dart
+    - match: '\b(?:abstract|static|final|const|late|external|factory|covariant|required|sealed|base|interface|augment|extends|implements|with|on|show|hide|deferred|operator|get|set|typedef)\b'
+      scope: storage.modifier.dart
+    - match: '\b(?:if|else|for|while|do|switch|case|default|break|continue|return|throw|rethrow|try|catch|finally|async|await|yield|sync|assert|in|when)\b'
+      scope: keyword.control.dart
+    - match: '\b(?:is|as|new)\b'
+      scope: keyword.operator.word.dart
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+\b'
+      scope: constant.numeric.hex.dart
+    - match: '(?<![A-Za-z0-9_.])(?:[0-9][0-9_]*\.[0-9][0-9_]*|\.[0-9][0-9_]*|[0-9][0-9_]*)(?:[eE][-+]?[0-9_]+)?(?![A-Za-z0-9_])'
+      scope: constant.numeric.decimal.dart
+
+  methods:
+    - match: '\b(print|identical|main)(?=\s*\()'
+      scope: support.function.dart
+    - match: '\b[a-z_]\w*(?=\s*[(<])'
+      scope: entity.name.function.dart
+
+  types:
+    - match: '\b[A-Z]\w*\b'
+      scope: entity.name.type.dart
+
+  operators:
+    - match: '\?\?=?|\?\.|\.\.\.?\??|\.\.|=>|[-+*/%&|^<>=!~?:]+'
+      scope: keyword.operator.dart

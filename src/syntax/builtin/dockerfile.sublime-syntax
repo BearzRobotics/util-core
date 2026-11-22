@@ -1,0 +1,51 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Dockerfile
+scope: source.dockerfile
+file_extensions: [Dockerfile, dockerfile, Containerfile, containerfile]
+first_line_match: '^#\s*syntax\s*=\s*docker'
+contexts:
+  main:
+    - match: '^\s*#.*$'
+      scope: comment.line.number-sign.dockerfile
+    - match: '(?i)^\s*(ONBUILD\s+)?(FROM|RUN|CMD|LABEL|MAINTAINER|EXPOSE|ENV|ADD|COPY|ENTRYPOINT|VOLUME|USER|WORKDIR|ARG|STOPSIGNAL|HEALTHCHECK|SHELL)\b'
+      captures:
+        1: keyword.control.onbuild.dockerfile
+        2: keyword.control.dockerfile
+    - match: '(?i)(?<=\s)(AS)(?=\s)'
+      scope: keyword.operator.dockerfile
+    - match: '(?<=\s)--[A-Za-z][\w-]*(?:=[^\s]*)?'
+      scope: variable.parameter.option.dockerfile
+    - match: '"'
+      scope: punctuation.definition.string.begin.dockerfile
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.dockerfile
+      push: sq
+    - include: vars
+    - match: '\\$'
+      scope: punctuation.separator.continuation.dockerfile
+    - match: '&&|\|\||;|\|'
+      scope: keyword.operator.dockerfile
+    - match: '\b[0-9]+(?:/(?:tcp|udp))?\b'
+      scope: constant.numeric.dockerfile
+
+  vars:
+    - match: '\$\{[^}\n]*\}|\$[A-Za-z_]\w*'
+      scope: variable.parameter.dockerfile
+
+  dq:
+    - meta_scope: string.quoted.double.dockerfile
+    - match: '"'
+      scope: punctuation.definition.string.end.dockerfile
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.dockerfile
+    - include: vars
+
+  sq:
+    - meta_scope: string.quoted.single.dockerfile
+    - match: "'"
+      scope: punctuation.definition.string.end.dockerfile
+      pop: true

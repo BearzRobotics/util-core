@@ -1,0 +1,67 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: HCL
+scope: source.hcl
+file_extensions: [tf, tfvars, hcl, nomad]
+contexts:
+  main:
+    - match: '(?://|#).*$'
+      scope: comment.line.hcl
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.hcl
+      push: block-comment
+    - match: '<<-?\s*([A-Za-z_]\w*)\s*$'
+      scope: punctuation.definition.string.begin.hcl
+      push: heredoc
+    - match: '"'
+      scope: punctuation.definition.string.begin.hcl
+      push: dq
+    - match: '^\s*(resource|data|variable|output|locals|module|provider|terraform|moved|import|check|backend|provisioner|lifecycle|dynamic|required_providers|job|group|task|service)\b(?=[\s"{])'
+      scope: storage.type.hcl
+    - match: '\b(?:for|in|if|else|endif|endfor)\b'
+      scope: keyword.control.hcl
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.hcl
+    - match: '\bnull\b'
+      scope: constant.language.null.hcl
+    - match: '\b(?:var|local|module|data|path|terraform|each|count|self)(?=\.)'
+      scope: variable.language.hcl
+    - match: '\b(?:abs|ceil|floor|log|max|min|pow|signum|parseint|chomp|format|formatlist|indent|join|lower|regex|regexall|replace|split|strrev|substr|title|trim|trimprefix|trimsuffix|trimspace|upper|alltrue|anytrue|chunklist|coalesce|coalescelist|compact|concat|contains|distinct|element|flatten|index|keys|length|list|lookup|map|matchkeys|merge|one|range|reverse|setintersection|setproduct|setsubtract|setunion|slice|sort|sum|transpose|values|zipmap|base64decode|base64encode|jsondecode|jsonencode|yamldecode|yamlencode|csvdecode|file|fileexists|fileset|filebase64|templatefile|abspath|dirname|basename|pathexpand|timestamp|timeadd|formatdate|md5|sha1|sha256|sha512|bcrypt|uuid|uuidv4|cidrhost|cidrnetmask|cidrsubnet|cidrsubnets|can|try|tobool|tolist|tomap|tonumber|toset|tostring|type|sensitive|nonsensitive|env|upper|lookup)\b(?=\s*\()'
+      scope: support.function.builtin.hcl
+    - match: '\b[A-Za-z_][\w-]*(?=\s*\()'
+      scope: entity.name.function.hcl
+    - match: '^\s*([A-Za-z_][\w-]*)\s*(?==[^=>])'
+      captures:
+        1: variable.parameter.hcl
+    - match: '\b[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.hcl
+    - match: '=>|\.\.\.|&&|\|\||[=!<>]=|[-+*/%<>!?:=]'
+      scope: keyword.operator.hcl
+  block-comment:
+    - meta_scope: comment.block.hcl
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.hcl
+      pop: true
+  heredoc:
+    - meta_scope: string.unquoted.heredoc.hcl
+    - match: '^\s*[A-Z_][A-Za-z_0-9]*\s*$'
+      scope: punctuation.definition.string.end.hcl
+      pop: true
+    - match: '\$\$\{|%%\{'
+      scope: constant.character.escape.hcl
+    - match: '[$%]\{[^}\n]*\}'
+      scope: variable.parameter.hcl
+  dq:
+    - meta_scope: string.quoted.double.hcl
+    - match: '"'
+      scope: punctuation.definition.string.end.hcl
+      pop: true
+    - match: '\\(?:[nrt"\\]|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})'
+      scope: constant.character.escape.hcl
+    - match: '\$\$\{|%%\{'
+      scope: constant.character.escape.hcl
+    - match: '[$%]\{[^}\n]*\}?'
+      scope: variable.parameter.hcl
+    - match: '$'
+      pop: true

@@ -1,0 +1,81 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Nix
+scope: source.nix
+file_extensions: [nix]
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.nix
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.nix
+      push: block-comment
+    - match: "''"
+      scope: punctuation.definition.string.begin.nix
+      push: indented
+    - match: '"'
+      scope: punctuation.definition.string.begin.nix
+      push: dq
+    - match: '<[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+/-]+)?>'
+      scope: string.unquoted.path.nix
+    - match: '(?<![\w.-])[A-Za-z0-9._+~-]*/[A-Za-z0-9._+/~-]+'
+      scope: string.unquoted.path.nix
+    - match: '\b[a-z][a-z0-9+.-]*://[^\s;,)\]}"'']+'
+      scope: string.unquoted.uri.nix
+    - match: '\b(?:if|then|else|assert|with|let|in|rec|inherit|or)\b'
+      scope: keyword.control.nix
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.nix
+    - match: '\bnull\b'
+      scope: constant.language.null.nix
+    - match: '\b(?:builtins|import|abort|throw|toString|map|baseNameOf|dirOf|isNull|removeAttrs|derivation|fetchTarball|fetchGit|fetchurl|fetchTree|scopedImport|placeholder)\b'
+      scope: support.function.builtin.nix
+    - match: '\b(?:mkDerivation|mkOption|mkIf|mkMerge|mkForce|mkDefault|mkEnableOption|mkOverride|callPackage|overrideAttrs|override|fetchFromGitHub|writeText|writeShellScriptBin|buildEnv|optional|optionals|optionalString|concatStringsSep|genAttrs|attrByPath|mapAttrs|filterAttrs|foldl)\b'
+      scope: support.function.nix
+    - match: '\b([A-Za-z_][\w''-]*)\s*(:)(?=\s)'
+      captures:
+        1: variable.parameter.nix
+        2: keyword.operator.nix
+    - match: '^\s*([A-Za-z_][\w''.-]*(?:\.[A-Za-z_"$][\w''-]*)*)\s*(?==[^=])'
+      captures:
+        1: variable.parameter.nix
+    - match: '\$\{'
+      scope: punctuation.section.interpolation.begin.nix
+      push: interp
+    - match: '\b[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.nix
+    - match: '\.\.\.|\+\+|//|->|&&|\|\||==|!=|<=|>=|[-+*/<>!?=@:]'
+      scope: keyword.operator.nix
+  block-comment:
+    - meta_scope: comment.block.nix
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.nix
+      pop: true
+  interp:
+    - meta_scope: variable.parameter.nix
+    - match: '\{'
+      push: interp
+    - match: '\}'
+      scope: punctuation.section.interpolation.end.nix
+      pop: true
+  dq:
+    - meta_scope: string.quoted.double.nix
+    - match: '"'
+      scope: punctuation.definition.string.end.nix
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.nix
+    - match: '\$\{'
+      scope: punctuation.section.interpolation.begin.nix
+      push: interp
+  indented:
+    - meta_scope: string.quoted.other.nix
+    - match: "''(?!['$\\\\])"
+      scope: punctuation.definition.string.end.nix
+      pop: true
+    - match: "'''|''\\$|''\\\\."
+      scope: constant.character.escape.nix
+    - match: '\$\{'
+      scope: punctuation.section.interpolation.begin.nix
+      push: interp
