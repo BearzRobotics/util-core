@@ -1,6 +1,6 @@
 # Built-in syntax grammars for cat
 
-Status: 25 grammars, original work; unverified against any reference highlighter. Date: 2026-11-21
+Status: 40 grammars, original work; unverified against any reference highlighter. Date: 2026-11-21
 
 ## Provenance
 
@@ -11,13 +11,14 @@ Every file in `src/syntax/builtin/` was written for util-core from knowledge of 
 | Grammar | Extensions (and names) | First line |
 |---|---|---|
 | asm | asm s S nasm inc | .file/.text/.section/... or NASM `bits`/`section`/`global` |
+| batch | bat cmd btm | |
 | c | c h | modeline |
 | cpp | cpp cc cxx c++ hpp hh hxx h++ ipp tpp inl | modeline |
 | css | css pcss | `@charset` |
 | diff | diff patch rej | `diff `, `Index:`, `--- `, mail `From <sha>` |
 | go | go | `Code generated ... DO NOT EDIT.` |
-| html | html htm xhtml shtml xht svg | doctype, `<html` |
-| ini | ini conf cfg desktop service socket timer mount target path gitconfig editorconfig properties repo inf reg theme directory | |
+| html | html htm xhtml shtml xht | doctype, `<html` |
+| ini | ini desktop service socket timer mount target path gitconfig editorconfig properties repo inf reg theme directory | |
 | java | java jsh | |
 | javascript | js mjs cjs jsx es6 | node/deno/bun shebang |
 | json | json jsonc json5 geojson webmanifest har ipynb babelrc eslintrc code-workspace | |
@@ -35,6 +36,20 @@ Every file in `src/syntax/builtin/` was written for util-core from knowledge of 
 | typescript | ts tsx mts cts | ts-node/deno/bun shebang |
 | yaml | yaml yml clang-format clang-tidy yamllint | `%YAML` |
 | zig | zig zon | `zig` shebang |
+| conf | conf cfg sshd_config ssh_config sysctl fstab crontab hosts resolv exports limits nanorc htaccess wgetrc curlrc inputrc gemrc npmrc netrc pam rc rules motd | |
+| cmake | cmake CMakeLists.txt CMakeCache.txt ctest cpack | |
+| csharp | cs csx cake | |
+| dockerfile | Dockerfile dockerfile Containerfile containerfile | `# syntax=docker` |
+| dotenv | env .env envrc env.example env.local env.development env.production env.test env.sample | |
+| gitignore | gitignore gitattributes gitmodules dockerignore npmignore ignore mailmap git-blame-ignore-revs | |
+| haskell | hs hsc lhs hs-boot purs | `runhaskell` shebang |
+| kotlin | kt kts | |
+| lua | lua rockspec luacheckrc | `lua`/`luajit` shebang |
+| perl | pl pm pod t psgi cgi perl ph | `perl` shebang |
+| php | php phtml php3 php4 php5 phps phpt inc | `<?php`, `php` shebang |
+| swift | swift | `swift` shebang |
+| vim | vim vimrc gvimrc nvimrc exrc | `" vim:` |
+| xml | xml svg xsd xsl xslt xaml axaml csproj vbproj fsproj vcxproj props targets plist rss atom wsdl resx nuspec kml gpx xliff glade ui manifest appxmanifest mobileconfig storyboard xib config | `<?xml` |
 
 `cat --list-languages` prints what is loaded.
 

@@ -1,0 +1,55 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Vim Script
+scope: source.vim
+file_extensions: [vim, vimrc, .vimrc, gvimrc, .gvimrc, nvimrc, exrc]
+first_line_match: '^"\s*vim:'
+contexts:
+  main:
+    - match: '^\s*"[^\n]*$'
+      scope: comment.line.double-quote.vim
+    - match: '^\s*#[^\n]*$'
+      scope: comment.line.number-sign.vim
+    - match: '(?<=\s)"\s[^\n]*$'
+      scope: comment.line.double-quote.vim
+    - match: '"'
+      scope: punctuation.definition.string.begin.vim
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.vim
+      push: sq
+    - match: '\b(?:function|endfunction|func|endfunc|def|enddef|augroup|if|elseif|else|endif|for|endfor|while|endwhile|try|catch|finally|endtry|return|break|continue|finish|throw|autocmd|command|execute|call|unlet|let|const|var|set|setlocal|setglobal|source|runtime|echo|echom|echomsg|echoerr|silent|normal|nnoremap|inoremap|vnoremap|xnoremap|nmap|imap|vmap|map|noremap|map!|cnoremap|tnoremap|onoremap|syntax|highlight|filetype|colorscheme|abbreviate|import|export|lua|python|python3)!?(?![\w])'
+      scope: keyword.control.vim
+    - match: '(?<=\s)<(?:silent|buffer|expr|nowait|unique|script|leader|localleader|cr|esc|tab|space|bs|c-[a-z]|a-[a-z]|plug|cmd|nop|bar|lt)>'
+      scope: constant.character.escape.vim
+    - match: '\b(?:[abgslvwt]:)[A-Za-z_]\w*|&[A-Za-z_]\w*|@[a-z"*+]'
+      scope: variable.other.vim
+    - match: '\b[A-Za-z_][\w#]*(?=\()'
+      scope: entity.name.function.vim
+    - match: '\b(?:v:true|v:false|v:null|true|false|null)\b'
+      scope: constant.language.vim
+    - match: '\b0[xX][0-9A-Fa-f]+\b|\b[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?\b|#[0-9A-Fa-f]{6}\b'
+      scope: constant.numeric.vim
+    - match: '=~[#?]?|!~[#?]?|==[#?]?|!=[#?]?|\.\.|[-+*/%.<>=!?:|&]+'
+      scope: keyword.operator.vim
+
+  dq:
+    - meta_scope: string.quoted.double.vim
+    - match: '"'
+      scope: punctuation.definition.string.end.vim
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.vim
+    - match: '$'
+      pop: true
+
+  sq:
+    - meta_scope: string.quoted.single.vim
+    - match: "''"
+      scope: constant.character.escape.vim
+    - match: "'"
+      scope: punctuation.definition.string.end.vim
+      pop: true
+    - match: '$'
+      pop: true

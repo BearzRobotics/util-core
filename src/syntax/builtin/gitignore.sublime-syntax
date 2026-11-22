@@ -1,0 +1,22 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Git Ignore
+scope: source.gitignore
+file_extensions: [gitignore, .gitignore, gitattributes, .gitattributes, gitmodules, .gitmodules, dockerignore, .dockerignore, npmignore, .npmignore, ignore, git-blame-ignore-revs, mailmap, .mailmap]
+contexts:
+  main:
+    - match: '^\s*#.*$'
+      scope: comment.line.number-sign.gitignore
+    - match: '^!'
+      scope: keyword.operator.negation.gitignore
+    - match: '\\.'
+      scope: constant.character.escape.gitignore
+    - match: '\*\*|\*|\?'
+      scope: keyword.operator.glob.gitignore
+    - match: '\[[^\]\n]*\]'
+      scope: constant.other.character-class.gitignore
+    - match: '/'
+      scope: punctuation.separator.path.gitignore
+    - match: '(?<=\s)(?:-?[a-z][\w.-]*(?:=[^\s]*)?)'
+      scope: variable.parameter.attribute.gitignore

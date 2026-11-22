@@ -9,7 +9,7 @@ file_extensions:
   - xhtml
   - shtml
   - xht
-  - svg
+
 first_line_match: '^\s*<!DOCTYPE\s+html|^\s*<html'
 
 contexts:

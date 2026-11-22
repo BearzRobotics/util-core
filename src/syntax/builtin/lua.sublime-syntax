@@ -1,0 +1,83 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Lua
+scope: source.lua
+file_extensions: [lua, rockspec, luacheckrc]
+first_line_match: '^#!.*\blua(?:jit)?\b'
+contexts:
+  main:
+    - match: '^#!.*$'
+      scope: comment.line.shebang.lua
+    - match: '--\[(=*)\['
+      scope: punctuation.definition.comment.begin.lua
+      push: block-comment
+    - match: '--.*$'
+      scope: comment.line.double-dash.lua
+    - match: '\[(=*)\['
+      scope: punctuation.definition.string.begin.lua
+      push: long-string
+    - match: '"'
+      scope: punctuation.definition.string.begin.lua
+      push: dq
+    - match: "'"
+      scope: punctuation.definition.string.begin.lua
+      push: sq
+    - match: '\b(function)\s+([A-Za-z_][\w.:]*)'
+      captures:
+        1: storage.type.function.lua
+        2: entity.name.function.lua
+    - match: '\b(?:and|or|not)\b'
+      scope: keyword.operator.word.lua
+    - match: '\b(?:if|then|else|elseif|end|for|while|do|repeat|until|return|break|goto|in)\b'
+      scope: keyword.control.lua
+    - match: '\b(?:local|function)\b'
+      scope: storage.type.lua
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.lua
+    - match: '\bnil\b'
+      scope: constant.language.null.lua
+    - match: '\b(?:self|_G|_ENV|_VERSION)\b'
+      scope: variable.language.lua
+    - match: '\b(?:print|pairs|ipairs|require|type|tostring|tonumber|pcall|xpcall|error|assert|select|setmetatable|getmetatable|rawget|rawset|rawequal|rawlen|next|unpack|load|loadfile|dofile|collectgarbage)\b(?=\s*[(\x22'']|\s*\{)'
+      scope: support.function.builtin.lua
+    - match: '\b0[xX][0-9A-Fa-f]+(?:\.[0-9A-Fa-f]*)?(?:[pP][-+]?[0-9]+)?\b|(?<![\w.])(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\b'
+      scope: constant.numeric.lua
+    - match: '\b[A-Za-z_]\w*(?=\s*[(\x22''{])'
+      scope: entity.name.function.lua
+    - match: '::[A-Za-z_]\w*::'
+      scope: entity.name.label.lua
+    - match: '\.\.\.?|[-+*/%^#&~|<>=]+|~='
+      scope: keyword.operator.lua
+
+  block-comment:
+    - meta_scope: comment.block.lua
+    - match: '\]=*\]'
+      scope: punctuation.definition.comment.end.lua
+      pop: true
+
+  long-string:
+    - meta_scope: string.quoted.other.lua
+    - match: '\]=*\]'
+      scope: punctuation.definition.string.end.lua
+      pop: true
+
+  dq:
+    - meta_scope: string.quoted.double.lua
+    - match: '"'
+      scope: punctuation.definition.string.end.lua
+      pop: true
+    - match: '\\(?:[abfnrtvz\\"''\n]|x[0-9A-Fa-f]{2}|[0-9]{1,3}|u\{[0-9A-Fa-f]+\})'
+      scope: constant.character.escape.lua
+    - match: '$'
+      pop: true
+
+  sq:
+    - meta_scope: string.quoted.single.lua
+    - match: "'"
+      scope: punctuation.definition.string.end.lua
+      pop: true
+    - match: '\\(?:[abfnrtvz\\"''\n]|x[0-9A-Fa-f]{2}|[0-9]{1,3}|u\{[0-9A-Fa-f]+\})'
+      scope: constant.character.escape.lua
+    - match: '$'
+      pop: true

@@ -24,9 +24,10 @@ A new command, a bat-faithful `cat` view, and a Windows console fix.
   Library module `util_core.pager`; shared terminal layer `sys.Tty`.
 
 **`cat`**
-- Syntax highlighting out of the box: about 25 built-in grammars of our own (C, C++, Rust, Zig, Go,
+- Syntax highlighting out of the box: 40 built-in grammars of our own (C, C++, Rust, Zig, Go,
   Java, JavaScript, TypeScript, Python, Ruby, shell, PowerShell, SQL, HTML, CSS, JSON, YAML, TOML,
-  INI, Markdown, diff, Makefile, Odin, Nim, assembly).
+  INI, Markdown, diff, Makefile, Odin, Nim, assembly, batch, C#, Kotlin, Swift, PHP, Perl, Lua, Haskell,
+  Vim script, CMake, Dockerfile, XML, git ignore, .env and generic config files).
 - Paging like bat: a long view goes through `$BAT_PAGER`/`$PAGER` or the built-in pager, which
   scrolls while `cat` is still writing; `--paging`, `-P`, `--pager`.
 - The terminal view now matches bat 0.26.1's default: no `Size:` line (only `--style=full` adds

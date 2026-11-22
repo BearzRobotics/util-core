@@ -31,7 +31,7 @@ Terminal view (decision 0005, presentation on a terminal): when standard output 
 ## Known deviations and gaps
 
 - Deliberate deviation from GNU: on a terminal, with no GNU formatting option, output is the bat-style view (header, grid, line numbers, tabs expanded to 4). Pipes and redirects stay byte-exact GNU.
-- Syntax highlighting: about 25 built-in grammars of our own (docs/compatibility/builtin-grammars.md) plus Sublime grammars loaded from disk (sublime-syntax.md); no theme option, no cache (all grammars are parsed at the start of a highlighted run).
+- Syntax highlighting: 40 built-in grammars of our own (docs/compatibility/builtin-grammars.md) plus Sublime grammars loaded from disk (sublime-syntax.md); no theme option, no cache (all grammars are parsed at the start of a highlighted run).
 - Paging: `--paging`, `-P`, `--pager`; the built-in pager is shared with `less` (docs/compatibility/less.md). Not implemented yet: git change markers, -r/-H, UTF-8 aware column counting (tab stops and the grid count bytes).
 - Lines over 1 MiB are printed without highlighting.
 - Does not detect 'input file is output file'.

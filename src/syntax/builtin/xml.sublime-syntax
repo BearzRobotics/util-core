@@ -1,0 +1,113 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: XML
+scope: text.xml
+file_extensions: [xml, svg, xsd, xsl, xslt, xaml, axaml, csproj, vbproj, fsproj, vcxproj, props, targets, plist, rss, atom, wsdl, resx, nuspec, kml, gpx, xliff, glade, ui, config, manifest, appxmanifest, sln.DotSettings, mobileconfig, storyboard, xib]
+first_line_match: '^\s*<\?xml'
+
+contexts:
+  main:
+    - match: '<!--'
+      scope: punctuation.definition.comment.begin.xml
+      push: comment
+    - match: '(?i)(<!)(DOCTYPE)\b'
+      captures:
+        1: punctuation.definition.tag.begin.xml
+        2: keyword.declaration.doctype.xml
+      push: doctype
+    - match: '<!\[CDATA\['
+      scope: punctuation.definition.string.begin.xml
+      push: cdata
+    - match: '<\?'
+      scope: punctuation.definition.tag.begin.xml
+      push: processing
+    - match: '(</?)([A-Za-z][A-Za-z0-9:._-]*)'
+      captures:
+        1: punctuation.definition.tag.begin.xml
+        2: entity.name.tag.xml
+      push: tag-attrs
+    - include: entities
+
+  entities:
+    - match: '&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);'
+      scope: constant.character.entity.xml
+
+  comment:
+    - meta_scope: comment.block.xml
+    - match: '-->'
+      scope: punctuation.definition.comment.end.xml
+      pop: true
+
+  doctype:
+    - meta_scope: meta.tag.sgml.doctype.xml
+    - match: '>'
+      scope: punctuation.definition.tag.end.xml
+      pop: true
+    - match: '"[^"]*"|''[^'']*'''
+      scope: string.quoted.xml
+    - match: '\bhtml\b'
+      scope: entity.name.tag.xml
+      
+  cdata:
+    - meta_scope: string.unquoted.cdata.xml
+    - match: '\]\]>'
+      scope: punctuation.definition.string.end.xml
+      pop: true
+
+  processing:
+    - meta_scope: meta.tag.preprocessor.xml.xml
+    - match: '\?>'
+      scope: punctuation.definition.tag.end.xml
+      pop: true
+    - match: '"[^"]*"|''[^'']*'''
+      scope: string.quoted.xml
+    - match: '[A-Za-z_:][\w:.-]*(?==)'
+      scope: support.type.attribute-name.xml entity.other.attribute-name.xml
+
+  tag-attrs:
+    - meta_scope: meta.tag.xml
+    - match: '/?>'
+      scope: punctuation.definition.tag.end.xml
+      pop: true
+    - match: '(?=<)'
+      pop: true
+    - match: '"'
+      scope: punctuation.definition.string.begin.xml
+      push: dq-value
+    - match: "'"
+      scope: punctuation.definition.string.begin.xml
+      push: sq-value
+    - match: '='
+      scope: punctuation.separator.key-value.xml
+      push: unquoted-value
+    - match: '[^\s"''<>/=]+'
+      scope: support.type.attribute-name.xml entity.other.attribute-name.xml
+
+  unquoted-value:
+    - match: '(?=\s|/?>|$)'
+      pop: true
+    - match: '"'
+      scope: punctuation.definition.string.begin.xml
+      set: dq-value
+    - match: "'"
+      scope: punctuation.definition.string.begin.xml
+      set: sq-value
+    - match: '[^\s"''<>=`]+'
+      scope: string.unquoted.xml
+      pop: true
+
+  dq-value:
+    - meta_scope: string.quoted.double.xml
+    - match: '"'
+      scope: punctuation.definition.string.end.xml
+      pop: true
+    - include: entities
+
+  sq-value:
+    - meta_scope: string.quoted.single.xml
+    - match: "'"
+      scope: punctuation.definition.string.end.xml
+      pop: true
+    - include: entities
+

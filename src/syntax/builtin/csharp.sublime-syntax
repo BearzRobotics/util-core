@@ -1,0 +1,152 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: C#
+scope: source.cs
+file_extensions: [cs, csx, cake]
+contexts:
+  main:
+    - include: comments
+    - include: triple
+    - include: verbatim
+    - include: strings
+    - include: annotations
+    - include: preproc
+    - include: decls
+    - include: keywords
+    - include: numbers
+    - include: methods
+    - include: types
+    - include: operators
+
+  comments:
+    - match: '///.*$'
+      scope: comment.line.documentation.csharp
+    - match: '//.*$'
+      scope: comment.line.double-slash.csharp
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.csharp
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.csharp
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.csharp
+      pop: true
+
+  triple:
+    - match: '"""'
+      scope: punctuation.definition.string.begin.csharp
+      push: triple-body
+
+  triple-body:
+    - meta_scope: string.quoted.triple.csharp
+    - match: '"""'
+      scope: punctuation.definition.string.end.csharp
+      pop: true
+    - include: interp
+    - include: escapes
+
+  verbatim:
+    - match: '[$@]*@[$@]*"'
+      scope: punctuation.definition.string.begin.csharp
+      push: verbatim-body
+
+  verbatim-body:
+    - meta_scope: string.quoted.verbatim.csharp
+    - match: '""'
+      scope: constant.character.escape.csharp
+    - match: '"'
+      scope: punctuation.definition.string.end.csharp
+      pop: true
+
+  strings:
+    - match: '\$?"'
+      scope: punctuation.definition.string.begin.csharp
+      push: string-body
+    - match: "'(?=(?:[^'\\\\\\n]|\\\\.[A-Za-z0-9{}]*)')"
+      scope: punctuation.definition.string.begin.csharp
+      push: char-body
+
+  char-body:
+    - meta_scope: string.quoted.single.csharp
+    - match: "'"
+      scope: punctuation.definition.string.end.csharp
+      pop: true
+    - include: escapes
+
+  string-body:
+    - meta_scope: string.quoted.double.csharp
+    - match: '"'
+      scope: punctuation.definition.string.end.csharp
+      pop: true
+    - match: '$'
+      pop: true
+    - include: interp
+    - include: escapes
+
+  escapes:
+    - match: '\\(?:[abfnrtv0"''\\$]|x[0-9A-Fa-f]{1,4}|u\{?[0-9A-Fa-f]{1,8}\}?|U[0-9A-Fa-f]{8})'
+      scope: constant.character.escape.csharp
+
+  interp:
+    - match: '\{[^{}\n]*\}|\\\([^)\n]*\)'
+      scope: meta.interpolation.csharp
+
+  annotations:
+    - match: '(?<=^|\s|\[)\[\s*[A-Za-z_][\w.]*(?=[\](])'
+      scope: meta.annotation.csharp
+
+  preproc:
+    - match: '^\s*#.*$'
+      scope: meta.preprocessor.csharp
+
+  decls:
+    - match: '\b(class|struct|interface|enum|record|namespace|using|delegate|event)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.csharp
+        2: entity.name.class.csharp
+    - match: '\b(fun|func|function|def)\s+(?:[A-Za-z_][\w.<>?]*\.)?([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.function.csharp
+        2: entity.name.function.csharp
+
+  keywords:
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.csharp
+    - match: '\b(?:null)\b'
+      scope: constant.language.null.csharp
+    - match: '\b(?:this|base|value)\b'
+      scope: variable.language.csharp
+    - match: '\b(?:bool|byte|sbyte|char|short|ushort|int|uint|long|ulong|float|double|decimal|string|object|void|var|dynamic|nint|nuint)\b'
+      scope: storage.type.primitive.csharp
+    - match: '\b(?:public|private|protected|internal|static|readonly|const|abstract|virtual|override|sealed|partial|async|volatile|unsafe|extern|new|ref|out|in|params|required|init|get|set|add|remove|where)\b'
+      scope: storage.modifier.csharp
+    - match: '\b(?:if|else|for|foreach|while|do|switch|case|default|break|continue|return|throw|try|catch|finally|goto|yield|await|lock|using|when)\b'
+      scope: keyword.control.csharp
+    - match: '\b(?:is|as|typeof|sizeof|nameof|new|stackalloc|checked|unchecked|and|or|not|with)\b'
+      scope: keyword.operator.word.csharp
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+[uUlL]*\b'
+      scope: constant.numeric.hex.csharp
+    - match: '\b0[bB][01_]+[uUlL]*\b'
+      scope: constant.numeric.binary.csharp
+    - match: '(?<![A-Za-z0-9_.])(?:[0-9][0-9_]*\.[0-9][0-9_]*|\.[0-9][0-9_]*|[0-9][0-9_]*)(?:[eE][-+]?[0-9_]+)?[uUlLfFdDmM]*(?![A-Za-z0-9_])'
+      scope: constant.numeric.decimal.csharp
+
+  methods:
+    - match: '\b[A-Za-z_]\w*(?=\s*(?:<[^<>()\n]*>)?\()'
+      scope: entity.name.function.csharp
+
+  types:
+    - match: '\b[A-Z][A-Z0-9_]+\b(?!\s*[(<])'
+      scope: support.constant.csharp
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: entity.name.type.csharp
+
+  operators:
+    - match: '=>|->|::|\?\.|\?\?|\.\.[.<]?'
+      scope: keyword.operator.arrow.csharp
+    - match: '[-+*/%&|^~!<>=?:]+'
+      scope: keyword.operator.csharp

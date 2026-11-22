@@ -3,7 +3,7 @@
 # Original grammar written for util-core (GPL-2.0-or-later).
 name: INI
 scope: source.ini
-file_extensions: [ini, conf, cfg, desktop, service, socket, timer, mount, target, path, gitconfig, editorconfig, properties, repo, inf, reg, theme, directory]
+file_extensions: [ini, desktop, service, socket, timer, mount, target, path, gitconfig, editorconfig, properties, repo, inf, reg, theme, directory]
 contexts:
   main:
     - match: '^[ \t]*[;#].*$'

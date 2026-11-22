@@ -1,0 +1,134 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Swift
+scope: source.swift
+file_extensions: [swift]
+first_line_match: '^#!.*\bswift\b'
+contexts:
+  main:
+    - include: comments
+    - include: triple
+    - include: strings
+    - include: annotations
+    - include: decls
+    - include: keywords
+    - include: numbers
+    - include: methods
+    - include: types
+    - include: operators
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.swift
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.swift
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.swift
+    - match: '/\*'
+      push: block-comment
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.swift
+      pop: true
+
+  triple:
+    - match: '"""'
+      scope: punctuation.definition.string.begin.swift
+      push: triple-body
+
+  triple-body:
+    - meta_scope: string.quoted.triple.swift
+    - match: '"""'
+      scope: punctuation.definition.string.end.swift
+      pop: true
+    - include: interp
+    - include: escapes
+
+  strings:
+    - match: '\$?"'
+      scope: punctuation.definition.string.begin.swift
+      push: string-body
+    - match: "'(?=(?:[^'\\\\\\n]|\\\\.[A-Za-z0-9{}]*)')"
+      scope: punctuation.definition.string.begin.swift
+      push: char-body
+
+  char-body:
+    - meta_scope: string.quoted.single.swift
+    - match: "'"
+      scope: punctuation.definition.string.end.swift
+      pop: true
+    - include: escapes
+
+  string-body:
+    - meta_scope: string.quoted.double.swift
+    - match: '"'
+      scope: punctuation.definition.string.end.swift
+      pop: true
+    - match: '$'
+      pop: true
+    - include: interp
+    - include: escapes
+
+  escapes:
+    - match: '\\(?:[abfnrtv0"''\\$]|x[0-9A-Fa-f]{1,4}|u\{?[0-9A-Fa-f]{1,8}\}?|U[0-9A-Fa-f]{8})'
+      scope: constant.character.escape.swift
+
+  interp:
+    - match: '\{[^{}\n]*\}|\\\([^)\n]*\)'
+      scope: meta.interpolation.swift
+
+  annotations:
+    - match: '@[A-Za-z_]\w*|#(?:available|selector|keyPath|colorLiteral|imageLiteral|file|line|function|if|elseif|else|endif)\b'
+      scope: meta.annotation.swift
+
+  decls:
+    - match: '\b(class|struct|enum|protocol|extension|actor|typealias|associatedtype|import)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.swift
+        2: entity.name.class.swift
+    - match: '\b(fun|func|function|def)\s+(?:[A-Za-z_][\w.<>?]*\.)?([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.function.swift
+        2: entity.name.function.swift
+
+  keywords:
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.swift
+    - match: '\b(?:nil)\b'
+      scope: constant.language.null.swift
+    - match: '\b(?:self|Self|super)\b'
+      scope: variable.language.swift
+    - match: '\b(?:Int|Int8|Int16|Int32|Int64|UInt|UInt8|UInt16|UInt32|UInt64|Float|Double|Bool|String|Character|Any|AnyObject|Void|Optional|Array|Dictionary|Set)\b'
+      scope: storage.type.primitive.swift
+    - match: '\b(?:public|private|fileprivate|internal|open|static|final|lazy|weak|unowned|mutating|nonmutating|override|required|convenience|dynamic|indirect|inout|let|var|async|throws|rethrows)\b'
+      scope: storage.modifier.swift
+    - match: '\b(?:if|else|guard|switch|case|default|for|while|repeat|break|continue|return|throw|try|catch|defer|fallthrough|do|in|where|await)\b'
+      scope: keyword.control.swift
+    - match: '\b(?:is|as|typealias|init|deinit|subscript|operator|precedencegroup)\b'
+      scope: keyword.operator.word.swift
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+[uUlL]*\b'
+      scope: constant.numeric.hex.swift
+    - match: '\b0[bB][01_]+[uUlL]*\b'
+      scope: constant.numeric.binary.swift
+    - match: '(?<![A-Za-z0-9_.])(?:[0-9][0-9_]*\.[0-9][0-9_]*|\.[0-9][0-9_]*|[0-9][0-9_]*)(?:[eE][-+]?[0-9_]+)?[uUlLfFdDmM]*(?![A-Za-z0-9_])'
+      scope: constant.numeric.decimal.swift
+
+  methods:
+    - match: '\b[A-Za-z_]\w*(?=\s*(?:<[^<>()\n]*>)?\()'
+      scope: entity.name.function.swift
+
+  types:
+    - match: '\b[A-Z][A-Z0-9_]+\b(?!\s*[(<])'
+      scope: support.constant.swift
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: entity.name.type.swift
+
+  operators:
+    - match: '=>|->|::|\?\.|\?\?|\.\.[.<]?'
+      scope: keyword.operator.arrow.swift
+    - match: '[-+*/%&|^~!<>=?:]+'
+      scope: keyword.operator.swift

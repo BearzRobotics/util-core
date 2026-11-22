@@ -1,0 +1,135 @@
+%YAML 1.2
+---
+# Original grammar written for util-core (GPL-2.0-or-later).
+name: Kotlin
+scope: source.kotlin
+file_extensions: [kt, kts]
+contexts:
+  main:
+    - include: comments
+    - include: triple
+    - include: strings
+    - include: annotations
+    - include: decls
+    - include: keywords
+    - include: numbers
+    - include: methods
+    - include: types
+    - include: operators
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.kotlin
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.kotlin
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.kotlin
+    - match: '/\*'
+      push: block-comment
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.kotlin
+      pop: true
+
+  triple:
+    - match: '"""'
+      scope: punctuation.definition.string.begin.kotlin
+      push: triple-body
+
+  triple-body:
+    - meta_scope: string.quoted.triple.kotlin
+    - match: '"""'
+      scope: punctuation.definition.string.end.kotlin
+      pop: true
+    - include: interp
+    - include: escapes
+
+  strings:
+    - match: '\$?"'
+      scope: punctuation.definition.string.begin.kotlin
+      push: string-body
+    - match: "'"
+      scope: punctuation.definition.string.begin.kotlin
+      push: sq-body
+
+  sq-body:
+    - meta_scope: string.quoted.single.kotlin
+    - match: "'"
+      scope: punctuation.definition.string.end.kotlin
+      pop: true
+    - match: '$'
+      pop: true
+    - include: escapes
+
+  string-body:
+    - meta_scope: string.quoted.double.kotlin
+    - match: '"'
+      scope: punctuation.definition.string.end.kotlin
+      pop: true
+    - match: '$'
+      pop: true
+    - include: interp
+    - include: escapes
+
+  escapes:
+    - match: '\\(?:[abfnrtv0"''\\$]|x[0-9A-Fa-f]{1,4}|u\{?[0-9A-Fa-f]{1,8}\}?|U[0-9A-Fa-f]{8})'
+      scope: constant.character.escape.kotlin
+
+  interp:
+    - match: '\$\{[^}\n]*\}|\$[A-Za-z_]\w*|\{[^{}\n]*\}'
+      scope: meta.interpolation.kotlin
+
+  annotations:
+    - match: '@[A-Za-z_][\w.]*'
+      scope: meta.annotation.kotlin
+
+  decls:
+    - match: '\b(class|interface|object|typealias|package|import|enum)\s+([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.kotlin
+        2: entity.name.class.kotlin
+    - match: '\b(fun|func|function|def)\s+(?:[A-Za-z_][\w.<>?]*\.)?([A-Za-z_]\w*)'
+      captures:
+        1: storage.type.function.kotlin
+        2: entity.name.function.kotlin
+
+  keywords:
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.kotlin
+    - match: '\b(?:null)\b'
+      scope: constant.language.null.kotlin
+    - match: '\b(?:this|super|it)\b'
+      scope: variable.language.kotlin
+    - match: '\b(?:Int|Long|Short|Byte|Float|Double|Boolean|Char|String|Unit|Any|Nothing|Array|List|Map|Set)\b'
+      scope: storage.type.primitive.kotlin
+    - match: '\b(?:public|private|protected|internal|open|final|abstract|override|sealed|data|inner|lateinit|lateinit|const|suspend|inline|noinline|crossinline|reified|vararg|operator|infix|tailrec|companion|annotation|val|var|external|expect|actual)\b'
+      scope: storage.modifier.kotlin
+    - match: '\b(?:if|else|for|while|do|when|break|continue|return|throw|try|catch|finally|in)\b'
+      scope: keyword.control.kotlin
+    - match: '\b(?:is|as|typeof|by|where|out)\b'
+      scope: keyword.operator.word.kotlin
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+[uUlL]*\b'
+      scope: constant.numeric.hex.kotlin
+    - match: '\b0[bB][01_]+[uUlL]*\b'
+      scope: constant.numeric.binary.kotlin
+    - match: '(?<![A-Za-z0-9_.])(?:[0-9][0-9_]*\.[0-9][0-9_]*|\.[0-9][0-9_]*|[0-9][0-9_]*)(?:[eE][-+]?[0-9_]+)?[uUlLfFdDmM]*(?![A-Za-z0-9_])'
+      scope: constant.numeric.decimal.kotlin
+
+  methods:
+    - match: '\b[A-Za-z_]\w*(?=\s*(?:<[^<>()\n]*>)?\()'
+      scope: entity.name.function.kotlin
+
+  types:
+    - match: '\b[A-Z][A-Z0-9_]+\b(?!\s*[(<])'
+      scope: support.constant.kotlin
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: entity.name.type.kotlin
+
+  operators:
+    - match: '=>|->|::|\?\.|\?\?|\.\.[.<]?'
+      scope: keyword.operator.arrow.kotlin
+    - match: '[-+*/%&|^~!<>=?:]+'
+      scope: keyword.operator.kotlin
