@@ -45,6 +45,7 @@ pub fn build(b: *std.Build) void {
     const install_man = b.option(bool, "man", "Install the manual pages as share/man/man1/NAME.1.md (default: on)") orelse true;
     const selected = selectCommands(b);
     const regex_mod = b.dependency("regex", .{ .target = target, .optimize = optimize }).module("regex");
+    const yaml_mod = b.dependency("yaml", .{ .target = target, .optimize = optimize }).module("yaml");
 
     const test_step = b.step("test", "Run Zig unit tests");
 
@@ -55,6 +56,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     lib.addImport("regex", regex_mod);
+    lib.addImport("yaml", yaml_mod);
 
     // Individual executables.
     if (mode != .multicall) for (selected) |name| {
@@ -71,6 +73,7 @@ pub fn build(b: *std.Build) void {
         });
         exe.root_module.addOptions("build_options", opts);
         exe.root_module.addImport("regex", regex_mod);
+        exe.root_module.addImport("yaml", yaml_mod);
         b.installArtifact(exe);
     };
 
@@ -89,6 +92,7 @@ pub fn build(b: *std.Build) void {
         });
         exe.root_module.addOptions("build_options", opts);
         exe.root_module.addImport("regex", regex_mod);
+        exe.root_module.addImport("yaml", yaml_mod);
         b.installArtifact(exe);
     }
 
@@ -117,7 +121,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/fuzz.zig"),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{.{ .name = "regex", .module = regex_mod }},
+                .imports = &.{ .{ .name = "regex", .module = regex_mod }, .{ .name = "yaml", .module = yaml_mod } },
             }),
         });
         test_step.dependOn(&b.addRunArtifact(fuzz_t).step);
@@ -126,13 +130,13 @@ pub fn build(b: *std.Build) void {
         b.step("fuzz", "Run the fuzz campaign (use tools/fuzz.sh)").dependOn(&campaign.step);
     }
 
-    // Syntax-highlighting modules (they depend on the regex-zig package).
+    // Syntax-highlighting modules (they depend on regex-zig and yaml-zig).
     const syntax_unit = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/syntax/root.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "regex", .module = regex_mod }},
+            .imports = &.{ .{ .name = "regex", .module = regex_mod }, .{ .name = "yaml", .module = yaml_mod } },
         }),
     });
     test_step.dependOn(&b.addRunArtifact(syntax_unit).step);
@@ -144,7 +148,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/syntax/probe.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "regex", .module = regex_mod }},
+            .imports = &.{ .{ .name = "regex", .module = regex_mod }, .{ .name = "yaml", .module = yaml_mod } },
         }),
     });
     b.installArtifact(probe); // run zig-out/bin/syntax-probe GRAMMAR... -- FILE
@@ -155,7 +159,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/test_all.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "regex", .module = regex_mod }},
+            .imports = &.{ .{ .name = "regex", .module = regex_mod }, .{ .name = "yaml", .module = yaml_mod } },
         }),
     });
     test_step.dependOn(&b.addRunArtifact(unit).step);

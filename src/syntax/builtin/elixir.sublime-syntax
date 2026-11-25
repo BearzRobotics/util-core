@@ -23,7 +23,7 @@ contexts:
       scope: comment.line.number-sign.elixir
 
   strings:
-    - match: '~[a-zA-Z](?:"""|''''')'
+    - match: '~[a-zA-Z](?:"""|'''''')'
       scope: punctuation.definition.string.begin.elixir
       push: sigil-heredoc
     - match: '~[a-z]\('
@@ -93,7 +93,7 @@ contexts:
     - include: interp
   sigil-heredoc:
     - meta_scope: string.quoted.triple.elixir
-    - match: '^\s*(?:"""|''''')[a-z]*'
+    - match: '^\s*(?:"""|'''''')[a-z]*'
       scope: punctuation.definition.string.end.elixir
       pop: true
     - include: escapes

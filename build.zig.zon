@@ -8,6 +8,10 @@
             .url = "https://github.com/BearzRobotics/regex-zig/archive/refs/tags/v0.4.0.tar.gz",
             .hash = "regex-0.4.0-bWvIn34rCwAWT160q4wuvE32kzckrdr_dbxLiYlApZvk",
         },
+        .yaml = .{
+            .url = "https://github.com/BearzRobotics/yaml-zig/releases/download/v0.3.1/yaml-0.3.1.tar.gz",
+            .hash = "yaml-0.3.1-fE0bW3geBQDJZbnwWh0TuYOXsPhO7ldTqBq46OWuMQsV",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE", "README.md", "docs/manpages" },
 }

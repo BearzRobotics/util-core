@@ -17,7 +17,7 @@
 
 const std = @import("std");
 const regex = @import("regex");
-const yaml = @import("yaml.zig");
+const yaml = @import("yaml");
 
 pub const ScopeId = u32;
 
@@ -93,7 +93,22 @@ pub const Syntax = struct {
     warnings: std.ArrayList([]const u8) = .empty,
 };
 
-pub const LoadError = error{ OutOfMemory, InvalidSyntax } || yaml.Error;
+pub const LoadError = error{ OutOfMemory, InvalidSyntax } || yaml.ParseError;
+
+/// A YAML alias is a reference, so a small grammar can nest a context inside
+/// itself, or stand for far more rules than its text holds. These bound what
+/// one grammar may unfold to: how deep anonymous contexts nest, and how many
+/// rules, captures and context references are read.
+const max_context_depth = 32;
+const max_grammar_items = 100_000;
+
+/// The text of a scalar (following an alias), or null for a collection.
+fn str(v: yaml.Value) ?[]const u8 {
+    return switch (v.deref()) {
+        .scalar => |s| s.text,
+        else => null,
+    };
+}
 
 pub const Registry = struct {
     gpa: std.mem.Allocator,
@@ -106,6 +121,8 @@ pub const Registry = struct {
     diag: yaml.Diagnostic = .{},
     /// Why the last load failed.
     last_error: []const u8 = "",
+    /// What is left of `max_grammar_items` for the grammar being loaded.
+    items_left: usize = 0,
 
     pub fn init(gpa: std.mem.Allocator) Registry {
         return .{ .gpa = gpa, .arena_state = std.heap.ArenaAllocator.init(gpa) };
@@ -226,45 +243,52 @@ pub const Registry = struct {
     pub fn load(r: *Registry, text: []const u8, file_name: []const u8) LoadError!*Syntax {
         const a = r.arena();
         var diag: yaml.Diagnostic = .{};
-        // Parsed scalars and keys slice into the text, so the registry keeps its
-        // own copy; the caller may free `text` after load returns.
-        const doc = yaml.parse(a, try a.dupe(u8, text), &diag) catch |e| {
+        // The document copies what it keeps, so the caller may free `text`
+        // after load returns. It is never deinited: its arena lives in the
+        // registry's, because names and patterns point into it.
+        const doc = yaml.Document.parse(a, text, .{}, &diag) catch |e| {
             r.diag = diag;
             r.last_error = diag.message;
             return e;
         };
-        if (doc != .map) return r.bad("grammar is not a mapping");
+        if (doc.root != .map) return r.bad("grammar is not a mapping");
+        const top = doc.root.map;
+        r.items_left = max_grammar_items;
 
         const syn = try a.create(Syntax);
-        const scope_name = if (doc.get("scope")) |s| s.str() orelse "" else "";
+        const scope_name = top.getString("scope") orelse "";
         syn.* = .{
-            .name = if (doc.get("name")) |n| n.str() orelse "" else std.Io.Dir.path.stem(file_name),
+            .name = if (top.get("name")) |n| str(n) orelse "" else try a.dupe(u8, std.Io.Dir.path.stem(file_name)),
             .file_name = try a.dupe(u8, file_name),
             .scope_name = scope_name,
             .scope = try r.scopes(scope_name),
             .extensions = &.{},
-            .first_line_match = if (doc.get("first_line_match")) |f| f.str() orelse "" else "",
+            .first_line_match = top.getString("first_line_match") orelse "",
         };
 
-        if (doc.get("extends") != null) try r.warn(syn, "extends is not supported; inherited rules are missing");
-        if (doc.get("file_extensions")) |fe| if (fe == .seq) {
+        if (top.get("extends") != null) try r.warn(syn, "extends is not supported; inherited rules are missing");
+        if (top.getSeq("file_extensions")) |fe| {
             var exts: std.ArrayList([]const u8) = .empty;
-            for (fe.seq) |e| if (e.str()) |s| try exts.append(a, s);
+            for (fe.items.items) |e| if (str(e)) |s| try exts.append(a, s);
             syn.extensions = exts.items;
-        };
-        if (doc.get("variables")) |vars| if (vars == .map) for (vars.map) |p| {
-            if (p.value.str()) |s| try syn.variables.put(a, p.key, s);
+        }
+        if (top.getMap("variables")) |vars| for (vars.keys(), vars.entries.values()) |k, e| {
+            const name = str(k) orelse continue;
+            if (str(e.value)) |s| try syn.variables.put(a, name, s);
         };
 
-        const ctxs = doc.get("contexts") orelse return r.bad("grammar has no contexts");
+        const ctxs = top.get("contexts") orelse return r.bad("grammar has no contexts");
         if (ctxs != .map) return r.bad("contexts is not a mapping");
         // Create all named contexts first so rules can refer to any of them.
-        for (ctxs.map) |p| {
+        for (ctxs.map.keys()) |k| {
+            const name = str(k) orelse return r.bad("context name is not a string");
             const c = try a.create(Context);
-            c.* = .{ .name = p.key, .syntax = syn };
-            try syn.contexts.put(a, p.key, c);
+            c.* = .{ .name = name, .syntax = syn };
+            try syn.contexts.put(a, name, c);
         }
-        for (ctxs.map) |p| try r.fillContext(syn, syn.contexts.get(p.key).?, p.value);
+        for (ctxs.map.keys(), ctxs.map.entries.values()) |k, e| {
+            try r.fillContext(syn, syn.contexts.get(str(k).?).?, e.value, 0);
+        }
         if (syn.contexts.get("main") == null) return r.bad("grammar has no main context");
 
         try r.syntaxes.append(r.gpa, syn);
@@ -281,33 +305,44 @@ pub const Registry = struct {
         try syn.warnings.append(r.arena(), msg);
     }
 
-    /// A context's value is a list of rules and meta_* settings.
-    fn fillContext(r: *Registry, syn: *Syntax, ctx: *Context, v: yaml.Value) LoadError!void {
+    /// Count `n` items against the grammar's allowance.
+    fn spend(r: *Registry, n: usize) LoadError!void {
+        if (n > r.items_left) return r.bad("grammar expands to too many items");
+        r.items_left -= n;
+    }
+
+    /// A context's value is a list of rules and meta_* settings. `depth`
+    /// counts the anonymous contexts around this one.
+    fn fillContext(r: *Registry, syn: *Syntax, ctx: *Context, v: yaml.Value, depth: u32) LoadError!void {
         const a = r.arena();
-        if (v != .seq) return r.bad("context is not a list");
+        const list = v.deref();
+        if (list != .seq) return r.bad("context is not a list");
         var rules: std.ArrayList(Rule) = .empty;
-        for (v.seq) |item| {
-            if (item != .map) return r.bad("context entry is not a mapping");
+        for (list.seq.items.items) |entry| {
+            try r.spend(1);
+            const node = entry.deref();
+            if (node != .map) return r.bad("context entry is not a mapping");
+            const item = node.map;
             if (item.get("meta_scope")) |s| {
-                ctx.meta_scope = try r.scopes(s.str() orelse "");
+                ctx.meta_scope = try r.scopes(str(s) orelse "");
             } else if (item.get("meta_content_scope")) |s| {
-                ctx.meta_content_scope = try r.scopes(s.str() orelse "");
+                ctx.meta_content_scope = try r.scopes(str(s) orelse "");
             } else if (item.get("meta_include_prototype")) |s| {
-                ctx.meta_include_prototype = !std.mem.eql(u8, s.str() orelse "true", "false");
+                ctx.meta_include_prototype = !std.mem.eql(u8, str(s) orelse "true", "false");
             } else if (item.get("clear_scopes") != null) {
                 try r.warn(syn, "clear_scopes is not supported");
             } else if (item.get("meta_prepend") != null or item.get("meta_append") != null) {
                 try r.warn(syn, "meta_prepend/meta_append are not supported");
             } else if (item.get("include")) |inc| {
-                try rules.append(a, .{ .include = .{ .name = inc.str() orelse "" } });
+                try rules.append(a, .{ .include = .{ .name = str(inc) orelse "" } });
             } else if (item.get("match")) |m| {
-                if (try r.matchRule(syn, item, m.str() orelse "")) |rule| try rules.append(a, .{ .match = rule });
+                if (try r.matchRule(syn, item, str(m) orelse "", depth)) |rule| try rules.append(a, .{ .match = rule });
             } else try r.warn(syn, "unknown context entry skipped");
         }
         ctx.rules = rules.items;
     }
 
-    fn matchRule(r: *Registry, syn: *Syntax, item: yaml.Value, pattern: []const u8) LoadError!?*MatchRule {
+    fn matchRule(r: *Registry, syn: *Syntax, item: *const yaml.Map, pattern: []const u8, depth: u32) LoadError!?*MatchRule {
         const a = r.arena();
         for ([_][]const u8{ "embed", "escape", "branch_point", "fail", "with_prototype" }) |k| {
             if (item.get(k) != null) {
@@ -316,18 +351,19 @@ pub const Registry = struct {
             }
         }
         var caps: std.ArrayList(Capture) = .empty;
-        if (item.get("captures")) |c| if (c == .map) for (c.map) |p| {
-            const idx = std.fmt.parseInt(u32, p.key, 10) catch continue;
-            try caps.append(a, .{ .index = idx, .scopes = try r.scopes(p.value.str() orelse "") });
+        if (item.getMap("captures")) |c| for (c.keys(), c.entries.values()) |k, e| {
+            try r.spend(1);
+            const idx = std.fmt.parseInt(u32, str(k) orelse continue, 10) catch continue;
+            try caps.append(a, .{ .index = idx, .scopes = try r.scopes(str(e.value) orelse "") });
         };
 
         var action: Action = .none;
         if (item.get("push")) |p| {
-            action = .{ .push = try r.contextRefs(syn, p) };
+            action = .{ .push = try r.contextRefs(syn, p, depth) };
         } else if (item.get("set")) |p| {
-            action = .{ .set = try r.contextRefs(syn, p) };
+            action = .{ .set = try r.contextRefs(syn, p, depth) };
         } else if (item.get("pop")) |p| {
-            const s = p.str() orelse "true";
+            const s = str(p) orelse "true";
             action = .{ .pop = if (std.mem.eql(u8, s, "true")) 1 else std.fmt.parseInt(u32, s, 10) catch 1 };
         }
 
@@ -335,7 +371,7 @@ pub const Registry = struct {
         rule.* = .{
             .syntax = syn,
             .pattern = pattern,
-            .scope = try r.scopes(if (item.get("scope")) |s| s.str() orelse "" else ""),
+            .scope = try r.scopes(item.getString("scope") orelse ""),
             .captures = caps.items,
             .action = action,
         };
@@ -345,29 +381,34 @@ pub const Registry = struct {
 
     /// A push/set target: a name, a list of names, or an anonymous context
     /// (a list of rules). A list whose first entry is a mapping is anonymous.
-    fn contextRefs(r: *Registry, syn: *Syntax, v: yaml.Value) LoadError![]const ContextRef {
+    fn contextRefs(r: *Registry, syn: *Syntax, v: yaml.Value, depth: u32) LoadError![]const ContextRef {
         const a = r.arena();
-        switch (v) {
+        switch (v.deref()) {
+            .alias => unreachable,
             .scalar => |s| {
+                try r.spend(1);
                 const out = try a.alloc(ContextRef, 1);
-                out[0] = .{ .name = s };
+                out[0] = .{ .name = s.text };
                 return out;
             },
-            .seq => |items| {
+            .seq => |q| {
+                const items = q.items.items;
+                try r.spend(items.len);
                 var anonymous = false;
-                for (items) |it| if (it == .map) {
+                for (items) |it| if (it.deref() == .map) {
                     anonymous = true;
                 };
                 if (anonymous) {
+                    if (depth >= max_context_depth) return r.bad("contexts are nested too deeply");
                     const c = try a.create(Context);
                     c.* = .{ .name = "<anonymous>", .syntax = syn };
-                    try r.fillContext(syn, c, v);
+                    try r.fillContext(syn, c, v, depth + 1);
                     const out = try a.alloc(ContextRef, 1);
                     out[0] = .{ .anon = c };
                     return out;
                 }
                 var out: std.ArrayList(ContextRef) = .empty;
-                for (items) |it| try out.append(a, .{ .name = it.str() orelse "" });
+                for (items) |it| try out.append(a, .{ .name = str(it) orelse "" });
                 return out.items;
             },
             .map => return r.bad("push/set target is a mapping"),
@@ -444,4 +485,51 @@ pub const Registry = struct {
 /// creating one failing means no working memory, i.e. out of memory.
 fn searcherOf(re: anytype, gpa: std.mem.Allocator) error{OutOfMemory}!@import("regex").Searcher {
     return re.searcher(gpa) catch error.OutOfMemory;
+}
+
+test "aliases are followed" {
+    var r = Registry.init(std.testing.allocator);
+    defer r.deinit();
+    const syn = try r.load(
+        \\name: &n Aliased
+        \\scope: source.aliased
+        \\contexts:
+        \\  main: &rules
+        \\    - match: a
+        \\      push: &inner
+        \\        - match: b
+        \\          pop: true
+        \\    - match: c
+        \\      push: *inner
+        \\  other: *rules
+    , "A.sublime-syntax");
+    try std.testing.expectEqualStrings("Aliased", syn.name);
+    try std.testing.expectEqual(2, syn.contexts.get("other").?.rules.len);
+}
+
+test "a context that contains itself is refused" {
+    var r = Registry.init(std.testing.allocator);
+    defer r.deinit();
+    try std.testing.expectError(error.InvalidSyntax, r.load(
+        \\contexts:
+        \\  main:
+        \\    - match: a
+        \\      push: &loop
+        \\        - match: b
+        \\          push: *loop
+    , "L.sublime-syntax"));
+    try std.testing.expectEqualStrings("contexts are nested too deeply", r.last_error);
+}
+
+test "aliases that unfold to too much are refused" {
+    var r = Registry.init(std.testing.allocator);
+    defer r.deinit();
+    // Each level uses the one below twice: 2^24 rules from 24 short lines.
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(std.testing.allocator);
+    try text.appendSlice(std.testing.allocator, "contexts:\n  c0: &c0\n    - match: a\n");
+    for (1..24) |i| try text.print(std.testing.allocator, "  c{d}: &c{d}\n    - {{match: a, push: *c{d}}}\n    - {{match: b, push: *c{d}}}\n", .{ i, i, i - 1, i - 1 });
+    try text.appendSlice(std.testing.allocator, "  main: *c23\n");
+    try std.testing.expectError(error.InvalidSyntax, r.load(text.items, "B.sublime-syntax"));
+    try std.testing.expectEqualStrings("grammar expands to too many items", r.last_error);
 }

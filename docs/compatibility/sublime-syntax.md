@@ -1,8 +1,9 @@
 # Sublime syntax engine: compatibility record
 
 Status: partial, spike quality (not verified against Sublime Text or syntect).
-Date: 2026-11-04. Code: `src/syntax/` (yaml.zig, definition.zig, engine.zig,
-probe.zig). Regex: the `regex-zig` package, Oniguruma dialect.
+Date: 2026-11-04. Code: `src/syntax/` (definition.zig, engine.zig,
+probe.zig). Regex: the `regex-zig` package, Oniguruma dialect. YAML: the
+`yaml-zig` package.
 
 ## Reference
 
@@ -14,9 +15,12 @@ compare against. Treat all scope output as unverified.
 
 ## Supported
 
-- YAML subset: block mappings/sequences, quoted and plain scalars, block
-  scalars, flow collections, comments. Anchors/aliases/tags, multi-line quoted
-  scalars and multiple documents are rejected with a line number.
+- YAML: what yaml-zig reads (its docs list the limits), including anchors,
+  aliases, tags and multi-line quoted scalars. Multiple documents, repeated
+  mapping keys and invalid YAML are rejected with a line number. Aliases are
+  followed; a grammar is refused if anonymous contexts nest more than 32 deep
+  (which includes a context that contains itself) or if it unfolds to more than
+  100,000 rules, captures and context references.
 - Grammar: `name`, `scope`, `file_extensions`, `first_line_match` (stored, not
   yet used for detection), `variables` (recursive `{{x}}`), contexts, `match`
   and `include` rules, `scope`, `captures`, `push`/`set`/`pop` (including
@@ -73,5 +77,5 @@ available to compare against.
 
 ## Tests
 
-`zig build test` (yaml, toy grammar end to end including state across lines,
+`zig build test` (aliases and their limits, toy grammar end to end including state across lines,
 lookup, loop termination, warnings). Manual: `zig-out/bin/syntax-probe`.
