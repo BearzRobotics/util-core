@@ -102,3 +102,13 @@ The embedded grammar set exists and needs no license audit: 73 grammars written
 for this project (src/syntax/builtin/, listed in docs/compatibility/builtin-grammars.md),
 embedded by `src/syntax/builtin.zig` and loaded after the user's grammars. The
 audit remains the precondition only for any third-party grammar added later.
+
+## YAML reader (2026-11-25)
+
+The project's own YAML-subset reader (decision point 3) is replaced by the
+`yaml-zig` package, so that third-party grammars using YAML outside the subset
+load, and one YAML parser is maintained instead of two. The old reader also
+accepted invalid YAML: it dropped the rest of a line after a stray quote, which
+had silently broken two rules in the built-in Elixir grammar. The cost is parse
+time: loading the 73 built-in grammars took about 13 ms against 2.5 ms
+(ReleaseSafe, parsing only, best of 15 on a busy machine).

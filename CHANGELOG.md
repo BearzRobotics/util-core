@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+**`cat`**
+- Grammars are read with the `yaml-zig` package: `.sublime-syntax` files may now use anchors,
+  aliases, tags and multi-line quoted strings. Invalid YAML and repeated keys are now refused.
+- Fixed: Elixir `~s'''` and `~s"""` heredocs were not highlighted (invalid YAML in the grammar).
+
 ## 0.2.0
 
 Two new commands (`time`, `less`), a bat-faithful `cat` with highlighting for 73 languages, themes, git markers and paging, and a Windows console fix.

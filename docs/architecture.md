@@ -97,9 +97,14 @@ identically in both modes, and the same unit and shell tests cover both
 
 ## Dependencies
 
-One external dependency: `regex-zig` (github.com/BearzRobotics/regex-zig,
-pinned in `build.zig.zon`), used through `src/posixre.zig` by grep, sed, find,
-csplit, expr, ptx, locate and updatedb. Zig-native; no C FFI.
+Two external dependencies, pinned in `build.zig.zon`, both Zig-native with no C
+FFI:
+
+- `regex-zig` (github.com/BearzRobotics/regex-zig), used through
+  `src/posixre.zig` by grep, sed, find, csplit, expr, ptx, locate and updatedb,
+  and by `cat`'s syntax engine.
+- `yaml-zig` (github.com/BearzRobotics/yaml-zig), which reads the
+  `.sublime-syntax` grammars for `cat` (`src/syntax/definition.zig`).
 
 ## Testing
 
