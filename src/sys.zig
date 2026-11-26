@@ -978,6 +978,8 @@ pub const O = struct {
     pub const NOFOLLOW = openBits(.{ .NOFOLLOW = true });
     pub const NOATIME = openBits(.{ .NOATIME = true });
     pub const CLOEXEC = openBits(.{ .CLOEXEC = true });
+    /// A descriptor that only names a file (to run in a directory, say).
+    pub const PATH = openBits(.{ .PATH = true });
     /// O_SYNC includes O_DSYNC.
     pub const SYNC = openBits(.{ .SYNC = true, .DSYNC = true });
 };

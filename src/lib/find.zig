@@ -136,6 +136,7 @@ fn emit(st: *State, bytes: []const u8) void {
 
 /// Evaluate the expression (or call the visitor) for the current entry.
 fn evalHere(st: *State) void {
+    flushLeftBehind(st);
     if (st.visitor) |v| {
         var e: Entry = .{ .st = st };
         v.func(v.context, &e);
@@ -186,7 +187,9 @@ const Node = struct {
     dir: bool = false,
     prompt: bool = false,
     batch: std.ArrayList([]const u8) = .empty,
-    batch_dirs: std.ArrayList([]const u8) = .empty,
+    /// -execdir ... +: the directory the batched names are in, held open
+    /// while the batch is not empty.
+    batch_dir: ?ExecDir = null,
     batch_len: usize = 0,
     // output files
     out: ?*OutFile = null,
@@ -267,7 +270,12 @@ const State = struct {
     cur_cmdline: bool = false,
     cur_root: []const u8 = "",
     cur_dev: u64 = 0,
-    cur_dir_path: []const u8 = "",
+    /// Set when the expression has -execdir or -okdir.
+    has_execdir: bool = false,
+    /// The directory of the current start point, for -execdir on it.
+    start_dir: ?ExecDir = null,
+    /// Why `start_dir` is null.
+    start_dir_errno: LX.E = .SUCCESS,
     /// The open directory the current file was found in; null for a start
     /// point.
     cur_parent: ?*dirat.Level = null,
@@ -296,6 +304,10 @@ const State = struct {
 
 
 const At = struct { dir: sys.Handle, name: []const u8 };
+
+/// A directory for -execdir to run a command in: the descriptor, which stays
+/// right whatever happens to the path, and what it is.
+const ExecDir = struct { fd: sys.Handle, dev: u64, ino: u64 };
 
 // -------------------------------------------------------------- parsing
 
@@ -834,7 +846,10 @@ const Parser = struct {
                 argv.append(st.gpa, x) catch return error.OutOfMemory;
             }
             if (!terminated) return fail(st, "missing argument to `{s}'", .{a});
-            if (n.dir) try checkExecDirPath(st, a);
+            if (n.dir) {
+                try checkExecDirPath(st, a);
+                st.has_execdir = true;
+            }
             if (argv.items.len == 0) return fail(st, "invalid argument `;' to `{s}'", .{a});
             if (n.plus) {
                 var cnt: usize = 0;
@@ -1422,10 +1437,37 @@ fn replaceBraces(st: *State, arg: []const u8, repl: []const u8) []const u8 {
     return out.items;
 }
 
-fn runCommand(st: *State, argv: []const []const u8, cwd: ?[]const u8) bool {
+/// The directory -execdir uses for the current file: the one it was listed
+/// in, or for a start point the one opened before its walk.
+fn execDirOf(st: *const State) ?ExecDir {
+    if (st.cur_parent) |p| return .{ .fd = p.fd, .dev = p.dev, .ino = p.ino };
+    return st.start_dir;
+}
+
+/// A second descriptor for the directory `fd`, only good for running in.
+fn holdDir(fd: sys.Handle, path: []const u8, err: *LX.E) ?ExecDir {
+    const held = sys.openFdAt(fd, path, sys.O.PATH | sys.O.DIRECTORY, 0, err) orelse return null;
+    const s = sys.fstatFd(held, err) orelse {
+        _ = sys.closeFd(held);
+        return null;
+    };
+    return .{ .fd = held, .dev = devKey(s), .ino = s.ino };
+}
+
+/// Run the -execdir batches that belong to another directory than the current
+/// file's, as GNU find does when the walk moves on.
+fn flushLeftBehind(st: *State) void {
+    for (st.execs.items) |n| {
+        const held = n.batch_dir orelse continue;
+        const now = execDirOf(st);
+        if (now == null or now.?.dev != held.dev or now.?.ino != held.ino) flushBatch(st, n);
+    }
+}
+
+fn runCommand(st: *State, argv: []const []const u8, cwd: ?sys.Handle) bool {
     flushOut(st);
     for (st.outs.items) |o| flushFile(st, o);
-    const cwd_opt: std.process.Child.Cwd = if (cwd) |c| .{ .path = c } else .inherit;
+    const cwd_opt: std.process.Child.Cwd = if (cwd) |fd| .{ .dir = .{ .handle = fd } } else .inherit;
     var child = std.process.spawn(st.env.io, .{ .argv = argv, .cwd = cwd_opt, .stdin = .inherit }) catch |e| {
         const text: []const u8 = switch (e) {
             error.FileNotFound => "No such file or directory",
@@ -1495,17 +1537,23 @@ fn doExec(st: *State, n: *Node) bool {
             break :blk st.cur_path;
         };
     };
-    const cwd: ?[]const u8 = if (n.dir) (if (st.cur_depth == 0) blk: {
-        const d = dirOf(blk2: {
-            var p = st.cur_path;
-            while (p.len > 1 and p[p.len - 1] == '/') p = p[0 .. p.len - 1];
-            break :blk2 p;
-        });
-        break :blk d;
-    } else st.cur_dir_path) else null;
+    var cwd: ?ExecDir = null;
+    if (n.dir) {
+        cwd = execDirOf(st) orelse {
+            // A start point whose directory could not be opened.
+            pathError(st, st.cur_path, st.start_dir_errno);
+            return false;
+        };
+    }
     if (n.plus) {
+        if (cwd) |c| if (n.batch_dir == null) {
+            var err: LX.E = .SUCCESS;
+            n.batch_dir = holdDir(c.fd, ".", &err) orelse {
+                pathError(st, dirnameOf(st.cur_path), err);
+                return false;
+            };
+        };
         n.batch.append(st.gpa, name_for_dir) catch st.nomem();
-        if (n.dir) n.batch_dirs.append(st.gpa, cwd orelse ".") catch st.nomem();
         n.batch_len += name_for_dir.len + 1;
         if (n.batch_len > 100000) flushBatch(st, n);
         return true;
@@ -1526,32 +1574,18 @@ fn doExec(st: *State, n: *Node) bool {
         const c = st.confirm orelse return false;
         if (!c.func(c.context, pr.items)) return false;
     }
-    return runCommand(st, argv.items, cwd);
+    return runCommand(st, argv.items, if (cwd) |c| c.fd else null);
 }
 
 fn flushBatch(st: *State, n: *Node) void {
     if (n.batch.items.len == 0) return;
     var argv: std.ArrayList([]const u8) = .empty;
     for (n.argv[0 .. n.argv.len - 1]) |a| argv.append(st.gpa, a) catch st.nomem();
-    if (n.dir) {
-        // run once per directory group
-        var i: usize = 0;
-        while (i < n.batch.items.len) {
-            const d = n.batch_dirs.items[i];
-            var j = i;
-            argv.shrinkRetainingCapacity(n.argv.len - 1);
-            while (j < n.batch.items.len and std.mem.eql(u8, n.batch_dirs.items[j], d)) : (j += 1) {
-                argv.append(st.gpa, n.batch.items[j]) catch st.nomem();
-            }
-            if (!runCommand(st, argv.items, d)) st.exit_status = 1;
-            i = j;
-        }
-    } else {
-        for (n.batch.items) |f| argv.append(st.gpa, f) catch st.nomem();
-        if (!runCommand(st, argv.items, null)) st.exit_status = 1;
-    }
+    for (n.batch.items) |f| argv.append(st.gpa, f) catch st.nomem();
+    if (!runCommand(st, argv.items, if (n.batch_dir) |d| d.fd else null)) st.exit_status = 1;
+    if (n.batch_dir) |d| _ = sys.closeFd(d.fd);
+    n.batch_dir = null;
     n.batch.clearRetainingCapacity();
-    n.batch_dirs.clearRetainingCapacity();
     n.batch_len = 0;
 }
 
@@ -1917,12 +1951,11 @@ const Cur = struct {
     loaded: bool,
     failed: bool,
     cmdline: bool,
-    dir: []const u8,
     parent: ?*dirat.Level,
 };
 
 fn saveCur(st: *State) Cur {
-    return .{ .path = st.cur_path, .name_off = st.cur_name_off, .depth = st.cur_depth, .st = st.cur_st, .lst = st.cur_lst, .dtype = st.cur_dtype, .loaded = st.cur_loaded, .failed = st.cur_failed, .cmdline = st.cur_cmdline, .dir = st.cur_dir_path, .parent = st.cur_parent };
+    return .{ .path = st.cur_path, .name_off = st.cur_name_off, .depth = st.cur_depth, .st = st.cur_st, .lst = st.cur_lst, .dtype = st.cur_dtype, .loaded = st.cur_loaded, .failed = st.cur_failed, .cmdline = st.cur_cmdline, .parent = st.cur_parent };
 }
 
 fn restoreCur(st: *State, c: Cur) void {
@@ -1935,7 +1968,6 @@ fn restoreCur(st: *State, c: Cur) void {
     st.cur_loaded = c.loaded;
     st.cur_failed = c.failed;
     st.cur_cmdline = c.cmdline;
-    st.cur_dir_path = c.dir;
     st.cur_parent = c.parent;
 }
 
@@ -1953,14 +1985,13 @@ fn dtypeOf(d_type: u8) u8 {
     };
 }
 
-fn visit(st: *State, path: []const u8, name_off: usize, depth: i64, cmdline: bool, ancestors: *std.ArrayList(Ancestor), root_dev: u64, parent_dir: []const u8, parent: ?*dirat.Level, dtype: u8) void {
+fn visit(st: *State, path: []const u8, name_off: usize, depth: i64, cmdline: bool, ancestors: *std.ArrayList(Ancestor), root_dev: u64, parent: ?*dirat.Level, dtype: u8) void {
     if (st.quit) return;
     st.cur_path = path;
     st.cur_name_off = name_off;
     st.cur_depth = depth;
     st.cur_dtype = dtype;
     st.cur_cmdline = cmdline;
-    st.cur_dir_path = parent_dir;
     st.cur_parent = parent;
     st.cur_loaded = false;
     st.cur_failed = false;
@@ -2048,7 +2079,7 @@ fn walkDir(st: *State, path: []const u8, depth: i64, ancestors: *std.ArrayList(A
             continue;
         };
         const off = child.len - nm.len;
-        visit(st, child, off, depth + 1, false, ancestors, root_dev, path, &level, dtypeOf(entry.dtype));
+        visit(st, child, off, depth + 1, false, ancestors, root_dev, &level, dtypeOf(entry.dtype));
     }
 }
 // ------------------------------------------------------------------ public API
@@ -2223,7 +2254,15 @@ fn runWalk(st: *State, starts_in: []const []const u8) error{OutOfMemory}!Result 
         var tl = sp.len;
         while (tl > 1 and sp[tl - 1] == '/') tl -= 1;
         const off = if (std.mem.lastIndexOfScalar(u8, sp[0..tl], '/')) |k| (if (tl == 1) 0 else k + 1) else 0;
-        visit(st, sp, off, 0, true, &anc, rdev, dirOf(sp), null, 0);
+        if (st.has_execdir) {
+            // Opened before anything runs, so that no command can redirect it.
+            st.start_dir = holdDir(sys.cwdFd(), dirOf(sp[0..tl]), &st.start_dir_errno);
+        }
+        defer if (st.start_dir) |d| {
+            _ = sys.closeFd(d.fd);
+            st.start_dir = null;
+        };
+        visit(st, sp, off, 0, true, &anc, rdev, null, 0);
     }
     for (st.execs.items) |n| flushBatch(st, n);
     flushOut(st);

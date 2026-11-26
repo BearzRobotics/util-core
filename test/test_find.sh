@@ -542,6 +542,25 @@ race_check "a link that replaced a directory is not followed" sh -c '! grep -q "
 race_check "the replaced directory is reported" sh -c '[ "$2" = 1 ] && grep -q "Not a directory" "$1"' _ "$W/race.out" "$st"
 rm -rf "$W/race"
 
+# -execdir runs in the directory that was searched, not in whatever the path
+# leads to by the time the command starts.
+for terminator in ';' '+'; do
+    race_setup
+    echo mine > "$R/tree/a/sub/data"; echo VICTIM > "$R/victim/data"
+    printf '#!/bin/sh\ncd "%s" && mv tree/a/sub moved && ln -s "%s/victim" tree/a/sub\n' "$R" "$R" > "$R/swap"; chmod +x "$R/swap"
+    "$BIN_DIR/find" "$R/tree" -name data -exec "$R/swap" ';' -execdir cat {} "$terminator" > "$W/race.out" 2>&1
+    race_check "-execdir $terminator runs in the searched directory" sh -c '[ "$(cat "$1")" = mine ]' _ "$W/race.out"
+done
+rm -rf "$W/race"
+# The batches of -execdir + run when the walk moves to another directory.
+mkdir -p "$W/batch/t/a" "$W/batch/t/b"; : > "$W/batch/t/f1"; : > "$W/batch/t/a/g"; : > "$W/batch/t/a/h"; : > "$W/batch/t/b/i"; : > "$W/batch/t/z"
+for depth in -follow -depth; do
+    exp=$(cd "$W/batch" && /usr/bin/find t $depth -print -execdir echo run {} + 2>&1)
+    act=$(cd "$W/batch" && "$BIN_DIR/find" t $depth -print -execdir echo run {} + 2>&1)
+    race_check "-execdir + order $depth" test "$exp" = "$act"
+done
+rm -rf "$W/batch"
+
 # Deeper than the walker keeps directories open, with few descriptors.
 mkdir "$W/deepfd"
 ( cd "$W/deepfd" && mkdir -p "$(awk 'BEGIN { for (i = 0; i < 120; i++) printf "n/"; print "n" }')" &&
