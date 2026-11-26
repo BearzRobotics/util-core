@@ -75,7 +75,25 @@ pub fn parseDuration(text: []const u8) ?u64 {
     if (std.math.isNan(v) or v < 0) return null;
     const ns = v * mult * 1e9;
     if (ns >= 1.8e19) return std.math.maxInt(u64);
-    return @intFromFloat(ns);
+    // Rounded up, as in GNU: 0 means no limit, so a duration that is not
+    // zero must not become one, however small.
+    const whole: u64 = @intFromFloat(@ceil(ns));
+    return if (whole == 0 and !writtenAsZero(num)) 1 else whole;
+}
+
+/// Whether the digits before any exponent are all zeros. A number too small
+/// for a float reads as 0 without being zero.
+fn writtenAsZero(num: []const u8) bool {
+    var i: usize = 0;
+    if (i < num.len and num[i] == '+') i += 1;
+    const hex = num.len >= i + 2 and num[i] == '0' and std.ascii.toLower(num[i + 1]) == 'x';
+    if (hex) i += 2;
+    while (i < num.len) : (i += 1) {
+        const c = std.ascii.toLower(num[i]);
+        if (c == (if (hex) @as(u8, 'p') else 'e')) break;
+        if ((c >= '1' and c <= '9') or (hex and c >= 'a' and c <= 'f')) return false;
+    }
+    return true;
 }
 
 /// Start the command. The caller makes itself a group leader first unless
@@ -203,6 +221,10 @@ test "parseDuration" {
     try std.testing.expectEqual(@as(?u64, 1_000_000_000), parseDuration("1"));
     try std.testing.expectEqual(@as(?u64, 120_000_000_000), parseDuration("2m"));
     try std.testing.expectEqual(@as(?u64, 500_000_000), parseDuration("0.5s"));
+    for ([_][]const u8{ "1e-10", "1e-400", "0.0000000001s", "0x1p-99999" }) |t|
+        try std.testing.expectEqual(@as(?u64, 1), parseDuration(t));
+    for ([_][]const u8{ "0", "0.0", "0e5", "0x0p3", "+0d" }) |t|
+        try std.testing.expectEqual(@as(?u64, 0), parseDuration(t));
     try std.testing.expectEqual(@as(?u64, null), parseDuration("-1"));
     try std.testing.expectEqual(@as(?u64, null), parseDuration(""));
     try std.testing.expectEqual(@as(?u64, null), parseDuration("s"));

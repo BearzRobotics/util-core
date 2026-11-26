@@ -150,5 +150,8 @@ for k in 0 0s; do
 rc=124" ]; then PASS=$((PASS + 1)); echo "PASS -k $k sends no KILL"
     else FAIL=$((FAIL + 1)); echo "FAIL -k $k sends no KILL: $got"; fi
 done
+# Any duration that is not zero is a limit, however small.
+for d in 1e-10 0.0000000001s 1e-400; do run_cmp "tiny duration $d" "$d" sleep 3; done
+for d in 0 0.0 0e5; do run_cmp "no limit $d" "$d" sleep 0.2; done
 print_summary
 [ "$FAIL" -eq 0 ]
