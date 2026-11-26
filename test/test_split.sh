@@ -145,6 +145,17 @@ run_tree "filter gzip-less"     "$S" --filter='tr a-z A-Z > $FILE' -l 10 words
 run_tree "filter fails"         "$S" --filter='exit 3' -l 10 in
 run_tree "filter and stdout chunk" "$S" --filter=cat -n 1/3 in
 run_tree "-u"                   "$S" -u -n r/3 words
+# Round robin runs one filter per chunk too, all open at once.
+for nn in 1 2 3 10; do
+    run_tree "filter r/$nn"     "$S" --filter='tr a-z A-Z > $FILE.up' -n r/$nn words
+done
+# (only output made after end of input has a defined order)
+run_tree "filter r/ output order" "$S" --filter='x=$(cat); echo "$FILE: $x"' -n r/3 seven
+run_tree "filter r/ -u"         "$S" -u --filter='cat > $FILE.out' -n r/3 words
+run_tree "filter r/ empty input" "$S" --filter='cat > $FILE.out' -n r/3 empty
+run_tree "filter r/ empty input -e" "$S" -e --filter='cat > $FILE.out' -n r/3 empty
+run_tree "filter r/ -e few lines" "$S" -e --filter='cat > $FILE.out' -n r/30 words
+run_tree "filter r/ fails"      "$S" --filter='cat >/dev/null; [ $FILE != xab ] || exit 4; [ $FILE != xac ] || exit 5' -n r/3 words
 # A write that fails, at the end or on the way, is reported with status 1.
 if [ -e /dev/full ]; then
     for c in "-n 1/2" "-n l/1/2" "-n r/1/2"; do

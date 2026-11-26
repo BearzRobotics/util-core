@@ -43,7 +43,7 @@ None. Every accepted option and behaviour is GNU 9.7 (or a documented gap below)
 
 ## Tests
 
-`sh test/test_split.sh`: 229 differential cases against GNU split 9.7 in the C locale. Includes seeded random inputs and filters.
+`sh test/test_split.sh`: 240 differential cases against GNU split 9.7 in the C locale. Includes seeded random inputs and filters.
 
 ## Not yet done
 

@@ -84,7 +84,6 @@ pub const Result = struct {
     stdout_failed: bool = false,
 };
 
-
 /// Split `input` into files according to `opts`. `stdout` receives chunk K of
 /// `-n K/N`. Option validation (the usage errors) is the caller's job; the
 /// suffix configuration is checked here because it depends on the chunk count.
@@ -242,7 +241,6 @@ const State = struct {
     child: ?std.process.Child = null,
     cur_name: std.ArrayList(u8) = .empty,
     failed: bool = false,
-    files_made: usize = 0,
     /// Exit status to use when a --filter command failed.
     filter_status: u8 = 0,
 
@@ -267,14 +265,23 @@ const State = struct {
         if (st.verbose) {
             st.obs.emit(.{ .creating_file = name });
         }
+        const output = st.startOutput(name) orelse return false;
+        st.out = output.sink;
+        st.child = output.child;
+        return true;
+    }
+
+    /// Start the output called `name`: the --filter command with FILE set to
+    /// it, or the file itself. Null (already reported) when that fails.
+    fn startOutput(st: *State, name: []const u8) ?Output {
         if (st.filter) |cmd| {
             var env = std.process.Environ.Map.init(st.env.gpa);
             defer env.deinit();
             if (st.env.environ) |src| {
                 var it = src.iterator();
-                while (it.next()) |e| env.put(e.key_ptr.*, e.value_ptr.*) catch return false;
+                while (it.next()) |e| env.put(e.key_ptr.*, e.value_ptr.*) catch return null;
             }
-            env.put("FILE", name) catch return false;
+            env.put("FILE", name) catch return null;
             const shell = st.env.getenv("SHELL");
             const sh: []const u8 = if (shell != null and shell.?.len > 0) shell.? else "/bin/sh";
             var child = std.process.spawn(st.env.io, .{
@@ -283,18 +290,15 @@ const State = struct {
                 .stdin = .pipe,
             }) catch |e| {
                 st.obs.emit(.{ .spawn_failed = .{ .shell = sh, .command = cmd, .err = e } });
-                return false;
+                return null;
             };
-            st.out = wsink.Sink.initFile(st.env.io, child.stdin.?);
-            st.child = child;
+            // The sink now owns the pipe; finishOutput closes it.
+            const pipe = child.stdin.?;
             child.stdin = null;
-            st.child.?.stdin = st.out.?.file;
-            return true;
+            return .{ .sink = wsink.Sink.initFile(st.env.io, pipe), .child = child };
         }
-        const f = st.createOutput(name) orelse return false;
-        st.out = wsink.Sink.initFile(st.env.io, f);
-        st.files_made += 1;
-        return true;
+        const f = st.createOutput(name) orelse return null;
+        return .{ .sink = wsink.Sink.initFile(st.env.io, f) };
     }
 
     /// Create or empty the output file `name`; null (already reported) when
@@ -349,32 +353,46 @@ const State = struct {
         return true;
     }
 
+    /// Flush and close an output that startOutput made, waiting for its
+    /// filter. False when it failed, which is reported unless `quiet`.
+    fn finishOutput(st: *State, sink: *wsink.Sink, child: *?std.process.Child, name: []const u8, quiet: bool) bool {
+        if (child.* == null) return st.closeOutput(sink, name, quiet);
+        // A filter's pipe.
+        sink.flush();
+        sink.file.?.close(st.env.io);
+        const term = child.*.?.wait(st.env.io) catch null;
+        child.* = null;
+        if (term) |t| switch (t) {
+            .exited => |code| if (code != 0) {
+                if (!quiet) {
+                    st.obs.emit(.{ .filter_exit = .{ .file = name, .code = code, .command = st.filter.? } });
+                    st.filter_status = code;
+                }
+                return false;
+            },
+            .signal => |sig| if (@backingInt(sig) != 13) {
+                if (!quiet) {
+                    st.obs.emit(.{ .filter_signal = .{ .file = name, .signal = @backingInt(sig), .command = st.filter.? } });
+                    st.filter_status = 1;
+                }
+                return false;
+            },
+            else => {},
+        };
+        if (sink.failed) {
+            if (!quiet) st.writeError(sink, name);
+            return false;
+        }
+        return true;
+    }
+
     fn closeCurrent(st: *State) bool {
         // Taken out first: whatever fails below, it is not closed again.
         var o = st.out orelse return true;
         st.out = null;
-        if (st.child == null and o.file != null) return st.closeOutput(&o, st.cur_name.items, false);
-        // A filter's pipe, or the caller's writer for -n K/N.
+        if (o.file != null) return st.finishOutput(&o, &st.child, st.cur_name.items, false);
+        // The caller's writer for -n K/N.
         o.flush();
-        if (st.child) |*c| {
-            if (o.file) |f| f.close(st.env.io);
-            c.stdin = null;
-            const term = c.wait(st.env.io) catch null;
-            st.child = null;
-            if (term) |t| switch (t) {
-                .exited => |code| if (code != 0) {
-                    st.obs.emit(.{ .filter_exit = .{ .file = st.cur_name.items, .code = code, .command = st.filter.? } });
-                    st.filter_status = code;
-                    return false;
-                },
-                .signal => |sig| if (@intFromEnum(sig) != 13) {
-                    st.obs.emit(.{ .filter_signal = .{ .file = st.cur_name.items, .signal = @intFromEnum(sig), .command = st.filter.? } });
-                    st.filter_status = 1;
-                    return false;
-                },
-                else => {},
-            };
-        }
         return !o.failed or st.sinkFailed(&o);
     }
 
@@ -400,21 +418,34 @@ const State = struct {
     }
 };
 
-/// One of the N files that -n r/N keeps open together.
-const RrOutput = struct {
+/// An output that is open: a file, or the pipe to a --filter command.
+const Output = struct {
     sink: wsink.Sink,
+    /// The filter reading from the pipe.
+    child: ?std.process.Child = null,
+};
+
+/// One of the N outputs that -n r/N keeps open together.
+const RrOutput = struct {
+    output: Output,
     name: []u8,
 
-    /// Create the file with the next name; null when that fails (reported).
+    /// Start the output with the next name; null when that fails (reported).
     fn create(st: *State, verbose: bool) ?RrOutput {
         if (!st.nextName()) return null;
         const name = st.env.gpa.dupe(u8, st.cur_name.items) catch return null;
         if (verbose and st.verbose) st.obs.emit(.{ .creating_file = name });
-        const file = st.createOutput(name) orelse {
+        const output = st.startOutput(name) orelse {
             st.env.gpa.free(name);
             return null;
         };
-        return .{ .sink = wsink.Sink.initFile(st.env.io, file), .name = name };
+        return .{ .output = output, .name = name };
+    }
+
+    fn finish(o: *RrOutput, st: *State, quiet: bool) bool {
+        const ok = st.finishOutput(&o.output.sink, &o.output.child, o.name, quiet);
+        st.env.gpa.free(o.name);
+        return ok;
     }
 };
 fn readAll(io: Io, file: Io.File, buf: []u8) !usize {
@@ -635,8 +666,7 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
             defer {
                 // Outputs still open here belong to a run that has failed.
                 for (outs) |*slot| if (slot.*) |*o| {
-                    _ = st.closeOutput(&o.sink, o.name, true);
-                    gpa.free(o.name);
+                    _ = o.finish(st, true);
                 };
                 gpa.free(outs);
             }
@@ -672,21 +702,17 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
                 }
             }
             if (mode == .chunk_rr and !to_stdout) {
-                // Files for chunks that never got a line (empty) are still created.
-                for (outs) |slot| {
-                    if (slot == null and !st.elide) {
-                        if (!st.nextName()) return false;
-                        const f = st.createOutput(st.cur_name.items) orelse return false;
-                        f.close(io);
-                    }
-                    // elided: the name is skipped as GNU does not number it
-                }
+                // In chunk order. A chunk that never got a line still gets
+                // its (empty) file or filter run, except with -e, where GNU
+                // does not number it either.
                 var closed = true;
-                for (outs) |*slot| if (slot.*) |*o| {
-                    if (!st.closeOutput(&o.sink, o.name, !closed)) closed = false;
-                    gpa.free(o.name);
-                    slot.* = null;
-                };
+                for (outs) |*slot| {
+                    if (slot.* == null and !st.elide) slot.* = RrOutput.create(st, false) orelse return false;
+                    if (slot.*) |*o| {
+                        if (!o.finish(st, !closed)) closed = false;
+                        slot.* = null;
+                    }
+                }
                 if (!closed) return false;
             }
             if (to_stdout) {
@@ -734,10 +760,11 @@ fn emitChunkRecord(
             for (outs) |*slot| slot.* = RrOutput.create(st, true) orelse return false;
         }
         const o = &outs[@intCast(idx)].?;
-        o.sink.write(rec);
-        if (st.unbuffered) o.sink.flush();
-        if (o.sink.failed) st.writeError(&o.sink, o.name);
-        return !o.sink.failed;
+        const sink = &o.output.sink;
+        sink.write(rec);
+        if (st.unbuffered) sink.flush();
+        if (sink.failed) st.writeError(sink, o.name);
+        return !sink.failed;
     }
     // Lines: the record goes to the chunk its first byte lies in.
     // Advance past chunks whose end offset has been reached.
