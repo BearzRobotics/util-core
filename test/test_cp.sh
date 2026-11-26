@@ -312,4 +312,52 @@ for o in "" -f --remove-destination -b --backup=numbered; do
 done
 run_tree "cp --reflink=always -n existing" "$SETUP" -n --reflink=always a b
 run_tree "cp --reflink=always --attributes-only" "$SETUP" --attributes-only --reflink=always a b
+# --preserve=mode takes the POSIX ACLs along. Without them the group bits of a
+# file with an ACL (the mask) would go to its owning group.
+mkdir -p "$TEST_TMP/aclprobe"; : > "$TEST_TMP/aclprobe/f"
+if setfacl -m u:nobody:rw "$TEST_TMP/aclprobe/f" 2>/dev/null; then
+    ACL='echo s > secret; chmod 600 secret; setfacl -m u:nobody:rw secret; echo p > plain; chmod 640 plain
+         mkdir tree; setfacl -d -m u:nobody:rx tree; setfacl -m u:daemon:rx tree; echo f > tree/f
+         mkdir bare; echo b > bare/f; mkdir dflt; setfacl -d -m u:nobody:rwx dflt
+         echo q > old; chmod 600 old; setfacl -m u:daemon:rwx old; mkfifo ff; setfacl -m u:nobody:rw ff
+         mkdir -p par/in out; setfacl -m u:nobody:rx par/in; echo x > par/in/f'
+    acl_cmp() {
+        description="$1"; shift
+        base="$TEST_TMP/acl"; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
+        for x in g o; do (cd "$base/$x" && eval "$ACL"); done
+        (cd "$base/g" && LC_ALL=C gnu "$@" > ../g.out 2>&1; echo $? > ../g.rc)
+        (cd "$base/o" && LC_ALL=C ours "$@" > ../o.out 2>&1; echo $? > ../o.rc)
+        for x in g o; do (cd "$base/$x" && find . | sort | xargs -d '\n' getfacl -n -P) > "$base/$x.acl" 2>&1; done
+        if cmp -s "$base/g.out" "$base/o.out" && cmp -s "$base/g.rc" "$base/o.rc" && cmp -s "$base/g.acl" "$base/o.acl"; then
+            PASS=$((PASS + 1)); echo "PASS $description"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL $description"; diff "$base/g.acl" "$base/o.acl" | head -12
+        fi
+    }
+    for o in -p -a --preserve=mode -dR "-R --preserve=mode" --attributes-only "-p --attributes-only" ""; do
+        acl_cmp "acl: cp $o file"                 $o -r secret copy
+        acl_cmp "acl: cp $o over a file with one" $o -r plain old
+        acl_cmp "acl: cp $o tree"                 $o -r tree copy
+        acl_cmp "acl: cp $o into a default ACL"   $o -r plain dflt/x
+        acl_cmp "acl: cp $o onto a default ACL"   $o -r bare/. dflt/
+    done
+    acl_cmp "acl: cp -a fifo" -a ff copy
+    acl_cmp "acl: cp -p --parents" -rp --parents par/in/f out
+    # A destination that cannot store ACLs: said, and no wider than before.
+    if strace -o /dev/null -e trace=fsetxattr -e inject=fsetxattr:error=EOPNOTSUPP true 2>/dev/null; then
+        base="$TEST_TMP/aclfail"; mkdir -p "$base"
+        (cd "$base" && echo s > secret && chmod 600 secret && setfacl -m u:nobody:rw secret &&
+            strace -f -o trace -e trace=fsetxattr -e inject=fsetxattr:error=EOPNOTSUPP "$BIN_DIR/cp" -p secret out 2> err)
+        rc=$?
+        if [ "$rc" = 1 ] && [ "$(stat -c %a "$base/out")" = 600 ] && [ "$(cat "$base/err")" = "cp: preserving permissions for 'out': Operation not supported" ]; then
+            PASS=$((PASS + 1)); echo "PASS acl: a lost ACL gives the group nothing it did not have"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL acl: a lost ACL (rc=$rc mode $(stat -c %a "$base/out"))"; cat "$base/err"
+        fi
+    else
+        skip_test "acl: lost ACL (no usable strace)"
+    fi
+else
+    skip_test "ACL preservation (needs setfacl and a file system with ACLs)"
+fi
 cd /; print_summary

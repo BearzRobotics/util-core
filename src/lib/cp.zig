@@ -16,6 +16,7 @@ const copy = @import("../copy.zig");
 const backup = @import("../backup.zig");
 const quote = @import("../quote.zig");
 const sys = @import("../sys.zig");
+const posixacl = @import("../posixacl.zig");
 const E = std.os.linux.E;
 
 pub const Env = common.Env;
@@ -79,7 +80,7 @@ pub fn run(env: Env, x: Options, sources: []const []const u8, params: Params, si
                     var rs: ?bool = null;
                     if (!c.copy(arg, dst_name, @intFromBool(new_dst), &into_self, &rs)) ok = false;
                     if (params.parents) {
-                        if (!reProtect(&c, dst_name, attr_list.items, x)) ok = false;
+                        if (!reProtect(&c, dst_name, stripTrailingSlashes(arg), attr_list.items, x)) ok = false;
                     }
                 }
             }
@@ -219,9 +220,11 @@ fn dirLen(path: []const u8) usize {
     return if (d == 0) 1 else d;
 }
 
-fn reProtect(c: *copy.Copier, dst_name: []const u8, attrs: []const DirAttr, x: copy.Opts) bool {
+/// `src` is the source name that the end of `dst_name` repeats.
+fn reProtect(c: *copy.Copier, dst_name: []const u8, src: []const u8, attrs: []const DirAttr, x: copy.Opts) bool {
     for (attrs) |at| {
         const name = dst_name[0..at.slash_offset];
+        const src_part = dst_name[dst_name.len - src.len .. at.slash_offset];
         if (x.preserve_timestamps) {
             const ts = [2]sys.TimeSpec{ .{ .sec = at.st.atime_s, .nsec = at.st.atime_ns }, .{ .sec = at.st.mtime_s, .nsec = at.st.mtime_ns } };
             if (sys.setTimes(name, sys.invalid_handle, ts, false)) |te| {
@@ -239,8 +242,8 @@ fn reProtect(c: *copy.Copier, dst_name: []const u8, attrs: []const DirAttr, x: c
             }
         }
         if (x.preserve_mode) {
-            if (sys.chmodPath(name, at.st.mode & 0o7777, false)) |ce| {
-                _ = ce;
+            if (posixacl.preserve(.{ .path = src_part }, .{ .path = name }, at.st.mode & 0o7777, true)) |ce| {
+                warn(c, "failed to preserve permissions for {f}: {s}", .{ quote.quoteA(name), sys.errnoText(ce) });
                 return false;
             }
         } else if (at.restore_mode) {

@@ -161,4 +161,20 @@ else
     skip_test "mv without RENAME_NOREPLACE (no usable strace)"
 fi
 rm -rf "$d"
+# Across file systems the ACL moves with the file.
+other=$(mktemp -d /dev/shm/mvtest.XXXXXX 2>/dev/null)
+d=$(mktemp -d)
+if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$d")" ] &&
+    echo s > "$d/secret" && chmod 600 "$d/secret" && setfacl -m u:nobody:rw "$d/secret" 2>/dev/null && : > "$other/probe" && setfacl -m u:nobody:r "$other/probe" 2>/dev/null; then
+    want=$(getfacl -c -n "$d/secret" 2>/dev/null)
+    "$BIN_DIR/mv" "$d/secret" "$other/secret" > "$d/out" 2>&1; rc=$?
+    if [ "$rc" = 0 ] && [ ! -s "$d/out" ] && [ "$(getfacl -c -n "$other/secret" 2>/dev/null)" = "$want" ]; then
+        PASS=$((PASS + 1)); echo "PASS mv across file systems keeps the ACL"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL mv across file systems keeps the ACL (rc=$rc)"; cat "$d/out"; getfacl -c "$other/secret"
+    fi
+else
+    skip_test "mv ACL (needs setfacl and a second file system with ACLs)"
+fi
+rm -rf "$d"; [ -z "$other" ] || rm -rf "$other"
 cd /; print_summary

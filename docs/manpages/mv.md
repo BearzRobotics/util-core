@@ -30,6 +30,13 @@ Move (rename) files.
 --help, --version
 : Print help or version and exit.
 
+# DIFFERENCES FROM GNU
+
+- When the destination cannot store a source's POSIX ACL, the failure is
+  reported as GNU reports it, but the group and other permissions are narrowed
+  so that nobody gains access. GNU 9.7 leaves the owning group with the ACL's
+  mask.
+
 # EXIT STATUS
 
 | Status | Meaning |
@@ -56,7 +63,7 @@ See docs/compatibility/mv.md for details.
 
 - `--exchange` is not implemented.
 - Only the C locale: names, quotes and messages are the English/ASCII ones.
-- SELinux contexts, ACLs and extended attributes are not copied (`--preserve=context` fails as on a kernel without SELinux; `-Z` and `--context` are accepted and ignored).
+- POSIX ACLs travel with the mode (`-p`, `-a`, `--preserve=mode`, and mv between file systems): the source's access ACL and a directory's default ACL are copied, as in GNU. If the destination cannot store them the copy is reported (`preserving permissions for ...`) and, unlike GNU 9.7, which leaves the ACL mask as the owning group's permission, the group and other bits are narrowed so that nobody gains access. SELinux contexts and other extended attributes are not copied (`--preserve=context` fails as on a kernel without SELinux; `-Z` and `--context` are accepted and ignored). ACLs are handled on Linux only.
 
 # SEE ALSO
 

@@ -15,6 +15,7 @@ const common = @import("lib/common.zig");
 const quote = @import("quote.zig");
 const errtext = @import("errtext.zig");
 const sys = @import("sys.zig");
+const posixacl = @import("posixacl.zig");
 const replacelink = @import("replacelink.zig");
 const backup = @import("backup.zig");
 const Io = std.Io;
@@ -879,7 +880,7 @@ pub const Copier = struct {
         if (dest_is_symlink) return delayed_ok;
 
         if (x.preserve_mode or x.move_mode) {
-            if (sys.chmodPath(drelname, src_mode & 0o7777, false)) |ce| {
+            if (posixacl.preserve(.{ .path = src_name }, .{ .path = drelname }, src_mode & 0o7777, src_is_dir)) |ce| {
                 if (!c.ownerFailureOk(ce)) {
                     c.errno("preserving permissions for {f}", .{quote.quoteA(dst_name)}, ce);
                     if (x.require_preserve) return false;
@@ -1160,7 +1161,7 @@ pub const Copier = struct {
             }
         }
         if (x.preserve_mode or x.move_mode) {
-            if (sys.fchmodFd(dest_fd, smode & 0o7777)) |ce| {
+            if (posixacl.preserve(.{ .fd = src_fd }, .{ .fd = dest_fd }, smode & 0o7777, false)) |ce| {
                 if (!c.ownerFailureOk(ce)) {
                     c.errno("preserving permissions for {f}", .{quote.quoteA(dst_name)}, ce);
                     if (x.require_preserve) ok = false;

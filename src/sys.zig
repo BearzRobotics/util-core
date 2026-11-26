@@ -938,6 +938,31 @@ pub fn statfs(path: []const u8, err: *LX.E) ?StatFs {
     };
 }
 
+/// fgetxattr(2) into `buf`; returns the value length.
+pub fn getXattrFd(fd: Handle, name: [:0]const u8, buf: []u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.getXattrFd(fd, name, buf, err);
+    const rc = LX.syscall4(.fgetxattr, @bitCast(@as(isize, fd)), @intFromPtr(name.ptr), @intFromPtr(buf.ptr), buf.len);
+    if (LX.errno(rc) != .SUCCESS) {
+        err.* = LX.errno(rc);
+        return null;
+    }
+    return rc;
+}
+
+/// fsetxattr(2).
+pub fn setXattrFd(fd: Handle, name: [:0]const u8, value: []const u8) ?LX.E {
+    if (comptime !is_linux) return other.setXattrFd(fd, name, value);
+    return errOf(LX.syscall5(.fsetxattr, @bitCast(@as(isize, fd)), @intFromPtr(name.ptr), @intFromPtr(value.ptr), value.len, 0));
+}
+
+/// setxattr(2), following a symbolic link.
+pub fn setXattr(path: []const u8, name: [:0]const u8, value: []const u8) ?LX.E {
+    if (comptime !is_linux) return other.setXattr(path, name, value);
+    var pbuf: [4097]u8 = undefined;
+    const p = cstr(&pbuf, path) orelse return .NAMETOOLONG;
+    return errOf(LX.syscall5(.setxattr, @intFromPtr(p), @intFromPtr(name.ptr), @intFromPtr(value.ptr), value.len, 0));
+}
+
 /// getxattr(2)/lgetxattr(2) into `buf`; returns the value length.
 pub fn getXattr(path: []const u8, name: [:0]const u8, follow: bool, buf: []u8, err: *LX.E) ?usize {
     if (comptime !is_linux) return other.getXattr(path, name, follow, buf, err);

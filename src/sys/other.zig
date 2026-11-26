@@ -1129,6 +1129,22 @@ pub fn getXattr(path: []const u8, name: [:0]const u8, follow: bool, buf: []u8, e
     return null;
 }
 
+pub fn getXattrFd(fd: Handle, name: [:0]const u8, buf: []u8, err: *E) ?usize {
+    _ = .{ fd, name, buf };
+    err.* = .OPNOTSUPP;
+    return null;
+}
+
+pub fn setXattrFd(fd: Handle, name: [:0]const u8, value: []const u8) ?E {
+    _ = .{ fd, name, value };
+    return .OPNOTSUPP;
+}
+
+pub fn setXattr(path: []const u8, name: [:0]const u8, value: []const u8) ?E {
+    _ = .{ path, name, value };
+    return .OPNOTSUPP;
+}
+
 /// Directory entries through std.Io, with "." and ".." added (the Linux version
 /// returns them from getdents). `dtype` uses the DT_* values.
 pub fn readDirFd(gpa: std.mem.Allocator, fd: Handle, err: *E) ?[]sys.RawEntry {
