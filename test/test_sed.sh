@@ -489,6 +489,19 @@ close_fails '-i keeps the file when close fails' '/sed[0-9a-f]\{6\}>' a -i 's/a/
 close_fails '-i.bak keeps the file when close fails' '/sed[0-9a-f]\{6\}>' a -i.bak 's/a/b/' f
 close_fails 'w file close failure' '/w>' a -n 'w w' f
 
+# A run that stops inside an in-place edit leaves no temporary file behind.
+d="$W/aborted"; mkdir "$d"
+seq 20000 > "$d/big"
+(ulimit -f 20; trap '' XFSZ; exec "$BIN_DIR/sed" -i s/1/2/ "$d/big") 2> /dev/null; rc=$?
+left=$(find "$d" -name 'sed*' | wc -l)
+if [ "$rc $left $(wc -l < "$d/big")" = "4 0 20000" ]; then PASS=$((PASS + 1)); echo "PASS -i removes the temporary file after a failed write"
+else FAIL=$((FAIL + 1)); echo "FAIL -i removes the temporary file after a failed write (rc=$rc left=$left)"; fi
+printf 'a\nb\n' > "$d/ab"
+"$BIN_DIR/sed" -i '2{s///}' "$d/ab" 2> /dev/null; rc=$?
+left=$(find "$d" -name 'sed*' | wc -l)
+if [ "$rc $left $(tr '\n' ' ' < "$d/ab")" = "1 0 a b " ]; then PASS=$((PASS + 1)); echo "PASS -i removes the temporary file after a script error"
+else FAIL=$((FAIL + 1)); echo "FAIL -i removes the temporary file after a script error (rc=$rc left=$left)"; fi
+
 # -i: the new file takes the attributes of the file that was read.
 ok_if() { # DESC GOT WANT
     if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); printf 'PASS %s\n' "$1"
