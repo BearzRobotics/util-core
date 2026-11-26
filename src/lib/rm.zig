@@ -50,8 +50,11 @@ pub const Event = union(enum) {
     unreadable: struct { path: []const u8, errno: sys.E },
     /// "." or ".." given as an operand with -r.
     refuse_dot: []const u8,
-    /// An operand that is (or resolves to) "/" with preserve_root.
+    /// An operand that is "/" (the same file, however it is named) with
+    /// preserve_root.
     refuse_root: struct { path: []const u8, literal: bool },
+    /// preserve_root could not examine "/", so nothing is removed.
+    unknown_root: sys.E,
     /// A directory on another device with --one-file-system.
     other_device: []const u8,
 };
@@ -85,6 +88,8 @@ const State = struct {
     ok: bool = true,
     root_dev: u64 = 0, // device of the current operand (--one-file-system)
     nerr: usize = 0, // hard failures so far (declined prompts do not count)
+    /// What "/" is, with recursive and preserve_root.
+    root: ?sys.FileStat = null,
 
     fn fail(st: *State) void {
         st.ok = false;
@@ -95,6 +100,13 @@ const State = struct {
 /// Remove each operand. Returns false when anything failed.
 pub fn run(env: Env, options: Options, paths: []const []const u8, observer: Observer, confirm: Confirm) bool {
     var st: State = .{ .env = env, .opts = options, .observer = observer, .confirm = confirm };
+    if (options.recursive and options.preserve_root) {
+        var e: sys.E = .SUCCESS;
+        st.root = sys.fileStat("/", false, &e) orelse {
+            observer.emit(.{ .unknown_root = e });
+            return false;
+        };
+    }
     for (paths) |p| removeArg(&st, p);
     return st.ok;
 }
@@ -109,19 +121,13 @@ fn removeArg(st: *State, path: []const u8) void {
         st.fail();
         return;
     }
-    if (cfg.preserve_root and cfg.recursive and isRoot(st.env, path)) {
-        st.observer.emit(.{ .refuse_root = .{ .path = path, .literal = std.mem.eql(u8, path, "/") } });
-        st.fail();
-        return;
-    }
     _ = remove(st, null, path, path, true);
 }
 
-fn isRoot(env: Env, p: []const u8) bool {
-    if (p.len > 0 and std.mem.indexOfNone(u8, p, "/") == null) return true;
-    var buf: [4096]u8 = undefined;
-    const n = Io.Dir.cwd().realPathFile(env.io, p, &buf) catch return false;
-    return std.mem.eql(u8, buf[0..n], "/");
+/// Whether `a` and `b` are the same file: so is "/" under any name, such as
+/// a bind mount of it or a symbolic link to it followed by a slash.
+fn sameFile(a: sys.FileStat, b: sys.FileStat) bool {
+    return a.ino == b.ino and dirat.devOf(a) == dirat.devOf(b);
 }
 
 /// How `remove` reaches one file: `name` in the open directory `parent` (an
@@ -154,6 +160,12 @@ fn remove(st: *State, parent: ?*dirat.Level, name: []const u8, path: []const u8,
             if (cfg.dirs) return removeEmptyDir(st, file, lst);
             return failed(st, path, .ISDIR);
         }
+        // Decided on the examination the walk is then bound to (`lst`).
+        if (is_arg) if (st.root) |root| if (sameFile(lst, root)) {
+            st.observer.emit(.{ .refuse_root = .{ .path = path, .literal = std.mem.eql(u8, path, "/") } });
+            st.fail();
+            return false;
+        };
         if (cfg.one_file_system) {
             const dev = dirat.devOf(lst);
             if (is_arg) {
@@ -245,7 +257,6 @@ fn writable(file: Target) bool {
 }
 
 fn removeEmptyDir(st: *State, dir: Target, lst: sys.FileStat) bool {
-    const env = st.env;
     const cfg = st.opts;
     const path = dir.path;
     if (cfg.interactive == .always) {
@@ -256,7 +267,9 @@ fn removeEmptyDir(st: *State, dir: Target, lst: sys.FileStat) bool {
     if (sys.unlinkAt(dirat.fdOf(dir.parent), dir.name, true)) |e| {
         // rmdir("/") says EBUSY; GNU's message is the one for a non-empty directory.
         // Likewise "." (EINVAL) is reported as a non-empty directory.
-        const busy_root = (e == .BUSY and isRoot(env, path)) or (e == .INVAL and std.mem.endsWith(u8, std.mem.trimEnd(u8, path, "/"), "."));
+        var root_err: sys.E = .SUCCESS;
+        const root = sys.fileStat("/", false, &root_err);
+        const busy_root = (e == .BUSY and root != null and sameFile(lst, root.?)) or (e == .INVAL and std.mem.endsWith(u8, std.mem.trimEnd(u8, path, "/"), "."));
         return failed(st, path, if (busy_root) .NOTEMPTY else e);
     }
     if (cfg.verbose) st.observer.emit(.{ .removed = .{ .path = path, .dir = true } });

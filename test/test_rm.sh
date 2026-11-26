@@ -71,8 +71,42 @@ if $BOX true 2>/dev/null; then
     run_tree "rm /etc (no -r)"         "$S" /etc
     gnu()  { "${GNU_BIN:-/usr/bin}/$UTIL" "$@"; }
     ours() { "$BIN_DIR/$UTIL" "$@"; }
+    for o in --no-preserve-roo --no-preserve --no-p --n; do
+        run_tree "$o is refused"        "$S" $o a
+    done
+    run_tree "-r link to dir/"         "$S" -r sd/
 else
     skip_test "protected names and root (needs a working bwrap)"
+fi
+
+# "/" must be recognised by what it is, not by its name, also without /proc.
+# The sandbox's root is an empty tmpfs holding only rm and the case directory,
+# so a broken guard can delete nothing else.
+box="$TEST_TMP/minroot"; mkdir -p "$box"; echo keep > "$box/file"; ln -s / "$box/link"
+minroot() { timeout 30 bwrap --unshare-all --die-with-parent --ro-bind "$BIN_DIR/rm" /rm --bind "$box" /work --chdir /work /rm "$@"; }
+if minroot --help > /dev/null 2>&1; then
+    for o in "-rf link/" "-rf /" "-rf //" "-rf /work/link/"; do
+        err=$(minroot $o 2>&1); rc=$?
+        want="rm: it is dangerous to operate recursively on '${o#-rf }' (same as '/')
+rm: use --no-preserve-root to override this failsafe"
+        [ "$o" != "-rf /" ] || want="rm: it is dangerous to operate recursively on '/'
+rm: use --no-preserve-root to override this failsafe"
+        if [ "$rc" = 1 ] && [ "$err" = "$want" ] && [ -f "$box/file" ] && [ -L "$box/link" ]; then
+            PASS=$((PASS + 1)); echo "PASS without /proc: rm $o is refused"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL without /proc: rm $o is refused (rc=$rc)"; printf '%s\n' "$err" | head -5
+            [ -f "$box/file" ] || echo keep > "$box/file"; [ -L "$box/link" ] || ln -s / "$box/link"
+        fi
+    done
+    # The link itself is not "/".
+    err=$(minroot -r link 2>&1); rc=$?
+    if [ "$rc" = 0 ] && [ -z "$err" ] && [ ! -L "$box/link" ] && [ -f "$box/file" ]; then
+        PASS=$((PASS + 1)); echo "PASS rm -r removes a link to /"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL rm -r removes a link to / (rc=$rc $err)"
+    fi
+else
+    skip_test "/ under other names (needs a working bwrap)"
 fi
 
 printf "\n[ Interactive ]\n"
