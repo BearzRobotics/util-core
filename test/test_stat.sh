@@ -109,5 +109,17 @@ for tzv in America/New_York Asia/Kolkata; do
     TZ=$tzv run_cmp "default $tzv"   file empty big
     TZ=$tzv run_cmp "%x %y %z %w $tzv" -c '%x|%y|%z|%w' file empty
 done
+
+printf "\n[ Long quoted names ]\n"
+# Quoted, such a name is several times longer than a path may be.
+seg=$(head -c 250 /dev/zero | tr '\0' '\001'); long=long
+mkdir long; i=0
+while [ $i -lt 12 ]; do long="$long/$seg"; mkdir "$long"; i=$((i + 1)); done
+ln -s "$long" longlink
+for style in shell-escape-always c escape shell literal; do
+    QUOTING_STYLE=$style run_cmp "%N long name $style" -c '%N|END' "$long"
+    QUOTING_STYLE=$style run_cmp "%N long link target $style" --printf '%N|END\n' longlink
+done
+/usr/bin/rm -rf long longlink
 print_summary
 [ "$FAIL" -eq 0 ]
