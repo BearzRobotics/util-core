@@ -49,6 +49,7 @@ pub fn run(env: Env, options: Options, files: []const []const u8, observer: Obse
 }
 
 pub fn touchOne(env: Env, file: []const u8, options: Options, observer: Observer) bool {
+    _ = env; // the calls below are system calls; `Env` is the libraries' common shape
     const change_times: u8 = if (options.change_times == 0) ch_atime | ch_mtime else options.change_times;
     var open_errno: ?std.os.linux.E = null;
     const is_stdout = std.mem.eql(u8, file, "-");
@@ -57,22 +58,11 @@ pub fn touchOne(env: Env, file: []const u8, options: Options, observer: Observer
         if (change_times == ch_mtime) times[0].nsec = sys.TimeSpec.omit_ns else times[1].nsec = sys.TimeSpec.omit_ns;
     }
     if (!is_stdout and !(options.no_create or options.no_deref)) {
-        // Create the file if needed (mode 0666 & ~umask), like open(O_CREAT).
-        if (Io.Dir.cwd().createFile(env.io, file, .{ .truncate = false })) |f| {
-            f.close(env.io);
-        } else |e| {
-            open_errno = switch (e) {
-                error.AccessDenied, error.PermissionDenied => .ACCES,
-                error.FileNotFound => .NOENT,
-                error.IsDir => .ISDIR,
-                error.NotDir => .NOTDIR,
-                error.ReadOnlyFileSystem => .ROFS,
-                error.NameTooLong => .NAMETOOLONG,
-                error.SymLinkLoop => .LOOP,
-                error.NoSpaceLeft => .NOSPC,
-                else => .IO,
-            };
-        }
+        // Create the file if needed (mode 0666 & ~umask). Non-blocking, or a
+        // FIFO without a reader would hang here; its times are still set below.
+        var e: std.os.linux.E = .SUCCESS;
+        const flags = sys.O.WRONLY | sys.O.CREAT | sys.O.NONBLOCK | sys.O.NOCTTY;
+        if (sys.openFd(file, flags, 0o666, &e)) |fd| _ = sys.closeFd(fd) else open_errno = e;
     }
     const t: ?[2]sys.TimeSpec = if (options.now) null else times;
     const uerr = if (is_stdout) sys.setTimes(null, Io.File.stdout().handle, t, false) else sys.setTimes(file, sys.invalid_handle, t, options.no_deref);

@@ -36,7 +36,7 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Tests
 
-`sh test/test_touch.sh`: 327 differential cases against GNU touch 9.7 in the C locale. Compares atime and mtime to the nanosecond for every explicit-time case.
+`sh test/test_touch.sh`: 332 cases, mostly differential, against GNU touch 9.7 in the C locale. Compares atime and mtime to the nanosecond for every explicit-time case.
 
 ## Not yet done
 

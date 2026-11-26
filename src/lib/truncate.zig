@@ -9,6 +9,7 @@
 const std = @import("std");
 const Io = std.Io;
 const common = @import("common.zig");
+const sys = @import("../sys.zig");
 
 pub const Env = common.Env;
 
@@ -31,7 +32,7 @@ pub const Options = struct {
 
 pub const Event = union(enum) {
     /// Opening (or creating) the file failed.
-    open_failed: struct { path: []const u8, err: anyerror },
+    open_failed: struct { path: []const u8, errno: std.os.linux.E },
     /// Its current size could not be read.
     size_failed: struct { path: []const u8, err: ?anyerror },
     /// -o: `blocks` (taken from a "-" SIZE when `negative`) times the block
@@ -65,21 +66,17 @@ pub fn run(env: Env, options: Options, files: []const []const u8, observer: Obse
 
 pub fn truncateOne(env: Env, name: []const u8, options: Options, observer: Observer) bool {
     const io = env.io;
-    const cwd = Io.Dir.cwd();
+    // Non-blocking, so that a FIFO without a reader fails instead of hanging.
     // -c never creates: it opens only files that already exist.
-    const file: Io.File = if (options.no_create)
-        (cwd.openFile(io, name, .{ .mode = .write_only }) catch |e| {
-            if (e != error.FileNotFound) {
-                observer.emit(.{ .open_failed = .{ .path = name, .err = e } });
-                return false;
-            }
-            return true;
-        })
-    else
-        (cwd.createFile(io, name, .{ .truncate = false }) catch |e| {
-            observer.emit(.{ .open_failed = .{ .path = name, .err = e } });
-            return false;
-        });
+    var flags = sys.O.WRONLY | sys.O.NONBLOCK | sys.O.NOCTTY;
+    if (!options.no_create) flags |= sys.O.CREAT;
+    var open_errno: std.os.linux.E = .SUCCESS;
+    const fd = sys.openFd(name, flags, 0o666, &open_errno) orelse {
+        if (options.no_create and open_errno == .NOENT) return true;
+        observer.emit(.{ .open_failed = .{ .path = name, .errno = open_errno } });
+        return false;
+    };
+    const file: Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
     defer file.close(io);
     const cur = file.length(io) catch |e| {
         observer.emit(.{ .size_failed = .{ .path = name, .err = e } });

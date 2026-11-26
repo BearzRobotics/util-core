@@ -19,6 +19,8 @@ pub fn errText(err: anyerror) []const u8 {
         error.ReadOnlyFileSystem => "Read-only file system",
         error.NoSpaceLeft => "No space left on device",
         error.FileTooBig => "File too large",
+        // ftruncate's EINVAL: a FIFO or device has no length to set.
+        error.NonResizable => "Invalid argument",
         error.InputOutput => "Input/output error",
         error.NotOpenForReading, error.NotOpenForWriting => "Bad file descriptor",
         error.DiskQuota => "Disk quota exceeded",

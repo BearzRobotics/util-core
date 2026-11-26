@@ -5,6 +5,7 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const count_arg = @import("../count_arg.zig");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "no-create", "io-blocks", "reference", "size", "help", "version" };
@@ -163,7 +164,7 @@ pub fn main(ctx: cli.Context) u8 {
 fn report(context: ?*anyopaque, ev: truncate.Event) void {
     const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
     switch (ev) {
-        .open_failed => |f| cli.warn(ctx.*, "cannot open {f} for writing: {s}", .{ cli.quoteA(f.path), cli.errText(f.err) }),
+        .open_failed => |f| cli.warn(ctx.*, "cannot open {f} for writing: {s}", .{ cli.quoteA(f.path), sys.errnoText(f.errno) }),
         .size_failed => |f| if (f.err) |e|
             cli.warn(ctx.*, "cannot get the size of {f}: {s}", .{ cli.quoteA(f.path), cli.errText(e) })
         else

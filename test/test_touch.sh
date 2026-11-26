@@ -105,5 +105,19 @@ TREE_TIMES= run_tree "touch existing"    "$S" f
 TREE_TIMES= run_tree "touch -a existing" "$S" -a f
 TREE_TIMES= run_tree "touch -d now"      "$S" -d now f
 TREE_TIMES= run_tree "touch readonly (owner)" "$S" g
+printf "\n[ FIFO ]\n"
+# A FIFO with no reader must be touched, not block in open(). run_tree has no
+# time limit, so the comparisons run only after the bounded check has passed.
+d="$TEST_TMP/fifo"; mkdir "$d"; mkfifo "$d/p"
+(cd "$d" && timeout 5 "$BIN_DIR/touch" p); rc=$?
+if [ "$rc" = 0 ]; then
+    PASS=$((PASS + 1)); printf "PASS fifo does not hang\n"
+    TREE_TIMES= run_tree "touch fifo"   'mkfifo p' p
+    TREE_TIMES= run_tree "touch -c fifo" 'mkfifo p' -c p
+    run_tree "-d @5 fifo, then a file"  'mkfifo p; : > f; touch -d @1 f' -d @5 p f
+    TREE_TIMES= run_tree "fifo with no permission" 'mkfifo p; chmod 000 p' -d @5 p
+else
+    FAIL=$((FAIL + 1)); printf "FAIL fifo does not hang (rc=%s)\n" "$rc"
+fi
 print_summary
 [ "$FAIL" -eq 0 ]

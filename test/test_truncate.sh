@@ -64,4 +64,27 @@ done
 for sz in /1E '<1E' 9223372036854775807 -9223372036854775807 -1E +4611686018427387904; do
     size_cmp "out of range: -o -s $sz" -o -s "$sz"
 done
+# A FIFO with no reader must fail at once, not block in open(). run_tree has no
+# time limit, so the comparisons run only after the bounded check has passed.
+d="$TEST_TMP/fifo"; mkdir "$d"; mkfifo "$d/p"
+(cd "$d" && timeout 5 "$BIN_DIR/truncate" -s 0 p 2>/dev/null); rc=$?
+if [ "$rc" = 1 ]; then
+    PASS=$((PASS + 1)); printf "PASS fifo does not hang\n"
+    run_tree "fifo without a reader"    'mkfifo p' -s 0 p
+    run_tree "fifo without a reader -c" 'mkfifo p' -c -s 0 p
+else
+    FAIL=$((FAIL + 1)); printf "FAIL fifo does not hang (rc=%s)\n" "$rc"
+fi
+# A FIFO that has a reader opens, and then cannot be given a length.
+d="$TEST_TMP/fifo2"
+for x in gnu ours; do
+    mkdir -p "$d"; mkfifo "$d/p"
+    (cd "$d" && exec 3<> p && LC_ALL=C timeout 5 sh -c 'exec "$0" -s 0 p' "$([ $x = gnu ] && echo "${GNU_BIN:-/usr/bin}/truncate" || echo "$BIN_DIR/truncate")" 2> "../$x.fifo.err"; echo "rc=$?" > "../$x.fifo.rc")
+    rm -rf "$d"
+done
+if [ "$(norm_err < "$TEST_TMP/gnu.fifo.err"; cat "$TEST_TMP/gnu.fifo.rc")" = "$(norm_err < "$TEST_TMP/ours.fifo.err"; cat "$TEST_TMP/ours.fifo.rc")" ]; then
+    PASS=$((PASS + 1)); printf "PASS fifo with a reader\n"
+else
+    FAIL=$((FAIL + 1)); printf "FAIL fifo with a reader: %s\n" "$(cat "$TEST_TMP/ours.fifo.err")"
+fi
 print_summary
