@@ -27,4 +27,22 @@ run_tree "--silent"                "$S" --silent a
 run_tree "--zero"                  "$S" --zero sl
 run_tree "--bogus"                 "$S" --bogus sl
 run_tree "--"                      "$S" -- sl
+# A name that cannot be examined (no search permission, a component too long)
+# is an error except with -m, never a canonical name.
+d="$TEST_TMP/denied"; mkdir -p "$d"; cd "$d" || exit 1
+mkdir locked dir noexec; : > f; : > locked/x; : > noexec/y; ln -s locked/x tolocked; ln -s locked tolockeddir; ln -s nowhere dang
+chmod 000 locked; chmod 444 noexec
+long=$(printf 'a%.0s' $(seq 300))
+if [ -r locked/x ]; then
+    skip_test "readlink on names without search permission (running as root)"
+    names=
+else
+    names="locked/x locked/a/b locked/./x locked/x/ tolocked tolocked/ tolockeddir/x tolocked/.. noexec/y noexec/.. locked locked/ locked/.."
+fi
+for o in "-v -f" "-v -e" "-v -m"; do
+    for n in $names "$long" "$long/x" "dir/$long" f/. f/.. f/ nosuch/ nosuch/. nosuch/x nosuch/x/.. dir/nosuch/ dang/ dang/x; do
+        run_cmp "readlink $o $(printf '%.30s' "$n")" $o "$n"
+    done
+done
+chmod 755 locked noexec; cd /
 print_summary

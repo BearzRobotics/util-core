@@ -34,7 +34,7 @@ pub const Result = struct {
     failed: bool = false,
     /// --relative-to / --relative-base directory that could not be resolved;
     /// when set nothing was written.
-    bad_base: ?[]const u8 = null,
+    bad_base: ?Event = null,
 };
 
 pub fn isBelow(path: []const u8, base: []const u8) bool {
@@ -57,11 +57,11 @@ pub fn run(env: Env, opts: Options, names: []const []const u8, out: *Io.Writer, 
     const base_mode: Mode = if (mode == .existing) .existing else .missing;
     if (opts.relative_to) |d| base_to = paths.resolve(env, d, base_mode) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return .{ .bad_base = d },
+        else => return .{ .bad_base = .{ .name = d, .failure = e } },
     };
     if (opts.relative_base) |d| base_base = paths.resolve(env, d, base_mode) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return .{ .bad_base = d },
+        else => return .{ .bad_base = .{ .name = d, .failure = e } },
     };
     // A --relative-to directory outside --relative-base disables relative output.
     if (base_to != null and base_base != null and !isBelow(base_to.?, base_base.?)) {

@@ -107,15 +107,7 @@ fn report(context: ?*anyopaque, ev: readlink.Event) void {
     r.out.flush() catch {};
     switch (ev.failure) {
         .link => |e| cli.warn(r.ctx.*, "{f}: {s}", .{ cli.quote(ev.name), if (e == error.NotLink) "Invalid argument" else cli.errText(e) }),
-        .path => |e| {
-            const msg = switch (e) {
-                error.NotDir => "Not a directory",
-                error.Loop => "Too many levels of symbolic links",
-                error.NameTooLong => "File name too long",
-                else => "No such file or directory",
-            };
-            cli.warn(r.ctx.*, "{f}: {s}", .{ cli.quote(ev.name), msg });
-        },
+        .path => |e| cli.warn(r.ctx.*, "{f}: {s}", .{ cli.quote(ev.name), paths.errorText(e) }),
     }
 }
 

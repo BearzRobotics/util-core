@@ -18,7 +18,7 @@ GNU coreutils 9.7 (`/usr/bin/realpath --version` on the development machine, ins
 
 ## Supported behaviour
 
-- Same resolver as readlink (src/paths.zig).
+- Same resolver as readlink (src/paths.zig). As in GNU, a component that cannot be examined (no search permission, a name too long, an I/O error) is an error except with `-m`.
 
 ## Library
 
@@ -34,7 +34,7 @@ None. Output, diagnostics and exit status follow GNU (decision 0005).
 
 ## Tests
 
-test/test_realpath.sh (551 cases: option mixes over 33 paths, relative-to/base combinations) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
+test/test_realpath.sh (707 cases: option mixes over 33 paths, relative-to/base combinations, names that cannot be examined) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
 
 ## Not yet done
 
