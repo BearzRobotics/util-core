@@ -87,6 +87,11 @@ pub const Result = struct {
 /// Split `input` into files according to `opts`. `stdout` receives chunk K of
 /// `-n K/N`. Option validation (the usage errors) is the caller's job; the
 /// suffix configuration is checked here because it depends on the chunk count.
+///
+/// With a filter, SIGPIPE is ignored for the duration of the call when it had
+/// its default action (a filter may exit before it has read everything), and
+/// each filter is started with the default restored. That setting belongs to
+/// the whole process.
 pub fn run(env: Env, opts: Options, input: Input, stdout: *Io.Writer, obs: Observer) Result {
     const gpa = env.gpa;
     var result: Result = .{ .failed = true };
@@ -164,6 +169,10 @@ pub fn run(env: Env, opts: Options, input: Input, stdout: *Io.Writer, obs: Obser
     // Of the open file, so that redirected standard input is protected too.
     var ferr: std.os.linux.E = .SUCCESS;
     st.input_stat = sys.fstatFd(file.handle, &ferr);
+
+    st.ignore_sigpipe = opts.filter != null and sys.signalState(sys.signo.PIPE).disp == .default;
+    if (st.ignore_sigpipe) sys.ignoreSignal(.pipe);
+    defer if (st.ignore_sigpipe) sys.defaultSignal(.pipe);
 
     const ok = runMode(&st, file, opts.mode, opts.size, chunks, opts.chunk_k, opts.separator);
     const closed = st.closeCurrent();
@@ -243,6 +252,10 @@ const State = struct {
     failed: bool = false,
     /// Exit status to use when a --filter command failed.
     filter_status: u8 = 0,
+    /// SIGPIPE is ignored here but not for the filters.
+    ignore_sigpipe: bool = false,
+    /// -n r/N: how many filters stopped reading before the end.
+    filters_gone: u64 = 0,
 
     fn nextName(st: *State) bool {
         st.cur_name.clearRetainingCapacity();
@@ -284,11 +297,14 @@ const State = struct {
             env.put("FILE", name) catch return null;
             const shell = st.env.getenv("SHELL");
             const sh: []const u8 = if (shell != null and shell.?.len > 0) shell.? else "/bin/sh";
-            var child = std.process.spawn(st.env.io, .{
+            if (st.ignore_sigpipe) sys.defaultSignal(.pipe);
+            const spawned = std.process.spawn(st.env.io, .{
                 .argv = &.{ sh, "-c", cmd },
                 .environ_map = &env,
                 .stdin = .pipe,
-            }) catch |e| {
+            });
+            if (st.ignore_sigpipe) sys.ignoreSignal(.pipe);
+            var child = spawned catch |e| {
                 st.obs.emit(.{ .spawn_failed = .{ .shell = sh, .command = cmd, .err = e } });
                 return null;
             };
@@ -379,11 +395,17 @@ const State = struct {
             },
             else => {},
         };
-        if (sink.failed) {
+        if (sink.failed and !pipeClosed(sink)) {
             if (!quiet) st.writeError(sink, name);
             return false;
         }
         return true;
+    }
+
+    /// Whether a write to a filter failed only because it no longer reads. As
+    /// in GNU that is not an error: the rest of its chunk is dropped.
+    fn pipeClosed(sink: *const wsink.Sink) bool {
+        return if (sink.file_error) |e| e == error.BrokenPipe else false;
     }
 
     fn closeCurrent(st: *State) bool {
@@ -409,8 +431,7 @@ const State = struct {
             o.write(bytes);
             if (st.unbuffered) o.flush();
             if (o.failed) {
-                // A filter that exits early (SIGPIPE) is not an error.
-                if (st.filter != null) return true;
+                if (st.child != null and pipeClosed(o)) return true;
                 return st.sinkFailed(o);
             }
         }
@@ -676,7 +697,9 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
             }
             // Lines mode: sequentially numbered files created lazily in order.
             var cur_end = end_of(0, per, rem);
-            while (true) {
+            // When no round-robin filter is reading any more, stop: the input
+            // may never end.
+            while (st.filters_gone < n) {
                 const got = readAll(io, file, buf) catch |e| return readFail(st, e);
                 if (got == 0) break;
                 var pos: usize = 0;
@@ -761,10 +784,16 @@ fn emitChunkRecord(
         }
         const o = &outs[@intCast(idx)].?;
         const sink = &o.output.sink;
+        const was_failed = sink.failed;
         sink.write(rec);
         if (st.unbuffered) sink.flush();
-        if (sink.failed) st.writeError(sink, o.name);
-        return !sink.failed;
+        if (!sink.failed) return true;
+        if (o.output.child != null and State.pipeClosed(sink)) {
+            if (!was_failed) st.filters_gone += 1;
+            return true;
+        }
+        st.writeError(sink, o.name);
+        return false;
     }
     // Lines: the record goes to the chunk its first byte lies in.
     // Advance past chunks whose end offset has been reached.

@@ -156,6 +156,23 @@ run_tree "filter r/ empty input" "$S" --filter='cat > $FILE.out' -n r/3 empty
 run_tree "filter r/ empty input -e" "$S" -e --filter='cat > $FILE.out' -n r/3 empty
 run_tree "filter r/ -e few lines" "$S" -e --filter='cat > $FILE.out' -n r/30 words
 run_tree "filter r/ fails"      "$S" --filter='cat >/dev/null; [ $FILE != xab ] || exit 4; [ $FILE != xac ] || exit 5' -n r/3 words
+# A filter that stops reading early: the rest of its chunk is dropped and the
+# other chunks are still processed. The input is far larger than a pipe holds,
+# so split is sure to still be writing when the filter has gone.
+BIG='head -c 3000000 /dev/zero | tr "\0" "\n" > big'
+for how in "-b 2000000" "-l 2000000" "-C 2000000" "-n 2" "-n l/2" "-n r/2" "-u -b 2000000"; do
+    run_tree "filter exits early $how" "$BIG" --filter='x=$(head -c1); echo $FILE > $FILE.ran' $how big
+    run_tree "filter reads nothing, fails $how" "$BIG" --filter='exit 3' $how big
+done
+run_tree "filter gets SIGPIPE's default action" 'seq 4 > in' --filter='grep SigIgn /proc/self/status; cat > /dev/null' -l 2 in
+# Round robin stops once no filter reads any more, even on endless input.
+d="$TEST_TMP/endless"; mkdir -p "$d"
+out=$( (cd "$d" && yes | timeout 30 "$BIN_DIR/split" -n r/3 --filter='head -n 1') 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ "$out" = "$(printf 'y\ny\ny')" ]; then
+    PASS=$((PASS + 1)); echo "PASS filter r/ on endless input ends when the filters do"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL filter r/ on endless input ends when the filters do (rc=$rc: $out)"
+fi
 # A write that fails, at the end or on the way, is reported with status 1.
 if [ -e /dev/full ]; then
     for c in "-n 1/2" "-n l/1/2" "-n r/1/2"; do
