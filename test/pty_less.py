@@ -139,4 +139,47 @@ with open(src, 'w') as f:
 out, st, _ = session([cat, src], [])
 check("cat: built-in Zig grammar colours the source", re.search(r'\x1b\[(?:3[0-9]|38;[25];[0-9;]+)m', out) is not None and st == 0)
 
+# cat with itself as the pager, directly or through a script. Unfixed, each cat
+# starts another without end, so these run only inside a systemd scope that caps
+# the number of processes and the memory, and which is stopped afterwards.
+import shutil, subprocess
+cap = ['-p', 'TasksMax=50', '-p', 'MemoryMax=1G', '-p', 'MemorySwapMax=0']
+can_cap = shutil.which('systemd-run') is not None and subprocess.run(
+    ['systemd-run', '--user', '--scope', '-q', *cap, '/bin/true'], capture_output=True).returncode == 0
+if can_cap:
+    bindir = os.path.join(tmp, 'pty_bin')
+    os.makedirs(bindir, exist_ok=True)
+    if not os.path.lexists(os.path.join(bindir, 'cat')):
+        os.symlink(os.path.abspath(cat), os.path.join(bindir, 'cat'))
+    wrapper = os.path.join(bindir, 'wrapper')
+    with open(wrapper, 'w') as f:
+        f.write('#!/bin/sh\nexec cat\n')
+    os.chmod(wrapper, 0o755)
+    one = os.path.join(tmp, 'pty_one.txt')
+    with open(one, 'w') as f:
+        f.write('only-this-line\n')
+    cases = [('PAGER=cat', {'PAGER': 'cat'}, ''),
+             ('BAT_PAGER=cat', {'BAT_PAGER': 'cat'}, ''),
+             ('PAGER=/path/to/cat', {'PAGER': os.path.join(bindir, 'cat')}, ''),
+             ('--pager=cat --paging=always', {}, '--pager=cat --paging=always '),
+             ('a pager with arguments that runs cat', {'PAGER': 'cat -u'}, ''),
+             ('a pager script that runs cat', {'PAGER': wrapper}, '')]
+    for n, (label, env, options) in enumerate(cases):
+        unit = 'util-core-pager-test-%d-%d.scope' % (os.getpid(), n)
+        assign = ' '.join('%s="%s"' % kv for kv in env.items())
+        # The unit variables are needed by systemd-run only.
+        script = 'unset BAT_PAGER PAGER; export PATH="%s:/usr/bin:/bin"; %s exec "%s/cat" %s"%s"' % (
+            bindir, ('export %s;' % assign) if assign else '', bindir, options, one)
+        try:
+            out, st, _ = session(['/usr/bin/env', 'systemd-run', '--user', '--scope', '-q', '--unit=' + unit,
+                                  *cap, '/bin/sh', '-c', script], [(b'', 1.0)])
+        finally:
+            subprocess.run(['systemctl', '--user', 'kill', '--signal=KILL', unit], capture_output=True)
+        check('cat: %s shows the file once and ends' % label, st == 0 and out.count('only-this-line') == 1)
+        if label.startswith('a pager'):
+            check('cat: %s does not number it twice' % label, len(re.findall(r'1[^\n]*only-this-line', visible(out))) <= 1
+                  and visible(out).count('pty_one.txt') == 1)
+else:
+    print('SKIP cat as its own pager (no systemd scope to cap processes)')
+
 sys.exit(1 if failures else 0)
