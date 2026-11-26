@@ -4,8 +4,9 @@
 //!
 //! The child is started with std.process.spawn. The supervisor then waits on
 //! a pidfd and a signalfd (`sys.Watcher`) with a poll timeout, so no signal
-//! handler is ever installed: TERM, INT, HUP and QUIT sent to timeout are read
-//! from the signalfd and forwarded to the command. Exit status: 124 on timeout
+//! handler is ever installed: TERM, INT, HUP, QUIT, ALRM and the --signal
+//! signal sent to timeout are read from the signalfd and forwarded to the
+//! command (ALRM as a timeout). Exit status: 124 on timeout
 //! (unless --preserve-status), 125 on timeout's own failure, 126/127 when the
 //! command cannot be run, otherwise the command's status.
 //!
@@ -24,8 +25,31 @@ const sys = @import("../sys.zig");
 pub const Env = common.Env;
 
 /// Signals that terminate or interrupt timeout and are passed to the
-/// command; the caller creates the Watcher for these.
-pub const watched_signals = [_]u8{ sys.signo.HUP, sys.signo.INT, sys.signo.QUIT, sys.signo.TERM };
+/// command (ALRM instead makes the time limit expire at once).
+pub const base_signals = [_]u8{ sys.signo.HUP, sys.signo.INT, sys.signo.QUIT, sys.signo.TERM, sys.signo.ALRM };
+
+/// The signals the caller creates the Watcher for.
+pub const Watched = struct {
+    buf: [base_signals.len + 1]u8,
+    len: usize,
+
+    /// `base_signals` and, as in GNU, the signal chosen with --signal, which
+    /// is passed on too when it can be caught.
+    pub fn init(signal: u8) Watched {
+        var w: Watched = .{ .buf = undefined, .len = base_signals.len };
+        @memcpy(w.buf[0..base_signals.len], &base_signals);
+        const uncatchable = signal == 0 or signal == sys.signo.KILL or signal == sys.signo.STOP;
+        if (!uncatchable and std.mem.indexOfScalar(u8, &base_signals, signal) == null) {
+            w.buf[w.len] = signal;
+            w.len += 1;
+        }
+        return w;
+    }
+
+    pub fn list(w: *const Watched) []const u8 {
+        return w.buf[0..w.len];
+    }
+};
 
 pub const Options = struct {
     /// --foreground: do not signal the whole process group.
@@ -129,6 +153,7 @@ const Supervisor = struct {
     obs: Observer,
     verbose: bool,
     foreground: bool,
+    watched: []const u8,
     /// Copies of our own signals still to arrive on the signalfd.
     self_signals: u32 = 0,
     last_self: u8 = 0,
@@ -140,7 +165,7 @@ const Supervisor = struct {
             // The whole group includes timeout itself; its copy will arrive on
             // the signalfd and must not be forwarded again.
             _ = sys.signalOwnGroup(sig);
-            for (watched_signals) |ws| if (ws == sig) {
+            for (s.watched) |ws| if (ws == sig) {
                 s.last_self = sig;
                 s.self_signals += 1;
             };
@@ -157,7 +182,8 @@ const Supervisor = struct {
 /// Wait for the started command (`pid`), enforcing the time limit and
 /// forwarding signals read from `w`. Does not close `w`.
 pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Observer) Outcome {
-    var sup: Supervisor = .{ .obs = obs, .verbose = opts.verbose, .foreground = opts.foreground };
+    const watched: Watched = .init(opts.signal);
+    var sup: Supervisor = .{ .obs = obs, .verbose = opts.verbose, .foreground = opts.foreground, .watched = watched.list() };
     // As in GNU, a kill delay of 0 means no follow-up KILL.
     const kill_after: ?u64 = if (opts.kill_after) |k| (if (k == 0) null else k) else null;
     var timed_out = false;
@@ -192,7 +218,12 @@ pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Obs
                     sup.self_signals -= 1;
                     continue;
                 }
-                sup.sendTo(pid, s);
+                // As in GNU, ALRM times the command out now.
+                if (s == sys.signo.ALRM) {
+                    timed_out = true;
+                    sup.sendTo(pid, opts.signal);
+                    deadline = null;
+                } else sup.sendTo(pid, s);
                 if (kill_after) |k| if (deadline == null) {
                     deadline = nowNs(env.io) + @as(i96, k);
                 };

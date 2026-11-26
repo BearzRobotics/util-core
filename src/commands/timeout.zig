@@ -86,7 +86,8 @@ pub fn main(ctx: cli.Context) u8 {
     };
     const pid = child.id.?;
     // Blocks the watched signals; they are read from the signalfd instead.
-    const w = sys.Watcher.init(pid, &timeout.watched_signals) orelse {
+    const watched: timeout.Watched = .init(signal);
+    const w = sys.Watcher.init(pid, watched.list()) orelse {
         cli.warn(ctx, "unable to monitor the command", .{});
         child.kill(ctx.io);
         return 125;

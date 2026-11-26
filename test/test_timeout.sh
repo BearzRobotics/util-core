@@ -153,5 +153,17 @@ done
 # Any duration that is not zero is a limit, however small.
 for d in 1e-10 0.0000000001s 1e-400; do run_cmp "tiny duration $d" "$d" sleep 3; done
 for d in 0 0.0 0e5; do run_cmp "no limit $d" "$d" sleep 0.2; done
+# Signals sent to timeout reach the command, the --signal one too; ALRM
+# makes the limit expire at once.
+sent() { # BINARY SIGNAL-TO-SEND TIMEOUT-ARGS...
+    t=$1; sig=$2; shift 2
+    "$t" "$@" sh -c 'for s in USR1 HUP TERM; do trap "echo child-got-$s; exit 3" $s; done; sleep 2 & wait; echo untouched' > "$TEST_TMP/sent" 2>/dev/null &
+    p=$!; sleep 0.5; kill -$sig $p; wait $p; echo "status $?"; cat "$TEST_TMP/sent"
+}
+for c in "USR1 -s USR1 3" "TERM -s USR2 3" "ALRM 3" "ALRM -s USR1 3" "ALRM --preserve-status -s USR1 3" "USR1 --foreground -s USR1 3" "HUP -s USR1 3" "ALRM 0"; do
+    exp=$(sent "${GNU_BIN:-/usr/bin}/timeout" $c); act=$(sent "$BIN_DIR/timeout" $c)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS signal $c"
+    else FAIL=$((FAIL + 1)); echo "FAIL signal $c: GNU [$exp] ours [$act]"; fi
+done
 print_summary
 [ "$FAIL" -eq 0 ]

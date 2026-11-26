@@ -18,7 +18,7 @@ GNU coreutils 9.7 (`/usr/bin/timeout --version` on the development machine, inst
 ## Supported behaviour
 
 - DURATION is a number with an optional s, m, h or d suffix; 0 disables the limit.
-- The command is started with std.process.spawn; timeout waits on a pidfd and a signalfd with a poll timeout (src/sys.zig `Watcher`), so no signal handler is installed. TERM, INT, HUP and QUIT sent to timeout are forwarded.
+- The command is started with std.process.spawn; timeout waits on a pidfd and a signalfd with a poll timeout (src/sys.zig `Watcher`), so no signal handler is installed. TERM, INT, HUP, QUIT and the --signal signal sent to timeout are forwarded; ALRM makes the time limit expire at once, as in GNU.
 - Like GNU, timeout ignores SIGTTIN and SIGTTOU, so a command that reads the terminal from timeout's background process group is stopped while timeout keeps running and enforces the limit. The command starts with the default actions of both. After each signal it sends or forwards (other than KILL), timeout sends CONT to the command and, without `--foreground`, to its group.
 - If the command dies from a signal that timeout did not send, timeout kills itself with the same signal, like GNU.
 
