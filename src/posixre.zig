@@ -18,7 +18,13 @@ const unicode = @import("unicode.zig");
 pub const Error = error{ OutOfMemory, BadPattern };
 
 /// UTF-8 classes make large patterns; the package defaults are too small.
-pub const big_limits: regex.Limits = .{ .max_pattern_len = 1 << 22, .max_program_len = 1 << 21 };
+/// Capture memory is not capped: the patterns are the command's own user's,
+/// and the default refuses an alternation of a few hundred groups.
+pub const big_limits: regex.Limits = .{
+    .max_pattern_len = 1 << 22,
+    .max_program_len = 1 << 21,
+    .max_capture_bytes = std.math.maxInt(usize),
+};
 
 /// Perl-dialect source equivalent to the BRE (or ERE) in `pat`.
 pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 {
@@ -175,8 +181,10 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                 continue;
             }
             if (std.ascii.isDigit(n) and n != '0') {
-                try out.append(gpa, '\\');
-                try out.append(gpa, n);
+                // A back-reference is one digit. It gets a group of its own
+                // so that a literal digit after it is not read as part of
+                // it: the Perl dialect takes \10 for an octal escape.
+                try out.appendSlice(gpa, &.{ '(', '?', ':', '\\', n, ')' });
                 at_start = false;
                 continue;
             }
@@ -844,6 +852,18 @@ pub fn compileFull(gpa: std.mem.Allocator, pat: []const u8, ere: bool, ignore_ca
     // An anchored match starts at the start, so the oracle needs no anchor.
     const longest = try Longest.compile(gpa, .{ .pattern = pat, .ere = ere, .body = body, .prefix = prefix, .flags = flags, .ignore_case = ignore_case, .utf8 = opts.utf8 });
     return .{ .re = re, .groups = re.groupCount(), .longest = longest };
+}
+
+test "a digit after a back-reference is a literal" {
+    const gpa = std.testing.allocator;
+    for ([_]bool{ false, true }) |ere| {
+        var c = try compile(gpa, if (ere) "(a)\\10" else "\\(a\\)\\10", ere, false);
+        defer c.deinit(gpa);
+        var sr = try rx.searcher(&c.re, gpa);
+        defer sr.deinit();
+        try std.testing.expect(try sr.find("aa0", 0) != null);
+        try std.testing.expect(try sr.find("a\x08", 0) == null);
+    }
 }
 
 test "translate basic forms" {

@@ -421,5 +421,15 @@ midchar -w -E '()'
 midchar -w -e ''
 midchar -w -F -e '' -e zz
 midchar -P -w 'x*'
+# A back-reference is one digit: what follows it is a literal.
+printf 'aa0\naa8\naa9\na\010\n' > "$TEST_TMP/backref"
+for p in '\(a\)\10' '\(a\)\18' '\(a\)\19' '\(a\)\1\0'; do
+    gd "back-reference then digit: $p" "$TEST_TMP/backref" -e "$p"
+done
+gd "back-reference then digit: -E" "$TEST_TMP/backref" -E '(a)\10'
+# Hundreds of capture groups in one pattern are still accepted.
+many=$(awk 'BEGIN { for (i = 0; i < 600; i++) printf "%s(w%d)+x", i ? "|" : "", i }')
+printf 'w5x\nw599x\nnone\n' > "$TEST_TMP/many"
+gd "600 alternatives with a group each" "$TEST_TMP/many" -E "$many"
 help_cmp
 cd /; print_summary
