@@ -145,5 +145,54 @@ run_tree "filter gzip-less"     "$S" --filter='tr a-z A-Z > $FILE' -l 10 words
 run_tree "filter fails"         "$S" --filter='exit 3' -l 10 in
 run_tree "filter and stdout chunk" "$S" --filter=cat -n 1/3 in
 run_tree "-u"                   "$S" -u -n r/3 words
+# A write that fails, at the end or on the way, is reported with status 1.
+if [ -e /dev/full ]; then
+    for c in "-n 1/2" "-n l/1/2" "-n r/1/2"; do
+        (cd "$TEST_TMP" && seq 100 > kn && ours $c kn > /dev/full 2> kn.err); rc=$?
+        if [ "$rc" = 1 ] && [ "$(cat "$TEST_TMP/kn.err")" = "split: write error: No space left on device" ]; then
+            PASS=$((PASS + 1)); echo "PASS $c to a full device"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL $c to a full device (rc=$rc $(cat "$TEST_TMP/kn.err"))"
+        fi
+    done
+    run_tree "-l write error"       'seq 1 100 > in; ln -s /dev/full xab' -l 60 in
+    run_tree "-n write error"       'seq 1 100 > in; ln -s /dev/full xab' -n 2 in
+    run_tree "-n r/ write error at the end" 'seq 1 100 > in; ln -s /dev/full xab' -n r/2 in
+    # (mid-way, GNU has created fewer of the other files than we have)
+    for how in "-n r/2" "-u -n r/2"; do
+        m="$TEST_TMP/midway"; rm -rf "$m"; mkdir "$m"; seq 1 20000 > "$m/in"; ln -s /dev/full "$m/xaa"
+        (cd "$m" && ours $how in 2> "$TEST_TMP/midway.err"); rc=$?
+        if [ "$rc" = 1 ] && [ "$(cat "$TEST_TMP/midway.err")" = "split: xaa: No space left on device" ]; then
+            PASS=$((PASS + 1)); echo "PASS write error mid-way $how"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL write error mid-way $how (rc=$rc $(cat "$TEST_TMP/midway.err"))"
+        fi
+    done
+fi
+# Pieces cut short by a file size limit: ours must say so (how much of the
+# other pieces GNU has written by then differs, so the trees are not compared).
+d="$TEST_TMP/limit"; mkdir -p "$d"; seq 3000 > "$d/in"
+for how in "-n r/2" "-n 2" "-b 8000"; do
+    (cd "$d" && rm -f x?? && trap '' XFSZ && ulimit -f 4 && ours $how in 2> "$TEST_TMP/limit.err"); rc=$?
+    if [ "$rc" = 1 ] && [ "$(cat "$TEST_TMP/limit.err")" = "split: xaa: File too large" ]; then
+        PASS=$((PASS + 1)); echo "PASS file size limit $how"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL file size limit $how (rc=$rc $(cat "$TEST_TMP/limit.err"))"
+    fi
+done
+if can_inject; then
+    for how in "-n r/1" "-l 5000"; do
+        (cd "$d" && rm -f x?? && strace -y -o "$TEST_TMP/trace" -e trace=close "$BIN_DIR/split" $how in)
+        n=$(grep '^close' "$TEST_TMP/trace" | grep -n '/xaa>' | cut -d: -f1)
+        (cd "$d" && rm -f x?? && strace -o /dev/null -e trace=close -e inject=close:error=EIO:when="$n" "$BIN_DIR/split" $how in 2> "$TEST_TMP/limit.err"); rc=$?
+        if [ "$rc" = 1 ] && [ "$(cat "$TEST_TMP/limit.err")" = "split: xaa: Input/output error" ]; then
+            PASS=$((PASS + 1)); echo "PASS close error $how"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL close error $how (n=$n rc=$rc $(cat "$TEST_TMP/limit.err"))"
+        fi
+    done
+else
+    skip_test "close errors (no strace)"
+fi
 print_summary
 [ "$FAIL" -eq 0 ]

@@ -12,6 +12,8 @@ const Io = std.Io;
 pub const Sink = struct {
     target: Target,
     failed: bool = false,
+    /// Why a file target failed.
+    file_error: ?Io.File.Writer.Error = null,
     /// The destination file for `initFile` sinks (null for writer sinks).
     file: ?Io.File = null,
     buf: [8192]u8 = undefined,
@@ -39,7 +41,10 @@ pub const Sink = struct {
                 w.writeAll(bytes) catch return false;
                 w.flush() catch return false;
             },
-            .file => |f| f.file.writeStreamingAll(f.io, bytes) catch return false,
+            .file => |f| f.file.writeStreamingAll(f.io, bytes) catch |e| {
+                o.file_error = e;
+                return false;
+            },
         }
         return true;
     }
