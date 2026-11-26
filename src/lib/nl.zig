@@ -90,7 +90,7 @@ pub fn run(env: Env, options: Options, inputs: []const Input, writer: *Io.Writer
             if (cfg.delimiter.len > 0 and (std.mem.eql(u8, line.text, d3.items) or std.mem.eql(u8, line.text, d2.items) or std.mem.eql(u8, line.text, cfg.delimiter))) {
                 section = if (line.text.len == d3.items.len) .header else if (line.text.len == d2.items.len) .body else .footer;
                 if (cfg.renumber) number = cfg.start;
-                blank_run = 0;
+                // The count of blank lines runs on across sections, as in GNU.
                 out.writeByte('\n');
                 continue;
             }
