@@ -1464,11 +1464,13 @@ fn flushLeftBehind(st: *State) void {
     }
 }
 
-fn runCommand(st: *State, argv: []const []const u8, cwd: ?sys.Handle) bool {
+/// Run `argv` and wait. A command that was asked about (-ok, -okdir) reads
+/// /dev/null: standard input holds the answers to the questions.
+fn runCommand(st: *State, argv: []const []const u8, cwd: ?sys.Handle, asked: bool) bool {
     flushOut(st);
     for (st.outs.items) |o| flushFile(st, o);
     const cwd_opt: std.process.Child.Cwd = if (cwd) |fd| .{ .dir = .{ .handle = fd } } else .inherit;
-    var child = std.process.spawn(st.env.io, .{ .argv = argv, .cwd = cwd_opt, .stdin = .inherit }) catch |e| {
+    var child = std.process.spawn(st.env.io, .{ .argv = argv, .cwd = cwd_opt, .stdin = if (asked) .ignore else .inherit }) catch |e| {
         const text: []const u8 = switch (e) {
             error.FileNotFound => "No such file or directory",
             error.AccessDenied, error.PermissionDenied => "Permission denied",
@@ -1574,7 +1576,7 @@ fn doExec(st: *State, n: *Node) bool {
         const c = st.confirm orelse return false;
         if (!c.func(c.context, pr.items)) return false;
     }
-    return runCommand(st, argv.items, if (cwd) |c| c.fd else null);
+    return runCommand(st, argv.items, if (cwd) |c| c.fd else null, n.prompt);
 }
 
 fn flushBatch(st: *State, n: *Node) void {
@@ -1582,7 +1584,8 @@ fn flushBatch(st: *State, n: *Node) void {
     var argv: std.ArrayList([]const u8) = .empty;
     for (n.argv[0 .. n.argv.len - 1]) |a| argv.append(st.gpa, a) catch st.nomem();
     for (n.batch.items) |f| argv.append(st.gpa, f) catch st.nomem();
-    if (!runCommand(st, argv.items, if (n.batch_dir) |d| d.fd else null)) st.exit_status = 1;
+    // "+" is not accepted after -ok and -okdir.
+    if (!runCommand(st, argv.items, if (n.batch_dir) |d| d.fd else null, false)) st.exit_status = 1;
     if (n.batch_dir) |d| _ = sys.closeFd(d.fd);
     n.batch_dir = null;
     n.batch.clearRetainingCapacity();

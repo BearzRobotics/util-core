@@ -419,6 +419,14 @@ run_ok '-okdir yes' yes.txt a -type f -okdir echo {} ';'
 run_ok '-ok eof' /dev/null a -type f -ok echo {} ';'
 run_ok '-ok print' answers.txt a -maxdepth 1 -type f -ok echo {} ';' -print
 run_ok '-ok multi args' yes.txt a -maxdepth 1 -name f1.txt -ok echo a b {} c ';'
+# The command must not read the answers meant for find. (Only standard output
+# and status are compared: GNU's command may complain about its input.)
+for action in -ok -okdir; do
+    exp=$(printf 'y\ny\ny\ny\ny\ny\ny\ny\n' | gnu a -type f $action sh -c 'cat 2>/dev/null; echo ran' ';' 2>/dev/null; echo "status $?")
+    act=$(printf 'y\ny\ny\ny\ny\ny\ny\ny\n' | ours a -type f $action sh -c 'cat 2>/dev/null; echo ran' ';' 2>/dev/null; echo "status $?")
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $action commands cannot read the answers"
+    else FAIL=$((FAIL + 1)); echo "FAIL $action commands cannot read the answers"; printf '  GNU: %s\n  ours: %s\n' "$exp" "$act"; fi
+done
 
 # ---- file system changes
 SET='mkdir -p a/b/c a/d e; printf x > a/f1; printf y > a/b/f2; : > a/b/c/f3; printf z > e/f4; ln -s a/f1 lnk; mkdir empty; ln -s ../e a/d/up; chmod 400 e/f4'
