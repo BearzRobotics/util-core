@@ -78,15 +78,18 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
     var bpb: usize = 16;
     if (lcm > 16) bpb = lcm;
     if (opts.width) |w| {
-        if (w % lcm != 0 or w == 0 or w > 1 << 20) {
+        if (w % lcm != 0 or w == 0) {
             obs.emit(.{ .invalid_width = .{ .width = w, .using = lcm } });
             bpb = lcm;
-        } else bpb = @intCast(w);
+        } else bpb = std.math.cast(usize, w) orelse return error.OutOfMemory;
     } else if (bpb % lcm != 0) bpb = lcm;
 
     // Column alignment across formats.
     var line_w: usize = 0;
-    for (fmts.items) |f| line_w = @max(line_w, (f.width + 1) * (bpb / f.size));
+    for (fmts.items) |f| {
+        const chars = std.math.mul(usize, f.width + 1, bpb / f.size) catch return error.OutOfMemory;
+        line_w = @max(line_w, chars);
+    }
     for (fmts.items) |*f| {
         const n = bpb / f.size;
         f.pad = (line_w - (f.width + 1) * n) / n;
@@ -105,7 +108,7 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
     if (opts.strings) |min| {
         dumpStrings(&src, &out, min, opts.radix, skip);
     } else {
-        const buf = try gpa.alloc(u8, bpb * 2);
+        const buf = try gpa.alloc(u8, std.math.mul(usize, bpb, 2) catch return error.OutOfMemory);
         defer gpa.free(buf);
         const cur = buf[0..bpb];
         const prev = buf[bpb..];
@@ -124,10 +127,12 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
                 }
             } else {
                 star_printed = false;
-                if (n < bpb) @memset(cur[n..], 0);
+                // Zero only up to the end of the last element: with a large
+                // -w the rest of the block is never looked at.
+                if (n < bpb) @memset(cur[n..@min(bpb, std.mem.alignForward(usize, n, lcm))], 0);
                 printBlock(&out, fmts.items, cur, n, addr, radix, opts.big_endian, line_w, if (have_label) lab else null);
-                @memcpy(prev, cur);
                 have_prev = n == bpb;
+                if (have_prev) @memcpy(prev, cur);
             }
             addr += n;
             lab += n;

@@ -226,7 +226,10 @@ pub fn main(ctx: cli.Context) u8 {
         .big_endian = big_endian,
         .label = if (have_label) label else null,
     }, inputs.items, &stdout.interface, .{ .context = @constCast(&ctx), .func = report }) catch |e| switch (e) {
-        error.OutOfMemory => return 1,
+        error.OutOfMemory => {
+            cli.warn(ctx, "memory exhausted", .{});
+            return 1;
+        },
         error.WriteFailed => {
             cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
             return 1;

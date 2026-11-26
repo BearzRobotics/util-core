@@ -198,5 +198,10 @@ run_cmp "long abbrev"        --skip=3 small
 run_cmp "--address abbrev"   --address=x small
 run_cmp "ambiguous"          --e small
 
+# A -w of any size that fits in memory is used as given.
+printf 'a b c\n' > widew
+for w in 1048576 1048577 2000000 100000000; do run_cmp "-w$w" -w$w -tx1 -An widew; done
+run_cmp "-w too large for memory" -w100000000000 -tx1 -An widew
+
 print_summary
 [ "$FAIL" -eq 0 ]
