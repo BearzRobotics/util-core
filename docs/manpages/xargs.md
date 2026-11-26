@@ -17,7 +17,7 @@ Build and execute command lines from standard input.
 : Items end with NUL or the given character; no quote or backslash processing.
 
 -a, --arg-file=FILE
-: Read items from FILE instead of standard input.
+: Read items from FILE instead of standard input. The commands then get xargs' standard input (without -a theirs is /dev/null). FILE `-` is standard input.
 
 -E EOF-STR, -e[EOF-STR], --eof[=EOF-STR]
 : Logical end-of-file string.

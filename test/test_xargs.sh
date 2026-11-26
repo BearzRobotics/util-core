@@ -128,4 +128,20 @@ for a in "--show-limits" "--show-limits -s 1000" "-s 50 --show-limits"; do
     e=$(env -i LC_ALL=C /usr/bin/xargs $a -r < /dev/null 2>&1 | sed 's#/usr/bin/xargs#xargs#'); o=$(env -i LC_ALL=C "$BIN_DIR/xargs" $a -r < /dev/null 2>&1)
     if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS env -i $a"; else FAIL=$((FAIL+1)); echo "FAIL env -i $a"; fi
 done
+# With -a the items do not come from standard input, which the commands then
+# get; otherwise theirs is /dev/null. "-a -" is standard input itself.
+printf 'item two\n' > aitems; echo dashfile > ./-
+a_stdin() {
+    d="$1"; shift
+    e=$(echo FROMSTDIN | LC_ALL=C /usr/bin/xargs "$@" 2>&1; echo "status $?"); o=$(echo FROMSTDIN | LC_ALL=C "$BIN_DIR/xargs" "$@" 2>&1; echo "status $?")
+    if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS $d"; else FAIL=$((FAIL+1)); echo "FAIL $d"; printf '  GNU: %s\n  ours: %s\n' "$e" "$o"; fi
+}
+a_stdin "-a gives the commands standard input" -a aitems sh -c 'echo "$@"; cat' x
+a_stdin "-a with -n1: the first command reads it" -a aitems -n1 sh -c 'echo "$@"; cat' x
+a_stdin "-a with -P" -a aitems -P2 -n2 sh -c 'cat; echo "$@"' x
+a_stdin "--arg-file=- reads standard input" --arg-file=- echo
+a_stdin "-a /dev/stdin" -a /dev/stdin echo
+a_stdin "-a ./- is a file" -a ./- echo
+a_stdin "without -a the commands read nothing" sh -c 'echo "$@"; cat' x
+rm -f ./- aitems
 cd /; print_summary

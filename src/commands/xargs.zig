@@ -213,13 +213,15 @@ pub fn main(ctx: cli.Context) u8 {
 
     var input: Io.File = Io.File.stdin();
     var close_input = false;
-    if (arg_file) |af| {
+    o.inherit_stdin = arg_file != null;
+    // As in GNU, "-" names standard input.
+    if (arg_file) |af| if (!std.mem.eql(u8, af, "-")) {
         input = Io.Dir.cwd().openFile(ctx.io, af, .{}) catch |e| {
             cli.warn(ctx, "Cannot open input file {f}: {s}", .{ cli.quoteA(af), cli.errText(e) });
             return 1;
         };
         close_input = true;
-    }
+    };
     defer if (close_input) input.close(ctx.io);
 
     var rbuf: [8192]u8 = undefined;

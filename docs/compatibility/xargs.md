@@ -11,7 +11,7 @@ GNU findutils xargs 4.10.0 (`/usr/bin/xargs --version` on the development machin
 ## Supported options
 
 - `-0, --null, -d, --delimiter=DELIM`: Items end with NUL or the given character; no quote or backslash processing.
-- `-a, --arg-file=FILE`: Read items from FILE instead of standard input.
+- `-a, --arg-file=FILE`: Read items from FILE instead of standard input. The commands then get xargs' standard input (without -a theirs is /dev/null). FILE `-` is standard input.
 - `-E EOF-STR, -e[EOF-STR], --eof[=EOF-STR]`: Logical end-of-file string.
 - `-I R, -i[R], --replace[=R]`: Replace R in the initial arguments with each input line (one command per item).
 - `-L N, -l[N], --max-lines[=N]`: At most N non-blank input lines per command.

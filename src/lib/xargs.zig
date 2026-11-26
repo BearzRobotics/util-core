@@ -70,6 +70,9 @@ pub const Options = struct {
     confirm: ?Confirm = null,
     /// -o: children read from /dev/tty.
     open_tty: bool = false,
+    /// The items do not come from standard input (-a), so the commands get
+    /// it; otherwise their standard input is /dev/null.
+    inherit_stdin: bool = false,
     exit_if_too_long: bool = false,
     /// -P; 0 is unlimited.
     procs: u64 = 1,
@@ -298,7 +301,7 @@ fn runCommand(x: *X) Stop!void {
         }
     }
     x.ran_any = true;
-    var stdin_opt: std.process.SpawnOptions.StdIo = .ignore;
+    var stdin_opt: std.process.SpawnOptions.StdIo = if (x.opt.inherit_stdin) .inherit else .ignore;
     var tty_file: ?Io.File = null;
     defer if (tty_file) |f| f.close(x.env.io);
     if (x.opt.open_tty) {
