@@ -39,7 +39,7 @@ Every extension is opt-in and leaves GNU behaviour unchanged when not used (deci
 
 | Option | Kind | Why / semantics | Test oracle |
 |---|---|---|---|
-| `--json` | ripgrep | JSON Lines, ripgrep's schema (begin, match, context, end, summary; `{"bytes": base64}` for non-UTF-8). Searches every file as text; `-o`, `--replace` do not change the messages. | `rg --json`, timings normalised |
+| `--json` | ripgrep | JSON Lines, ripgrep's schema (begin, match, context, end, summary; `{"bytes": base64}` for non-UTF-8). Searches every file as text; `-o`, `--replace` do not change the messages. No group separators or `--stats` text; `-c`, `-l`, `-L`, `--count-matches` are refused (rg: the later of the two options wins). | `rg --json`, timings normalised |
 | `--smart-case` | ripgrep | Case-insensitive unless a pattern has an uppercase letter; escapes (`\S`) do not count; `-i` wins. | `rg --smart-case` |
 | `--glob=GLOB` | ripgrep | Include/exclude (`!`) with gitignore-style globs, later wins, only while walking (command-line files are never filtered, as in rg). | `rg -g` |
 | `--hidden`, `--no-hidden` | ripgrep | GNU `-r` already searches hidden files, so `--hidden` is the default spelled out and `--no-hidden` skips dot names. rg's default (hidden skipped) is `--no-hidden`. | `rg --hidden`, `rg` |

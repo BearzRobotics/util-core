@@ -449,6 +449,23 @@ pub fn main(ctx: cli.Context) u8 {
         }
     }
 
+    if (o.json) {
+        // These print text of their own in place of the matching lines.
+        const text_only: ?[]const u8 = if (o.count_matches)
+            "--count-matches"
+        else if (o.count)
+            "-c (--count)"
+        else switch (o.list) {
+            .none => null,
+            .matching => "-l (--files-with-matches)",
+            .nonmatching => "-L (--files-without-match)",
+        };
+        if (text_only) |name| {
+            cli.warn(ctx, "--json cannot be used with {s}; the JSON messages carry the file names and counts", .{name});
+            return 2;
+        }
+    }
+
     var operands = p.operands.items;
     if (!have_keys and have_ops) {
         if (terms.items.len == 0) return usage(ctx);

@@ -132,7 +132,9 @@ pub const Options = struct {
     // ---- extensions (decision 0006); every default is GNU behaviour.
     /// --smart-case: ignore case when no pattern has an uppercase letter.
     smart_case: bool = false,
-    /// --json: ripgrep's JSON Lines messages instead of text.
+    /// --json: ripgrep's JSON Lines messages instead of text. Nothing else is
+    /// written, so `count`, `count_matches`, `list`, `stats` and `group_sep`
+    /// have no effect with it (the messages carry the numbers).
     json: bool = false,
     /// --stats: print search statistics after the results.
     stats: bool = false,
@@ -1339,7 +1341,15 @@ pub fn run(env: Env, options: Options, matcher: *Matcher, inputs: []const Input,
     }
     g.eol = if (g.o.null_data) 0 else '\n';
     g.t0_ns = nowNs();
-    if (g.o.json) g.o.binary_files = .text;
+    if (g.o.json) {
+        g.o.binary_files = .text;
+        // Every line written must be a JSON message.
+        g.o.count = false;
+        g.o.count_matches = false;
+        g.o.list = .none;
+        g.o.stats = false;
+        g.o.group_sep = null;
+    }
     defer {
         for (g.ign_stack.items) |lv| {
             g.gpa.free(lv.pats);

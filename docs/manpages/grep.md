@@ -56,7 +56,7 @@ Every option below is opt-in; without it grep behaves as GNU grep 3.12 (decision
 From ripgrep (tested against `rg` 15):
 
 --json
-: Print JSON Lines in ripgrep's message schema (`begin`, `match`, `context`, `end`, `summary`); text that is not UTF-8 is `{"bytes": base64}`. Binary detection is off (every file is searched as text), `-o` is ignored.
+: Print JSON Lines in ripgrep's message schema (`begin`, `match`, `context`, `end`, `summary`); text that is not UTF-8 is `{"bytes": base64}`. Binary detection is off (every file is searched as text), `-o` is ignored. Nothing but JSON is written: there are no group separators, `--stats` adds nothing (the `end` and `summary` messages carry the numbers), and `-c`, `-l`, `-L` and `--count-matches` are refused (status 2; ripgrep instead lets whichever of the two comes last win).
 
 --smart-case
 : Ignore case unless a pattern has an uppercase letter (an escaped letter such as `\S` does not count). `-i` wins.

@@ -85,6 +85,28 @@ rgcmp 'json escapes' "--json 'uo' esc.txt" "--json uo esc.txt" "$JNORM"
 printf 'no newline two' > nonl.txt
 rgcmp 'json no trailing newline' "--json two nonl.txt" "--json two nonl.txt" "$JNORM"
 
+# Nothing but JSON may reach standard output.
+all_json() { # DESC ARGS...
+    desc=$1; shift
+    out=$("$OURS" "$@" 2>&1); rc=$?
+    if [ "$rc" -le 1 ] && [ -n "$out" ] && printf '%s\n' "$out" |
+        python3 -I -c 'import json, sys; [json.loads(l)["type"] for l in sys.stdin]' 2>/dev/null; then pass "$desc"
+    else fail "$desc" "only JSON lines" "rc=$rc $out"; fi
+}
+if command -v python3 > /dev/null; then
+    printf 'two\nx\ny\nz\ntwo\n' > apart.txt
+    all_json 'json: no separator between context groups' --json -A1 two apart.txt
+    all_json 'json: no separator between files' --json -C1 two a.txt b.c
+    all_json 'json with --stats' --json --stats two a.txt
+    all_json 'json with --group-separator' --json -C1 --group-separator=== two apart.txt
+else
+    skip_test 'json: every line is JSON (no python3)'
+fi
+for opt in -c -l -L --count-matches; do
+    cmp "json refuses $opt" "echo 1; echo 2" "\$G --json $opt two a.txt 2>&1 >/dev/null | /usr/bin/grep -c -e '--json cannot be used with'; \$G --json $opt two a.txt >/dev/null 2>&1; echo \$?" ""
+    cmp "json refuses $opt: nothing on stdout" "exit 2" "\$G $opt --json two a.txt 2>/dev/null" ""
+done
+
 # ------------------------------------------------- ripgrep: counts and stats
 rgcmp 'count-matches one file' "--count-matches two a.txt" "--count-matches two a.txt"
 rgcmp 'count-matches two files' "--count-matches two a.txt b.c" "--count-matches two a.txt b.c" "$SORT"
