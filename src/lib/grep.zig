@@ -23,6 +23,7 @@ const common = @import("common.zig");
 const posixre = @import("../posixre.zig");
 const regex = @import("regex");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 const unicode = @import("../unicode.zig");
 const fnmatch = @import("../fnmatch.zig");
 const ign = @import("grep_ignore.zig");
@@ -1397,7 +1398,7 @@ pub fn run(env: Env, options: Options, matcher: *Matcher, inputs: []const Input,
             },
             .path => |p| {
                 g.is_stdin = false;
-                if (try grepFile(&g, p, p, true, false)) any = true;
+                if (try grepFile(&g, null, p, p, true, false)) any = true;
             },
         }
         if (g.early) break;
@@ -2223,11 +2224,9 @@ fn ignored(g: *G, display: []const u8, is_dir: bool) bool {
     return false;
 }
 
-/// Read `path` fully; null on error.
-fn slurp(gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
+/// Read the open file `fd` to its end; null on error.
+fn slurp(gpa: std.mem.Allocator, fd: sys.Handle) ?[]u8 {
     var err: LX.E = .SUCCESS;
-    const fd = sys.openFd(path, sys.O.RDONLY, 0, &err) orelse return null;
-    defer _ = sys.closeFd(fd);
     var data: std.ArrayList(u8) = .empty;
     var buf: [16384]u8 = undefined;
     while (true) {
@@ -2244,11 +2243,12 @@ fn slurp(gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
     return data.toOwnedSlice(gpa) catch null;
 }
 
-fn pushIgnore(g: *G, dir_path: []const u8, prefix_len: usize) Err!void {
+fn pushIgnore(g: *G, dir: sys.Handle, prefix_len: usize) Err!void {
     for ([_][]const u8{ ".gitignore", ".ignore" }) |nm| {
-        const fp = try std.fmt.allocPrint(g.gpa, "{s}/{s}", .{ dir_path, nm });
-        defer g.gpa.free(fp);
-        const data = slurp(g.gpa, fp) orelse continue;
+        var err: LX.E = .SUCCESS;
+        const fd = sys.openFdAt(dir, nm, sys.O.RDONLY, 0, &err) orelse continue;
+        defer _ = sys.closeFd(fd);
+        const data = slurp(g.gpa, fd) orelse continue;
         var pats: std.ArrayList(ign.Pattern) = .empty;
         var it = std.mem.splitScalar(u8, data, '\n');
         while (it.next()) |ln| {
@@ -2299,11 +2299,17 @@ fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
     return .raw;
 }
 
-fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir: bool) Err!bool {
+/// Search the file or directory `name` in the open directory `parent` (an
+/// operand is named by its path, from the current directory). Whatever was
+/// met while walking is reached only through `parent`, and a symbolic link is
+/// followed only where the options ask for it, also one that took the entry's
+/// place after the directory was listed.
+fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8, cmdline: bool, in_dir: bool) Err!bool {
     const o = &g.o;
     // status of the file: true = matched
     var err: LX.E = .SUCCESS;
-    var st_opt = sys.fileStat(path, cmdline or o.deref_recursive or o.symlinks != .gnu, &err);
+    const follow = cmdline or o.deref_recursive or o.symlinks != .gnu;
+    var st_opt = sys.fileStatAt(dirat.fdOf(parent), name, follow, &err);
     if (st_opt == null) {
         if (!(cmdline and false)) {
             g.obs.emit(.{ .read_error = .{ .name = display, .errno = err } });
@@ -2311,16 +2317,18 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
         }
         return false;
     }
-    const st = st_opt.?;
+    var st = st_opt.?;
     st_opt = null;
+    // Listed as something else, a link now.
+    if (!follow and st.isLink()) return false;
     if (st.isDir()) {
         if (o.directories == .skip) return false;
         if (o.directories == .recurse) {
             if (cmdline and o.symlinks == .none) {
                 var e2: LX.E = .SUCCESS;
-                if (sys.fileStat(path, false, &e2)) |l| if (l.isLink()) return false;
+                if (sys.fileStatAt(dirat.fdOf(parent), name, false, &e2)) |l| if (l.isLink()) return false;
             }
-            return try grepDir(g, path, display, cmdline);
+            return try grepDir(g, parent, name, st, display, cmdline);
         }
         g.obs.emit(.{ .is_directory = display });
         g.errseen = true;
@@ -2335,12 +2343,26 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
     }
     if (in_dir and !rgFileOk(g, display, false)) return false;
     var oerr: LX.E = .SUCCESS;
-    const fd = sys.openFd(path, sys.O.RDONLY | sys.O.NONBLOCK, 0, &oerr) orelse {
+    const nofollow: u32 = if (follow) 0 else sys.O.NOFOLLOW;
+    const fd = sys.openFdAt(dirat.fdOf(parent), name, sys.O.RDONLY | sys.O.NONBLOCK | nofollow, 0, &oerr) orelse {
+        // A link that appeared since the stat is passed over like any other.
+        if (!follow and oerr == .LOOP) return false;
         g.obs.emit(.{ .read_error = .{ .name = display, .errno = oerr } });
         g.errseen = true;
         return false;
     };
     defer _ = sys.closeFd(fd);
+    // Everything from here on is about the file that was opened.
+    if (in_dir) {
+        st = sys.fstatFd(fd, &oerr) orelse {
+            g.obs.emit(.{ .read_error = .{ .name = display, .errno = oerr } });
+            g.errseen = true;
+            return false;
+        };
+        const opened = st.mode & 0o170000;
+        if (opened == 0o040000) return false;
+        if (o.devices != .read and (opened == 0o020000 or opened == 0o060000 or opened == 0o010000 or opened == 0o140000)) return false;
+    }
     // refuse to read the output file
     if (g.stdout_st) |so| {
         if (!g.out_quiet and o.list == .none and so.isReg() and so.ino == st.ino and so.dev_major == st.dev_major and so.dev_minor == st.dev_minor and o.max_count > 1 and !o.count) {
@@ -2355,7 +2377,7 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
         else => in_dir,
     };
     if (o.decompress and st.isReg()) {
-        const raw = slurp(g.gpa, path) orelse {
+        const raw = slurp(g.gpa, fd) orelse {
             g.obs.emit(.{ .read_error = .{ .name = display, .errno = .IO } });
             g.errseen = true;
             return false;
@@ -2391,7 +2413,7 @@ fn grepFile(g: *G, path: []const u8, display: []const u8, cmdline: bool, in_dir:
     return try grepOpened(g, fd, display, false, false);
 }
 
-const SortEnt = struct { name: []u8, key: i128 };
+const SortEnt = struct { name: []const u8, key: i128 };
 
 fn entLess(ctx: *const G, a: SortEnt, b: SortEnt) bool {
     if (ctx.o.sort != .path and a.key != b.key) return a.key < b.key;
@@ -2402,7 +2424,8 @@ fn sortEntLess(ctx: *const G, a: SortEnt, b: SortEnt) bool {
     return if (ctx.o.sort_reverse) entLess(ctx, b, a) else entLess(ctx, a, b);
 }
 
-fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool {
+/// Search the directory `name` in `parent`, which `seen` describes.
+fn grepDir(g: *G, parent: ?*dirat.Level, name: []const u8, seen: sys.FileStat, display: []const u8, cmdline: bool) Err!bool {
     const o = &g.o;
     if (dirExcluded(g, display, if (std.mem.lastIndexOfScalar(u8, display, '/')) |k| display[k + 1 ..] else display, cmdline)) return false;
     if (o.include_dirs.len > 0) {
@@ -2411,50 +2434,38 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
         if (!dirIncluded(g, if (std.mem.lastIndexOfScalar(u8, nm, '/')) |k| nm[k + 1 ..] else nm)) return false;
     }
     var any = false;
-    var id_err: LX.E = .SUCCESS;
-    if (sys.fileStat(path, true, &id_err)) |s| {
-        const id: DirId = .{ .dev_major = s.dev_major, .dev_minor = s.dev_minor, .ino = s.ino };
-        for (g.dir_stack.items) |above| {
-            if (std.meta.eql(above, id)) {
-                g.obs.emit(.{ .directory_loop = display });
-                return false;
-            }
+    const id: DirId = .{ .dev_major = seen.dev_major, .dev_minor = seen.dev_minor, .ino = seen.ino };
+    for (g.dir_stack.items) |above| {
+        if (std.meta.eql(above, id)) {
+            g.obs.emit(.{ .directory_loop = display });
+            return false;
         }
-        try g.dir_stack.append(g.gpa, id);
-    } else {
-        g.obs.emit(.{ .read_error = .{ .name = display, .errno = id_err } });
+    }
+    try g.dir_stack.append(g.gpa, id);
+    defer _ = g.dir_stack.pop();
+    // Opened in its parent, checked to be the directory just examined, and
+    // not through a link unless links to directories are being followed.
+    var level: dirat.Level = undefined;
+    if (dirat.enter(&level, parent, name, .{ .follow = cmdline or g.o.deref_recursive, .expect = seen })) |e| {
+        g.obs.emit(.{ .read_error = .{ .name = display, .errno = e } });
         g.errseen = true;
         return false;
     }
-    defer _ = g.dir_stack.pop();
-    const dir_h = Io.Dir.cwd().openDir(g.env.io, path, .{ .iterate = true }) catch |e| {
-        const emap: LX.E = switch (e) {
-            error.AccessDenied => .ACCES,
-            error.FileNotFound => .NOENT,
-            error.NotDir => .NOTDIR,
-            else => .IO,
-        };
-        g.obs.emit(.{ .read_error = .{ .name = display, .errno = emap } });
+    defer if (dirat.leave(&level)) |e| {
+        g.obs.emit(.{ .read_error = .{ .name = display, .errno = e } });
+        g.errseen = true;
+    };
+    var list_err: LX.E = .SUCCESS;
+    const entries = sys.readDirNamesFd(g.gpa, level.fd, &list_err) orelse {
+        if (list_err == .NOMEM) return error.OutOfMemory;
+        g.obs.emit(.{ .read_error = .{ .name = display, .errno = list_err } });
         g.errseen = true;
         return false;
     };
-    var dir = dir_h;
-    var names: std.ArrayList([]u8) = .empty;
-    var kinds: std.ArrayList(Io.File.Kind) = .empty;
-    defer {
-        for (names.items) |n| g.gpa.free(n);
-        names.deinit(g.gpa);
-        kinds.deinit(g.gpa);
-    }
-    var it = dir.iterate();
-    while (it.next(g.env.io) catch null) |entry| {
-        const dup = try g.gpa.dupe(u8, entry.name);
-        try names.append(g.gpa, dup);
-        try kinds.append(g.gpa, entry.kind);
-    }
-    dir.close(g.env.io);
-    var pbase = path;
-    while (pbase.len > 1 and pbase[pbase.len - 1] == '/') pbase = pbase[0 .. pbase.len - 1];
+    defer sys.freeDirEntries(g.gpa, entries);
+    const names = try g.gpa.alloc([]const u8, entries.len);
+    defer g.gpa.free(names);
+    for (entries, names) |entry, *n| n.* = entry.name;
     var dbase = display;
     while (dbase.len > 1 and dbase[dbase.len - 1] == '/') dbase = dbase[0 .. dbase.len - 1];
     const implicit = g.implicit_dot and std.mem.eql(u8, display, ".");
@@ -2466,17 +2477,15 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
             g.gpa.free(lv.data);
         }
     }
-    if (o.ignore_vcs) try pushIgnore(g, pbase, if (implicit) 0 else dbase.len + 1);
+    if (o.ignore_vcs) try pushIgnore(g, level.fd, if (implicit) 0 else dbase.len + 1);
     if (o.sort != .none) {
         var ents: std.ArrayList(SortEnt) = .empty;
         defer ents.deinit(g.gpa);
-        for (names.items) |n| {
+        for (names) |n| {
             var key: i128 = 0;
             if (o.sort != .path) {
-                const child = try std.fmt.allocPrint(g.gpa, "{s}/{s}", .{ pbase, n });
-                defer g.gpa.free(child);
                 var e3: LX.E = .SUCCESS;
-                if (sys.fileStat(child, true, &e3)) |fs| {
+                if (sys.fileStatAt(level.fd, n, true, &e3)) |fs| {
                     key = switch (o.sort) {
                         .modified => @as(i128, fs.mtime_s) * 1_000_000_000 + fs.mtime_ns,
                         .accessed => @as(i128, fs.atime_s) * 1_000_000_000 + fs.atime_ns,
@@ -2489,15 +2498,12 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
             try ents.append(g.gpa, .{ .name = n, .key = key });
         }
         std.mem.sort(SortEnt, ents.items, g, sortEntLess);
-        for (ents.items, 0..) |e, i| names.items[i] = e.name;
+        for (ents.items, 0..) |e, i| names[i] = e.name;
     }
-    for (names.items, 0..) |n, name_idx| {
+    for (names, 0..) |n, name_idx| {
+        // A level that could not be reopened cannot be searched any further.
+        if (!level.open) break;
         if (!o.search_hidden and n.len > 0 and n[0] == '.') continue;
-        const child = if (implicit)
-            std.fmt.allocPrint(g.gpa, "{s}", .{n}) catch return error.OutOfMemory
-        else
-            try std.fmt.allocPrint(g.gpa, "{s}/{s}", .{ pbase, n });
-        defer g.gpa.free(child);
         const disp = if (implicit)
             std.fmt.allocPrint(g.gpa, "{s}", .{n}) catch return error.OutOfMemory
         else
@@ -2507,14 +2513,18 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
         // The directory entry already says "regular file" or "directory";
         // only other kinds (symlinks, unknown) need an lstat. (Sorting
         // permutes `names`, so the kinds are not used then.)
-        const known_kind: Io.File.Kind = if (o.sort == .none) kinds.items[name_idx] else .unknown;
-        const lst = if (known_kind == .file or known_kind == .directory) null else sys.fileStat(child, false, &err);
+        const known_kind: Io.File.Kind = if (o.sort != .none) .unknown else switch (entries[name_idx].dtype) {
+            4 => .directory,
+            8 => .file,
+            else => .unknown,
+        };
+        const lst = if (known_kind == .file or known_kind == .directory) null else sys.fileStatAt(level.fd, n, false, &err);
         var is_dir = known_kind == .directory;
         if (lst) |l| {
             if (l.isLink() and !o.deref_recursive) {
                 if (o.symlinks == .gnu) continue;
                 var e4: LX.E = .SUCCESS;
-                const tgt = sys.fileStat(child, true, &e4);
+                const tgt = sys.fileStatAt(level.fd, n, true, &e4);
                 if (tgt == null or tgt.?.isDir()) continue;
             }
             is_dir = l.isDir();
@@ -2526,7 +2536,7 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
         if (is_dir) {
             if (!rgFileOk(g, disp, true)) continue;
         }
-        if (try grepFile(g, child, disp, false, true)) any = true;
+        if (try grepFile(g, &level, n, disp, false, true)) any = true;
         if (g.early) break;
     }
     return any;

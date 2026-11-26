@@ -314,6 +314,35 @@ gd 'exit status 1' nums zzz nums
 gd 'exit status 2 error + match' nums two nums nosuch
 gd 'exit status -q error' nums -q zzz nosuch
 gd 'long line' longline x longline
+# -r does not follow a link that takes the place of an entry after the
+# directory was listed. strace holds grep just after the listing.
+for swapped in file directory; do
+    rm -rf race; mkdir -p race/t race/secrets; echo 'match SECRET' > race/secrets/zzz
+    if [ "$swapped" = file ]; then echo 'match innocent' > race/t/zzz; target=../secrets/zzz
+    else mkdir race/t/zzz; echo 'match innocent' > race/t/zzz/zzz; target=../secrets; fi
+    if can_inject; then
+        (cd race && exec timeout 30 strace -o /dev/null -e trace=getdents64 -e inject=getdents64:delay_exit=3000000:when=1 "$BIN_DIR/grep" -r match t > ../race.out 2>&1) & race_pid=$!
+        sleep 1.5
+        mv race/t/zzz race/moved && ln -s "$target" race/t/zzz
+        wait "$race_pid"
+        if ! grep -q SECRET race.out; then PASS=$((PASS + 1)); printf 'PASS -r does not follow a swapped-in link to a %s\n' "$swapped"
+        else FAIL=$((FAIL + 1)); printf 'FAIL -r does not follow a swapped-in link to a %s\n' "$swapped"; head -n 3 race.out; fi
+    else
+        skip_test "grep -r link race (needs strace)"
+    fi
+done
+rm -rf race race.out
+# Directory trees deeper than the walker keeps open, with few descriptors.
+mkdir -p "deep/$(awk 'BEGIN { for (i = 0; i < 90; i++) printf "n/"; print "n" }')"
+echo match > "deep/$(awk 'BEGIN { for (i = 0; i < 90; i++) printf "n/"; print "n" }')/leaf"
+for opts in -r -R; do
+    exp=$(LC_ALL=C "${GNU_BIN:-/usr/bin}/grep" $opts match deep 2>&1)
+    act=$(ulimit -n 48 && LC_ALL=C "$BIN_DIR/grep" $opts match deep 2>&1)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); printf 'PASS %s of a deep tree with 48 descriptors\n' "$opts"
+    else FAIL=$((FAIL + 1)); printf 'FAIL %s of a deep tree with 48 descriptors: %.200s\n' "$opts" "$act"; fi
+done
+rm -rf deep
+
 # A symbolic link that leads back up is not searched again, however many
 # there are. Warning, status and (sorted) matches are GNU's.
 mkdir -p loops/one/a loops/two; echo match > loops/one/a/f; ln -s .. loops/one/a/up

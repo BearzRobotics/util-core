@@ -31,6 +31,7 @@ GNU grep 3.12 (`/usr/bin/grep --version` on the development machine). Consulted 
 - ERE leniency of GNU grep: leading `*`, `+`, `?` and `{n}` are ignored with a warning, an unmatched `)` and a `{` that does not start an interval are literals.
 - Leftmost-longest matching for alternation is emulated (see sed); `-w` and `-x` are implemented with look-around, so they pick the same match GNU's retry loop does.
 - `-R` (and the other modes that follow links) does not search a directory that is already being searched; as GNU grep it warns `recursive directory loop` (not with `-s`), which does not change the exit status.
+- A recursive search reaches files through the open directories. Where links are not followed, a symbolic link that takes the place of a file or directory after it was listed is not followed either. It stops with `File name too long` below 10000 levels (4000 in a debug build) or 64 KiB of path.
 
 ## Extensions
 
@@ -80,7 +81,7 @@ How lines are selected: the pattern is analysed once (src/lib/grep_scan.zig). A 
 
 Results on the 100 MB file: a rare literal 36 ms (GNU 64, ripgrep 16, ugrep 17; was 224); `-i` 28 ms (GNU 62; was 117); `-w -c` 95 ms (GNU 155; was 209); `-E` alternation of three literals 34 ms (GNU 99; was 200). Multi-literal round (10 MB unless noted): `-f` with 3000 words 49 ms (GNU 135, rg 52, ugrep 36; was 236); `-F -f` 1000 words 46 ms (GNU 154; was 104); `-F` with 10 patterns over 100 MB 86 ms (GNU 289, rg 58, ugrep 69; was 382); `-E '(two|the)s?'` 9 ms (GNU 12; was 33). A 3000-word `-w` list, which took minutes through the DFA, takes 60 ms. `-r --include` skips a regular file the globs reject from the directory entry alone (no stat), as GNU does.
 
-Still behind GNU: patterns that need the DFA on every line (`^[a-m]+[[:space:]][n-z]+` 8.5x, `-x` with a regex 3x, UTF-8 `-i` and `.` 3x). The regex-zig 0.3.0 DFA loop costs 30-60 instructions per byte; see the notes in docs/benchmarks/grep.md. Also `-r` over 10000 small files is about 1.1x GNU (one stat, open, read and close per file, as GNU).
+Still behind GNU: patterns that need the DFA on every line (`^[a-m]+[[:space:]][n-z]+` 8.5x, `-x` with a regex 3x, UTF-8 `-i` and `.` 3x). The regex-zig 0.3.0 DFA loop costs 30-60 instructions per byte; see the notes in docs/benchmarks/grep.md. Also `-r` over 10000 small files was measured at about 1.1x GNU with one stat, open, read and close per file; there is now also an fstat of the opened file (not re-measured).
 
 ## Known deviations and gaps
 
