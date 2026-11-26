@@ -1608,6 +1608,18 @@ pub fn seekFd(fd: Handle, off: i64, whence: u32, err: *LX.E) ?i64 {
     return @bitCast(rc);
 }
 
+/// Wait up to `timeout_ms` for the reading end of `fd`, a pipe or socket we
+/// write to, to be closed; true when it has been. Writing is the only other way
+/// to learn that, so a program with nothing to write needs this. Null (without
+/// waiting) when the system cannot be asked. std.Io has no poll.
+pub fn waitReaderGone(fd: Handle, timeout_ms: i32) ?bool {
+    if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return null;
+    // No events requested: only POLLERR (pipe) or POLLHUP (socket) end the wait.
+    var fds = [1]std.posix.pollfd{.{ .fd = fd, .events = 0, .revents = 0 }};
+    const n = std.posix.poll(&fds, timeout_ms) catch return null;
+    return n > 0 and fds[0].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP) != 0;
+}
+
 /// The offset at which the next streaming read or write of `fd` happens, or
 /// null when it has none or the system cannot say. (seekFd's result cannot be
 /// used for this everywhere: on Windows it does not report a position.)

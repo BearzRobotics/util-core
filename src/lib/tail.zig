@@ -7,7 +7,8 @@
 //! small files such as those of /proc and /sys) are streamed while holding
 //! only the last N items in memory. Following (by descriptor or by name) polls,
 //! and `run` does not return until the follow ends (the --pid process dies,
-//! no file remains, or an output error occurs).
+//! no file remains, the reader of `Options.output` leaves, or an output error
+//! occurs).
 
 const std = @import("std");
 const Io = std.Io;
@@ -34,6 +35,9 @@ pub const Options = struct {
     sleep_seconds: f64 = 1.0,
     pid: ?i32 = null,
     header: Header = .auto,
+    /// The pipe or socket that `run`'s writer ends in, if any: following then
+    /// ends as soon as its reader closes it, without waiting for more input.
+    output: ?Io.File = null,
 };
 
 pub const Kind = enum {
@@ -62,7 +66,11 @@ pub const Event = struct {
     detail: []const u8 = "",
 };
 
-pub const Result = struct { failed: bool = false };
+pub const Result = struct {
+    failed: bool = false,
+    /// Following ended because nobody reads `Options.output` any more.
+    reader_gone: bool = false,
+};
 
 pub const Observer = common.Observer(Event);
 
@@ -310,6 +318,13 @@ fn lastFromStream(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, bu
     return total;
 }
 
+/// Sleep for one polling interval while watching for the output's reader to
+/// close it. Null when that cannot be watched (nothing has been slept then).
+fn waitForReader(output: Io.File, interval_ns: i96) ?bool {
+    const ms = std.math.divCeil(i96, interval_ns, std.time.ns_per_ms) catch unreachable;
+    return sys.waitReaderGone(output.handle, @intCast(@min(ms, std.math.maxInt(i32))));
+}
+
 /// The part of the follow loop that copies data out of the open files.
 const Follower = struct {
     env: Env,
@@ -420,6 +435,10 @@ fn followLoop(env: Env, out: *stickyout.Out, files: []Followed, cfg: Options, mu
             return .{ .failed = true };
         }
         if (!follower.activity) if (cfg.pid) |pid| if (!sys.processAlive(pid)) return .{ .failed = follower.exit_status != 0 };
+        if (cfg.output) |output| if (waitForReader(output, interval_ns)) |gone| {
+            if (gone) return .{ .failed = true, .reader_gone = true };
+            continue;
+        };
         std.Io.sleep(env.io, .fromNanoseconds(interval_ns), .awake) catch return .{ .failed = follower.exit_status != 0 };
     }
 }

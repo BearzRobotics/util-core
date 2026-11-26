@@ -135,6 +135,13 @@ for a in "-n0" "-c0" "-n1" "" "-n +2" "-c +2" "-c3"; do
         cmp -s gnu.out ours.out && { PASS=$((PASS + 1)); echo "PASS -f on redirected stdin: '$a', $skip line(s) already read"; } || { FAIL=$((FAIL + 1)); printf "FAIL -f on redirected stdin: '%s' skip %s\n     GNU : %s\n     OURS: %s\n" "$a" $skip "$(cat gnu.out)" "$(cat ours.out)"; }
     done
 done
+# The reader of the output pipe leaves while the followed file stays quiet.
+echo first > qf; rm -f qf.status
+( "$BIN_DIR/tail" -s 0.1 -f qf 2> qf.err & echo $! > qf.pid; wait $!; echo $? > qf.status ) | head -n 1 > /dev/null &
+i=0; while [ ! -s qf.status ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+if [ -s qf.status ] && [ ! -s qf.err ]; then PASS=$((PASS + 1)); echo "PASS -f ends when the output pipe loses its reader"
+else FAIL=$((FAIL + 1)); echo "FAIL -f ends when the output pipe loses its reader: $(cat qf.err)"; kill "$(cat qf.pid)" 2>/dev/null; fi
+wait 2>/dev/null
 sleep 30 & spid=$!
 echo x > pf; timeout 5 "$BIN_DIR/tail" --pid=$spid -s 0.1 -f pf > /dev/null & tpid=$!
 sleep 0.5; kill $spid; wait $spid 2>/dev/null; sleep 0.5
@@ -194,6 +201,7 @@ rotated "-F two files, rotation with pending lines" "-F -s 1 f g" "sleep 0.5; ec
 cd /
 rm -rf "$W"
 printf "\n[ Backward scan across read windows ]\n"
+CMP_STDIN=/dev/null # the earlier default input was removed with its directory
 W="$(mktemp -d)"
 awk 'BEGIN { srand(21); for (i = 0; i < 60000; i++) { n = int(rand() * 25); s = ""; for (j = 0; j < n; j++) s = s "z"; print i s } }' > "$W/lines"
 head -c 65536 "$W/lines" > "$W/w1"
