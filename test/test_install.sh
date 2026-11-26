@@ -125,4 +125,29 @@ done
 run_tree "setgid parent -d"                    "$SG" -d g/new
 run_tree "setgid parent -d existing"           "$SG" -d g/old
 run_tree "setgid parent -D"                    "$SG" -D -m 700 f g/a/b/f
+# Another process may make a shared directory between the look and the mkdir
+# (a parallel "make install"). strace holds install there while the test makes it.
+if can_inject; then
+    for case in "-D:q/r/z:q" "-D:q/r/z:q/r" "-d:p/q:p" "-d:p/q:p/q" "-d -m 700:p/q:p/q"; do
+        opts=${case%%:*}; rest=${case#*:}; dst=${rest%:*}; made=${rest#*:}
+        d="$TEST_TMP/race"; rm -rf "$d"; mkdir -p "$d/w"; echo data > "$d/w/f"
+        n=1; case $made in */*) n=2 ;; esac
+        src=; [ "$opts" != -D ] || src=f
+        (cd "$d/w" && exec timeout 30 strace -o ../trace -e trace=mkdirat,mkdir -e inject=mkdirat,mkdir:delay_enter=2000000:when=$n "$BIN_DIR/install" $opts $src "$dst" > ../out 2>&1) & pid=$!
+        tries=0
+        while [ "$(cat "$d/trace" 2>/dev/null | grep -c '^mkdir')" -lt $((n - 1)) ] && [ $tries -lt 100 ]; do sleep 0.05; tries=$((tries + 1)); done
+        sleep 1
+        mkdir -p "$d/w/$made"
+        wait $pid; rc=$?
+        ok=1; [ "$rc" = 0 ] && [ ! -s "$d/out" ] && grep -q EEXIST "$d/trace" || ok=0
+        case $opts in -D) cmp -s "$d/w/f" "$d/w/$dst" || ok=0 ;; "-d -m 700") [ "$(stat -c %a "$d/w/$dst")" = 700 ] || ok=0 ;; *) [ "$(stat -c %a "$d/w/$dst")" = 755 ] || ok=0 ;; esac
+        if [ $ok = 1 ]; then
+            PASS=$((PASS + 1)); echo "PASS install $opts $dst while $made appears"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL install $opts $dst while $made appears (rc=$rc)"; cat "$d/out"
+        fi
+    done
+else
+    skip_test "concurrent install (no usable strace)"
+fi
 cd /; print_summary

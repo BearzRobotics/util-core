@@ -282,6 +282,15 @@ fn announceMkdir(s: *St, dir: []const u8) void {
     }
 }
 
+/// Whether mkdir failed only because the directory appeared after we looked,
+/// as when several installs create a shared directory at once.
+fn madeMeanwhile(path: []const u8, failure: E) bool {
+    if (failure != .EXIST) return false;
+    var e: E = .SUCCESS;
+    const st = sys.fileStat(path, true, &e) orelse return false;
+    return st.isDir();
+}
+
 /// Create every missing leading directory of `path` (not `path` itself).
 fn mkAncestors(s: *St, path: []const u8) bool {
     var i: usize = 0;
@@ -296,10 +305,11 @@ fn mkAncestors(s: *St, path: []const u8) bool {
             }
         } else {
             if (sys.mkdirPath(prefix, 0o755)) |me| {
-                s.warn("cannot create directory {f}: {s}", .{ quote.quoteA(path), sys.errnoText(me) });
-                return false;
-            }
-            announceMkdir(s, prefix);
+                if (!madeMeanwhile(prefix, me)) {
+                    s.warn("cannot create directory {f}: {s}", .{ quote.quoteA(path), sys.errnoText(me) });
+                    return false;
+                }
+            } else announceMkdir(s, prefix);
         }
         i = sl + 1;
         while (i < path.len and path[i] == '/') i += 1;
@@ -323,12 +333,15 @@ fn processDir(s: *St, dir_in: []const u8) bool {
     } else {
         const create_mode = if (s.o.owner_id != unset or s.o.group_id != unset) s.o.dir_mode & 0o700 else s.o.dir_mode;
         if (sys.mkdirPath(dir, create_mode)) |me| {
-            if (me == .ACCES) {
-                s.warn("cannot change permissions of {f}: No such file or directory", .{quote.quoteA(dir)});
-            } else s.warn("cannot create directory {f}: {s}", .{ quote.quoteA(dir), sys.errnoText(me) });
-            return false;
-        }
-        announceMkdir(s, dir);
+            if (madeMeanwhile(dir, me)) {
+                existed = true;
+            } else {
+                if (me == .ACCES) {
+                    s.warn("cannot change permissions of {f}: No such file or directory", .{quote.quoteA(dir)});
+                } else s.warn("cannot create directory {f}: {s}", .{ quote.quoteA(dir), sys.errnoText(me) });
+                return false;
+            }
+        } else announceMkdir(s, dir);
     }
     if (!(s.o.owner_id == unset and s.o.group_id == unset)) {
         if (sys.chownAt(dir, s.o.owner_id, s.o.group_id, true)) |ce| {
