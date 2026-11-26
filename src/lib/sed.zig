@@ -391,7 +391,6 @@ const Cmd = struct {
     ypairs: ?[]const [2]u32 = null,
     ysrc: []const u8 = "",
     ydst: []const u8 = "",
-    depth: u16 = 0,
 };
 
 fn isStdFd(fd: sys.Handle) bool {
@@ -1014,7 +1013,6 @@ const Parser = struct {
                 }
             }
             cmd.c = c;
-            cmd.depth = @intCast(s.blocks.items.len);
             switch (c) {
                 '#' => {
                     if (cmd.a1.kind != .none) return p.fail("comments don't accept any addresses", .{});
@@ -1037,7 +1035,6 @@ const Parser = struct {
                     if (cmd.a1.kind != .none) return p.fail("}} doesn't want any addresses", .{});
                     const open = s.blocks.pop() orelse return p.fail("unexpected `}}'", .{});
                     s.cmds.items[open].jump = s.cmds.items.len;
-                    cmd.depth = @intCast(s.blocks.items.len);
                     try s.cmds.append(s.arena, cmd);
                     try p.endOfCmd();
                     continue;
@@ -1073,7 +1070,10 @@ const Parser = struct {
                     const x = p.skipBlank();
                     if (x) |d| {
                         if (std.ascii.isDigit(d)) {
-                            cmd.int = @intCast(p.readNumber(d));
+                            const n = p.readNumber(d);
+                            // A width too large to hold wraps no line. An
+                            // exit status is the low byte, which masking keeps.
+                            cmd.int = @intCast(if (c == 'l') @min(n, std.math.maxInt(i64)) else n & std.math.maxInt(i64));
                         } else p.unget();
                     }
                     try p.endOfCmd();
@@ -1829,11 +1829,12 @@ const Exec = struct {
             },
             .plus => {
                 if (c.a2.n == 0) return true;
-                c.range_end = l + c.a2.n;
+                // A range that ends past any line number goes to the end.
+                c.range_end = l +| c.a2.n;
             },
             .mult => {
                 if (c.a2.n == 0) return true;
-                c.range_end = (l / c.a2.n + 1) * c.a2.n;
+                c.range_end = (l / c.a2.n + 1) *| c.a2.n;
             },
             else => {},
         }

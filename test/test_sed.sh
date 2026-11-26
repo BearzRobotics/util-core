@@ -162,6 +162,20 @@ sd 'addr 0,/re/ -s' nums -s -n '0,/o/p' nums nums
 sd 'addr 2,4 -s' nums -s -n '2,4p' nums nums
 sd 'addr 2,4 no -s' nums -n '2,4p' nums nums
 
+# Numbers that do not fit where they are used, and very deep blocks.
+huge=18446744073709551615
+# (GNU's sum wraps around and ends such a range after two lines.)
+got=$(printf '1\n2\n3\n4\n' | "$BIN_DIR/sed" -n "2,+${huge}p" 2>&1 | tr '\n' ' ')
+if [ "$got" = '2 3 4 ' ]; then PASS=$((PASS + 1)); echo "PASS a range +N past any line goes to the end"
+else FAIL=$((FAIL + 1)); echo "FAIL a range +N past any line goes to the end ($got)"; fi
+sd 'range ~N with a huge multiple' nums -n "2,~${huge}p"
+sd 'l width 2^63' abc 'l 9223372036854775808'
+sd 'q status 2^63' nums 'q 9223372036854775808'
+sd 'q status 2^63+7' nums 'q 9223372036854775815'
+sd 'Q status 2^64+3 wraps' nums 'Q 18446744073709551619'
+awk 'BEGIN { for (i = 0; i < 70000; i++) printf "{"; printf "p"; for (i = 0; i < 70000; i++) printf "}"; print "" }' > deep.sed
+sd '70000 nested blocks' one -f deep.sed
+
 # ---- other commands, per input
 for f in nums text abc nonl nonl3 empty one; do
     sd "p $f" $f p

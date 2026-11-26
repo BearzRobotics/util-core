@@ -45,6 +45,7 @@ None. Every option and command is GNU sed 4.9's (including `--debug`, `--sandbox
 - `\<` and `\>` in the C locale: the pattern is translated for regex-zig's Perl dialect, which has only `\b`. Where a literal word character or `\w` is next to the anchor on the word's side (`\<foo`, `bar\>`), `\b` means the same and is used. Elsewhere (`s/\>//`, `\<[a-z]*`) a lookahead is added, which, as in UTF-8 locales, needs the backtracking engine: it is slower, and on very long lines the search can reach its limit. Removing that needs word-start and word-end assertions in the Perl dialect of regex-zig.
 - `e` and `s///e` run the command with `/bin/sh -c` and read its output through a pipe; no temporary file is used.
 - `-i` takes the owner, group, mode and POSIX access ACL from the file as it was opened (an ACL the new file inherited from its directory is removed, as in GNU). Other extended attributes are not copied (nor by GNU); an SELinux context is not copied either, unlike GNU. When the group cannot be kept, the new file's group gets no more than others had (with a warning), and a set-ID bit is kept only along with its owner or group; GNU copies the mode unchanged.
+- Numbers in scripts wrap at 2^64 as GNU's do; a `+N` or `~N` range end that does not fit is the end of the input (GNU's sum wraps).
 - `--version` prints an abbreviated banner.
 
 ## Tests
