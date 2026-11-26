@@ -1229,38 +1229,69 @@ pub fn readDirFd(gpa: std.mem.Allocator, fd: Handle, err: *LX.E) ?[]RawEntry {
         for (list.items) |x| gpa.free(x.name);
         list.deinit(gpa);
     }
+    const e = appendDirEntries(gpa, &list, fd);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return list.toOwnedSlice(gpa) catch {
+        err.* = .NOMEM;
+        return null;
+    };
+}
+
+/// What could be read of a directory: `failure` is set when the listing ended
+/// early, and `entries` (free with `freeDirEntries`) holds what came before.
+pub const DirListing = struct { entries: []RawEntry, failure: ?LX.E = null };
+
+/// `readDirNamesFd` for a walk that only reports (find), which visits the
+/// names it did get before reporting the error, as GNU find does. Null when
+/// there is nothing to give. Other systems give a complete listing or none.
+pub fn readDirNamesPartialFd(gpa: std.mem.Allocator, fd: Handle, err: *LX.E) ?DirListing {
+    if (comptime !is_linux) return .{ .entries = readDirNamesFd(gpa, fd, err) orelse return null };
+    var list: std.ArrayList(RawEntry) = .empty;
+    defer {
+        for (list.items) |x| gpa.free(x.name);
+        list.deinit(gpa);
+    }
+    const e = appendDirEntries(gpa, &list, fd);
+    if (e != .SUCCESS and list.items.len == 0) {
+        err.* = e;
+        return null;
+    }
+    const all = list.toOwnedSlice(gpa) catch {
+        err.* = .NOMEM;
+        return null;
+    };
+    const names = dropDots(gpa, all, err) orelse return null;
+    return .{ .entries = names, .failure = if (e == .SUCCESS) null else e };
+}
+
+/// Append the entries of the open directory `fd` to `list`. On failure the
+/// entries read until then stay in the list.
+fn appendDirEntries(gpa: std.mem.Allocator, list: *std.ArrayList(RawEntry), fd: Handle) LX.E {
     var buf: [32768]u8 align(8) = undefined;
     while (true) {
         const rc = LX.syscall3(.getdents64, @bitCast(@as(isize, fd)), @intFromPtr(&buf), buf.len);
         const e = LX.errno(rc);
         if (e == .INTR) continue;
-        if (e != .SUCCESS) {
-            err.* = e;
-            return null;
-        }
+        if (e != .SUCCESS) return e;
         if (rc == 0) break;
         var off: usize = 0;
         while (off < rc) {
             const reclen = std.mem.readInt(u16, buf[off + 16 ..][0..2], .little);
             const dtype = buf[off + 18];
             const nm = std.mem.sliceTo(buf[off + 19 .. off + reclen], 0);
-            const dup = gpa.dupe(u8, nm) catch {
-                err.* = .NOMEM;
-                return null;
-            };
+            const dup = gpa.dupe(u8, nm) catch return .NOMEM;
             const ino = std.mem.readInt(u64, buf[off..][0..8], .little);
             list.append(gpa, .{ .name = dup, .dtype = dtype, .ino = ino }) catch {
                 gpa.free(dup);
-                err.* = .NOMEM;
-                return null;
+                return .NOMEM;
             };
             off += reclen;
         }
     }
-    return list.toOwnedSlice(gpa) catch {
-        err.* = .NOMEM;
-        return null;
-    };
+    return .SUCCESS;
 }
 
 pub fn closeFd(fd: Handle) ?LX.E {

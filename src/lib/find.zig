@@ -2111,15 +2111,17 @@ fn walkDir(st: *State, path: []const u8, depth: i64, ancestors: *std.ArrayList(A
     defer if (dirat.leave(&level)) |e| pathError(st, dirnameOf(path), e);
 
     var err: LX.E = .SUCCESS;
-    const entries = sys.readDirNamesFd(st.env.gpa, level.fd, &err) orelse return pathError(st, path, err);
-    defer sys.freeDirEntries(st.env.gpa, entries);
+    const listing = sys.readDirNamesPartialFd(st.env.gpa, level.fd, &err) orelse return pathError(st, path, err);
+    defer sys.freeDirEntries(st.env.gpa, listing.entries);
+    // A listing that ended early is an error, reported after what it did give.
+    defer if (listing.failure) |e| pathError(st, path, e);
     var base = path;
     if (base.len > 1 and base[base.len - 1] == '/') {
         // fts: the trailing slash of the parent is not doubled
         base = base[0 .. base.len - 1];
         if (base.len == 0) base = "/";
     }
-    for (entries) |entry| {
+    for (listing.entries) |entry| {
         // A level that could not be reopened cannot be walked any further.
         if (st.quit or !level.open) return;
         const nm = entry.name;

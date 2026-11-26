@@ -623,6 +623,22 @@ race_check "deep tree with 48 descriptors" test "$exp" = "$act"
 (cd "$W" && ulimit -n 48 && "$BIN_DIR/find" deepfd -delete > "$W/race.out" 2>&1)
 race_check "-delete of a deep tree with 48 descriptors" test ! -e "$W/deepfd"
 
+# A directory that cannot be read to its end is an error, and the names read
+# before it are still visited. strace makes the second getdents64 call fail.
+mkdir "$W/readerr"; cd "$W/readerr"; mkdir d; : > d/a; : > d/b
+if strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=2 true 2>/dev/null; then
+    for when in 1 2; do
+        inject() { strace -f -o /dev/null -e trace=getdents64 -e "inject=getdents64:error=EIO:when=$when" "$@" 2>"$W/rerr"; echo "status $?"; }
+        exp=$(inject /usr/bin/find d | sort); gerr=$(sed 's#^[^ ]*find:#find:#' "$W/rerr")
+        act=$(inject "$BIN_DIR/find" d | sort); oerr=$(sed 's#^[^ ]*find:#find:#' "$W/rerr")
+        if [ "$exp" = "$act" ] && [ "$gerr" = "$oerr" ]; then PASS=$((PASS + 1)); echo "PASS directory read error, call $when"
+        else FAIL=$((FAIL + 1)); echo "FAIL directory read error, call $when"; printf '  GNU: %s %s\n  ours: %s %s\n' "$exp" "$gerr" "$act" "$oerr"; fi
+    done
+else
+    SKIP=$((SKIP + 1)); echo "SKIP directory read errors (needs strace fault injection)"
+fi
+cd "$W/t"
+
 # Any time the file system can hold: no crash, and where the year does not fit
 # a struct tm the seconds are printed, as GNU does. (Skipped where the file
 # system clamps such times.)
