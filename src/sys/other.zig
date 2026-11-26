@@ -570,6 +570,7 @@ pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *E) ?Handle {
 }
 
 pub fn closeFd(fd: Handle) ?E {
+    if (comptime is_libc_posix) return cerr(c.close(fd));
     fileOf(fd).close(io());
     return null;
 }

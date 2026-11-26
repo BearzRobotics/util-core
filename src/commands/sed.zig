@@ -164,10 +164,9 @@ pub fn main(ctx: cli.Context) u8 {
     opts.stderr = &stderr.interface;
     opts.stdin = Io.File.stdin();
     var report_state = Report{ .ctx = ctx, .stdout = &stdout, .stderr = &stderr };
-    const result = sed.run(env, &program, opts, inputs.items, &stdout.interface, .{
-        .context = &report_state,
-        .func = report,
-    }) catch return oom(ctx);
+    const observer: sed.Observer = .{ .context = &report_state, .func = report };
+    const result = sed.run(env, &program, opts, inputs.items, &stdout.interface, observer) catch return oom(ctx);
+    if (!program.closeFiles(observer)) return 4;
     return result.exit_code;
 }
 
@@ -220,6 +219,7 @@ fn report(context: ?*anyopaque, ev: sed.Event) void {
         },
         .temp_open_failed => |e| cli.warn(ctx, "couldn't open temporary file {s}: {s}", .{ e.path, sys.errnoText(e.errno) }),
         .rename_failed => |e| cli.warn(ctx, "cannot rename {s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
+        .close_failed => |e| cli.warn(ctx, "couldn't close {s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
         .no_previous_regex => |ch| {
             if (ch.is_file) {
                 cli.warn(ctx, "file {s} line 1: no previous regular expression", .{ch.name});

@@ -451,6 +451,28 @@ run_tree_t '-i backup in missing dir' "$SET" -i'nodir/*' 's/a/A/' f g
 run_tree_t '-i backup is a directory' "$SET; mkdir f.bak" -i.bak 's/[ax]/A/' f g
 run_tree_t '-i backup fails after q' "$SET" -i'nodir/*' 2q f g
 run_tree_t '-i backup fails, w kept' "$SET" -i'nodir/*' -e 'w out' f g
+# A write error that only close() reports. strace makes that one close fail;
+# the file being edited (or the w file) is picked by name from a first trace.
+# close_fails DESC PATTERN WANT-f ARGS...
+close_fails() {
+    description="$1"; pattern="$2"; want="$3"; shift 3
+    d="$W/close"; rm -rf "$d"; mkdir "$d"
+    printf 'a\n' > "$d/f"
+    (cd "$d" && strace -y -o ../trace -e trace=close "$BIN_DIR/sed" "$@") > /dev/null 2>&1
+    n=$(grep '^close' "$W/trace" | grep -n "$pattern" | head -n 1 | cut -d: -f1)
+    if [ -z "$n" ]; then skip_test "$description (cannot trace)"; return; fi
+    printf 'a\n' > "$d/f"; rm -f "$d/w"
+    (cd "$d" && strace -o ../trace -e trace=close -e inject=close:error=EIO:when="$n" "$BIN_DIR/sed" "$@") > /dev/null 2> "$W/close.err"; rc=$?
+    if [ "$rc" -eq 4 ] && grep -q "couldn't close .*: Input/output error" "$W/close.err" &&
+        [ "$(cat "$d/f")" = "$want" ] && [ -z "$(find "$d" -name 'sed*')" ]; then
+        PASS=$((PASS + 1)); printf 'PASS %s\n' "$description"
+    else
+        FAIL=$((FAIL + 1)); printf 'FAIL %s (rc=%s f=%s) %s\n' "$description" "$rc" "$(cat "$d/f")" "$(cat "$W/close.err")"
+    fi
+}
+close_fails '-i keeps the file when close fails' '/sed[0-9a-f]\{6\}>' a -i 's/a/b/' f
+close_fails '-i.bak keeps the file when close fails' '/sed[0-9a-f]\{6\}>' a -i.bak 's/a/b/' f
+close_fails 'w file close failure' '/w>' a -n 'w w' f
 run_tree_t '--in-place' "$SET" --in-place 's/a/A/' f
 run_tree_t '--in-place=.b' "$SET" --in-place=.b 's/a/A/' f
 run_tree_t '-i missing' "$SET" -i 's/a/A/' nosuch

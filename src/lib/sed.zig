@@ -144,6 +144,9 @@ pub const Event = union(enum) {
     /// "cannot rename NAME: ERRNO" (fatal, status 4). The original is not
     /// replaced.
     rename_failed: struct { name: []const u8, errno: LX.E },
+    /// "couldn't close NAME: ERRNO" (fatal, status 4). Some file systems only
+    /// report a failed write here. An in-place original is not replaced.
+    close_failed: struct { name: []const u8, errno: LX.E },
     /// An empty regex with no previous one (fatal, status 1). The chunk is
     /// the script's first.
     no_previous_regex: Chunk,
@@ -166,9 +169,25 @@ pub const Program = struct {
     gpa: std.mem.Allocator,
     st: *State,
 
+    /// Close the `w` files after the last run, reporting through `observer`.
+    /// False if any close failed, which means output may be missing. The
+    /// program cannot run again if it has `w` files.
+    pub fn closeFiles(p: *Program, observer: Observer) bool {
+        var ok = true;
+        for (p.st.outs.items) |o| {
+            if (isStdFd(o.fd) or o.fd == sys.invalid_handle) continue;
+            if (sys.closeFd(o.fd)) |er| {
+                observer.emit(.{ .close_failed = .{ .name = o.path, .errno = er } });
+                ok = false;
+            }
+            o.fd = sys.invalid_handle;
+        }
+        return ok;
+    }
+
     pub fn deinit(p: *Program) void {
         for (p.st.outs.items) |o| {
-            if (!isStdFd(o.fd)) _ = sys.closeFd(o.fd);
+            if (!isStdFd(o.fd) and o.fd != sys.invalid_handle) _ = sys.closeFd(o.fd);
         }
         const gpa = p.gpa;
         p.arena.deinit();
@@ -1489,8 +1508,14 @@ const Exec = struct {
             }
             _ = sys.closeFd(ofd);
         }
-        _ = sys.closeFd(o.fd);
+        const close_error = sys.closeFd(o.fd);
         o.fd = sys.invalid_handle;
+        if (close_error) |er| {
+            e.s.obs.emit(.{ .close_failed = .{ .name = tmp, .errno = er } });
+            try e.flushAll();
+            e.s.exit_code = 4;
+            return error.Abort;
+        }
         if (e.s.opts.suffix) |suf| {
             const name = e.in_place_target;
             const slash = std.mem.lastIndexOfScalar(u8, name, '/');
