@@ -32,6 +32,7 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 - Random data and the order of the fixed patterns come from the operating system's generator, not GNU's ISAAC stream: `--random-source` supplies the bytes but the resulting passes differ from GNU's for the same file.
 - Direct I/O is not requested.
+- `-u` warns on standard error when a rename fails and the name is therefore not fully wiped; GNU is silent. As in GNU, a file system without `RENAME_NOREPLACE` is renamed without it after checking that the new name is free.
 
 ## Tests
 

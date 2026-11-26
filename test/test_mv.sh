@@ -145,4 +145,20 @@ else
     skip_test "mv source removal race (needs strace and a second file system)"
 fi
 rm -rf "$d"; [ -z "$other" ] || rm -rf "$other"
+# A file system without RENAME_NOREPLACE (NFS, CIFS, many FUSE ones) fails the
+# renameat2 call with EINVAL; mv must still move, and still make backups.
+d=$(mktemp -d)
+if can_inject; then
+    echo x > "$d/a"; echo y > "$d/c"; echo z > "$d/e"
+    (cd "$d" && strace -f -o /dev/null -e trace=renameat2 -e inject=renameat2:error=EINVAL "$BIN_DIR/mv" a b > out 2>&1); rc1=$?
+    (cd "$d" && strace -f -o /dev/null -e trace=renameat2 -e inject=renameat2:error=EINVAL "$BIN_DIR/mv" --backup=numbered c e >> out 2>&1); rc2=$?
+    if [ "$rc1$rc2" = 00 ] && [ ! -s "$d/out" ] && [ "$(cat "$d/b")" = x ] && [ "$(cat "$d/e")" = y ] && [ "$(cat "$d/e.~1~")" = z ]; then
+        PASS=$((PASS + 1)); echo "PASS mv without RENAME_NOREPLACE"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL mv without RENAME_NOREPLACE (rc=$rc1 $rc2)"; cat "$d/out"
+    fi
+else
+    skip_test "mv without RENAME_NOREPLACE (no usable strace)"
+fi
+rm -rf "$d"
 cd /; print_summary

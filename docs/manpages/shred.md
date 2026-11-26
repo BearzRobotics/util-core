@@ -34,6 +34,12 @@ Overwrite a file to hide its contents, and optionally delete it.
 --help, --version
 : Print help or version and exit.
 
+# DIFFERENCES FROM GNU
+
+- When `-u` cannot rename a file in order to wipe its name, shred prints a
+  warning on standard error before removing it. GNU says nothing. The exit
+  status is GNU's.
+
 # EXIT STATUS
 
 | Status | Meaning |

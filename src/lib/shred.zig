@@ -398,6 +398,7 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
     var first = true;
     if (o.remove != .unlink) {
         var len = cur.len - base_off;
+        var warned = false;
         while (len != 0) : (len -= 1) {
             const next = ctx.gpa.dupe(u8, cur[0 .. base_off + len]) catch return false;
             defer ctx.gpa.free(next);
@@ -406,6 +407,12 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
             while (true) {
                 if (sys.renamePath(cur, next, sys.RENAME_NOREPLACE)) |re| {
                     if (re == .EXIST and incname(next[base_off..])) continue;
+                    // GNU says nothing here, though some or all of the old
+                    // name may then survive in the directory.
+                    if (re != .EXIST and !warned) {
+                        warn(ctx, "{s}: warning: cannot rename, so the name is not fully wiped: {s}", .{ qoldname, sys.errnoText(re) });
+                        warned = true;
+                    }
                     break;
                 }
                 rename_ok = true;

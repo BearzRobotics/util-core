@@ -1268,7 +1268,16 @@ pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?LX.E {
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
     const p2 = cstr(&b2, new) orelse return .NAMETOOLONG;
-    return errOf(LX.syscall5(.renameat2, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p1), @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p2), flags));
+    if (flags == 0) return errOf(LX.renameat(LX.AT.FDCWD, p1, LX.AT.FDCWD, p2));
+    const failed = errOf(LX.syscall5(.renameat2, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p1), @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p2), flags)) orelse return null;
+    // NFS, CIFS and many FUSE file systems reject the flag (and old kernels
+    // the call). As gnulib's renameatu does: check that nothing has the new
+    // name, then rename without the flag. That is not atomic.
+    if (flags != RENAME_NOREPLACE or (failed != .INVAL and failed != .NOSYS and failed != .OPNOTSUPP)) return failed;
+    var e: LX.E = .SUCCESS;
+    if (fileStat(new, false, &e) != null or e == .OVERFLOW) return .EXIST;
+    if (e != .NOENT) return e;
+    return errOf(LX.renameat(LX.AT.FDCWD, p1, LX.AT.FDCWD, p2));
 }
 
 /// linkat(2); `follow` makes a hard link to the target of a symlink.
