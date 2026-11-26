@@ -56,6 +56,7 @@ See docs/compatibility/csplit.md for details.
 # LIMITATIONS
 
 - The whole input is read into memory before splitting.
+- A `--digits` value, field width or precision above 1048576 is "memory exhausted". GNU says that from 2147483647 on, or when it cannot allocate the name; below that, such a name is too long to create anyway.
 - `--help` omits the "GNU coreutils online help" footer.
 
 # SEE ALSO

@@ -156,6 +156,7 @@ const State = struct {
         if (s.suffix) |sf| {
             try formatSuffix(s.gpa, buf, sf, @intCast(num));
         } else {
+            if (s.digits > max_field) return error.OutOfMemory;
             var tmp: [32]u8 = undefined;
             const d = std.fmt.bufPrint(&tmp, "{d}", .{num}) catch unreachable;
             if (d.len < s.digits) try buf.appendNTimes(s.gpa, '0', s.digits - d.len);
@@ -352,7 +353,11 @@ const State = struct {
                 if (try s.matches(p, line)) break;
             }
         }
-        const break_line = s.current_line + p.offset;
+        // A line number that cannot be represented: nothing more is written.
+        const break_line = std.math.add(i64, s.current_line, p.offset) catch {
+            s.obs.emit(.{ .line_out_of_range = .{ .text = s.args[p.argnum], .repetition = 0 } });
+            return s.cleanupFatal();
+        };
         try s.writeToFile(break_line, ignore, p.argnum);
         if (!ignore) try s.closeOutputFile();
         if (p.offset > 0) s.current_line = break_line;
@@ -371,6 +376,11 @@ const State = struct {
         try s.closeOutputFile();
     }
 };
+/// The largest --digits, field width or precision that is padded out. It is
+/// far beyond any file name; larger ones are "memory exhausted" (GNU says so
+/// from INT_MAX on) instead of gigabytes of padding.
+const max_field = 1 << 20;
+
 /// sprintf(format, num) for the integer conversions allowed in --suffix-format.
 fn formatSuffix(gpa: std.mem.Allocator, out: *std.ArrayList(u8), fmt: []const u8, num: i32) !void {
     var i: usize = 0;
@@ -400,14 +410,15 @@ fn formatSuffix(gpa: std.mem.Allocator, out: *std.ArrayList(u8), fmt: []const u8
             }
         }
         var width: usize = 0;
-        while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) width = width * 10 + (fmt[i] - '0');
+        while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) width = width *| 10 +| (fmt[i] - '0');
         var prec: ?usize = null;
         if (i < fmt.len and fmt[i] == '.') {
             i += 1;
             var pv: usize = 0;
-            while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) pv = pv * 10 + (fmt[i] - '0');
+            while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) pv = pv *| 10 +| (fmt[i] - '0');
             prec = pv;
         }
+        if (width > max_field or (prec orelse 0) > max_field) return error.OutOfMemory;
         const conv = if (i < fmt.len) fmt[i] else 'd';
         i += 1;
         var digits_buf: [48]u8 = undefined;
