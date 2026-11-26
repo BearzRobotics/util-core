@@ -1078,6 +1078,31 @@ pub fn readFd(fd: Handle, buf: []u8, err: *LX.E) ?usize {
     }
 }
 
+/// `readFd` that also returns when a caught signal interrupts it (.INTR), so
+/// the caller can act on the signal before reading again.
+pub fn readFdInterruptible(fd: Handle, buf: []u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.readFd(fd, buf, err);
+    const rc = LX.read(fd, buf.ptr, buf.len);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return rc;
+}
+
+/// `writeFd` that also returns .INTR, like `readFdInterruptible`.
+pub fn writeFdInterruptible(fd: Handle, bytes: []const u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.writeFd(fd, bytes, err);
+    const rc = LX.write(fd, bytes.ptr, bytes.len);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return rc;
+}
+
 /// One write(2); returns the byte count written.
 pub fn writeFd(fd: Handle, bytes: []const u8, err: *LX.E) ?usize {
     if (comptime !is_linux) return other.writeFd(fd, bytes, err);
@@ -1352,4 +1377,60 @@ pub fn deliverCaughtSignal(sig: u8) void {
     _ = L.sigaction(@enumFromInt(sig), &act, null);
     unblockSignal(sig);
     _ = L.kill(self, @enumFromInt(sig));
+}
+
+// ----------------------------------- statistics on request (dd: USR1, INT)
+// The handlers only record the signal; the program prints at its next safe
+// point. They are installed without SA_RESTART, so that a read or write that
+// is waiting returns and that point is reached.
+
+var statistics_requested: std.atomic.Value(bool) = .init(false);
+var interrupt_received: std.atomic.Value(bool) = .init(false);
+
+pub fn recordStatisticsRequest() void {
+    statistics_requested.store(true, .release);
+}
+
+pub fn recordInterrupt() void {
+    interrupt_received.store(true, .release);
+}
+
+fn statisticsHandler(_: std.os.linux.SIG) callconv(.c) void {
+    recordStatisticsRequest();
+}
+
+fn interruptHandler(_: std.os.linux.SIG) callconv(.c) void {
+    recordInterrupt();
+}
+
+/// Catch SIGINT unless it is ignored (once: a second one ends the process even
+/// if the first has not been acted on) and, with `on_user_signal`, SIGUSR1
+/// (SIGINFO too where it exists). Does nothing on Windows.
+pub fn catchStatisticsSignals(on_user_signal: bool) void {
+    if (comptime !is_linux) return other.catchStatisticsSignals(on_user_signal);
+    const L = std.os.linux;
+    if (on_user_signal) {
+        const act: L.Sigaction = .{ .handler = .{ .handler = statisticsHandler }, .mask = L.sigemptyset(), .flags = 0 };
+        _ = L.sigaction(L.SIG.USR1, &act, null);
+    }
+    var old: L.Sigaction = undefined;
+    if (L.errno(L.sigaction(L.SIG.INT, null, &old)) != .SUCCESS or old.handler.handler == L.SIG.IGN) return;
+    const act: L.Sigaction = .{ .handler = .{ .handler = interruptHandler }, .mask = L.sigemptyset(), .flags = L.SA.RESETHAND };
+    _ = L.sigaction(L.SIG.INT, &act, null);
+}
+
+/// Whether statistics were asked for since the last call.
+pub fn takeStatisticsRequest() bool {
+    return statistics_requested.swap(false, .acq_rel);
+}
+
+pub fn interruptReceived() bool {
+    return interrupt_received.load(.acquire);
+}
+
+/// End the process the way the caught SIGINT would have.
+pub fn dieOfInterrupt() noreturn {
+    defaultSignal(.int);
+    _ = raiseSelf(signo.INT);
+    std.process.exit(128 + @as(u8, signo.INT));
 }

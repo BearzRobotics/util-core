@@ -111,4 +111,43 @@ DD_IN=lines dd_cmp "block short cbs" conv=block cbs=2
 DD_IN=lines dd_cmp "unblock short cbs" conv=unblock cbs=2
 DD_IN=lines dd_cmp "block cbs=1" conv=block cbs=1
 DD_IN=lines dd_cmp "ebcdic cbs=0" conv=ebcdic cbs=0
+
+# Signals. dd reads a FIFO that the test feeds, so each step waits for the one
+# before it. (A shell starts background jobs with SIGINT ignored; env undoes it.)
+wait_for() { # wait_for COMMAND...: poll for up to 5 s
+    tries=0
+    until "$@" 2>/dev/null; do
+        tries=$((tries + 1)); [ "$tries" -lt 100 ] || return 1
+        timeout 0.05 tail -f /dev/null
+    done
+}
+trap '' PIPE # a dd that has died must fail its case, not end the suite
+rm -f fifo sigout sigerr; mkfifo fifo
+"$BIN_DIR/dd" if=fifo of=sigout bs=3 2> sigerr & pid=$!
+exec 3> fifo
+printf abc >&3; wait_for grep -q abc sigout
+kill -USR1 "$pid"; wait_for grep -q 'records out' sigerr
+asked=$(head -n 2 sigerr)
+printf def >&3; exec 3>&-
+wait "$pid"; rc=$?
+if [ "$rc" = 0 ] && [ "$(cat sigout)" = abcdef ] && [ "$asked" = "$(printf '1+0 records in\n1+0 records out')" ] && [ "$(grep -c 'records in' sigerr)" = 2 ]; then
+    PASS=$((PASS + 1)); echo "PASS SIGUSR1 prints statistics and the copy goes on"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL SIGUSR1 prints statistics and the copy goes on (rc=$rc) $(cat sigerr)"
+fi
+rm -f fifo sigout sigerr; mkfifo fifo
+env --default-signal=INT "$BIN_DIR/dd" if=fifo of=sigout bs=3 2> sigerr & pid=$!
+exec 3> fifo
+printf abc >&3; wait_for grep -q abc sigout
+kill -INT "$pid"; wait_for grep -q 'records out' sigerr
+# Should the signal be lost, the end of input still ends dd.
+exec 3>&-
+wait "$pid"; rc=$?
+if [ "$rc" = 130 ] && [ "$(grep -c 'records in' sigerr)" = 1 ] && grep -q '^3 bytes copied' sigerr; then
+    PASS=$((PASS + 1)); echo "PASS SIGINT prints statistics and ends dd"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL SIGINT prints statistics and ends dd (rc=$rc) $(cat sigerr)"
+fi
+rm -f fifo sigout sigerr
+trap - PIPE
 cd /; print_summary

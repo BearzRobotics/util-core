@@ -10,6 +10,10 @@
 //! when it is done. Diagnostics and the statistics go through the observer:
 //! `diag` is the GNU message text without the program-name prefix, `raw`
 //! is text for standard error exactly as it is (statistics, progress).
+//!
+//! A caller that owns the process may call `catchSignals`, so that SIGUSR1
+//! prints the statistics during a run and SIGINT prints them before ending
+//! the process, as with GNU dd.
 
 const std = @import("std");
 const Io = std.Io;
@@ -354,10 +358,64 @@ fn diagnose(d: *Job, e: E, comptime fmt: []const u8, args: anytype) void {
     warn(d, fmt ++ ": {s}", args ++ .{sys.errnoText(e)});
 }
 
+// ------------------------------------------------------------------ signals
+
+/// Install the handlers. This changes process-wide state, so `run` does not do
+/// it by itself. GNU dd leaves SIGUSR1 alone when POSIXLY_CORRECT is set.
+pub fn catchSignals(posixly_correct: bool) void {
+    sys.catchStatisticsSignals(!posixly_correct);
+}
+
+/// Act on caught signals; called wherever the copy can be waiting or repeating.
+fn processSignals(d: *Job) void {
+    if (sys.interruptReceived()) {
+        printStats(d);
+        sys.dieOfInterrupt();
+    }
+    if (sys.takeStatisticsRequest()) printStats(d);
+}
+
+/// open(2), again after a signal (opening a FIFO waits for the other end).
+fn openSignalled(d: *Job, path: []const u8, flags: u32, e: *E) ?sys.Handle {
+    while (true) {
+        processSignals(d);
+        if (sys.openFd(path, flags, 0o666, e)) |fd| return fd;
+        if (e.* != .INTR) return null;
+    }
+}
+
+fn syncSignalled(d: *Job, kind: sys.SyncKind) ?E {
+    while (true) {
+        processSignals(d);
+        const result = sys.syncFile(d.out_fd, kind);
+        if (result == null or result.? != .INTR) return result;
+    }
+}
+
+fn truncateSignalled(d: *Job, len: u64) ?E {
+    while (true) {
+        processSignals(d);
+        const result = sys.ftruncateFd(d.out_fd, len);
+        if (result == null or result.? != .INTR) return result;
+    }
+}
+
+/// close(2). An interrupted close has still closed the descriptor.
+fn closeSignalled(fd: sys.Handle) ?E {
+    const result = sys.closeFd(fd) orelse return null;
+    return if (result == .INTR) null else result;
+}
+
 // ------------------------------------------------------------------ I/O
 
 fn iread(d: *Job, buf: []u8, e: *E) ?usize {
-    const n = sys.readFd(d.in_fd, buf, e) orelse return null;
+    const n = while (true) {
+        processSignals(d);
+        if (sys.readFdInterruptible(d.in_fd, buf, e)) |n| break n;
+        if (e.* != .INTR) return null;
+    };
+    // A short read may be the result of a signal.
+    if (n > 0 and n < buf.len) processSignals(d);
     if (n > 0 and d.warn_partial_read) {
         if (d.prev_nread > 0 and @as(usize, @intCast(d.prev_nread)) < buf.len) {
             if (d.status != STATUS_NONE) {
@@ -393,6 +451,7 @@ fn iwrite(d: *Job, buf: []const u8) usize {
         d.oflags &= ~@as(@TypeOf(d.oflags), O_DIRECT);
     }
     while (total < buf.len) {
+        processSignals(d);
         d.final_op_was_seek = false;
         var nwritten: usize = 0;
         if (d.conv & C_SPARSE != 0 and isNul(buf)) {
@@ -406,7 +465,8 @@ fn iwrite(d: *Job, buf: []const u8) usize {
         }
         if (nwritten == 0) {
             var e: E = .SUCCESS;
-            const rc = sys.writeFd(d.out_fd, buf[total..], &e) orelse {
+            const rc = sys.writeFdInterruptible(d.out_fd, buf[total..], &e) orelse {
+                if (e == .INTR) continue;
                 d.last_errno = e;
                 break;
             };
@@ -440,7 +500,7 @@ fn synchronizeOutput(d: *Job) u8 {
     d.conv &= ~(C_FDATASYNC | C_FSYNC);
     var need_fsync = mask & C_FSYNC != 0;
     if (mask & C_FDATASYNC != 0) {
-        if (sys.syncFile(d.out_fd, .data)) |e| {
+        if (syncSignalled(d, .data)) |e| {
             if (e != .NOSYS and e != .INVAL) {
                 diagnose(d, e, "fdatasync failed for {f}", .{quote.quoteA(d.output_file orelse "standard output")});
                 status = 1;
@@ -449,7 +509,7 @@ fn synchronizeOutput(d: *Job) u8 {
         }
     }
     if (need_fsync) {
-        if (sys.syncFile(d.out_fd, .file)) |e| {
+        if (syncSignalled(d, .file)) |e| {
             diagnose(d, e, "fsync failed for {f}", .{quote.quoteA(d.output_file orelse "standard output")});
             return 1;
         }
@@ -662,6 +722,7 @@ fn ddCopy(d: *Job) Fail!u8 {
             @memset(zeros, 0);
             var remaining = off;
             while (remaining > 0) {
+                processSignals(d);
                 const n: usize = @intCast(@min(remaining, @as(i64, @intCast(zeros.len))));
                 if (sys.writeAllFd(d.out_fd, zeros[0..n])) |we| {
                     diagnose(d, we, "writing to {f}", .{quote.quoteA(out_name)});
@@ -772,7 +833,7 @@ fn ddCopy(d: *Job) Fail!u8 {
             if (st.isReg()) {
                 if (sys.seekFd(d.out_fd, 0, 1, &e)) |off| {
                     if (off >= 0 and @as(i64, @intCast(st.size)) < off) {
-                        if (sys.ftruncateFd(d.out_fd, @intCast(off))) |te| {
+                        if (truncateSignalled(d, @intCast(off))) |te| {
                             diagnose(d, te, "failed to truncate to {d} bytes in output file {f}", .{ off, quote.quoteA(out_name) });
                             return 1;
                         }
@@ -793,9 +854,10 @@ pub fn run(d: *Job) u8 {
     if (d.in_fd == sys.invalid_handle) d.in_fd = std.Io.File.stdin().handle;
     if (d.out_fd == sys.invalid_handle) d.out_fd = std.Io.File.stdout().handle;
     applyTranslations(d);
+    d.start_ns = nowNs(d); // for statistics asked for while a file is opening
     var e: E = .SUCCESS;
     if (d.input_file) |inf| {
-        const fd = sys.openFd(inf, sys.O.RDONLY | d.iflags, 0, &e) orelse {
+        const fd = openSignalled(d, inf, sys.O.RDONLY | d.iflags, &e) orelse {
             warn(d, "failed to open {f}: {s}", .{ quote.quoteA(inf), sys.errnoText(e) });
             return 1;
         };
@@ -814,15 +876,15 @@ pub fn run(d: *Job) u8 {
         if (!(d.seek_records != 0 or d.conv & C_NOTRUNC != 0)) opts |= sys.O.TRUNC;
         const size: i64 = d.seek_records * @as(i64, @intCast(d.output_blocksize)) + d.seek_bytes;
         var fd: ?sys.Handle = null;
-        if (d.seek_records != 0) fd = sys.openFd(outf, sys.O.RDWR | opts, 0o666, &e);
-        if (fd == null) fd = sys.openFd(outf, sys.O.WRONLY | opts, 0o666, &e);
+        if (d.seek_records != 0) fd = openSignalled(d, outf, sys.O.RDWR | opts, &e);
+        if (fd == null) fd = openSignalled(d, outf, sys.O.WRONLY | opts, &e);
         const ofd = fd orelse {
             warn(d, "failed to open {f}: {s}", .{ quote.quoteA(outf), sys.errnoText(e) });
             return 1;
         };
         d.out_fd = ofd;
         if (d.seek_records != 0 and d.conv & C_NOTRUNC == 0) {
-            if (sys.ftruncateFd(d.out_fd, @intCast(size))) |te| {
+            if (truncateSignalled(d, @intCast(size))) |te| {
                 var se: E = .SUCCESS;
                 if (sys.fstatFd(d.out_fd, &se)) |st| {
                     if (st.isReg() or st.isDir()) {
@@ -841,11 +903,11 @@ pub fn run(d: *Job) u8 {
     exit_status = ddCopy(d) catch return 1;
     const sync_status = synchronizeOutput(d);
     if (sync_status != 0) exit_status = sync_status;
-    if (sys.closeFd(d.in_fd)) |ce| {
+    if (closeSignalled(d.in_fd)) |ce| {
         diagnose(d, ce, "closing input file {f}", .{quote.quoteA(d.input_file orelse "standard input")});
         return 1;
     }
-    if (sys.closeFd(d.out_fd)) |ce| {
+    if (closeSignalled(d.out_fd)) |ce| {
         diagnose(d, ce, "closing output file {f}", .{quote.quoteA(d.output_file orelse "standard output")});
         return 1;
     }

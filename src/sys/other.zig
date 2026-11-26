@@ -214,6 +214,27 @@ pub fn raiseSelf(sg: u8) ?E {
     return cerr(c.kill(c.getpid(), @enumFromInt(sg)));
 }
 
+fn statisticsHandler(_: c.SIG) callconv(.c) void {
+    sys.recordStatisticsRequest();
+}
+
+fn interruptHandler(_: c.SIG) callconv(.c) void {
+    sys.recordInterrupt();
+}
+
+pub fn catchStatisticsSignals(on_user_signal: bool) void {
+    if (comptime !is_libc_posix) return;
+    if (on_user_signal) {
+        const act: c.Sigaction = .{ .handler = .{ .handler = statisticsHandler }, .mask = std.posix.sigemptyset(), .flags = 0 };
+        _ = c.sigaction(c.SIG.USR1, &act, null);
+        if (comptime @hasField(c.SIG, "INFO")) _ = c.sigaction(c.SIG.INFO, &act, null);
+    }
+    var old: c.Sigaction = undefined;
+    if (c.sigaction(c.SIG.INT, null, &old) != 0 or old.handler.handler == c.SIG.IGN) return;
+    const act: c.Sigaction = .{ .handler = .{ .handler = interruptHandler }, .mask = std.posix.sigemptyset(), .flags = c.SA.RESETHAND };
+    _ = c.sigaction(c.SIG.INT, &act, null);
+}
+
 var saved_catch: [7]c.Sigaction = undefined;
 var saved_catch_valid: [7]bool = @splat(false);
 
