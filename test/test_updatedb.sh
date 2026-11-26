@@ -100,4 +100,28 @@ ud 'order of options' $P --localpaths="$W/tree/c" --prunepaths="$W/tree/c/four.s
 ud 'option twice' --localpaths="$W/tree/a" --localpaths="$W/tree/c" $P
 ud 'option with space value' "--localpaths=$W/tree/sp ace" $P
 ud 'output dir missing' --localpaths="$W/tree/c" $P --output="$W/nodir/db"
+
+# A database that cannot be written completely must not replace the old one.
+# keeps_old DESC TEXT PREFIX...: run updatedb behind PREFIX over a database.
+keeps_old() {
+    d="$1"; text="$2"; shift 2
+    echo old > "$W/keep.db"
+    "$@" "$BIN_DIR/updatedb" --localpaths="$W/tree" $P --output="$W/keep.db" > "$W/o.out" 2> "$W/o.err"; ox=$?
+    if [ "$ox" = 1 ] && [ "$(cat "$W/keep.db")" = old ] && [ ! -e "$W/keep.db.n" ] && grep -q "$text" "$W/o.err"; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$d"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s (rc=%s, %s bytes) %s\n" "$d" "$ox" "$(wc -c < "$W/keep.db")" "$(cat "$W/o.err")"
+    fi
+}
+keeps_old "write fails (file size limit)" "File too large" sh -c 'trap "" XFSZ; ulimit -f 1; exec "$@"' sh
+if can_inject; then
+    keeps_old "write fails (no space)" "No space left on device" strace -o /dev/null -e trace=write -e inject=write:error=ENOSPC:when=1
+    # The last close of a run is the database's.
+    echo old > "$W/keep.db"
+    strace -o "$W/trace" -e trace=close "$BIN_DIR/updatedb" --localpaths="$W/tree" $P --output="$W/keep.db" > /dev/null 2>&1
+    last=$(grep -c '^close' "$W/trace")
+    keeps_old "close fails" "Input/output error" strace -o /dev/null -e trace=close -e inject=close:error=EIO:when="$last"
+else
+    skip_test "write and close failures (no strace)"
+fi
 cd /; print_summary

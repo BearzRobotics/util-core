@@ -54,7 +54,8 @@ pub const Event = union(enum) {
     find_unknown_predicate: []const u8,
     /// A pruned path that ends in a slash; fatal (status 1, nothing written).
     prune_trailing_slash: []const u8,
-    /// The temporary database could not be created; fatal (status 1).
+    /// The temporary database could not be created or completely written;
+    /// fatal (status 1). The old database is left as it was.
     create_failed: struct { tmp: []const u8, text: []const u8 },
     /// The finished database could not be moved into place; fatal (status 1).
     move_failed: struct { from: []const u8, to: []const u8, text: []const u8 },
@@ -358,8 +359,14 @@ pub fn run(env: Env, options: Options, observer: Observer) Error!Result {
         observer.emit(.{ .create_failed = .{ .tmp = tmp_name, .text = sys.errnoText(err) } });
         return .{ .status = 1 };
     };
-    _ = sys.writeAllFd(fd, data);
-    _ = sys.closeFd(fd);
+    const write_error = sys.writeAllFd(fd, data);
+    // Some file systems report a failed write only here.
+    const close_error = sys.closeFd(fd);
+    if (write_error orelse close_error) |e| {
+        _ = sys.unlinkPath(tmp_name, false);
+        observer.emit(.{ .create_failed = .{ .tmp = tmp_name, .text = sys.errnoText(e) } });
+        return .{ .status = 1 };
+    }
     // `test -s`: a header alone still makes a non-empty file
     if (data.len > 0) {
         _ = sys.chmodPath(tmp_name, 0o644, false);
