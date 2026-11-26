@@ -668,6 +668,17 @@ for args in "-print" "-printf %p|%f|%l\n"; do
 done
 cd "$W/t"
 
+# Several '*' in a pattern take no longer than one. (With a time limit: trying
+# every position for every '*' would run for hours.)
+mkdir "$W/stars"; cd "$W/stars"; mkdir d; : > "d/$(printf 'a%.0s' $(seq 200))"; : > d/aaab
+for o in "-name" "-iname" "-path" "-ipath"; do
+    exp=$(timeout 20 /usr/bin/find d $o '*a*a*a*a*a*a*a*a*a*a*b'; echo "status $?")
+    act=$(timeout 20 "$BIN_DIR/find" d $o '*a*a*a*a*a*a*a*a*a*a*b'; echo "status $?")
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $o with many stars"
+    else FAIL=$((FAIL + 1)); echo "FAIL $o with many stars ($act)"; fi
+done
+cd "$W/t"
+
 # Any time the file system can hold: no crash, and where the year does not fit
 # a struct tm the seconds are printed, as GNU does. (Skipped where the file
 # system clamps such times.)

@@ -400,5 +400,15 @@ for p in '\<' '\>' '\<.' '.\>' 'abc\<' '\>abc' '\<a*' 'ab*\>' '\W\>' '\<\W' '\<[
     gd "word ends: -on '$p'" words -on -- "$p"
     gd "word ends: -c '$p'" words -c -- "$p"
 done
+# Several '*' in a file name pattern take no longer than one (a time limit:
+# trying every position for every '*' would run for hours).
+mkdir stars; printf 'x\n' > "stars/$(printf 'a%.0s' $(seq 200))"; printf 'x\n' > stars/aaab
+for o in --include --exclude; do
+    exp=$(LC_ALL=C timeout 20 /usr/bin/grep -r "$o=*a*a*a*a*a*a*a*a*a*a*b" x stars > stars.out; echo "status $?"; sort stars.out)
+    act=$(LC_ALL=C timeout 20 "$BIN_DIR/grep" -r "$o=*a*a*a*a*a*a*a*a*a*a*b" x stars > stars.out; echo "status $?"; sort stars.out)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $o with many stars"
+    else FAIL=$((FAIL + 1)); echo "FAIL $o with many stars"; fi
+done
+rm -rf stars stars.out
 help_cmp
 cd /; print_summary

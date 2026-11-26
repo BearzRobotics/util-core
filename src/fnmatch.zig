@@ -14,10 +14,6 @@ fn ceq(a: u8, b: u8, cf: bool) bool {
     return a == b or (cf and other(a) == b);
 }
 
-pub fn match(pattern: []const u8, text: []const u8, flags: Flags) bool {
-    return matchAt(pattern, 0, text, 0, flags);
-}
-
 fn classMatch(name: []const u8, c: u8) ?bool {
     const eql = std.mem.eql;
     if (eql(u8, name, "alpha")) return std.ascii.isAlphabetic(c);
@@ -82,59 +78,59 @@ fn bracket(pattern: []const u8, start: usize, c: u8, cf: bool) ?struct { matched
     return .{ .matched = matched != negate, .next = i };
 }
 
-fn matchAt(pattern: []const u8, pi_in: usize, text: []const u8, ti_in: usize, flags: Flags) bool {
-    var pi = pi_in;
-    var ti = ti_in;
-    while (pi < pattern.len) {
-        const pc = pattern[pi];
-        switch (pc) {
-            '?' => {
-                if (ti >= text.len) return false;
-                if (flags.period and ti == 0 and text[0] == '.') return false;
-                pi += 1;
-                ti += 1;
-            },
-            '*' => {
+/// Match one pattern element other than '*' (each stands for exactly one byte)
+/// against text[ti]. Returns the index of the next element, or null.
+fn element(pattern: []const u8, pi: usize, text: []const u8, ti: usize, flags: Flags) ?usize {
+    if (ti >= text.len) return null;
+    const c = text[ti];
+    // FNM_PERIOD: a leading period is matched only by a period.
+    const hidden = flags.period and ti == 0 and c == '.';
+    switch (pattern[pi]) {
+        '?' => return if (hidden) null else pi + 1,
+        '[' => {
+            const b = bracket(pattern, pi, c, flags.casefold) orelse return if (c == '[') pi + 1 else null;
+            return if (!hidden and b.matched) b.next else null;
+        },
+        '\\' => {
+            const at = if (pi + 1 < pattern.len) pi + 1 else pi;
+            return if (ceq(pattern[at], c, flags.casefold)) at + 1 else null;
+        },
+        else => |literal| return if (ceq(literal, c, flags.casefold)) pi + 1 else null,
+    }
+}
+
+/// Whole-string match in O(pattern * text). Only the last '*' is ever retried:
+/// every other element takes exactly one byte, so whatever an earlier '*' could
+/// take over is also within reach of the later one.
+pub fn match(pattern: []const u8, text: []const u8, flags: Flags) bool {
+    var pi: usize = 0;
+    var ti: usize = 0;
+    // Where to resume: the element after the last '*', and the first byte of
+    // the text that '*' has not yet taken.
+    var star: ?struct { pi: usize, ti: usize } = null;
+    while (pi < pattern.len or ti < text.len) {
+        if (pi < pattern.len) {
+            if (pattern[pi] == '*') {
                 if (flags.period and ti == 0 and ti < text.len and text[0] == '.') return false;
                 while (pi < pattern.len and pattern[pi] == '*') pi += 1;
                 if (pi == pattern.len) return true;
-                var k = ti;
-                while (k <= text.len) : (k += 1) {
-                    if (matchAt(pattern, pi, text, k, flags)) return true;
-                }
-                return false;
-            },
-            '[' => {
-                if (ti >= text.len) return false;
-                if (bracket(pattern, pi, text[ti], flags.casefold)) |b| {
-                    if (flags.period and ti == 0 and text[0] == '.') return false;
-                    if (!b.matched) return false;
-                    pi = b.next;
-                    ti += 1;
-                } else {
-                    if (text[ti] != '[') return false;
-                    pi += 1;
-                    ti += 1;
-                }
-            },
-            '\\' => {
-                var lit = pc;
-                if (pi + 1 < pattern.len) {
-                    pi += 1;
-                    lit = pattern[pi];
-                }
-                if (ti >= text.len or !ceq(lit, text[ti], flags.casefold)) return false;
-                pi += 1;
+                star = .{ .pi = pi, .ti = ti };
+                continue;
+            }
+            if (element(pattern, pi, text, ti, flags)) |next| {
+                pi = next;
                 ti += 1;
-            },
-            else => {
-                if (ti >= text.len or !ceq(pc, text[ti], flags.casefold)) return false;
-                pi += 1;
-                ti += 1;
-            },
+                continue;
+            }
         }
+        // A mismatch: let the last '*' take one more byte and start over there.
+        const s = &(star orelse return false);
+        if (s.ti >= text.len) return false;
+        s.ti += 1;
+        pi = s.pi;
+        ti = s.ti;
     }
-    return ti == text.len;
+    return true;
 }
 
 test "fnmatch" {
@@ -144,4 +140,19 @@ test "fnmatch" {
     try t.expect(match(".*", ".a", .{ .period = true }));
     try t.expect(match("[[:digit:]]x", "5x", .{}));
     try t.expect(!match("[!a]", "a", .{}));
+}
+
+test "fnmatch with many stars" {
+    const t = std.testing;
+    try t.expect(match("a*b*c", "aXbYbZc", .{}));
+    try t.expect(match("*ab", "aab", .{}));
+    try t.expect(match("*?b*", "abb", .{}));
+    try t.expect(match("a**", "a", .{}));
+    try t.expect(!match("*a*b", "ab a", .{}));
+    try t.expect(!match("*?", "", .{}));
+    // Retrying every '*' would take longer than the universe has.
+    const name: [4096]u8 = @splat('a');
+    const stars = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a";
+    try t.expect(!match(stars ++ "*b", &name, .{}));
+    try t.expect(match(stars ++ "*", &name, .{}));
 }
