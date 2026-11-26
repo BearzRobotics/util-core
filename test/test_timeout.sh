@@ -143,5 +143,12 @@ if [ -n "$got" ] && [ "$got" = "$ref" ]; then
 else
     FAIL=$((FAIL + 1)); echo "FAIL command does not inherit ignored terminal stops ($got, GNU $ref)"
 fi
+# -k 0 is no follow-up KILL at all.
+for k in 0 0s; do
+    got=$("$BIN_DIR/timeout" -k $k 0.3 sh -c 'trap "" TERM; sleep 1; echo survived'; echo "rc=$?")
+    if [ "$got" = "survived
+rc=124" ]; then PASS=$((PASS + 1)); echo "PASS -k $k sends no KILL"
+    else FAIL=$((FAIL + 1)); echo "FAIL -k $k sends no KILL: $got"; fi
+done
 print_summary
 [ "$FAIL" -eq 0 ]

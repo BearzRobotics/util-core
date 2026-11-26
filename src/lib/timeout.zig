@@ -140,6 +140,8 @@ const Supervisor = struct {
 /// forwarding signals read from `w`. Does not close `w`.
 pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Observer) Outcome {
     var sup: Supervisor = .{ .obs = obs, .verbose = opts.verbose, .foreground = opts.foreground };
+    // As in GNU, a kill delay of 0 means no follow-up KILL.
+    const kill_after: ?u64 = if (opts.kill_after) |k| (if (k == 0) null else k) else null;
     var timed_out = false;
     var sent_kill = false;
     var deadline: ?i96 = if (opts.duration == 0) null else nowNs(env.io) + @as(i96, opts.duration);
@@ -160,7 +162,7 @@ pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Obs
                 if (!sent_kill and !timed_out) {
                     timed_out = true;
                     sup.sendTo(pid, opts.signal);
-                    deadline = if (opts.kill_after) |k| nowNs(env.io) + @as(i96, k) else null;
+                    deadline = if (kill_after) |k| nowNs(env.io) + @as(i96, k) else null;
                 } else {
                     sent_kill = true;
                     sup.sendTo(pid, sys.signo.KILL);
@@ -173,7 +175,7 @@ pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Obs
                     continue;
                 }
                 sup.sendTo(pid, s);
-                if (opts.kill_after) |k| if (deadline == null) {
+                if (kill_after) |k| if (deadline == null) {
                     deadline = nowNs(env.io) + @as(i96, k);
                 };
             },
