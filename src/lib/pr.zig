@@ -69,6 +69,9 @@ pub const Event = union(enum) {
     page_width_too_narrow,
     /// A file could not be opened (not sent with -r).
     open_failed: struct { name: []const u8, err: anyerror },
+    /// Reading a file failed. Sent when printing reaches the point where it
+    /// did; nothing more is printed.
+    read_failed: struct { name: []const u8, err: anyerror },
     start_page_exceeds: struct { page: u64, count: u64 },
     page_number_overflow,
 };
@@ -153,11 +156,13 @@ pub fn run(env: Env, opts: Options, files: []const []const u8, out_w: *Io.Writer
                 failed = true;
                 break;
             }
+            if (pr.read_failed or pr.out_of_memory) break;
         }
     }
     pr.out.flush();
+    if (pr.out_of_memory) return error.OutOfMemory;
     if (pr.out.failed) return error.WriteFailed;
-    return .{ .failed = failed or pr.failed_opens };
+    return .{ .failed = failed or pr.failed_opens or pr.read_failed };
 }
 
 fn openPath(io: Io, path: []const u8) !Io.File {
@@ -176,6 +181,8 @@ const CharFn = enum { store_char, print_char };
 const Stream = struct {
     data: []const u8,
     pos: usize = 0,
+    /// Reading stopped on this error after `data`.
+    err: ?anyerror = null,
 
     fn getc(s: *Stream) i32 {
         if (s.pos >= s.data.len) return eof;
@@ -255,6 +262,10 @@ const Pr = struct {
     output_position: i32 = 0,
     input_position: i32 = 0,
     failed_opens: bool = false,
+    read_failed: bool = false,
+    out_of_memory: bool = false,
+    /// Takes what is formatted after a read error.
+    discard: Io.Writer.Discarding = undefined,
     columns: i32 = 1,
     first_page_number: u64 = 0,
     last_page_number: u64 = std.math.maxInt(u64),
@@ -352,46 +363,45 @@ const Pr = struct {
         return true;
     }
 
-    fn readStdin(p: *Pr) ?[]u8 {
-        if (p.stdin_data) |d| return p.gpa.dupe(u8, d) catch null;
+    /// What could be read of a file, and the error that ended it, if any.
+    const Contents = struct { data: []u8, err: ?anyerror = null };
+
+    fn readStdin(p: *Pr) error{OutOfMemory}!Contents {
+        if (p.stdin_data) |d| return .{ .data = try p.gpa.dupe(u8, d) };
         return p.readAll(Io.File.stdin());
     }
 
-    fn readAll(p: *Pr, file: Io.File) ?[]u8 {
+    fn readAll(p: *Pr, file: Io.File) error{OutOfMemory}!Contents {
         var list: std.ArrayList(u8) = .empty;
+        errdefer list.deinit(p.gpa);
         var chunk: [65536]u8 = undefined;
+        var failure: ?anyerror = null;
         while (true) {
-            const n = common.readChunk(p.env.io, file, &chunk) catch return null;
+            const n = common.readChunk(p.env.io, file, &chunk) catch |e| {
+                failure = e;
+                break;
+            };
             if (n == 0) break;
-            list.appendSlice(p.gpa, chunk[0..n]) catch return null;
+            try list.appendSlice(p.gpa, chunk[0..n]);
         }
-        return list.toOwnedSlice(p.gpa) catch null;
+        return .{ .data = try list.toOwnedSlice(p.gpa), .err = failure };
     }
 
-    fn openFile(p: *Pr, name: []const u8, c: *Column) bool {
-        var file: ?Io.File = null;
-        var data: ?[]u8 = null;
-        if (std.mem.eql(u8, name, "-")) {
-            c.name = "standard input";
-            p.have_read_stdin = true;
-            file = Io.File.stdin();
-            data = p.readStdin();
-        } else {
-            c.name = name;
-            if (openPath(p.env.io, name)) |f| {
-                file = f;
-                data = p.readAll(f);
-                f.close(p.env.io);
-            } else |e| {
-                p.failed_opens = true;
-                if (!p.ignore_failed_opens) p.obs.emit(.{ .open_failed = .{ .name = name, .err = e } });
-                return false;
-            }
-        }
-        const s = p.gpa.create(Stream) catch return false;
-        s.* = .{ .data = data orelse &.{} };
-        p.streams.append(p.gpa, s) catch return false;
-        if (data) |d| p.stream_data.append(p.gpa, d) catch return false;
+    /// A stream over `contents`, which it takes over.
+    fn newStream(p: *Pr, contents: Contents) error{OutOfMemory}!*Stream {
+        p.stream_data.append(p.gpa, contents.data) catch |e| {
+            p.gpa.free(contents.data);
+            return e;
+        };
+        const s = try p.gpa.create(Stream);
+        errdefer p.gpa.destroy(s);
+        s.* = .{ .data = contents.data, .err = contents.err };
+        try p.streams.append(p.gpa, s);
+        return s;
+    }
+
+    fn attach(p: *Pr, c: *Column, contents: error{OutOfMemory}!Contents) bool {
+        const s = p.newStream(contents catch return p.noMemory()) catch return p.noMemory();
         c.fp = s;
         c.status = .open;
         c.full_page_printed = false;
@@ -399,8 +409,44 @@ const Pr = struct {
         return true;
     }
 
+    fn noMemory(p: *Pr) bool {
+        p.out_of_memory = true;
+        return false;
+    }
+
+    fn openFile(p: *Pr, name: []const u8, c: *Column) bool {
+        if (std.mem.eql(u8, name, "-")) {
+            c.name = "standard input";
+            p.have_read_stdin = true;
+            return p.attach(c, p.readStdin());
+        }
+        c.name = name;
+        const f = openPath(p.env.io, name) catch |e| {
+            p.failed_opens = true;
+            if (!p.ignore_failed_opens) p.obs.emit(.{ .open_failed = .{ .name = name, .err = e } });
+            return false;
+        };
+        defer f.close(p.env.io);
+        return p.attach(c, p.readAll(f));
+    }
+
+    /// As in GNU, a read error ends the whole run where the reading failed:
+    /// what is before it is printed, the error is reported, nothing follows.
+    fn stopAtReadError(p: *Pr, name: []const u8, e: anyerror) void {
+        if (p.read_failed) return;
+        p.read_failed = true;
+        p.out.flush();
+        p.obs.emit(.{ .read_failed = .{ .name = name, .err = e } });
+        if (!p.out.failed) {
+            p.discard = .init(&.{});
+            p.out = wsink.Sink.initWriter(&p.discard.writer);
+        }
+    }
+
+    /// Called when a column reaches the end of what was read.
     fn closeFile(p: *Pr, c: *Column) void {
         if (c.status == .closed) return;
+        if (c.fp.err) |e| p.stopAtReadError(c.name, e);
         if (!p.parallel_files) {
             var i: usize = 0;
             while (i < @as(usize, @intCast(p.columns))) : (i += 1) {
@@ -443,7 +489,7 @@ const Pr = struct {
     fn initFps(p: *Pr, names: []const []const u8) bool {
         p.total_files = 0;
         p.columns_v.clearRetainingCapacity();
-        p.columns_v.resize(p.gpa, @intCast(@max(p.columns, 1))) catch return false;
+        p.columns_v.resize(p.gpa, @intCast(@max(p.columns, 1))) catch return p.noMemory();
         for (p.columns_v.items) |*c| c.* = .{};
         if (p.parallel_files) {
             var idx: usize = 0;
@@ -470,14 +516,7 @@ const Pr = struct {
             } else {
                 c0.name = "standard input";
                 p.have_read_stdin = true;
-                const s = p.gpa.create(Stream) catch return false;
-                s.* = .{ .data = p.readStdin() orelse &.{} };
-                p.streams.append(p.gpa, s) catch return false;
-                p.stream_data.append(p.gpa, @constCast(s.data)) catch return false;
-                c0.fp = s;
-                c0.status = .open;
-                c0.full_page_printed = false;
-                p.total_files += 1;
+                if (!p.attach(c0, p.readStdin())) return false;
                 p.initHeader("", -1, null);
                 c0.lines_stored = 0;
             }
@@ -568,7 +607,7 @@ const Pr = struct {
     fn printFiles(p: *Pr, names: []const []const u8) bool {
         if (!p.initParameters(names.len)) return false;
         if (!p.initFps(names)) return true;
-        if (p.storing_columns) p.initStoreCols();
+        if (p.storing_columns and !p.initStoreCols()) return true;
         if (p.first_page_number > 1) {
             if (!p.skipToPage(p.first_page_number)) return true;
             p.page_number = p.first_page_number;
@@ -579,15 +618,18 @@ const Pr = struct {
         return true;
     }
 
-    fn initStoreCols(p: *Pr) void {
+    fn initStoreCols(p: *Pr) bool {
         const total_lines: usize = @intCast(@as(i64, p.lines_per_body) * p.columns);
         p.gpa.free(p.line_vector);
         p.gpa.free(p.end_vector);
-        p.line_vector = p.gpa.alloc(i32, total_lines + 1) catch &.{};
-        p.end_vector = p.gpa.alloc(i32, total_lines + 1) catch &.{};
+        p.line_vector = &.{};
+        p.end_vector = &.{};
+        p.line_vector = p.gpa.alloc(i32, total_lines + 1) catch return p.noMemory();
+        p.end_vector = p.gpa.alloc(i32, total_lines + 1) catch return p.noMemory();
         @memset(p.line_vector, 0);
         @memset(p.end_vector, 0);
         p.buff.clearRetainingCapacity();
+        return true;
     }
 
     fn initPage(p: *Pr) void {
@@ -745,7 +787,9 @@ const Pr = struct {
 
     fn emit(p: *Pr, c: *Column, ch: u8) void {
         switch (c.char_func) {
-            .store_char => p.buff.append(p.gpa, ch) catch {},
+            .store_char => p.buff.append(p.gpa, ch) catch {
+                p.out_of_memory = true;
+            },
             .print_char => p.printChar(ch),
         }
     }
@@ -921,7 +965,7 @@ const Pr = struct {
             p.resetStatus();
             p.last_line = false;
             if (p.files_ready_to_read < 1) {
-                p.obs.emit(.{ .start_page_exceeds = .{ .page = page, .count = n } });
+                if (!p.read_failed) p.obs.emit(.{ .start_page_exceeds = .{ .page = page, .count = n } });
                 break;
             }
         }
