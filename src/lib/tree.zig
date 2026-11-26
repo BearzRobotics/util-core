@@ -173,7 +173,13 @@ fn escapeName(t: *T, name: []const u8, buf: *std.ArrayList(u8)) void {
         if (utf8 and c >= 0x80) {
             const d = unicode.decode(name, i);
             if (d.valid) {
-                buf.appendSlice(t.gpa, name[i .. i + d.len]) catch t.nomem();
+                // As tree 2.3.1: a character that is not printable (the C1
+                // controls among them) is '?' with -q, else its number in octal.
+                if (unicode.isPrint(d.cp)) {
+                    buf.appendSlice(t.gpa, name[i .. i + d.len]) catch t.nomem();
+                } else if (o.q) {
+                    buf.append(t.gpa, '?') catch t.nomem();
+                } else buf.print(t.gpa, "\\{o:0>3}", .{d.cp}) catch t.nomem();
                 i += d.len;
                 continue;
             }

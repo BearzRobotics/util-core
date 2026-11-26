@@ -117,4 +117,13 @@ for o in "-l" "-J -l" "-X -l" "--du -l" "--du -l -h" "-J --du -l" "-X --du -l" "
 done
 td "loop -J -l two roots" -J -l two cross
 ours() { "$BIN_DIR/$UTIL" "$@"; }
+# Characters that are not printable are escaped in a UTF-8 locale too, the C1
+# controls (U+009B starts a control sequence) among them.
+mkdir -p "$W/c1/d"; cd "$W/c1"
+: > "d/$(printf 'a\302\2332Jb')"; : > "d/$(printf 'b\302\200\302\205\302\237')"; : > "d/$(printf 'c\315\270\342\200\250\357\277\276')"
+: > "d/$(printf 'd\303\251\302\240\342\200\213\360\237\230\200\356\200\200')"; ln -s "$(printf 't\302\233q')" d/link
+for o in "" "-q" "-N" "-Q" "-f" "-F" "-p" "-qQ"; do
+    CMP_LOCALE=C.UTF-8 td "unprintable characters $o" $o --noreport d
+    CMP_LOCALE=C td "unprintable characters, C locale $o" $o --noreport d
+done
 cd /; print_summary

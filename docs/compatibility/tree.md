@@ -24,7 +24,7 @@ tree 2.3.1 by Steve Baker, Thomas Moore, Francesc Rocher, Florian Sesser and Kyo
 ## Supported behaviour
 
 - Output follows tree 2.3.1: `|--`/`` `-- `` lines in the C locale and box-drawing characters in UTF-8 locales, `name -> target` for links, and the `N directories, M files` report (the start directory counts only when something is listed).
-- Names are escaped as tree does for the locale (octal escapes, `\\` and `\ ` in the C locale).
+- Names are escaped as tree does for the locale (octal escapes, `\\` and `\ ` in the C locale). In a UTF-8 locale, characters that are not printable (the C1 controls among them) are shown as their number in octal, or `?` with `-q`; `-N` writes names as they are. Which characters are printable comes from util-core's Unicode tables, which can be older than the system's, so a recently assigned character may be escaped.
 - Directories that cannot be opened get an inline `[error opening dir]` note and exit status 2; link loops get `[recursive, not followed]`.
 
 ## Extensions
