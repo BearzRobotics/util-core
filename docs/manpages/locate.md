@@ -59,6 +59,8 @@ LOCATE_PATH (locate); FINDOPTIONS, SEARCHPATHS, NETPATHS, PRUNEPATHS, PRUNEFS, L
 
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
+As in GNU locate, when standard output is a terminal each unprintable character of a matching name is shown as `?`, so that a name in the database cannot send control sequences to the terminal. In the C locale that is every byte outside printable ASCII. Pipes, files and -0 get the names byte for byte.
+
 # COMPATIBILITY
 
 Reference: GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from the findutils-4.10.0 source tarball by `tools/build-gnu-findutils.sh` into `~/.cache/util-core/findutils`; the suites skip if that is absent. Behaviour was checked against the GNU binaries run with LC_ALL=C.

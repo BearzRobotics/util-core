@@ -22,6 +22,7 @@ const fu = @import("fu_common.zig");
 const sys = @import("../sys.zig");
 const regex = @import("regex");
 const fnmatch = @import("../fnmatch.zig");
+const quote = @import("../quote.zig");
 const tzmod = @import("../tz.zig");
 const strftime = @import("../strftime.zig");
 
@@ -57,6 +58,12 @@ pub const Options = struct {
     print: bool = true,
     /// Terminator after each name (0 for -0).
     separator: u8 = '\n',
+    /// The writer is a terminal: as GNU locate does, show the unprintable
+    /// characters of names as '?' (not with a NUL separator). The names in a
+    /// database were chosen by whoever created the files.
+    terminal: bool = false,
+    /// UTF-8 locale: which characters `terminal` takes for printable.
+    utf8: bool = false,
     /// --max-database-age in days.
     max_age_days: u64 = 8,
 };
@@ -334,7 +341,9 @@ fn searchDb(l: *L, data: []const u8, dbname: []const u8, patterns: []const []con
             if (nl) st.newline += 1;
         }
         if (l.o.print) {
-            try l.out.appendSlice(l.gpa, original);
+            if (l.o.terminal and l.o.separator != 0) {
+                try quote.appendForTerminal(&l.out, l.gpa, original, l.o.utf8);
+            } else try l.out.appendSlice(l.gpa, original);
             try l.out.append(l.gpa, l.o.separator);
             if (l.out.items.len > 65536) flush(l);
         }
