@@ -36,7 +36,7 @@ None. The executable is GNU xargs 4.10 behaviour. In the library (`util_core.xar
 
 - -x combined with an argument that cannot fit differs from GNU in some edge cases (the exact point at which GNU aborts is not reproduced).
 - With an empty replacement string and an empty input item (possible with -0 or -d), GNU xargs loops forever on a non-empty argument; ours says `command too long`, as GNU does for other items.
-- -P runs commands concurrently but reaps them in start order, so a failing later command is reported after earlier ones finish.
+- With -P, whichever command ends first frees its slot (and its --process-slot-var number, the lowest free one being used next), as in GNU xargs. On systems other than Linux and Windows xargs still waits for the commands in the order they were started, so a slow one holds up the rest; this has not been run on Windows.
 - -p and -o need a controlling terminal, which the test suite does not have; the error path is checked only by hand.
 
 ## Tests

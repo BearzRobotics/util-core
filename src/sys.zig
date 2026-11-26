@@ -733,6 +733,48 @@ pub fn waitPid(pid: Pid, block: bool) WaitResult {
     }
 }
 
+/// What `peekEnded` found.
+pub const Ended = union(enum) {
+    /// This one of the given children has ended; wait for it to reap it.
+    child: usize,
+    /// None of them has ended yet.
+    none,
+    /// This system offers no way to tell without reaping.
+    unknown,
+};
+
+/// Find one of the caller's children `pids` that has ended, without reaping it
+/// (so `std.process.Child.wait` still works on it) and without touching any
+/// other child of the process. With `block` it waits for a child to end where
+/// the system can wait for any one of them (Linux); it may still answer
+/// `.none` (Windows, or another child of the process has ended), and the
+/// caller then asks again a little later.
+pub fn peekEnded(pids: []const Pid, block: bool) Ended {
+    if (comptime !is_linux) return other.peekEnded(pids);
+    const flags: u32 = LX.W.EXITED | LX.W.NOWAIT;
+    // Any child first: this is the call that can wait, and without waiting it
+    // answers in one step however many children there are.
+    var info = std.mem.zeroes(LX.siginfo_t);
+    while (true) {
+        const rc = LX.waitid(.ALL, 0, &info, flags | if (block) @as(u32, 0) else LX.W.NOHANG, null);
+        switch (LX.errno(rc)) {
+            .SUCCESS => break,
+            .INTR => continue,
+            else => return .unknown,
+        }
+    }
+    const first = info.fields.common.first.piduid.pid;
+    if (first == 0) return .none;
+    if (std.mem.indexOfScalar(Pid, pids, first)) |i| return .{ .child = i };
+    // A child that is not the caller's hides the others from that call.
+    for (pids, 0..) |pid, i| {
+        info = std.mem.zeroes(LX.siginfo_t);
+        const rc = LX.waitid(.PID, pid, &info, flags | LX.W.NOHANG, null);
+        if (LX.errno(rc) == .SUCCESS and info.fields.common.first.piduid.pid != 0) return .{ .child = i };
+    }
+    return .none;
+}
+
 /// Resources a finished child used (the fields of getrusage(2), in common
 /// units). Fields a platform cannot report stay 0.
 pub const Usage = struct {

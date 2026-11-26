@@ -917,6 +917,17 @@ pub fn setRealtime(sec: i64, nsec: u32) ?E {
     return .NOSYS;
 }
 
+/// `sys.peekEnded`: on Windows a signalled process handle stays waitable until
+/// it is closed. Elsewhere waitpid would reap the child, so the answer is
+/// `.unknown`.
+pub fn peekEnded(pids: []const Pid) sys.Ended {
+    if (comptime !is_win) return .unknown;
+    for (pids, 0..) |pid, i| {
+        if (waitPid(pid, false) == .exited) return .{ .child = i };
+    }
+    return .none;
+}
+
 pub fn waitPid(pid: Pid, block: bool) sys.WaitResult {
     if (comptime is_win) {
         const r = win.WaitForSingleObject(pid, if (block) 0xFFFFFFFF else 0);

@@ -144,6 +144,43 @@ a_stdin "-a /dev/stdin" -a /dev/stdin echo
 a_stdin "-a ./- is a file" -a ./- echo
 a_stdin "without -a the commands read nothing" sh -c 'echo "$@"; cat' x
 rm -f ./- aitems
+# With -P whichever command ends first frees its slot. "slow" waits (10 s at
+# most) for the last item to have run, which needs the other slot to be reused
+# while "slow" still runs.
+cat > parallel.sh <<'END'
+case $1 in
+slow) i=0; while [ ! -e last.done ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+      if [ -e last.done ]; then echo "slow: the others did not wait"; else echo "slow: gave up"; fi ;;
+last) echo "last slot=$SLOT"; : > last.done ;;
+quick*) echo "$1 slot=$SLOT" ;;
+stop) exit 255 ;;
+zombies) sleep 1; n=0; for p in $(cat /proc/$PPID/task/$PPID/children 2>/dev/null); do
+             case $(cat /proc/$p/stat 2>/dev/null) in *') Z '*) n=$((n + 1)) ;; esac; done
+         echo "zombies: $n" ;;
+after) echo "started after a 255" ;;
+esac
+END
+parallel() { # DESC ITEMS XARGS-ARG...
+    d="$1"; items="$2"; shift 2
+    rm -f last.done
+    e=$(printf '%s\n' $items | LC_ALL=C timeout 30 /usr/bin/xargs "$@" sh parallel.sh 2>&1; echo "status $?")
+    rm -f last.done
+    o=$(printf '%s\n' $items | LC_ALL=C timeout 30 "$BIN_DIR/xargs" "$@" sh parallel.sh 2>&1; echo "status $?")
+    # (Sorted: commands that run at once may finish in either order.)
+    o=$(printf '%s\n' "$o" | sed 's#^[^ ]*/xargs: #xargs: #' | sort); e=$(printf '%s\n' "$e" | sed 's#^/usr/bin/xargs: #xargs: #' | sort)
+    if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS $d"; else FAIL=$((FAIL+1)); echo "FAIL $d"; printf '  GNU: %s\n  ours: %s\n' "$e" "$o"; fi
+}
+parallel "-P2: a finished command frees its slot" "slow quick1 quick2 last" -P2 -n1
+parallel "-P2: the lowest free slot number is reused" "slow quick1 quick2 last" -P2 -n1 --process-slot-var=SLOT
+# After a 255 nothing more is started, though an older command still runs.
+parallel "-P2: status 255 of a younger command stops at once" "slow stop after" -P2 -n1
+if [ -r /proc/self/task/$$/children ] || [ -r /proc/self/stat ]; then
+    # "zombies" counts, a second in, its finished siblings that xargs has not
+    # collected, though they were started after it.
+    parallel "-P0: finished commands are collected as it goes" "zombies quick1 quick2" -P0 -n1
+fi
+rm -f parallel.sh last.done
+
 # -s limits the length of one item too, and reading stops as soon as an item
 # cannot fit. (Compared: standard output, the diagnostic and the status;
 # where the diagnostic falls between the command's output is left open.)

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! xargs library: build and execute command lines from a stream of items.
 //! Reference: POSIX.1-2024 xargs and the GNU findutils 4.10 manual (xargs
-//! invocation), checked against `xargs (GNU findutils) 4.10.0`. Parallel runs
-//! (-P) wait for children in the order they were started.
+//! invocation), checked against `xargs (GNU findutils) 4.10.0`. In parallel
+//! runs (-P) any child that ends frees its slot at once (on systems other than
+//! Linux and Windows xargs waits for the oldest).
 //!
 //! The library reads items from a caller-supplied `*Io.Reader`, spawns the
 //! commands through `Env.io`, and reports every diagnostic and the `-t` trace
@@ -180,7 +181,8 @@ const X = struct {
     exit_status: u8 = 0,
     abort_status: u8 = 0,
     running: std.ArrayList(Running) = .empty,
-    next_slot: usize = 0,
+    /// Scratch space of `endedChild`, sized along with `running`.
+    pids: std.ArrayList(sys.Pid) = .empty,
     ran_any: bool = false,
     nul_warned: bool = false,
 
@@ -194,9 +196,37 @@ fn isBlank(c: u8) bool {
     return c == ' ' or c == '\t';
 }
 
+/// The index in `running` of a child that has ended; with `block`, wait for
+/// one. Null when none has (without `block`). A system that cannot tell which
+/// child ended waits for the oldest.
+fn endedChild(x: *X, block: bool) ?usize {
+    if (x.running.items.len == 1 and block) return 0;
+    x.pids.clearRetainingCapacity();
+    for (x.running.items) |r| x.pids.appendAssumeCapacity(r.child.id.?);
+    while (true) switch (sys.peekEnded(x.pids.items, block)) {
+        .child => |i| return i,
+        .unknown => return if (block) 0 else null,
+        .none => {
+            if (!block) return null;
+            Io.sleep(x.env.io, .fromMilliseconds(10), .awake) catch return 0;
+        },
+    };
+}
+
+/// Take care of the children that have already ended, without waiting: their
+/// slots are free again, and a status that ends the run is acted on.
+fn reapEnded(x: *X) Stop!void {
+    while (x.running.items.len > 0) try reap(x, endedChild(x, false) orelse return);
+}
+
+/// Wait until one of the running children has ended and take care of it.
 fn waitOne(x: *X) Stop!void {
     if (x.running.items.len == 0) return;
-    var r = x.running.orderedRemove(0);
+    try reap(x, endedChild(x, true).?);
+}
+
+fn reap(x: *X, index: usize) Stop!void {
+    var r = x.running.orderedRemove(index);
     const name = x.initial[0];
     const term = r.child.wait(x.env.io) catch {
         x.observer.emit(.{ .wait_failed = name });
@@ -302,14 +332,13 @@ fn runCommand(x: *X) Stop!void {
 
     var env_copy: ?std.process.Environ.Map = null;
     defer if (env_copy) |*m| m.deinit();
+    // The lowest slot number no running command has, as GNU xargs.
     var slot: usize = 0;
     if (x.opt.slot_var) |sv| {
+        while (slotInUse(x, slot)) slot += 1;
         if (x.env.environ) |m| {
             env_copy = m.clone(gpa) catch null;
             if (env_copy) |*ec| {
-                slot = x.next_slot % @max(@as(usize, @intCast(@min(x.opt.procs, 1 << 20))), 1);
-                if (x.opt.procs == 0) slot = x.next_slot;
-                x.next_slot += 1;
                 var nb: [24]u8 = undefined;
                 ec.put(sv, std.fmt.bufPrint(&nb, "{d}", .{slot}) catch "0") catch {};
             }
@@ -337,7 +366,10 @@ fn runCommand(x: *X) Stop!void {
         return x.abort(127);
     }
     argv.items[0] = program.?;
-    var child = std.process.spawn(x.env.io, .{
+    // Make room first: a started child must not be lost track of.
+    try x.running.ensureUnusedCapacity(gpa, 1);
+    try x.pids.ensureTotalCapacity(gpa, x.running.items.len + 1);
+    const child = std.process.spawn(x.env.io, .{
         .argv = argv.items,
         .stdin = stdin_opt,
         .environ_map = if (env_copy) |*m| m else null,
@@ -346,11 +378,16 @@ fn runCommand(x: *X) Stop!void {
         try finishAll(x);
         return x.abort(if (e == error.FileNotFound) 127 else 126);
     };
-    x.running.append(gpa, .{ .child = child, .slot = slot }) catch {
-        child.kill(x.env.io);
-    };
-    if (x.opt.procs == 1) try waitOne(x);
+    x.running.appendAssumeCapacity(.{ .child = child, .slot = slot });
     clearItems(x);
+    if (x.opt.procs == 1) try waitOne(x) else try reapEnded(x);
+}
+
+fn slotInUse(x: *const X, slot: usize) bool {
+    for (x.running.items) |r| {
+        if (r.slot == slot) return true;
+    }
+    return false;
 }
 
 fn cutNul(s: []const u8) []const u8 {
@@ -595,6 +632,7 @@ pub fn run(env: Env, options: Options, input: *Io.Reader, observer: Observer) er
         for (x.items.items) |it| env.gpa.free(it);
         x.items.deinit(env.gpa);
         x.running.deinit(env.gpa);
+        x.pids.deinit(env.gpa);
     }
     runAll(&x, input) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
