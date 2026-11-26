@@ -82,7 +82,7 @@ See docs/compatibility/sed.md for details.
 
 # LIMITATIONS
 
-- Regular expressions use the Perl-dialect engine of regex-zig through src/posixre.zig: alternation is leftmost-first, POSIX and GNU use leftmost-longest, so `s/a|ab/X/` differs on "ab".
+- Regular expressions use the Perl-dialect engine of regex-zig through src/posixre.zig. Alternation is made leftmost-longest, as in POSIX and GNU, except in patterns containing `$` or a word anchor, which are leftmost-first; group positions follow the Perl rule.
 - `--debug` is accepted but prints nothing extra (GNU prints the program and a trace).
 - C locale only: no multibyte characters.
 - `e` and `s///e` run the command with `/bin/sh -c` and read its output through a pipe; no temporary file is used.

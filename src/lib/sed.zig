@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! sed library: stream editor. Reference: GNU sed 4.9 (compile.c, execute.c)
 //! and POSIX sed. Regular expressions go through src/posixre.zig (BRE/ERE
-//! translated to the regex-zig Perl dialect), so alternation is
-//! leftmost-first rather than POSIX leftmost-longest.
+//! translated to the regex-zig Perl dialect); `posixre.Finder` gives
+//! alternation its POSIX leftmost-longest meaning.
 //!
 //! Two steps (decision 0004):
 //!   - `compile` turns script chunks (-e text, -f file contents) into a
@@ -336,7 +336,7 @@ fn errnoMsg(e: LX.E) []const u8 {
     return sys.errnoText(e);
 }
 
-const Re = struct { re: regex.Regex, groups: u32, multiline: bool, longest: ?regex.Regex = null, src: []const u8 = "", icase: bool = false, mb: bool = false };
+const Re = struct { re: regex.Regex, groups: u32, multiline: bool, longest: ?posixre.Longest = null, src: []const u8 = "", icase: bool = false, mb: bool = false };
 
 const AddrKind = enum { none, line, step, last, re, zero, plus, mult };
 const Addr = struct {
@@ -562,9 +562,7 @@ const Parser = struct {
         };
         const r = try s.arena.create(Re);
         r.* = .{ .re = re, .groups = re.groupCount(), .multiline = mline, .src = pat, .icase = icase, .mb = rflags.mb };
-        if (posixre.longestSource(s.arena, body, if (mline) "(?sm)" else "(?s)", rflags) catch null) |ls| {
-            r.longest = regex.Regex.compile(s.arena, ls, .{ .dialect = .perl, .ignore_case = icase, .limits = posixre.big_limits }, null) catch null;
-        }
+        r.longest = try posixre.Longest.compile(s.arena, .{ .pattern = conv, .ere = s.opts.ere, .body = body, .prefix = if (mline) "(?sm)" else "(?s)", .flags = rflags, .ignore_case = icase, .utf8 = s.opts.utf8, .multiline = mline });
         return r;
     }
 

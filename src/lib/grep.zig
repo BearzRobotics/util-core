@@ -255,7 +255,7 @@ const small_set_limits: regex.Limits = blk: {
 
 const Pat = struct {
     re: regex.Regex,
-    longest: ?*regex.Regex,
+    longest: ?*posixre.Longest,
     fin: posixre.Finder,
     mb: bool,
 };
@@ -915,13 +915,12 @@ pub const Matcher = struct {
         errdefer p.re.deinit(gpa);
         p.longest = null;
         if (options.syntax != .perl and !options.line and !options.word) {
-            if (posixre.longestSource(gpa, body, "(?s)", flags) catch null) |ls| {
-                defer gpa.free(ls);
-                if (regex.Regex.compile(gpa, ls, .{ .dialect = .perl, .ignore_case = options.icase, .limits = posixre.big_limits }, null) catch null) |lre| {
-                    const keep = try gpa.create(regex.Regex);
-                    keep.* = lre;
-                    p.longest = keep;
-                }
+            var found = try posixre.Longest.compile(gpa, .{ .pattern = st.pat, .ere = options.syntax == .extended, .body = body, .prefix = "(?s)", .flags = flags, .ignore_case = options.icase, .utf8 = options.utf8 });
+            if (found) |*l| {
+                errdefer l.deinit(gpa);
+                const keep = try gpa.create(posixre.Longest);
+                keep.* = l.*;
+                p.longest = keep;
             }
         }
         errdefer if (p.longest) |l| {

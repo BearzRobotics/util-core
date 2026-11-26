@@ -656,4 +656,24 @@ for p in '\<' '\>' '\<.' '.\>' 'abc\<' '\>abc' '\<a*' 'ab*\>' '\W\>' '\<\W' '\<[
     CMP_STDIN="$TEST_TMP/words" run_cmp "word ends: s/$p/[&]/g" "s/$p/[&]/g"
     CMP_STDIN="$TEST_TMP/words" run_cmp "word ends: -E s/$p" -n -E "s/$p/<&>/gp"
 done
+# Leftmost-longest alternation stays fast on long lines (this used to take
+# minutes) and does not turn into leftmost-first far from the end of a line.
+python3 -I -c 'print("a" * 20000)' > "$TEST_TMP/longalt" 2>/dev/null ||
+    { head -c 20000 /dev/zero | tr '\0' a; echo; } > "$TEST_TMP/longalt"
+got=$(timeout 20 "$BIN_DIR/sed" -E 's/a|b/x/g' "$TEST_TMP/longalt" | tr -d '\n' | tr -s x | wc -c)
+n=$(timeout 20 "$BIN_DIR/grep" -oE 'a|b' "$TEST_TMP/longalt" 2>/dev/null | wc -l)
+if [ "$got" -eq 1 ] && { [ ! -x "$BIN_DIR/grep" ] || [ "$n" -eq 20000 ]; }; then
+    PASS=$((PASS + 1)); echo "PASS alternation on a long line"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL alternation on a long line ($got, $n)"
+fi
+{ printf abcd; head -c 6000 /dev/zero | tr '\0' .; echo; } > "$TEST_TMP/longalt"
+CMP_STDIN="$TEST_TMP/longalt" run_cmp "longest alternative before a long rest" -E 's/a|abcd/X/'
+printf 'aaa abcabc xab\nab\n' > "$TEST_TMP/altin"
+for p in 'a|abc|abcabc' '(a|ab)(c|bcab)?' 'x{,2}a|xab' '^a|aaa a' '(ab|a)|b c' 'A|AAA'; do
+    CMP_STDIN="$TEST_TMP/altin" run_cmp "longest -E $p" -E "s/$p/<&>/g"
+    CMP_STDIN="$TEST_TMP/altin" run_cmp "longest -E I $p" -E "s/$p/<&>/gI"
+done 2>/dev/null
+CMP_STDIN="$TEST_TMP/altin" run_cmp "longest with the M flag" -E 'N;s/^a|^ab/X/Mg'
+CMP_STDIN="$TEST_TMP/altin" run_cmp "longest BRE" 's/a\|aaa\|ab\(c\|cab\)/<&>/g'
 cd /; print_summary
