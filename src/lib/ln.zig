@@ -152,7 +152,7 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
     }
     const kind: replacelink.Kind = if (cfg.symbolic) .symbolic else .{ .hard = .{ .follow = cfg.logical } };
     const failure = if (replacing)
-        replacelink.replace(env.io, target, dest, kind)
+        replacelink.replace(env.io, target, sys.cwdFd(), dest, kind)
     else switch (kind) {
         .symbolic => sys.symlinkPath(target, dest),
         .hard => |h| sys.linkPath(target, dest, h.follow),

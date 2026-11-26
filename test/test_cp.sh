@@ -396,6 +396,68 @@ if can_inject; then
 else
     skip_test "cp source swap races (no usable strace)"
 fi
+# The same for the destination: a directory of the copy replaced by a link to
+# "victim" while cp runs must leave victim as it was. strace holds cp before
+# the call that matches PATTERN while the test swaps SWAP.
+dest_race() { # DESC SYSCALL PATTERN SWAP ARGS...
+    description="$1"; call="$2"; pattern="$3"; swap="$4"; shift 4
+    base="$TEST_TMP/destswap"
+    dest_setup() {
+        chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/tree/a/sub" "$base/victim" "$base/out"
+        echo mine > "$base/tree/a/sub/data"; echo VICTIM > "$base/victim/other"
+        chmod 777 "$base/tree/a/sub"; chmod 700 "$base/victim"; chmod 600 "$base/victim/other"
+        touch -d '2001-01-01 00:00:00' "$base/victim/other" "$base/victim"
+    }
+    victim_state() { find "$base/victim" -printf '%P %m %T@ %s\n' | sort; cat "$base/victim/other"; }
+    dest_setup
+    (cd "$base" && strace -o trace -e trace="$call" "$BIN_DIR/cp" "$@" > /dev/null 2>&1)
+    n=$(grep "^$call(" "$base/trace" | grep -n -e "$pattern" | head -n 1 | cut -d: -f1)
+    dest_setup
+    before=$(victim_state)
+    (cd "$base" && exec timeout 30 strace -o trace -e trace="$call" -e inject="$call":delay_enter=3000000:when="${n:-1}" "$BIN_DIR/cp" "$@" > msgs 2>&1) & cp_pid=$!
+    tries=0
+    while [ "$(cat "$base/trace" 2>/dev/null | grep -c "^$call(")" -lt $((${n:-1} - 1)) ] && [ $tries -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    sleep 1
+    swapped=no
+    mv "$base/$swap" "$base/moved" && ln -s "$base/victim" "$base/$swap" && swapped=yes
+    wait $cp_pid
+    if [ -n "$n" ] && [ "$swapped" = yes ] && [ "$(victim_state)" = "$before" ]; then
+        PASS=$((PASS + 1)); echo "PASS $description"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $description (call $n, swapped $swapped)"; cat "$base/msgs"; victim_state
+    fi
+}
+if can_inject; then
+    dest_race "cp -r: destination directory swapped before a file is created" openat '[/"]data", O_WRONLY' copy/a/sub -r tree copy
+    dest_race "cp -a: destination directory swapped before its times and mode are set" utimensat '[/"]sub", \[' copy/a/sub -a tree copy
+    dest_race "cp --parents: destination directory swapped before a file is created" openat '[/"]data", O_WRONLY' out/tree/a/sub -a --parents tree/a/sub/data out
+else
+    skip_test "cp destination swap races (no usable strace)"
+fi
+# A copy deeper than PATH_MAX can be written.
+d="$TEST_TMP/deepdst"; mkdir -p "$d"
+name=$(printf 'n%.0s' $(seq 200))
+long=$(i=0; while [ $i -lt 19 ]; do printf '%s/' "$name"; i=$((i + 1)); done)in
+( cd "$d" && mkdir -p "src/$name/$name" && echo deep > "src/$name/$name/file" && ln -s file "src/$name/$name/link" && mkfifo "src/$name/$name/pipe" &&
+  i=0; while [ $i -lt 19 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done )
+if (cd "$d" && ours -a src "$long" > out 2>&1) &&
+    (cd "$d" && i=0; while [ $i -lt 19 ]; do cd -P "$name" || exit 1; i=$((i + 1)); done
+     cd -P "in/$name/$name" && [ "$(cat file)" = deep ] && [ "$(readlink link)" = file ] && [ -p pipe ] &&
+     [ "$(stat -c %y .)" = "$(stat -c %y "$d/src/$name/$name")" ]); then
+    PASS=$((PASS + 1)); echo "PASS cp -a writes destinations past PATH_MAX"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL cp -a writes destinations past PATH_MAX"; head -c 300 "$d/out"; echo
+fi
+/usr/bin/rm -rf "$d"
+# Destinations that go through symbolic links do so as in GNU.
+LINKED='mkdir -p src/dir out real; echo new > src/f; echo x > src/dir/inner; echo old > out/target; ln -s ../out/target dst_f; mkdir dst; ln -s ../out/target dst/f; ln -s ../out dst/dir; ln -s real lk; chmod 750 src'
+run_tree "cp -r onto a file link in the destination" "$LINKED" -r src/. dst
+run_tree "cp -a onto a file link in the destination" "$LINKED" -a src/. dst
+run_tree "cp -rp -T a directory link with a slash" "$LINKED" -rpT src lk/
+run_tree "cp -r --copy-contents --keep-directory-symlink" "$LINKED; rm dst/f" -r --copy-contents --keep-directory-symlink --preserve=mode src/. dst
+run_tree "cp -rp --parents through a directory link" "$LINKED; mkdir -p out/src; ln -s ../out/src real/src" -rp --parents src/dir real
+run_tree "cp -rb into an existing tree" "$LINKED; rm dst/dir; mkdir -p dst/dir; echo y > dst/dir/inner" -rbv src/. dst
+
 # A source deeper than PATH_MAX is copied when the copy's names are shorter.
 d="$TEST_TMP/deepsrc"; mkdir -p "$d"
 name=$(printf 'n%.0s' $(seq 200))

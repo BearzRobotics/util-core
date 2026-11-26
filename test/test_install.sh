@@ -150,4 +150,17 @@ if can_inject; then
 else
     skip_test "concurrent install (no usable strace)"
 fi
+# A link put in place of the installed file is not followed by what install
+# does to the file afterwards. The "strip" program makes the swap.
+d="$TEST_TMP/swapped"; mkdir -p "$d"
+(cd "$d" && echo data > f && echo VICTIM > victim && chmod 600 victim && touch -d '2001-01-01 00:00:00' victim &&
+    printf '#!/bin/sh\nrm -- "$1" && ln -s victim "$1"\n' > swap && chmod 755 swap)
+before=$(stat -c '%a %Y' "$d/victim")
+(cd "$d" && ours -p -s --strip-program=./swap -m 4755 f dest > out 2>&1); rc=$?
+if [ "$rc" = 1 ] && [ -L "$d/dest" ] && [ "$(stat -c '%a %Y' "$d/victim")" = "$before" ]; then
+    PASS=$((PASS + 1)); echo "PASS install does not change a file through a swapped-in link"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL install does not change a file through a swapped-in link (rc=$rc, victim $(stat -c '%a %Y' "$d/victim"), was $before)"; cat "$d/out"
+fi
+run_tree "install -d on a link to a directory" "$SETUP; mkdir real; ln -s real lk" -d -m 700 lk
 cd /; print_summary

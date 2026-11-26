@@ -15,7 +15,9 @@
 //! systems report that they have none, and only the mode is set.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sys = @import("sys.zig");
+const dirat = @import("dirat.zig");
 
 const access_name = "system.posix_acl_access";
 const default_name = "system.posix_acl_default";
@@ -23,13 +25,58 @@ const default_name = "system.posix_acl_default";
 /// XATTR_SIZE_MAX.
 const max_len = 64 * 1024;
 
-/// A file by its open descriptor, or by path (following links, as chmod does).
-pub const Place = union(enum) { fd: sys.Handle, path: []const u8 };
+/// A file by its open descriptor, by path (following links, as chmod does;
+/// sources only), or by its name in an open directory (destinations only).
+pub const Place = union(enum) { fd: sys.Handle, path: []const u8, entry: Entry };
+
+/// A directory or special file of kind `type_bits` (as in st_mode). A
+/// symbolic link at the name is not followed, unless `through` gives the
+/// directory that a link the caller means to go through led to.
+pub const Entry = struct {
+    spot: dirat.Spot,
+    type_bits: u32,
+    through: ?sys.FileStat = null,
+
+    pub fn setMode(e: Entry, mode: u32) ?sys.E {
+        if (e.through) |seen| return e.spot.setModeThroughLink(mode, seen);
+        return e.spot.setMode(e.type_bits, mode);
+    }
+
+    fn setAcl(e: Entry, name: [:0]const u8, value: []const u8) ?sys.E {
+        // No ACL is read on other systems, so none is ever written.
+        if (builtin.os.tag != .linux) return .OPNOTSUPP;
+        const is_dir = e.type_bits == 0o040000;
+        const nofollow: u32 = if (e.through == null) sys.O.NOFOLLOW else 0;
+        const at = if (e.through == null) std.mem.trimEnd(u8, e.spot.name, "/") else e.spot.name;
+        var err: sys.E = .SUCCESS;
+        // A readable directory takes the attribute directly. Anything else
+        // is only named, and reached through the descriptor's /proc link.
+        var direct = is_dir;
+        var opened: ?sys.Handle = null;
+        if (is_dir) opened = sys.openFdAt(e.spot.dir, at, sys.O.RDONLY | sys.O.DIRECTORY | sys.O.NONBLOCK | nofollow, 0, &err);
+        if (opened == null) {
+            direct = false;
+            opened = sys.openFdAt(e.spot.dir, at, sys.O.PATH | nofollow, 0, &err);
+        }
+        const fd = opened orelse return err;
+        defer _ = sys.closeFd(fd);
+        const st = sys.fstatFd(fd, &err) orelse return err;
+        if (st.mode & 0o170000 != e.type_bits) return .OPNOTSUPP;
+        if (e.through) |seen| {
+            if (st.ino != seen.ino or dirat.devOf(st) != dirat.devOf(seen)) return .NOENT;
+        }
+        if (direct) return sys.setXattrFd(fd, name, value);
+        var buf: [32]u8 = undefined;
+        const link = std.fmt.bufPrint(&buf, "/proc/self/fd/{d}", .{fd}) catch unreachable;
+        return sys.setXattr(link, name, value);
+    }
+};
 
 fn read(from: Place, name: [:0]const u8, buf: []u8, err: *sys.E) ?usize {
     return switch (from) {
         .fd => |fd| sys.getXattrFd(fd, name, buf, err),
         .path => |p| sys.getXattr(p, name, true, buf, err),
+        .entry => unreachable,
     };
 }
 
@@ -37,6 +84,7 @@ fn write(to: Place, name: [:0]const u8, value: []const u8) ?sys.E {
     return switch (to) {
         .fd => |fd| sys.setXattrFd(fd, name, value),
         .path => |p| sys.setXattr(p, name, value),
+        .entry => |e| e.setAcl(name, value),
     };
 }
 
@@ -44,6 +92,7 @@ fn setMode(to: Place, mode: u32) ?sys.E {
     return switch (to) {
         .fd => |fd| sys.fchmodFd(fd, mode),
         .path => |p| sys.chmodPath(p, mode, false),
+        .entry => |e| e.setMode(mode),
     };
 }
 

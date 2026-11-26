@@ -23,8 +23,9 @@ pub const Kind = union(enum) {
 const template = "CuXXXXXX";
 
 /// Make `dest` a link to `source`, replacing what is there (not a directory).
-/// Null on success, else the error, with `dest` unchanged.
-pub fn replace(io: Io, source: []const u8, dest: []const u8, kind: Kind) ?E {
+/// `dest` is resolved from the open directory `dest_dir` (`sys.cwdFd()` for a
+/// path). Null on success, else the error, with `dest` unchanged.
+pub fn replace(io: Io, source: []const u8, dest_dir: sys.Handle, dest: []const u8, kind: Kind) ?E {
     const trimmed = std.mem.trimEnd(u8, dest, "/");
     const dir_len = if (std.mem.lastIndexOfScalar(u8, trimmed, '/')) |slash| slash + 1 else 0;
     var buf: [4096]u8 = undefined;
@@ -37,15 +38,15 @@ pub fn replace(io: Io, source: []const u8, dest: []const u8, kind: Kind) ?E {
     while (true) : (attempts += 1) {
         fillRandom(io, temp[temp.len - 6 ..]);
         const failure = switch (kind) {
-            .hard => |h| sys.linkAt(h.source_dir orelse sys.cwdFd(), source, temp, h.follow),
-            .symbolic => sys.symlinkPath(source, temp),
+            .hard => |h| sys.linkAt(h.source_dir orelse sys.cwdFd(), source, dest_dir, temp, h.follow),
+            .symbolic => sys.symlinkAt(source, dest_dir, temp),
         } orelse break;
         if (failure != .EXIST or attempts == 100) return failure;
     }
-    const renamed = sys.renamePath(temp, dest, 0);
+    const renamed = sys.renameAt(dest_dir, temp, dest_dir, dest, 0);
     // After a failure, and also after a rename that did nothing because both
     // names were already links to one file, the temporary name is still there.
-    if (renamed != null or kind == .hard) _ = sys.unlinkPath(temp, false);
+    if (renamed != null or kind == .hard) _ = sys.unlinkAt(dest_dir, temp, false);
     return renamed;
 }
 

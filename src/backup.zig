@@ -21,8 +21,9 @@ fn dirOf(path: []const u8) []const u8 {
 
 /// Highest existing numbered backup of `file` (0 when none) and whether the
 /// number is all 9s.
-fn highestNumbered(env: common.Env, file: []const u8, base: []const u8) ?struct { n: u64 } {
-    var dir = Io.Dir.cwd().openDir(env.io, dirOf(file), .{ .iterate = true }) catch return null;
+fn highestNumbered(env: common.Env, from: sys.Handle, file: []const u8, base: []const u8) ?struct { n: u64 } {
+    const start: Io.Dir = .{ .handle = from };
+    var dir = start.openDir(env.io, dirOf(file), .{ .iterate = true }) catch return null;
     defer dir.close(env.io);
     var best: u64 = 0;
     var found = false;
@@ -49,7 +50,7 @@ fn highestNumbered(env: common.Env, file: []const u8, base: []const u8) ?struct 
     return .{ .n = best };
 }
 
-fn nameFor(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, file: []const u8, btype: *Type, numbered_ok: *bool) ![]const u8 {
+fn nameFor(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, from: sys.Handle, file: []const u8, btype: *Type, numbered_ok: *bool) ![]const u8 {
     var end = file.len;
     while (end > 1 and file[end - 1] == '/') end -= 1;
     const f = file[0..end];
@@ -57,7 +58,7 @@ fn nameFor(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, file: 
     const base = f[base_off..];
     numbered_ok.* = true;
     if (btype.* == .simple) return std.fmt.allocPrint(arena, "{s}{s}", .{ f, suffix });
-    const hi = highestNumbered(env, f, base);
+    const hi = highestNumbered(env, from, f, base);
     const n: u64 = if (hi) |h| h.n else 0;
     if (n == 0) {
         if (btype.* == .numbered_existing) {
@@ -73,24 +74,25 @@ fn nameFor(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, file: 
 pub fn findBackupName(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, file: []const u8, btype_in: Type) ?[]const u8 {
     var bt = btype_in;
     var ok: bool = true;
-    return nameFor(env, suffix, arena, file, &bt, &ok) catch null;
+    return nameFor(env, suffix, arena, sys.cwdFd(), file, &bt, &ok) catch null;
 }
 
-/// Rename `file` to its backup name; returns the new name, or null with
-/// `err` set (ENOENT when the file does not exist).
-pub fn backupRename(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, file: []const u8, btype_in: Type, err: *E) ?[]const u8 {
+/// Rename `file`, resolved from the open directory `dir`, to its backup name;
+/// returns the new name (relative to `dir` like `file`), or null with `err` set
+/// (ENOENT when the file does not exist).
+pub fn backupRename(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, dir: sys.Handle, file: []const u8, btype_in: Type, err: *E) ?[]const u8 {
     var attempts: usize = 0;
     while (attempts < 1000) : (attempts += 1) {
         var bt = btype_in;
         var ok: bool = true;
-        const name = nameFor(env, suffix, arena, file, &bt, &ok) catch {
+        const name = nameFor(env, suffix, arena, dir, file, &bt, &ok) catch {
             err.* = .NOMEM;
             return null;
         };
         var end = file.len;
         while (end > 1 and file[end - 1] == '/') end -= 1;
         const flags: u32 = if (bt == .simple) 0 else sys.RENAME_NOREPLACE;
-        if (sys.renamePath(file[0..end], name, flags)) |e| {
+        if (sys.renameAt(dir, file[0..end], dir, name, flags)) |e| {
             if (e == .EXIST and bt != .simple) continue;
             err.* = e;
             return null;

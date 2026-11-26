@@ -565,7 +565,8 @@ pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?
     const acc = flags & 3;
     const follow = flags & O.NOFOLLOW == 0;
     if (flags & O.DIRECTORY != 0) {
-        const d = dirOf(dir).openDir(io(), path, .{ .follow_symlinks = follow, .iterate = true }) catch |e| {
+        // A directory opened only to name files in it need not be readable.
+        const d = dirOf(dir).openDir(io(), path, .{ .follow_symlinks = follow, .iterate = flags & O.PATH == 0 }) catch |e| {
             err.* = errFrom(e);
             return null;
         };
@@ -691,13 +692,13 @@ pub fn fchownFd(fd: Handle, uid: u32, gid: u32) ?E {
     return noOwners(uid, gid);
 }
 
-pub fn chownAt(path: []const u8, uid: u32, gid: u32, nofollow: bool) ?E {
+pub fn chownAtDir(dir: Handle, path: []const u8, uid: u32, gid: u32, nofollow: bool) ?E {
     if (comptime is_libc_posix) {
         var b: [4097]u8 = undefined;
         const p = cstr(&b, path) orelse return .NAMETOOLONG;
-        return cerr(c.fchownat(c.AT.FDCWD, p, uid, gid, if (nofollow) c.AT.SYMLINK_NOFOLLOW else 0));
+        return cerr(c.fchownat(dir, p, uid, gid, if (nofollow) c.AT.SYMLINK_NOFOLLOW else 0));
     }
-    _ = .{ path, nofollow };
+    _ = .{ dir, path, nofollow };
     return noOwners(uid, gid);
 }
 
@@ -775,28 +776,28 @@ pub fn unlinkAt(dir: Handle, path: []const u8, removedir: bool) ?E {
     return null;
 }
 
-pub fn renameAt(old_dir: Handle, old: []const u8, new: []const u8, flags: u32) ?E {
+pub fn renameAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const u8, flags: u32) ?E {
     if (flags & sys.RENAME_EXCHANGE != 0) return .OPNOTSUPP;
     if (flags & sys.RENAME_NOREPLACE != 0) {
-        Io.Dir.renamePreserve(dirOf(old_dir), old, cwd(), new, io()) catch |e| return errFrom(e);
+        Io.Dir.renamePreserve(dirOf(old_dir), old, dirOf(new_dir), new, io()) catch |e| return errFrom(e);
         return null;
     }
-    Io.Dir.rename(dirOf(old_dir), old, cwd(), new, io()) catch |e| return errFrom(e);
+    Io.Dir.rename(dirOf(old_dir), old, dirOf(new_dir), new, io()) catch |e| return errFrom(e);
     return null;
 }
 
-pub fn linkAt(old_dir: Handle, old: []const u8, new: []const u8, follow: bool) ?E {
-    Io.Dir.hardLink(dirOf(old_dir), old, cwd(), new, io(), .{ .follow_symlinks = follow }) catch |e| return errFrom(e);
+pub fn linkAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const u8, follow: bool) ?E {
+    Io.Dir.hardLink(dirOf(old_dir), old, dirOf(new_dir), new, io(), .{ .follow_symlinks = follow }) catch |e| return errFrom(e);
     return null;
 }
 
-pub fn symlinkPath(target: []const u8, path: []const u8) ?E {
+pub fn symlinkAt(target: []const u8, dir: Handle, path: []const u8) ?E {
     var is_dir = false;
     if (comptime is_win) {
         // Windows distinguishes file and directory links; decide from the target.
-        if (cwd().statFile(io(), target, .{})) |st| is_dir = st.kind == .directory else |_| {}
+        if (dirOf(dir).statFile(io(), target, .{})) |st| is_dir = st.kind == .directory else |_| {}
     }
-    cwd().symLink(io(), target, path, .{ .is_directory = is_dir }) catch |e| return errFrom(e);
+    dirOf(dir).symLink(io(), target, path, .{ .is_directory = is_dir }) catch |e| return errFrom(e);
     return null;
 }
 
@@ -814,8 +815,8 @@ pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?E {
 
 /// chmod of `name` in `dir`. Windows has no links to guard against here (and
 /// std cannot change permissions without following one).
-pub fn chmodAt(dir: Handle, name: []const u8, mode: u32) ?E {
-    dirOf(dir).setFilePermissions(io(), name, sys.permissionsFromMode(mode), .{ .follow_symlinks = is_win }) catch |e| return errFrom(e);
+pub fn chmodAt(dir: Handle, name: []const u8, mode: u32, follow: bool) ?E {
+    dirOf(dir).setFilePermissions(io(), name, sys.permissionsFromMode(mode), .{ .follow_symlinks = follow or is_win }) catch |e| return errFrom(e);
     return null;
 }
 
@@ -824,19 +825,21 @@ pub fn accessAt(dir: Handle, path: []const u8, mode: u32) ?E {
     return null;
 }
 
+/// futimens only: names go through `setTimesAt`.
 pub fn setTimes(path: ?[]const u8, fd: Handle, times: ?[2]sys.TimeSpec, nofollow: bool) ?E {
+    if (path) |p| return setTimesAt(cwd().handle, p, times, nofollow);
     const T = Io.File.SetTimestamp;
-    var at: T = .now;
-    var mt: T = .now;
-    if (times) |t| {
-        at = conv(t[0]);
-        mt = conv(t[1]);
-    }
-    if (path) |p| {
-        cwd().setTimestamps(io(), p, .{ .follow_symlinks = !nofollow, .access_timestamp = at, .modify_timestamp = mt }) catch |e| return errFrom(e);
-    } else {
-        fileOf(fd).setTimestamps(io(), .{ .access_timestamp = at, .modify_timestamp = mt }) catch |e| return errFrom(e);
-    }
+    const at: T = if (times) |t| conv(t[0]) else .now;
+    const mt: T = if (times) |t| conv(t[1]) else .now;
+    fileOf(fd).setTimestamps(io(), .{ .access_timestamp = at, .modify_timestamp = mt }) catch |e| return errFrom(e);
+    return null;
+}
+
+pub fn setTimesAt(dir: Handle, path: []const u8, times: ?[2]sys.TimeSpec, nofollow: bool) ?E {
+    const T = Io.File.SetTimestamp;
+    const at: T = if (times) |t| conv(t[0]) else .now;
+    const mt: T = if (times) |t| conv(t[1]) else .now;
+    dirOf(dir).setTimestamps(io(), path, .{ .follow_symlinks = !nofollow, .access_timestamp = at, .modify_timestamp = mt }) catch |e| return errFrom(e);
     return null;
 }
 

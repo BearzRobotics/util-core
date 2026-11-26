@@ -36,6 +36,9 @@ Move (rename) files.
   reported as GNU reports it, but the group and other permissions are narrowed
   so that nobody gains access. GNU 9.7 leaves the owning group with the ACL's
   mask.
+- A move between file systems writes the destination tree by name in the
+  directories it made, so replacing one with a symbolic link meanwhile does not
+  redirect the copy (see cp(1)).
 
 # EXIT STATUS
 

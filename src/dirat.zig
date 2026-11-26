@@ -44,6 +44,8 @@ pub const Level = struct {
     ino: u64,
     /// The name this level was entered by is a symbolic link.
     through_link: bool,
+    /// Opened with `Options.path_only`.
+    path_only: bool,
     depth: usize,
     /// Bytes in the names from the first level down, separators included.
     path_len: usize,
@@ -71,7 +73,14 @@ pub const Options = struct {
     expect: ?sys.FileStat = null,
     /// Refuse a different device too (find -xdev).
     same_device: bool = false,
+    /// The directory is only used to name files in it (a destination), so
+    /// it need not be readable. Its entries cannot be listed.
+    path_only: bool = false,
 };
+
+fn accessFlags(path_only: bool) u32 {
+    return if (path_only) sys.O.PATH else sys.O.RDONLY;
+}
 
 /// Open the directory `name` in `parent` (null: relative to the current
 /// directory) as `level`. Returns null on success and the errno otherwise;
@@ -82,7 +91,7 @@ pub fn enter(level: *Level, parent: ?*Level, name: []const u8, options: Options)
     if (depth > max_depth or path_len > max_path) return .NAMETOOLONG;
     var err: sys.E = .SUCCESS;
     const nofollow: u32 = if (options.follow) 0 else sys.O.NOFOLLOW;
-    const fd = sys.openFdAt(fdOf(parent), name, sys.O.RDONLY | sys.O.DIRECTORY | sys.O.NONBLOCK | nofollow, 0, &err) orelse return err;
+    const fd = sys.openFdAt(fdOf(parent), name, accessFlags(options.path_only) | sys.O.DIRECTORY | sys.O.NONBLOCK | nofollow, 0, &err) orelse return err;
     const st = sys.fstatFd(fd, &err) orelse {
         _ = sys.closeFd(fd);
         return err;
@@ -99,7 +108,7 @@ pub fn enter(level: *Level, parent: ?*Level, name: []const u8, options: Options)
         const own = sys.fileStatAt(fdOf(parent), name, false, &err);
         through_link = own == null or own.?.isLink();
     }
-    level.* = .{ .parent = parent, .fd = fd, .open = true, .dev = devOf(st), .ino = st.ino, .through_link = through_link, .depth = depth, .path_len = path_len };
+    level.* = .{ .parent = parent, .fd = fd, .open = true, .dev = devOf(st), .ino = st.ino, .through_link = through_link, .path_only = options.path_only, .depth = depth, .path_len = path_len };
 
     // Close the ancestor that has just become the max_open'th.
     var child = level;
@@ -127,7 +136,7 @@ pub fn leave(level: *Level) ?sys.E {
     if (parent.open) return null;
     if (!level.open) return .NOENT;
     var err: sys.E = .SUCCESS;
-    const fd = sys.openFdAt(level.fd, "..", sys.O.RDONLY | sys.O.DIRECTORY, 0, &err) orelse return err;
+    const fd = sys.openFdAt(level.fd, "..", accessFlags(parent.path_only) | sys.O.DIRECTORY, 0, &err) orelse return err;
     const st = sys.fstatFd(fd, &err) orelse {
         _ = sys.closeFd(fd);
         return err;
@@ -179,9 +188,10 @@ pub const Spot = struct {
     /// `setMode`, but the bits of `keep` that the file has (a set-group-ID
     /// bit it inherited, say) stay set.
     pub fn setModeKeeping(spot: Spot, type_bits: u32, mode: u32, keep: u32) ?sys.E {
-        if (builtin.os.tag != .linux) return sys.chmodAtOther(spot.dir, spot.name, mode);
-        // A trailing slash would make the open follow a link.
-        const name = std.mem.trimEnd(u8, spot.name, "/");
+        if (builtin.os.tag != .linux) return sys.chmodAtOther(spot.dir, spot.name, mode, false);
+        // A trailing slash would make the open follow a link ("/" is itself).
+        const trimmed = std.mem.trimEnd(u8, spot.name, "/");
+        const name = if (trimmed.len == 0) spot.name else trimmed;
         const is_dir = type_bits == 0o040000;
         var err: sys.E = .SUCCESS;
         const fd = sys.openFdAt(spot.dir, name, sys.O.PATH | sys.O.NOFOLLOW | (if (is_dir) sys.O.DIRECTORY else 0), 0, &err) orelse return err;
@@ -189,6 +199,19 @@ pub const Spot = struct {
         const st = sys.fstatFd(fd, &err) orelse return err;
         if (st.mode & 0o170000 != type_bits) return .OPNOTSUPP;
         return sys.chmodHeld(fd, mode | (st.mode & keep));
+    }
+
+    /// Set the mode of the directory this name led to when it was a symbolic
+    /// link that the caller meant to go through. `seen` is the directory the
+    /// link led to then; one found in its place now is refused with ENOENT.
+    pub fn setModeThroughLink(spot: Spot, mode: u32, seen: sys.FileStat) ?sys.E {
+        if (builtin.os.tag != .linux) return sys.chmodAtOther(spot.dir, spot.name, mode, true);
+        var err: sys.E = .SUCCESS;
+        const fd = sys.openFdAt(spot.dir, spot.name, sys.O.PATH | sys.O.DIRECTORY, 0, &err) orelse return err;
+        defer _ = sys.closeFd(fd);
+        const st = sys.fstatFd(fd, &err) orelse return err;
+        if (st.ino != seen.ino or devOf(st) != devOf(seen)) return .NOENT;
+        return sys.chmodHeld(fd, mode);
     }
 };
 

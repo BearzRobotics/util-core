@@ -899,7 +899,20 @@ pub const TimeSpec = struct {
 /// utimensat(2) on `path` (cwd-relative), or futimens on `fd` when path is
 /// null. `times` null means "now" for both. Returns the errno on failure.
 pub fn setTimes(path: ?[]const u8, fd: Handle, times: ?[2]TimeSpec, nofollow: bool) ?LX.E {
-    if (comptime !is_linux) return other.setTimes(path, fd, times, nofollow);
+    if (path) |p| return setTimesAt(cwdFd(), p, times, nofollow);
+    if (comptime !is_linux) return other.setTimes(null, fd, times, nofollow);
+    var ts: [2]LX.timespec = undefined;
+    var tp: ?*[2]LX.timespec = null;
+    if (times) |t| {
+        for (0..2) |i| ts[i] = .{ .sec = t[i].sec, .nsec = t[i].nsec };
+        tp = &ts;
+    }
+    return errOf(LX.utimensat(fd, null, tp, 0));
+}
+
+/// `setTimes` of `path` resolved from the open directory `dir`.
+pub noinline fn setTimesAt(dir: Handle, path: []const u8, times: ?[2]TimeSpec, nofollow: bool) ?LX.E {
+    if (comptime !is_linux) return other.setTimesAt(dir, path, times, nofollow);
     var ts: [2]LX.timespec = undefined;
     var tp: ?*[2]LX.timespec = null;
     if (times) |t| {
@@ -907,26 +920,23 @@ pub fn setTimes(path: ?[]const u8, fd: Handle, times: ?[2]TimeSpec, nofollow: bo
         tp = &ts;
     }
     var buf: [4097]u8 = undefined;
-    if (path) |p| {
-        if (p.len >= 4096) return .NAMETOOLONG;
-        @memcpy(buf[0..p.len], p);
-        buf[p.len] = 0;
-        const flags: u32 = if (nofollow) LX.AT.SYMLINK_NOFOLLOW else 0;
-        return errOf(LX.utimensat(LX.AT.FDCWD, @ptrCast(&buf), tp, flags));
-    }
-    return errOf(LX.utimensat(fd, null, tp, 0));
+    const p = cstr(&buf, path) orelse return .NAMETOOLONG;
+    return errOf(LX.utimensat(dir, p, tp, if (nofollow) LX.AT.SYMLINK_NOFOLLOW else 0));
 }
 
 /// fchownat(2) on `path` (cwd-relative); uid or gid == maxInt(u32) leaves
 /// that id unchanged. `nofollow` changes a symbolic link itself.
 pub fn chownAt(path: []const u8, uid: u32, gid: u32, nofollow: bool) ?LX.E {
-    if (comptime !is_linux) return other.chownAt(path, uid, gid, nofollow);
+    return chownAtDir(cwdFd(), path, uid, gid, nofollow);
+}
+
+/// `chownAt` of `path` resolved from the open directory `dir`.
+pub noinline fn chownAtDir(dir: Handle, path: []const u8, uid: u32, gid: u32, nofollow: bool) ?LX.E {
+    if (comptime !is_linux) return other.chownAtDir(dir, path, uid, gid, nofollow);
     var buf: [4097]u8 = undefined;
-    if (path.len >= 4096) return .NAMETOOLONG;
-    @memcpy(buf[0..path.len], path);
-    buf[path.len] = 0;
+    const p = cstr(&buf, path) orelse return .NAMETOOLONG;
     const flags: u32 = if (nofollow) LX.AT.SYMLINK_NOFOLLOW else 0;
-    return errOf(LX.fchownat(LX.AT.FDCWD, @ptrCast(&buf), uid, gid, flags));
+    return errOf(LX.fchownat(dir, p, uid, gid, flags));
 }
 
 // ------------------------------------------------ file systems and xattrs
@@ -1321,50 +1331,55 @@ pub const RENAME_NOREPLACE: u32 = 1;
 pub const RENAME_EXCHANGE: u32 = 2;
 
 pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?LX.E {
-    return renameAt(cwdFd(), old, new, flags);
+    return renameAt(cwdFd(), old, cwdFd(), new, flags);
 }
 
-/// `renamePath` with `old` resolved from the open directory `old_dir`.
-pub noinline fn renameAt(old_dir: Handle, old: []const u8, new: []const u8, flags: u32) ?LX.E {
-    if (comptime !is_linux) return other.renameAt(old_dir, old, new, flags);
+/// `renamePath` with each name resolved from its own open directory.
+pub noinline fn renameAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const u8, flags: u32) ?LX.E {
+    if (comptime !is_linux) return other.renameAt(old_dir, old, new_dir, new, flags);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
     const p2 = cstr(&b2, new) orelse return .NAMETOOLONG;
-    if (flags == 0) return errOf(LX.renameat(old_dir, p1, LX.AT.FDCWD, p2));
-    const failed = errOf(LX.syscall5(.renameat2, @bitCast(@as(isize, old_dir)), @intFromPtr(p1), @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p2), flags)) orelse return null;
+    if (flags == 0) return errOf(LX.renameat(old_dir, p1, new_dir, p2));
+    const failed = errOf(LX.syscall5(.renameat2, @bitCast(@as(isize, old_dir)), @intFromPtr(p1), @bitCast(@as(isize, new_dir)), @intFromPtr(p2), flags)) orelse return null;
     // NFS, CIFS and many FUSE file systems reject the flag (and old kernels
     // the call). As gnulib's renameatu does: check that nothing has the new
     // name, then rename without the flag. That is not atomic.
     if (flags != RENAME_NOREPLACE or (failed != .INVAL and failed != .NOSYS and failed != .OPNOTSUPP)) return failed;
     var e: LX.E = .SUCCESS;
-    if (fileStat(new, false, &e) != null or e == .OVERFLOW) return .EXIST;
+    if (fileStatAt(new_dir, new, false, &e) != null or e == .OVERFLOW) return .EXIST;
     if (e != .NOENT) return e;
-    return errOf(LX.renameat(old_dir, p1, LX.AT.FDCWD, p2));
+    return errOf(LX.renameat(old_dir, p1, new_dir, p2));
 }
 
 /// linkat(2); `follow` makes a hard link to the target of a symlink.
 pub fn linkPath(old: []const u8, new: []const u8, follow: bool) ?LX.E {
-    return linkAt(cwdFd(), old, new, follow);
+    return linkAt(cwdFd(), old, cwdFd(), new, follow);
 }
 
-/// `linkPath` with `old` resolved from the open directory `old_dir`.
-pub noinline fn linkAt(old_dir: Handle, old: []const u8, new: []const u8, follow: bool) ?LX.E {
-    if (comptime !is_linux) return other.linkAt(old_dir, old, new, follow);
+/// `linkPath` with each name resolved from its own open directory.
+pub noinline fn linkAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const u8, follow: bool) ?LX.E {
+    if (comptime !is_linux) return other.linkAt(old_dir, old, new_dir, new, follow);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
     const p2 = cstr(&b2, new) orelse return .NAMETOOLONG;
-    return errOf(LX.linkat(old_dir, p1, LX.AT.FDCWD, p2, if (follow) LX.AT.SYMLINK_FOLLOW else 0));
+    return errOf(LX.linkat(old_dir, p1, new_dir, p2, if (follow) LX.AT.SYMLINK_FOLLOW else 0));
 }
 
 pub fn symlinkPath(target: []const u8, path: []const u8) ?LX.E {
-    if (comptime !is_linux) return other.symlinkPath(target, path);
+    return symlinkAt(target, cwdFd(), path);
+}
+
+/// `symlinkPath` with `path` resolved from the open directory `dir`.
+pub noinline fn symlinkAt(target: []const u8, dir: Handle, path: []const u8) ?LX.E {
+    if (comptime !is_linux) return other.symlinkAt(target, dir, path);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, target) orelse return .NAMETOOLONG;
     const p2 = cstr(&b2, path) orelse return .NAMETOOLONG;
-    return errOf(LX.symlinkat(p1, LX.AT.FDCWD, p2));
+    return errOf(LX.symlinkat(p1, dir, p2));
 }
 
 pub fn readlinkPath(path: []const u8, buf: []u8, err: *LX.E) ?usize {
@@ -1405,9 +1420,9 @@ pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?LX.E {
 }
 
 /// `chmodAt` for the systems without O_PATH (see sys/other.zig).
-pub fn chmodAtOther(dir: Handle, name: []const u8, mode: u32) ?LX.E {
+pub fn chmodAtOther(dir: Handle, name: []const u8, mode: u32, follow: bool) ?LX.E {
     if (comptime is_linux) return .NOSYS;
-    return other.chmodAt(dir, name, mode);
+    return other.chmodAt(dir, name, mode, follow);
 }
 
 /// Change the mode of the file an `O.PATH` descriptor names: fchmodat2(2)

@@ -51,6 +51,11 @@ Copy files and directories.
   reported as GNU reports it, but the group and other permissions are narrowed
   so that nobody gains access. GNU 9.7 leaves the owning group with the ACL's
   mask.
+- A recursive copy creates and changes everything below the destination operand
+  by name in the directory it made or examined, so replacing a directory of the
+  destination with a symbolic link while cp runs does not redirect the copy. A
+  symbolic link that appears at a destination file after cp examined it is not
+  written through, and is reported as such.
 
 # EXIT STATUS
 
