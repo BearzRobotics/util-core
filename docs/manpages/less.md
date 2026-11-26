@@ -16,7 +16,7 @@ It is a small implementation, built into util-core so that paging works on every
 # OPTIONS
 
 -F, --quit-if-one-screen
-: Quit at once, printing the text, if it fits on one screen.
+: Quit at once, printing the text, if it fits on one screen. The terminal is not touched until the text is longer than that, so what is typed meanwhile is left for others.
 
 -R, --RAW-CONTROL-CHARS, -r
 : Pass colour escape sequences through. Without it, control characters are shown as `^X`.

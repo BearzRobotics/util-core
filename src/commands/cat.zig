@@ -168,10 +168,16 @@ pub fn main(ctx: cli.Context) u8 {
     // is, not decorated a second time.
     const passing_on = in_pager and inputs.len == 1 and std.mem.eql(u8, inputs[0], "-") and
         !(Io.File.stdin().isTty(ctx.io) catch false);
+    // Reading a terminal, cat is just cat: what is typed comes straight back,
+    // and nothing else may read the keyboard.
+    const from_terminal = for (inputs) |path| {
+        if (isTerminal(ctx, path)) break true;
+    } else false;
+    if (from_terminal) paging = .never;
     const decorated = !opts.gnuFormatting() and switch (decorations) {
         .always => true,
         .never => false,
-        .auto => tty and !passing_on,
+        .auto => tty and !passing_on and !from_terminal,
     };
     // On a Windows console escapes work only after enabling VT processing; if
     // that fails, treat the console as one that cannot show them.
@@ -268,6 +274,18 @@ pub fn main(ctx: cli.Context) u8 {
         ui = null;
     }
     return if (result.failed) 1 else 0;
+}
+
+/// Whether the operand `path` reads a terminal.
+fn isTerminal(ctx: cli.Context, path: []const u8) bool {
+    if (std.mem.eql(u8, path, "-")) return Io.File.stdin().isTty(ctx.io) catch false;
+    // Only a character device can be one (/dev/tty, /dev/stdin).
+    var e: std.os.linux.E = .SUCCESS;
+    const st = sys.fileStat(path, true, &e) orelse return false;
+    if (st.mode & 0o170000 != 0o020000) return false;
+    const fd = sys.openFd(path, sys.O.RDONLY | sys.O.NOCTTY | sys.O.NONBLOCK, 0, &e) orelse return false;
+    defer _ = sys.closeFd(fd);
+    return (Io.File{ .handle = fd, .flags = .{ .nonblocking = true } }).isTty(ctx.io) catch false;
 }
 
 /// A pager process fed through a pipe. Started only for a terminal view and only

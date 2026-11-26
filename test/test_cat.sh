@@ -101,6 +101,14 @@ fi
 rm -rf /tmp/test_cat_syn /tmp/test_cat5.toy
 
 rm -f /tmp/test_cat1.txt /tmp/test_cat2.txt /tmp/test_cat3.txt /tmp/test_cat4.txt
+# What has been read is written before cat waits for more.
+for o in -u -n -A; do
+    got=$( { printf 'early\n'; sleep 3; } | { timeout 2 "$BIN_DIR/cat" $o > "$TEST_TMP/stream"; true; }; cat "$TEST_TMP/stream" )
+    want=$( { printf 'early\n'; sleep 3; } | { timeout 2 "${GNU_BIN:-/usr/bin}/cat" $o > "$TEST_TMP/stream.gnu"; true; }; cat "$TEST_TMP/stream.gnu" )
+    if [ -n "$got" ] && [ "$got" = "$want" ]; then PASS=$((PASS + 1)); printf "PASS output keeps up with a slow input %s\n" "$o"
+    else FAIL=$((FAIL + 1)); printf "FAIL output keeps up with a slow input %s (%s)\n" "$o" "$got"; fi
+done
+
 printf "\n[ Formatting options, differential ]\n"
 W="$(mktemp -d)"
 printf 'a\n\n\n\nb\n\nc' > "$W/blanks"

@@ -13,7 +13,7 @@ def check(name, ok):
     if not ok:
         failures.append(name)
 
-def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05):
+def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdin=False):
     """steps: list of (bytes_to_send_to_terminal, seconds_to_wait).
     stdin_feed: list of byte strings written to the program's stdin one by one
     (delay apart), then closed. Returns (output, exit status or None)."""
@@ -21,7 +21,9 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05):
     pid, master = pty.fork()
     if pid == 0:
         os.environ['TERM'] = 'xterm-256color'
-        if stdin_feed is None:
+        if tty_stdin:
+            pass
+        elif stdin_feed is None:
             fd = os.open('/dev/null', os.O_RDONLY); os.dup2(fd, 0)
         else:
             os.dup2(r_in, 0)
@@ -138,6 +140,31 @@ with open(src, 'w') as f:
     f.write('const std = @import("std");\npub fn main() void {\n    // hi\n    const x: u32 = 42;\n}\n')
 out, st, _ = session([cat, src], [])
 check("cat: built-in Zig grammar colours the source", re.search(r'\x1b\[(?:3[0-9]|38;[25];[0-9;]+)m', out) is not None and st == 0)
+
+# cat reading the terminal is just cat: no pager takes the keys, nothing is
+# decorated, and Ctrl-D ends the input.
+for label, argv in [('cat', [cat]), ('cat -', [cat, '-']), ('cat /dev/tty', [cat, '/dev/tty'])]:
+    out, st, _ = session(argv, [(b'hello\r', 0.3), (b'world\r', 0.3), (b'\x04', 0.5)], tty_stdin=True)
+    check('%s: typed lines are echoed and copied' % label,
+          st == 0 and out.replace('\r', '') == 'hello\nhello\nworld\nworld\n')
+
+# Another program in the pipeline reads the terminal: cat leaves it alone.
+prompt = os.path.join(tmp, 'pty_prompt.sh')
+with open(prompt, 'w') as f:
+    f.write('printf "Password: " > /dev/tty\nIFS= read -r pw < /dev/tty\necho "producer got [$pw]"\n')
+out, st, _ = session(['/bin/sh', '-c', 'sh "%s" | "%s"' % (prompt, cat)], [(b'hunter2\r', 0.8)], tty_stdin=True)
+check('cat: a prompt earlier in the pipeline gets the keyboard', st == 0 and 'producer got [hunter2]' in out)
+
+# What is typed while a short output is produced stays for the next reader.
+for label, command in [('cat', '"%s"' % cat), ('less -F', '"%s" -F' % less)]:
+    out, st, _ = session(['/bin/sh', '-c', '{ sleep 1; echo short; } | %s; IFS= read -r x; echo "next got [$x]"' % command],
+                         [(b'typed ahead\r', 1.5)], tty_stdin=True)
+    check('%s: input typed ahead is not consumed' % label, st == 0 and 'next got [typed ahead]' in out)
+
+# A long stream is still paged.
+feed = [("piped %d\n" % i).encode() for i in range(60)]
+out, st, _ = session([cat], [(b'', 0.5), (b'q', 0.5)], stdin_feed=feed, delay=0.01)
+check('cat: a long piped stream is paged and quits with q', '\x1b[?1049h' in out and '\x1b[?1049l' in out and st == 0)
 
 # cat with itself as the pager, directly or through a script. Unfixed, each cat
 # starts another without end, so these run only inside a systemd scope that caps
