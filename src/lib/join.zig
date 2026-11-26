@@ -146,29 +146,51 @@ fn isBlank(c: u8, term: u8) bool {
     return c == ' ' or c == '\t' or (term == 0 and c == '\n');
 }
 
+/// The fields of a line, one after another: each in constant time per byte,
+/// so a line with very many fields can be walked once.
+const Fields = struct {
+    cfg: *const Options,
+    line: []const u8,
+    pos: usize = 0,
+    done: bool,
+
+    fn init(cfg: *const Options, line: []const u8) Fields {
+        // As in GNU, an empty line has no fields, whatever separates them.
+        return .{ .cfg = cfg, .line = line, .done = line.len == 0 };
+    }
+
+    fn next(f: *Fields) ?[]const u8 {
+        if (f.done) return null;
+        const line = f.line;
+        if (f.cfg.tab_given and f.cfg.tab == null) { // -t '': whole line
+            f.done = true;
+            return line;
+        }
+        if (f.cfg.tab) |t| {
+            const start = f.pos;
+            const end = std.mem.indexOfScalarPos(u8, line, start, t) orelse line.len;
+            if (end >= line.len) f.done = true else f.pos = end + 1;
+            return line[start..end];
+        }
+        var p = f.pos;
+        while (p < line.len and isBlank(line[p], f.cfg.term)) p += 1;
+        const start = p;
+        while (p < line.len and !isBlank(line[p], f.cfg.term)) p += 1;
+        f.pos = p;
+        if (start == p) {
+            f.done = true;
+            return null;
+        }
+        return line[start..p];
+    }
+};
+
 /// The n-th field (1-based) of `line`, or null when the line has fewer.
 fn fieldAt(cfg: *const Options, line: []const u8, n: usize) ?[]const u8 {
-    // As in GNU, an empty line has no fields, whatever separates them.
-    if (line.len == 0) return null;
-    if (cfg.tab_given and cfg.tab == null) return if (n == 1) line else null; // -t '': whole line
-    var count: usize = 0;
-    var p: usize = 0;
-    if (cfg.tab) |t| {
-        while (true) {
-            count += 1;
-            const end = std.mem.indexOfScalarPos(u8, line, p, t) orelse line.len;
-            if (count == n) return line[p..end];
-            if (end >= line.len) return null;
-            p = end + 1;
-        }
-    }
-    while (p < line.len) {
-        while (p < line.len and isBlank(line[p], cfg.term)) p += 1;
-        if (p >= line.len) break;
-        const start = p;
-        while (p < line.len and !isBlank(line[p], cfg.term)) p += 1;
-        count += 1;
-        if (count == n) return line[start..p];
+    var it = Fields.init(cfg, line);
+    var count: usize = 1;
+    while (it.next()) |f| : (count += 1) {
+        if (count == n) return f;
     }
     return null;
 }
@@ -351,8 +373,9 @@ const Group = struct {
 };
 
 fn countFields(cfg: *const Options, line: []const u8) usize {
+    var it = Fields.init(cfg, line);
     var n: usize = 0;
-    while (fieldAt(cfg, line, n + 1) != null) n += 1;
+    while (it.next() != null) n += 1;
     return n;
 }
 
@@ -389,8 +412,9 @@ fn printPair(st: *State, l1: ?[]const u8, l2: ?[]const u8, fmt_auto: [2]usize) v
 
 fn writeRest(st: *State, line: []const u8, skip: usize) void {
     const cfg = st.cfg;
+    var it = Fields.init(cfg, line);
     var n: usize = 1;
-    while (fieldAt(cfg, line, n)) |f| : (n += 1) {
+    while (it.next()) |f| : (n += 1) {
         if (n == skip) continue;
         st.out.writeByte(sepByte(cfg));
         writeField(st, f);
@@ -421,11 +445,13 @@ fn printSpecified(st: *State, l1: ?[]const u8, l2: ?[]const u8, fmt_auto: [2]usi
         writeField(st, key);
         first = false;
         inline for (.{ .{ l1, cfg.f1, fmt_auto[0] }, .{ l2, cfg.f2, fmt_auto[1] } }) |t| {
+            var it = Fields.init(cfg, t[0] orelse "");
             var n: usize = 1;
             while (n <= t[2]) : (n += 1) {
+                const f = it.next();
                 if (n == t[1]) continue;
                 out.writeByte(sepByte(cfg));
-                writeField(st, if (t[0]) |line| fieldAt(cfg, line, n) else null);
+                writeField(st, f);
             }
         }
         out.writeByte(cfg.term);

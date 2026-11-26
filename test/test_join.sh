@@ -172,5 +172,14 @@ for o in '-1 1 -1 2' '-1 2 -1 1' '-1 1 -1 1' '-j 2 -1 1' '-1 3 -j 2' '-2 3 -j 2'
 done
 run_cmp "repeated -t, empty first" -t '' -t , r1 r2
 run_cmp "repeated -e, empty second" -e X -e '' r1 r2
+# Very many fields on a line take time in proportion to the line (a time
+# limit: rescanning the line for every field would run for minutes).
+awk 'BEGIN { printf "k"; for (i = 0; i < 400000; i++) printf " x"; print "" }' > wide
+for o in "" "-o auto"; do
+    exp=$(LC_ALL=C timeout 20 /usr/bin/join $o wide wide | cksum)
+    act=$(LC_ALL=C timeout 20 "$BIN_DIR/join" $o wide wide | cksum)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS 400000 fields $o"
+    else FAIL=$((FAIL + 1)); echo "FAIL 400000 fields $o"; fi
+done
 rm -rf "$W"
 print_summary
