@@ -153,6 +153,18 @@ ig_link/a:foo
 rc=0"
 ig 'ignore-vcs: .ignore symlink to a file is followed' ig_dot "rc=1"
 
+# Many "**" in a pattern take no longer than one (the limit stops a matcher
+# that tries every position for every one of them).
+deep=$IG/stars/t; for i in $(seq 40); do deep=$deep/x; done; mkdir -p "$deep"; echo foo > "$deep/f"
+printf '**/x/**/x/**/x/**/x/**/x/**/x/**/x/**/x/**/nomatch\n' > "$IG/stars/t/.gitignore"
+ig 'ignore-vcs: many ** segments' stars/t "stars/t/$(printf 'x/%.0s' $(seq 40))f:foo
+rc=0"
+printf 'a/**/b/**/c\n**/y/**\n!keep\n' > rules2
+mkdir -p dstar/a/q/b/r dstar/a/b dstar/m/y/n
+for f in dstar/a/q/b/r/c dstar/a/b/c dstar/a/b/d dstar/m/y/n/f dstar/m/f; do echo two > $f; done
+cp rules2 dstar/.gitignore
+rgcmp 'ignore-vcs with several **' "--no-require-git --hidden --sort path two dstar" "-r --sort=path --ignore-vcs two dstar" ""
+
 # --------------------------------------------------- ripgrep: smart case
 for pat in two Two tWo 'o' 'T' '\\Sw' 'w\\w'; do
     rgcmp "smart-case $pat" "--smart-case '$pat' a.txt" "--smart-case '$pat' a.txt"
