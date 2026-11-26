@@ -75,4 +75,10 @@ CMP_STDIN="$W/lines" run_cmp "stdin -b"    -b
 CMP_STDIN="$W/sepsplit" run_cmp "stdin -s SEP" -s SEP -
 rm -rf "$W"
 
+# sysfs says one page for a file holding a few bytes: the size is not where
+# the file ends.
+for f in /sys/kernel/mm/transparent_hugepage/enabled /sys/devices/system/cpu/online; do
+    [ -r "$f" ] && run_cmp "tac $f" "$f"
+done
+
 print_summary
