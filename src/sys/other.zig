@@ -575,8 +575,61 @@ pub fn fstatFd(fd: Handle, err: *E) ?FileStat {
 
 // ---------------------------------------------------- descriptors and files
 
+/// This system's open(2) flags for the abstract `flags`. DIRECT and NOATIME
+/// are left out: macOS has neither under these names. Where there is no
+/// O_PATH, a file opened only to name it must at least not wait.
+fn nativeOpenFlags(flags: u32) c.O {
+    var out: c.O = .{
+        .ACCMODE = switch (flags & 3) {
+            O.WRONLY => .WRONLY,
+            O.RDWR => .RDWR,
+            else => .RDONLY,
+        },
+        .CREAT = flags & O.CREAT != 0,
+        .EXCL = flags & O.EXCL != 0,
+        .TRUNC = flags & O.TRUNC != 0,
+        .APPEND = flags & O.APPEND != 0,
+        .NONBLOCK = flags & O.NONBLOCK != 0,
+        .NOCTTY = flags & O.NOCTTY != 0,
+        .NOFOLLOW = flags & O.NOFOLLOW != 0,
+        .DIRECTORY = flags & O.DIRECTORY != 0,
+        .CLOEXEC = true,
+    };
+    if (@hasField(c.O, "DSYNC")) out.DSYNC = flags & O.DSYNC != 0;
+    // The abstract SYNC includes DSYNC, as on Linux.
+    if (flags & (O.SYNC & ~O.DSYNC) != 0) out.SYNC = true;
+    if (flags & O.PATH != 0) {
+        if (@hasField(c.O, "PATH")) {
+            out.PATH = true;
+        } else {
+            out.NONBLOCK = true;
+            out.NOCTTY = true;
+        }
+    }
+    return out;
+}
+
+// macOS cannot be run here, so a cross build checks the translation against
+// the numbers in its <sys/fcntl.h>.
+comptime {
+    if (is_darwin) {
+        const bits = struct {
+            fn of(flags: u32) u32 {
+                return @bitCast(nativeOpenFlags(flags));
+            }
+        };
+        const cloexec = 0x1000000;
+        std.debug.assert(bits.of(O.RDONLY | O.NONBLOCK | O.NOCTTY) == cloexec | 0x4 | 0x20000);
+        std.debug.assert(bits.of(O.WRONLY | O.CREAT | O.EXCL | O.TRUNC) == cloexec | 0x1 | 0x200 | 0x800 | 0x400);
+        std.debug.assert(bits.of(O.RDWR | O.APPEND | O.NOFOLLOW) == cloexec | 0x2 | 0x8 | 0x100);
+        std.debug.assert(bits.of(O.DSYNC) == cloexec | 0x400000);
+        std.debug.assert(bits.of(O.SYNC) == cloexec | 0x400000 | 0x80);
+    }
+}
+
 /// O flags of sys.zig are abstract (the Linux values) on every OS other than
-/// Linux; this builds the matching Io open call.
+/// Linux. The libc systems pass them, translated, to openat(2); elsewhere the
+/// matching Io open call is built, which cannot express all of them.
 pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?Handle {
     const acc = flags & 3;
     const follow = flags & O.NOFOLLOW == 0;
@@ -587,6 +640,20 @@ pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?
             return null;
         };
         return d.handle;
+    }
+    if (comptime is_libc_posix) {
+        var b: [4097]u8 = undefined;
+        const p = cstr(&b, path) orelse {
+            err.* = .NAMETOOLONG;
+            return null;
+        };
+        const rc = c.openat(dir, p, nativeOpenFlags(flags), @as(c_uint, mode));
+        if (cerr(rc)) |e| {
+            // FreeBSD's answer to O_NOFOLLOW on a symbolic link.
+            err.* = if (e == .MLINK and !follow) .LOOP else e;
+            return null;
+        }
+        return rc;
     }
     const file = if (flags & O.CREAT != 0)
         dirOf(dir).createFile(io(), path, .{
@@ -610,6 +677,34 @@ pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?
     };
     if (flags & O.CREAT == 0 and flags & O.TRUNC != 0) f.setLength(io(), 0) catch {};
     return f.handle;
+}
+
+/// fcntl(F_GETFL) as abstract flags: the access mode, APPEND and NONBLOCK.
+/// Zero where there are no such flags.
+pub fn getStatusFlags(fd: Handle, err: *E) ?usize {
+    if (comptime !is_libc_posix) return 0;
+    const rc = c.fcntl(fd, c.F.GETFL, @as(c_int, 0));
+    if (cerr(rc)) |e| {
+        err.* = e;
+        return null;
+    }
+    const native: c.O = @bitCast(rc);
+    var flags: u32 = @intFromEnum(native.ACCMODE);
+    if (native.APPEND) flags |= O.APPEND;
+    if (native.NONBLOCK) flags |= O.NONBLOCK;
+    return flags;
+}
+
+/// fcntl(F_SETFL): APPEND and NONBLOCK are set as `flags` has them; the
+/// others stay as they are.
+pub fn setStatusFlags(fd: Handle, flags: usize) ?E {
+    if (comptime !is_libc_posix) return null;
+    const rc = c.fcntl(fd, c.F.GETFL, @as(c_int, 0));
+    if (cerr(rc)) |e| return e;
+    var native: c.O = @bitCast(rc);
+    native.APPEND = flags & O.APPEND != 0;
+    native.NONBLOCK = flags & O.NONBLOCK != 0;
+    return cerr(c.fcntl(fd, c.F.SETFL, @as(c_int, @bitCast(native))));
 }
 
 pub fn closeFd(fd: Handle) ?E {

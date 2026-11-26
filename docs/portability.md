@@ -50,7 +50,7 @@ host.
 | `df` | yes (`statfs`) | yes | total/free/available of the volume; no filesystem type or inode counts |
 | `tee -a`, `nohup.out` append | atomic `O_APPEND` | atomic `O_APPEND` | open, then seek to the end (not atomic between writers) |
 | Sparse copy (`cp --sparse`, `dd conv=sparse` hole detection) | yes | yes | holes are written as data |
-| `dd` flags `direct`, `dsync`, `nonblock` and similar | yes | ignored | ignored |
+| Open flags (`dd iflag=`/`oflag=` such as `append`, `dsync`, `sync`, `nonblock`, `noctty`, `nofollow`; `touch`, `truncate`, `sync` and `split` not waiting on a FIFO) | yes | yes, through `openat(2)` and `fcntl` (compile-checked); `direct` and `noatime` are ignored | ignored |
 | SELinux / extended-attribute contexts (`ls -Z`, `stat %C`, `cp --context`) | yes | not supported | not supported |
 | `uname`, `arch`, `hostid`, `nproc` | yes | yes | `uname` reports `Windows_NT`, the computer name, the NT version and build; `nproc` as `std` reports it |
 | Signals (`kill`-like behaviour, `ls` colour reset on SIGINT, SIGPIPE) | yes | yes | no signals; the code compiles to no-ops |
@@ -76,5 +76,5 @@ given. Text is never translated (no CRLF conversion).
   arguments, read and write files and pipes, and walk directories, but not how
   real Windows file systems, permissions, symbolic links or console behave. A
   run on a real Windows machine is planned before release.
-* macOS: compile-checked only. The libc paths (stat, chown, signals, kqueue
+* macOS: compile-checked only. The libc paths (open, stat, chown, signals, kqueue
   watcher, statfs) have never been executed; treat them as untested.

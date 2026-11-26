@@ -1401,7 +1401,7 @@ pub fn writeFd(fd: Handle, bytes: []const u8, err: *LX.E) ?usize {
 /// fcntl(F_GETFL): the file status flags (O_APPEND, O_DIRECT, ...). Systems
 /// without them report 0.
 pub fn getStatusFlags(fd: Handle, err: *LX.E) ?usize {
-    if (comptime !is_linux) return 0;
+    if (comptime !is_linux) return other.getStatusFlags(fd, err);
     const rc = LX.fcntl(fd, LX.F.GETFL, 0);
     const e = LX.errno(rc);
     if (e != .SUCCESS) {
@@ -1413,7 +1413,7 @@ pub fn getStatusFlags(fd: Handle, err: *LX.E) ?usize {
 
 /// fcntl(F_SETFL).
 pub fn setStatusFlags(fd: Handle, flags: usize) ?LX.E {
-    if (comptime !is_linux) return null;
+    if (comptime !is_linux) return other.setStatusFlags(fd, flags);
     return errOf(LX.fcntl(fd, LX.F.SETFL, flags));
 }
 
