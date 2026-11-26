@@ -84,11 +84,25 @@ run_tree "-n input is output"   'seq 1 9 > xab' -n 3 xab
 run_tree "-n l/ input is output" 'seq 1 9 > xab' -n l/3 xab
 run_tree "existing outputs are replaced" 'seq 1 9 > in; seq 1 99 > xaa' -l 3 in
 TREE_STDIN=xab run_tree "stdin is an output" 'seq 1 9 > xab' -b 6
-TREE_STDIN=xab run_tree "-n r/ stdin is an output" 'seq 1 9 > xab' -n r/3
 run_tree "-n r/ input is first output" 'seq 1 9 > xaa' -n r/2 xaa
-run_tree "-n r/ input is later output" 'seq 1 9 > xab' -n r/3 xab
-run_tree "-n r/ -e input is output" 'seq 1 9 > xab' -e -n r/3 xab
 run_tree "-n r/ empty input is output" ': > xab' -n r/3 xab
+# Here GNU has written part of the earlier pieces when it stops and we have
+# not, so only the status, the diagnostic and the input are compared.
+# keeps_input DESC REDIRECT ARGS...: xab is the input and the second output.
+keeps_input() {
+    description="$1"; redirect="$2"; shift 2
+    d="$TEST_TMP/keep"; rm -rf "$d"; mkdir "$d"
+    seq 1 9 > "$d/xab"; seq 1 9 > "$TEST_TMP/keep.want"
+    (cd "$d" && ours "$@" < "$redirect" > /dev/null 2> "$TEST_TMP/keep.err"); rc=$?
+    if [ "$rc" -eq 1 ] && grep -q "'xab' would overwrite input; aborting" "$TEST_TMP/keep.err" && cmp -s "$d/xab" "$TEST_TMP/keep.want"; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s (rc=%s)\n" "$description" "$rc"
+    fi
+}
+keeps_input "-n r/ stdin is an output"    xab       -n r/3
+keeps_input "-n r/ input is later output" /dev/null -n r/3 xab
+keeps_input "-n r/ -e input is output"    /dev/null -e -n r/3 xab
 run_tree "output is /dev/null"  'seq 1 9 > in; ln -s /dev/null xaa' -l 3 in
 run_tree "verbose"              "$S" --verbose -l 10 in
 run_tree "verbose -b"           "$S" --verbose -b 20 in
