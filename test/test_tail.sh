@@ -204,4 +204,22 @@ CMP_STDIN="$W/lines" run_cmp "stdin -n 50"     -n 50
 CMP_STDIN="$W/lines" run_cmp "stdin -c 5000"   -c 5000
 rm -rf "$W"
 
+CMP_STDIN=/dev/null
+# Files whose size says nothing: procfs reports 0 and sysfs 4096 for a few
+# bytes. (Only files that do not change while the test runs.)
+for f in /proc/version /proc/filesystems /sys/kernel/mm/transparent_hugepage/enabled /sys/devices/system/cpu/online /sys/class/net/lo/mtu; do
+    if [ ! -r "$f" ]; then skip_test "$f not readable"; continue; fi
+    for o in "-n 1" "-n 3" "-n 0" "-c 1" "-c 5" "-c 100000" "-n +2" "-c +3"; do
+        run_cmp "$o $f" $o "$f"
+    done
+done
+# Real files around the size from which the end is sought.
+S="$TEST_TMP/sizes"; mkdir -p "$S"
+for size in 4095 4096 4097 8192 8193; do
+    seq 3000 | head -c $size > "$S/$size"
+    for o in "-n 3" "-n 100000" "-c 7" "-c 4096"; do
+        run_cmp "$o of $size bytes" $o "$S/$size"
+    done
+done
+
 print_summary
