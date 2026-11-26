@@ -10,7 +10,8 @@ head -c 5000 /dev/urandom > rnd; : > empty; printf 'ABCDEFGHIJKLMNOPQRSTUVWXYZ01
 printf 'abc\ndefgh\n\nij\n' > lines; printf 'abc  def  \nxy  \n' > blank
 head -c 70000 /dev/zero > zeros
 
-mask() { sed -E 's/^([0-9]+ bytes?( \([^)]*\))?) copied, .*/\1 copied, TIME/'; }
+# The elapsed time must be a number as %g writes it; its value and the rate vary.
+mask() { sed -E 's/^([0-9]+ bytes?( \([^)]*\))?) copied, [0-9]+(\.[0-9]+)?(e-[0-9]+)? s, .*/\1 copied, TIME/'; }
 # dd_cmp DESC ARGS... (stdin from $DD_IN or /dev/null, output compared as a file too)
 dd_cmp() {
     description="$1"; shift
@@ -132,6 +133,12 @@ for a in skip=18014398509481984 skip=9223372036854775807; do
         PASS=$((PASS + 1)); echo "PASS pipe $a"
     else FAIL=$((FAIL + 1)); echo "FAIL pipe $a"; cat e.o; fi
 done
+
+# The elapsed time is the real one. The writer holds the pipe open for 0.3 s.
+{ printf a; timeout 0.3 tail -f /dev/null; } | "$BIN_DIR/dd" 2>e.o >/dev/null
+secs=$(sed -n 's/^1 byte copied, \([0-9.]*\) s, .*/\1/p' e.o)
+if awk -v t="$secs" 'BEGIN { exit !(t >= 0.25 && t < 60) }'; then PASS=$((PASS + 1)); echo "PASS elapsed time is reported"
+else FAIL=$((FAIL + 1)); echo "FAIL elapsed time is reported"; cat e.o; fi
 
 # Signals. dd reads a FIFO that the test feeds, so each step waits for the one
 # before it. (A shell starts background jobs with SIGINT ignored; env undoes it.)

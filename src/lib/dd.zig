@@ -298,16 +298,15 @@ fn printXferStats(d: *Job, progress: bool) void {
     var line: std.ArrayList(u8) = .empty;
     defer line.deinit(ctx.gpa);
     if (progress) line.append(ctx.gpa, '\r') catch {};
+    // dd.c prints "%.0f s" in a progress line and "%g s" at the end.
     var dbuf: [64]u8 = undefined;
-    var dstr: []const u8 = undefined;
+    var dstr: []const u8 = "? s";
     if (progress) {
-        dstr = std.fmt.bufPrint(&dbuf, "{d:.0} s", .{delta_s}) catch "";
-    } else {
-        var fb: [128]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&fb);
-        const g = fmt_float.formatAlloc(fba.allocator(), .{ .conv = 'g' }, delta_s) catch "0";
-        dstr = std.fmt.bufPrint(&dbuf, "{s} s", .{g}) catch "";
-    }
+        dstr = std.fmt.bufPrint(&dbuf, "{d:.0} s", .{delta_s}) catch dstr;
+    } else if (fmt_float.formatAlloc(ctx.gpa, .{ .conv = 'g' }, delta_s)) |g| {
+        defer ctx.gpa.free(g);
+        dstr = std.fmt.bufPrint(&dbuf, "{s} s", .{g}) catch dstr;
+    } else |_| {}
     var tmp: [512]u8 = undefined;
     const lacks = struct {
         fn f(m: []const u8) bool {
