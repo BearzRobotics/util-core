@@ -83,6 +83,12 @@ run_tree "output symlink to input" 'seq 1 9 > in; ln -s in xab' -b 4 in
 run_tree "-n input is output"   'seq 1 9 > xab' -n 3 xab
 run_tree "-n l/ input is output" 'seq 1 9 > xab' -n l/3 xab
 run_tree "existing outputs are replaced" 'seq 1 9 > in; seq 1 99 > xaa' -l 3 in
+TREE_STDIN=xab run_tree "stdin is an output" 'seq 1 9 > xab' -b 6
+TREE_STDIN=xab run_tree "-n r/ stdin is an output" 'seq 1 9 > xab' -n r/3
+run_tree "-n r/ input is first output" 'seq 1 9 > xaa' -n r/2 xaa
+run_tree "-n r/ input is later output" 'seq 1 9 > xab' -n r/3 xab
+run_tree "-n r/ -e input is output" 'seq 1 9 > xab' -e -n r/3 xab
+run_tree "-n r/ empty input is output" ': > xab' -n r/3 xab
 run_tree "output is /dev/null"  'seq 1 9 > in; ln -s /dev/null xaa' -l 3 in
 run_tree "verbose"              "$S" --verbose -l 10 in
 run_tree "verbose -b"           "$S" --verbose -b 20 in

@@ -160,11 +160,9 @@ pub fn run(env: Env, opts: Options, input: Input, stdout: *Io.Writer, obs: Obser
     };
     defer opened.close(env.io);
     const file = opened.file;
+    // Of the open file, so that redirected standard input is protected too.
     var ferr: std.os.linux.E = .SUCCESS;
-    switch (input.source) {
-        .path => |p| st.input_stat = sys.fileStat(p, true, &ferr),
-        .file => {},
-    }
+    st.input_stat = sys.fstatFd(file.handle, &ferr);
 
     const ok = runMode(&st, file, opts.mode, opts.size, chunks, opts.chunk_k, opts.separator);
     const closed = st.closeCurrent();
@@ -602,27 +600,6 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
                 outs = gpa.alloc(?wsink.Sink, @intCast(n)) catch return false;
                 for (outs) |*o| o.* = null;
             }
-            const handle = struct {
-                fn rrWrite(s: *State, outs_: []?wsink.Sink, names_: *std.ArrayList([]u8), idx: u64, bytes: []const u8) bool {
-                    const g = s.env.gpa;
-                    if (outs_[@intCast(idx)] == null) {
-                        // Files are created in chunk order the first time they get data.
-                        if (!s.nextName()) return false;
-                        const nm = g.dupe(u8, s.cur_name.items) catch return false;
-                        names_.append(g, nm) catch return false;
-                        const f = Io.Dir.cwd().createFile(s.env.io, nm, .{ .truncate = true }) catch |e| {
-                            s.obs.emit(.{ .create_failed = .{ .name = nm, .err = e } });
-                            return false;
-                        };
-                        outs_[@intCast(idx)] = wsink.Sink.initFile(s.env.io, f);
-                    }
-                    const o = &outs_[@intCast(idx)].?;
-                    o.write(bytes);
-                    if (s.unbuffered) o.flush();
-                    return !o.failed;
-                }
-            };
-            _ = handle;
             // Lines mode: sequentially numbered files created lazily in order.
             var cur_end = end_of(0, per, rem);
             while (true) {
@@ -656,10 +633,7 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
                     _ = i;
                     if (o.* == null and !st.elide) {
                         if (!st.nextName()) return false;
-                        const f = Io.Dir.cwd().createFile(io, st.cur_name.items, .{ .truncate = true }) catch |e| {
-                            st.obs.emit(.{ .create_failed = .{ .name = st.cur_name.items, .err = e } });
-                            return false;
-                        };
+                        const f = st.createOutput(st.cur_name.items) orelse return false;
                         f.close(io);
                     } else if (o.* == null) {
                         // elided: the name is skipped as GNU does not number it
@@ -711,10 +685,7 @@ fn emitChunkRecord(
         if (outs.*[@intCast(idx)] == null and st.elide) {
             // With -e only chunks that receive a line get a file.
             if (!st.nextName()) return false;
-            const f = Io.Dir.cwd().createFile(st.env.io, st.cur_name.items, .{ .truncate = true }) catch |e| {
-                st.obs.emit(.{ .create_failed = .{ .name = st.cur_name.items, .err = e } });
-                return false;
-            };
+            const f = st.createOutput(st.cur_name.items) orelse return false;
             outs.*[@intCast(idx)] = wsink.Sink.initFile(st.env.io, f);
         } else if (outs.*[@intCast(idx)] == null) {
             // GNU creates the files for chunks in order 0..N-1 up front when
@@ -727,10 +698,7 @@ fn emitChunkRecord(
                 if (st.verbose) {
                     st.obs.emit(.{ .creating_file = nm });
                 }
-                const f = Io.Dir.cwd().createFile(st.env.io, nm, .{ .truncate = true }) catch |e| {
-                    st.obs.emit(.{ .create_failed = .{ .name = nm, .err = e } });
-                    return false;
-                };
+                const f = st.createOutput(nm) orelse return false;
                 outs.*[@intCast(j)] = wsink.Sink.initFile(st.env.io, f);
             }
         }
