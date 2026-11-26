@@ -708,7 +708,9 @@ pub noinline fn mknodAt(dir: Handle, path: []const u8, mode: u32, dev: u64) ?LX.
     if (comptime !is_linux) return other.mknodAt(dir, path, mode, dev);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
-    return errOf(LX.mknodat(dir, p, mode, @intCast(dev)));
+    // The system call takes 32 bits; as glibc does, refuse what does not fit.
+    const small = std.math.cast(u32, dev) orelse return .INVAL;
+    return errOf(LX.mknodat(dir, p, mode, small));
 }
 
 /// Result of waiting for a child.

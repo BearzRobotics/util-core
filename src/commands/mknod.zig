@@ -94,6 +94,10 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         };
         dev = mknod.makedev(major, minor);
+        if (dev == mknod.no_device) {
+            cli.warn(ctx, "invalid device {s} {s}", .{ rest[0], rest[1] });
+            return 1;
+        }
         rest = rest[2..];
     }
     const env: mknod.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };

@@ -14,7 +14,7 @@ GNU coreutils 9.7 (`/usr/bin/mknod --version` on the development machine, instal
 
 ## Supported behaviour
 
-- TYPE is b, c/u or p (only the first character is looked at, like GNU). MAJOR and MINOR accept decimal, octal (0) and hex (0x).
+- TYPE is b, c/u or p (only the first character is looked at, like GNU). MAJOR and MINOR accept decimal, octal (0), hex (0x) and binary (0b), after optional white space and `+`, and must fit in 32 bits, as in GNU. Linux keeps only a 12-bit major and a 20-bit minor; larger ones fail with "Invalid argument".
 - Operand-count diagnostics reproduce GNU's wording.
 
 ## Safety
@@ -36,7 +36,7 @@ None. Output, diagnostics and exit status follow GNU (decision 0005).
 
 ## Tests
 
-`sh test/test_mknod.sh`: 64 differential cases against GNU mknod 9.7 in the C locale. 
+`sh test/test_mknod.sh`: 126 cases, mostly differential, against GNU mknod 9.7 in the C locale. 
 
 ## Not yet done
 

@@ -22,6 +22,8 @@ Make block or character special files, or named pipes.
 --help, --version
 : Print help or version and exit.
 
+MAJOR and MINOR are decimal, or octal (`0`), hexadecimal (`0x`) or binary (`0b`) numbers; a value that does not fit in the device number is an error.
+
 # EXIT STATUS
 
 | Status | Meaning |

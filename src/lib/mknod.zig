@@ -28,11 +28,38 @@ pub fn kindOf(type_text: []const u8) ?Kind {
     };
 }
 
-/// Parse a MAJOR or MINOR number (decimal, 0x hex or 0 octal).
-pub fn parseNumber(text: []const u8) ?u64 {
-    if (text.len == 0) return null;
-    return std.fmt.parseInt(u64, text, 0) catch null;
+/// Parse a MAJOR or MINOR number as GNU does, with strtoumax(3) in base 0:
+/// optional leading white space and "+", then decimal, 0x hex, 0b binary or
+/// 0 octal digits. Null when it is not one or does not fit in 32 bits (a
+/// larger value would silently name another device).
+pub fn parseNumber(text: []const u8) ?u32 {
+    var s = std.mem.trimStart(u8, text, " \t\n\x0b\x0c\r");
+    if (s.len > 0 and s[0] == '+') s = s[1..];
+    var base: u8 = 10;
+    if (s.len > 1 and s[0] == '0') switch (s[1]) {
+        'x', 'X' => {
+            base = 16;
+            s = s[2..];
+        },
+        'b', 'B' => {
+            base = 2;
+            s = s[2..];
+        },
+        else => base = 8,
+    };
+    if (s.len == 0) return null;
+    var value: u32 = 0;
+    for (s) |c| {
+        // Not parseInt: it would also take a sign and '_' separators.
+        const digit = std.fmt.charToDigit(c, base) catch return null;
+        value = std.math.mul(u32, value, base) catch return null;
+        value = std.math.add(u32, value, digit) catch return null;
+    }
+    return value;
 }
+
+/// The device number glibc reserves for "no device" (makedev of all ones).
+pub const no_device: u64 = std.math.maxInt(u64);
 
 /// glibc makedev(): split the numbers into the kernel's dev_t layout.
 pub fn makedev(major: u64, minor: u64) u64 {

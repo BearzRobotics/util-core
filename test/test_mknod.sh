@@ -25,6 +25,18 @@ run_tree "char bad minor"     "$S" x c 1 b
 run_tree "char hex"           "$S" x c 0x1 0x3
 run_tree "char devnull"       "$S" x c 1 3
 run_tree "block loop"         "$S" x b 7 0
+# MAJOR and MINOR must fit in 32 bits; 4294967296 once meant 0, and "0 0" is a
+# node that needs no privilege. Forms are those of strtoumax in base 0. Majors
+# of 4096 and more do not fit the system call.
+for n in 4294967296 8589934592 18446744073709551616 4294967295 4294967294 4096 4095 0b1 0B1 0b 0b2 0o7 1_000 ' 1' '1 ' ' +1' '+0x1' '++1' '+' ' ' 010 08 0x10 0X1f 0x 0x_1 0x+1 1k; do
+    run_tree "major '$n'"     "$S" x c "$n" 7
+    run_tree "minor '$n'"     "$S" x c 7 "$n"
+done
+run_tree "major wraps to 0"   "$S" x c 4294967296 0
+run_tree "minor wraps to 0"   "$S" x c 0 4294967296
+run_tree "block major wraps"  "$S" x b 4294967296 0
+run_tree "no such device"     "$S" x c 4294967295 4294967295
+run_tree "char 0 0"           "$S" x c 0 0
 run_tree "bad type"           "$S" x q
 run_tree "long type"          "$S" x pp
 run_tree "empty type"         "$S" x ''
