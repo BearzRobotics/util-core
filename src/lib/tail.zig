@@ -276,14 +276,68 @@ fn lastFromStream(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, bu
     return total;
 }
 
+/// The part of the follow loop that copies data out of the open files.
+const Follower = struct {
+    env: Env,
+    out: *stickyout.Out,
+    buf: []u8,
+    /// Whether a header names the file whenever the output changes files.
+    headers: bool,
+    last_printed: ?usize,
+    observer: Observer,
+    exit_status: u8,
+    activity: bool = false,
+
+    /// Copy what has been added to the open file `f` since the last call. This
+    /// is also the last thing done with a descriptor before it is closed: after
+    /// a rotation, the lines written just before it exist only there.
+    fn drain(follower: *Follower, f: *Followed, idx: usize) void {
+        const env = follower.env;
+        const out = follower.out;
+        const buf = follower.buf;
+        const fl = f.file orelse return;
+        const size = fl.length(env.io) catch return;
+        if (size < f.pos) {
+            out.flush();
+            follower.observer.emit(.{ .name = f.path, .kind = .truncated });
+            f.pos = 0;
+        }
+        while (f.pos < size) {
+            const n = fl.readPositional(env.io, &.{buf}, f.pos) catch |e| {
+                out.flush();
+                follower.observer.emit(.{ .name = f.path, .kind = .read_failed, .err = e });
+                follower.exit_status = 1;
+                break;
+            };
+            if (n == 0) break;
+            if (follower.headers and follower.last_printed != idx) {
+                out.write("\n==> ");
+                out.write(f.path);
+                out.write(" <==\n");
+                follower.last_printed = idx;
+            }
+            out.write(buf[0..n]);
+            f.pos += n;
+            follower.activity = true;
+        }
+    }
+};
+
 /// --follow=descriptor / --follow=name: poll for growth (and, by name, for
 /// removal, replacement and re-creation).
 fn followLoop(env: Env, out: *stickyout.Out, files: []Followed, cfg: Options, multiple: bool, headers_ok: bool, buf: []u8, status: u8, observer: Observer) error{WriteFailed}!Result {
-    var last_printed: ?usize = if (files.len > 0) files.len - 1 else null;
+    var follower: Follower = .{
+        .env = env,
+        .out = out,
+        .buf = buf,
+        .headers = multiple and headers_ok,
+        .last_printed = if (files.len > 0) files.len - 1 else null,
+        .observer = observer,
+        .exit_status = status,
+    };
     const interval_ns: i96 = @intFromFloat(@min(cfg.sleep_seconds, 1e9) * std.time.ns_per_s);
-    var exit_status = status;
     while (true) {
-        var activity = false;
+        follower.activity = false;
         for (files, 0..) |*f, idx| {
             if (f.ignored) continue;
             if (cfg.follow_name or f.file == null) {
@@ -291,6 +345,7 @@ fn followLoop(env: Env, out: *stickyout.Out, files: []Followed, cfg: Options, mu
                 const st = sys.fileStat(f.path, true, &se);
                 if (st == null) {
                     if (f.file) |fl| {
+                        follower.drain(f, idx);
                         out.flush();
                         observer.emit(.{
                             .name = f.path,
@@ -300,7 +355,7 @@ fn followLoop(env: Env, out: *stickyout.Out, files: []Followed, cfg: Options, mu
                         if (f.owned) fl.close(env.io);
                         f.file = null;
                         f.ignored = !cfg.retry;
-                        exit_status = if (cfg.retry) exit_status else 1;
+                        if (!cfg.retry) follower.exit_status = 1;
                     }
                     continue;
                 }
@@ -308,6 +363,7 @@ fn followLoop(env: Env, out: *stickyout.Out, files: []Followed, cfg: Options, mu
                 const fresh = f.file == null;
                 if (fresh or (cfg.follow_name and (dev != f.dev or st.?.ino != f.ino))) {
                     const nf = Io.Dir.cwd().openFile(env.io, f.path, .{ .allow_directory = false }) catch continue;
+                    follower.drain(f, idx); // the replaced file, if still open
                     out.flush();
                     if (f.file) |old| if (f.owned) old.close(env.io);
                     observer.emit(.{ .name = f.path, .kind = if (fresh) .appeared else .replaced });
@@ -318,31 +374,7 @@ fn followLoop(env: Env, out: *stickyout.Out, files: []Followed, cfg: Options, mu
                     f.ino = st.?.ino;
                 }
             }
-            const fl = f.file orelse continue;
-            const size = fl.length(env.io) catch continue;
-            if (size < f.pos) {
-                out.flush();
-                observer.emit(.{ .name = f.path, .kind = .truncated });
-                f.pos = 0;
-            }
-            while (f.pos < size) {
-                const n = fl.readPositional(env.io, &.{buf}, f.pos) catch |e| {
-                    out.flush();
-                    observer.emit(.{ .name = f.path, .kind = .read_failed, .err = e });
-                    exit_status = 1;
-                    break;
-                };
-                if (n == 0) break;
-                if (multiple and headers_ok and last_printed != idx) {
-                    out.write("\n==> ");
-                    out.write(f.path);
-                    out.write(" <==\n");
-                    last_printed = idx;
-                }
-                out.write(buf[0..n]);
-                f.pos += n;
-                activity = true;
-            }
+            follower.drain(f, idx);
         }
         try out.finish();
         var live = false;
@@ -353,7 +385,7 @@ fn followLoop(env: Env, out: *stickyout.Out, files: []Followed, cfg: Options, mu
             observer.emit(.{ .name = "", .kind = .no_files_remaining });
             return .{ .failed = true };
         }
-        if (!activity) if (cfg.pid) |pid| if (!sys.processAlive(pid)) return .{ .failed = exit_status != 0 };
-        std.Io.sleep(env.io, .fromNanoseconds(interval_ns), .awake) catch return .{ .failed = exit_status != 0 };
+        if (!follower.activity) if (cfg.pid) |pid| if (!sys.processAlive(pid)) return .{ .failed = follower.exit_status != 0 };
+        std.Io.sleep(env.io, .fromNanoseconds(interval_ns), .awake) catch return .{ .failed = follower.exit_status != 0 };
     }
 }

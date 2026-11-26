@@ -157,6 +157,26 @@ scen "--pid and --retry without -f" "--pid=1 --retry f" "sleep 0.1"
 scen "-F existing and missing" "-F -s 0.2 f nofile" "sleep 0.5; echo z > nofile"
 scen "-F -n0" "-F -n0 -s 0.2 f" "sleep 0.4; echo q >> f"
 scen "-f then removal keeps following" "-f -s 0.2 f" "sleep 0.5; echo q >> f; sleep 0.4; rm f; sleep 0.3"
+# Lines appended just before a rename or removal, with no poll in between, can
+# only be read from the old descriptor. The expected text is what GNU prints;
+# it is not run, because when its checks fall depends on inotify.
+# rotated DESC "tail args" "driver commands" STDOUT STDERR
+rotated() {
+    D="$W/rot"; rm -rf "$D"; mkdir "$D"; (cd "$D" && printf 'a1\na2\na3\n' > f && printf 'b1\n' > g)
+    ( cd "$D" && { ( eval "$3" ) & LC_ALL=C timeout 2.5 "$BIN_DIR/tail" $2 > out 2> err; wait; } )
+    printf "$4" > "$W/rot.out"; printf "$5" > "$W/rot.err"
+    sed "s#$BIN_DIR/tail#tail#g" "$D/err" > "$D/err2"
+    if cmp -s "$D/out" "$W/rot.out" && cmp -s "$D/err2" "$W/rot.err"; then PASS=$((PASS + 1)); echo "PASS $1"
+    else FAIL=$((FAIL + 1)); echo "FAIL $1"; diff "$W/rot.out" "$D/out"; diff "$W/rot.err" "$D/err2"; fi
+}
+rotated "-F lines written just before a rotation" "-F -s 1 f" "sleep 0.5; echo last >> f; mv f f.1; echo new > f" \
+    'a1\na2\na3\nlast\nnew\n' "tail: 'f' has been replaced;  following new file\n"
+rotated "-F lines written just before removal" "-F -s 1 f" "sleep 0.5; echo last >> f; rm f" \
+    'a1\na2\na3\nlast\n' "tail: 'f' has become inaccessible: No such file or directory\n"
+rotated "--follow=name lines before removal" "--follow=name -s 1 f" "sleep 0.5; echo last >> f; rm f" \
+    'a1\na2\na3\nlast\n' "tail: f: No such file or directory\ntail: no files remaining\n"
+rotated "-F two files, rotation with pending lines" "-F -s 1 f g" "sleep 0.5; echo last >> f; mv f f.1; echo new > f; echo b2 >> g" \
+    '==> f <==\na1\na2\na3\n\n==> g <==\nb1\n\n==> f <==\nlast\nnew\n\n==> g <==\nb2\n' "tail: 'f' has been replaced;  following new file\n"
 
 cd /
 rm -rf "$W"
