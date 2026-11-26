@@ -119,4 +119,9 @@ for f in big runs65 oneletter rnd; do
 done
 CMP_STDIN="$W/text"
 
+# Options end at the first operand: STRING2 may start with '-'.
+for a in '_ -x' '[:upper:]x-z -a' 'x -d' 'x --help' 'x --version' 'x --' '-- -x y' '-d a -s' 'a -- b' 'a b -c' '-s a -d' '-d a --help'; do
+    run_cmp "options after an operand: tr $a" $a
+done
+
 print_summary
