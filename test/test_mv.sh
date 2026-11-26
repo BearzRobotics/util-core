@@ -211,4 +211,96 @@ else
     skip_test "mv source swap race (needs strace and a second file system)"
 fi
 rm -rf "$d"; [ -z "$other" ] || rm -rf "$other"
+# Between file systems mv copies the source and then removes it: the only way mv
+# deletes data. run_xdev is run_tree with a second tree on another file system,
+# reached from each working directory through the link "far". Both trees are
+# compared: types, modes (setuid, setgid and sticky bits included), owners,
+# link targets, link counts, which names are one file, contents, and the
+# modification times of everything given an old time by the setup ("new"
+# otherwise). Lines of output are compared sorted, because the two walk a
+# directory in different orders.
+printf "\n[ Across file systems ]\n"
+other=$(mktemp -d /dev/shm/mvtest.XXXXXX 2>/dev/null)
+xdev_tree() { # DIR
+    (cd "$1" && {
+        find . ! -path ./far -printf '%p %y %m %u %g %l\n' | sort
+        find . ! -path ./far -printf '%p %T@\n' | awk '{ t = $NF; sub(/ [^ ]*$/, ""); print $0, (t + 0 < 1500000000 ? t : "new") }' | sort
+        tree_links | grep -v '^\./far nlink'
+        find . -type f -exec cksum {} + | sort -k3
+    }) 2>/dev/null
+}
+run_xdev() { # DESC SETUP ARGS...
+    description="$1"; setup="$2"; shift 2
+    base="$TEST_TMP/xdev"
+    for x in g o; do
+        chmod -R u+rwx "$base/$x" "$other/$x" 2>/dev/null; rm -rf "$base/$x" "$other/$x"
+        mkdir -p "$base/$x" "$other/$x"
+        (cd "$base/$x" && ln -s "$other/$x" far && eval "$setup")
+    done
+    (cd "$base/g" && LC_ALL=C timeout 30 "${GNU_BIN:-/usr/bin}/mv" "$@" < "${TREE_STDIN:-/dev/null}" > "$base/g.out" 2> "$base/g.err"; echo "rc=$?" > "$base/g.rc")
+    (cd "$base/o" && LC_ALL=C timeout 30 "$BIN_DIR/mv" "$@" < "${TREE_STDIN:-/dev/null}" > "$base/o.out" 2> "$base/o.err"; echo "rc=$?" > "$base/o.rc")
+    for x in g o; do
+        { cat "$base/$x.rc"; sort "$base/$x.out"; echo "-- stderr"; norm_err < "$base/$x.err" | grep -v -e "${XDEV_IGNORE:-^$}" | sort
+          echo "-- source side"; xdev_tree "$base/$x"; echo "-- other file system"; xdev_tree "$other/$x"; } > "$base/$x.all"
+    done
+    if cmp -s "$base/g.all" "$base/o.all"; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s\n" "$description"; diff "$base/g.all" "$base/o.all" | head -12
+    fi
+}
+if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$TEST_TMP")" ]; then
+    X='mkdir -p src/sub/deep src/emptydir; echo one > src/f; echo two > src/sub/g; : > src/sub/deep/empty; ln -s f src/rel; ln -s nowhere src/dang; ln -s sub src/dirlink; mkfifo src/fifo; ln src/f src/sub/hard; chmod 640 src/sub/g; echo s > src/suid; chmod 4755 src/suid; echo s > src/sgid; chmod 2755 src/sgid; chmod 1777 src/emptydir; chmod 2750 src/sub/deep; echo top > a; ln a h; echo kept > outside; ln outside inside; ln -s a l; ln -s src dl; find src a l dl -exec touch -h -d @1000000000.5 {} +'
+    # Success: the source goes, and everything about it arrives.
+    run_xdev "xdev file"                     "$X" a far/a
+    run_xdev "xdev tree"                     "$X" src far/dst
+    run_xdev "xdev tree -v"                  "$X" -v src far/dst
+    run_xdev "xdev tree into directory"      "$X" src far
+    run_xdev "xdev several operands"         "$X" src a l far
+    run_xdev "xdev hard-linked operands"     "$X" a h far
+    run_xdev "xdev one of two hard links"    "$X" inside far/inside
+    run_xdev "xdev symlink to file"          "$X" l far/l
+    run_xdev "xdev symlink to directory"     "$X" dl far/dl
+    run_xdev "xdev dangling symlink"         "$X" src/dang far/dang
+    run_xdev "xdev fifo"                     "$X" src/fifo far/fifo
+    run_xdev "xdev setuid file"              "$X" src/suid far/suid
+    run_xdev "xdev setgid file"              "$X" src/sgid far/sgid
+    run_xdev "xdev back again"               "$X; mv src far/src" far/src back
+    # An existing destination.
+    for o in "" -f -n -b --backup=numbered -u "--update=none" "-v -b"; do
+        run_xdev "xdev $o onto a file"       "$X; echo old > far/a" $o a far/a
+        run_xdev "xdev $o onto a link"       "$X; echo old > far/t; ln -s t far/a" $o a far/a
+    done
+    run_xdev "xdev onto empty directory"     "$X; mkdir far/src" src far
+    run_xdev "xdev onto non-empty directory" "$X; mkdir -p far/src; : > far/src/busy" src far
+    run_xdev "xdev directory onto file"      "$X; echo old > far/dst" src far/dst
+    run_xdev "xdev file onto directory"      "$X; mkdir -p far/dst/a" a far/dst
+    printf 'n\n' > "$TEST_TMP/no"; printf 'y\n' > "$TEST_TMP/yes"
+    for r in yes no; do
+        TREE_STDIN="$TEST_TMP/$r" run_xdev "xdev -i answer $r" "$X; echo old > far/a" -i a far/a
+    done
+    # Failure: whatever was not copied must stay, and so must the whole source.
+    run_xdev "xdev unreadable file"          "$X; chmod 000 src/sub/g" src far/dst
+    run_xdev "xdev unreadable file -v"       "$X; chmod 000 src/sub/g" -v src far/dst
+    # ours adds a spurious second diagnostic here (docs/bugs FSOP-035); the
+    # trees, status and every other line are compared.
+    XDEV_IGNORE="preserving permissions for 'far/dst/sub': Bad file descriptor" \
+        run_xdev "xdev unreadable directory" "$X; chmod 000 src/sub" src far/dst
+    XDEV_IGNORE=
+    run_xdev "xdev unreadable operand"       "$X; chmod 000 a" a far/a
+    run_xdev "xdev one operand of two fails" "$X; chmod 000 a" a src far
+    run_xdev "xdev unwritable destination"   "$X; mkdir far/ro; chmod 555 far/ro" src far/ro/dst
+    run_xdev "xdev missing destination dir"  "$X" a far/nodir/a
+    run_xdev "xdev unremovable source"       "$X; chmod 555 src/sub" src far/dst
+    # --no-copy must not copy.
+    run_xdev "xdev --no-copy file"           "$X" --no-copy a far/a
+    run_xdev "xdev --no-copy tree"           "$X" --no-copy src far/dst
+    run_xdev "xdev --no-copy fifo"           "$X" --no-copy src/fifo far/fifo
+    run_xdev "xdev --no-copy onto a file"    "$X; echo old > far/a" --no-copy a far/a
+    run_xdev "xdev --no-copy -b onto a file" "$X; echo old > far/a" --no-copy -b a far/a
+    chmod -R u+rwx "$other" 2>/dev/null
+else
+    skip_test "mv across file systems (needs /dev/shm on another file system than \$TMPDIR)"
+fi
+[ -z "$other" ] || rm -rf "$other"
 cd /; print_summary
