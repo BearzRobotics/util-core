@@ -84,6 +84,9 @@ run_cmp "-r -i range"         $RS=src1 -r -i 3-3 -n 3
 run_cmp "-i bad"              -i x
 run_cmp "-i no dash"          -i 5
 run_cmp "-i reversed"         -i 5-3
+run_cmp "-i empty"                -i 1-0
+run_cmp "-i empty with -n"        -i 5-4 -n 3
+run_cmp "-i empty with -r"        -i 5-4 -r
 run_cmp "-i 0-18446744073709551615" $RS=src1 -i 0-18446744073709551615 -n 1
 run_cmp "-i overflow"         -i 1-99999999999999999999999
 run_cmp "-i neg"              -i -1-5
