@@ -21,6 +21,7 @@ GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from t
 
 - Walks the tree, sorts the names bytewise, front-codes them and writes the database to FILE.n then renames it. Environment overrides: FINDOPTIONS, SEARCHPATHS, NETPATHS, PRUNEPATHS, PRUNEFS, LOCATE_DB.
 - A failing walk still produces a header-only database and exit status 0, as the GNU shell script does.
+- If PRUNEPATHS does not make a regular expression, GNU find's message is printed, nothing is walked and the database is header-only, as with GNU: pruning is never silently dropped. A directory whose name cannot be matched because of a matching limit is pruned.
 - As GNU find does for the GNU script, the walk works relative to the open directories and never follows a symbolic link, including one that takes a directory's place during the walk. Paths longer than PATH_MAX are recorded; below 10000 levels (4000 in a debug build) or 64 KiB of names a directory is reported (`File name too long`) and skipped.
 
 ## Extensions

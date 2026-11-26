@@ -19,7 +19,6 @@ const common = @import("common.zig");
 const fu = @import("fu_common.zig");
 const sys = @import("../sys.zig");
 const dirat = @import("../dirat.zig");
-const posixre = @import("../posixre.zig");
 const regex = @import("regex");
 const fnmatch = @import("../fnmatch.zig");
 
@@ -51,6 +50,10 @@ pub const Event = union(enum) {
     find_error: struct { path: []const u8, text: []const u8 },
     /// A -maxdepth/-mindepth value that is not a number; ends the walk.
     find_bad_number: struct { option: []const u8, value: []const u8 },
+    /// The pruned paths do not make a regular expression; nothing is walked,
+    /// as when GNU's find rejects it, so nothing that should be pruned can
+    /// get into the database.
+    find_bad_regex: struct { pattern: []const u8, text: []const u8 },
     /// A -findoptions word that is not understood; ends the walk.
     find_unknown_predicate: []const u8,
     /// A pruned path that ends in a slash; fatal (status 1, nothing written).
@@ -107,7 +110,10 @@ fn pruned(u: *U, display: []const u8, s: sys.FileStat) Error!bool {
         if (u.prune_re) |re| {
             var sr = try rx.searcher(re, u.gpa);
             defer sr.deinit();
-            if ((sr.find(display, 0) catch null) != null) return true;
+            // A name that cannot be matched (a matching limit) is left out
+            // rather than published.
+            const found = sr.find(display, 0) catch return true;
+            if (found != null) return true;
         }
     }
     return false;
@@ -298,22 +304,23 @@ fn build(env: Env, options: Options, observer: Observer, status: *u8, stale_tmp:
         try pre_src.print(gpa, "\\(^{s}$\\)", .{pp});
         npaths += 1;
     }
+    // An error ends the walk but, as in the script, where it comes from find,
+    // the (empty) database is still written and the status is 0.
+    var find_failed = false;
     if (npaths > 0) {
-        const conv = posixre.emacsToEre(gpa, pre_src.items, true);
-        if (posixre.translateOpts(gpa, conv, true, .{})) |body| {
-            const src = try std.fmt.allocPrint(gpa, "(?s)\\A(?:{s})\\z", .{body});
-            const re = try gpa.create(regex.Regex);
-            if (regex.Regex.compile(gpa, src, .{ .dialect = .perl, .limits = posixre.big_limits }, null)) |r| {
-                re.* = r;
-                u.prune_re = re;
-            } else |_| {}
-        } else |_| {}
+        var failure: fu.RegexFailure = undefined;
+        u.prune_re = fu.compileRegex(gpa, pre_src.items, .emacs, false, true, &failure) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.BadRegex => blk: {
+                observer.emit(.{ .find_bad_regex = .{ .pattern = pre_src.items, .text = failure.text } });
+                find_failed = true;
+                break :blk null;
+            },
+        };
     }
     var fit = std.mem.tokenizeAny(u8, options.prunefs, " \t\n");
     while (fit.next()) |f| try u.prune_fs.append(gpa, f);
-    // find options we understand; an error ends the walk but, as in the
-    // script, the (empty) database is still written and the status is 0
-    var find_failed = false;
+    // find options we understand
     var oit = std.mem.tokenizeAny(u8, options.findoptions, " \t\n");
     while (oit.next()) |o| {
         const m = std.mem.eql;

@@ -27,6 +27,7 @@ fn report(context: ?*anyopaque, ev: updatedb.Event) void {
     switch (ev) {
         .find_error => |e| stderrLine(ctx.*, "find: '{s}': {s}\n", .{ e.path, e.text }),
         .find_bad_number => |e| stderrLine(ctx.*, "find: Expected a positive decimal integer argument to {s}, but got '{s}'\n", .{ e.option, e.value }),
+        .find_bad_regex => |e| stderrLine(ctx.*, "find: failed to compile regular expression '{s}': {s}\n", .{ e.pattern, e.text }),
         .find_unknown_predicate => |o| stderrLine(ctx.*, "find: unknown predicate `{s}'\n", .{o}),
         .prune_trailing_slash => |pp| stderrLine(ctx.*, "{s}: {s}: pruned paths should not contain trailing slashes\n", .{ ctx.name, pp }),
         .create_failed => |e| stderrLine(ctx.*, "{s}: {s}: {s}\nFailed to generate {s}\n", .{ ctx.name, e.tmp, e.text, e.tmp }),

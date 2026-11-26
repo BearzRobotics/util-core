@@ -61,6 +61,9 @@ ud 'prunepaths start itself' --localpaths="$W/tree/skip" --prunepaths="$W/tree/s
 ud 'prunepaths file' --localpaths="$W/tree" --prunepaths="$W/tree/top.md"
 ud 'prunepaths star' --localpaths="$W/tree" --prunepaths="$W/tree/*"
 ud 'prunepaths bracket' --localpaths="$W/tree" --prunepaths="$W/tree/[ab]"
+# An expression that cannot be used must not turn pruning off.
+ud 'prunepaths unmatched \(' --localpaths="$W/tree" --prunepaths="$W/tree/skip $W/tree/x\\("
+ud 'prunepaths unmatched \)' --localpaths="$W/tree" --prunepaths="$W/tree/skip $W/tree/x\\)"
 ud 'prunefs ext4' --localpaths="$W/tree" $P --prunefs="ext4"
 ud 'prunefs bogus' --localpaths="$W/tree" $P --prunefs="nosuchfs"
 ud 'prunefs empty' --localpaths="$W/tree" $P --prunefs=""
