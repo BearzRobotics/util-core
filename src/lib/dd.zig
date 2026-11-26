@@ -132,17 +132,17 @@ pub const conversions = [_]Sym{
     .{ .name = "fsync", .value = C_FSYNC },
 };
 
-// O_* values (Linux x86-64) plus private bits for the dd-only flags.
-pub const O_APPEND: u32 = 0o2000;
-pub const O_DIRECT: u32 = 0o40000;
-pub const O_DIRECTORY: u32 = 0o200000;
-pub const O_DSYNC: u32 = 0o10000;
-pub const O_NOATIME: u32 = 0o1000000;
-pub const O_NOCTTY: u32 = 0o400;
-pub const O_NOFOLLOW: u32 = 0o400000;
-pub const O_NONBLOCK: u32 = 0o4000;
-pub const O_SYNC: u32 = 0o4010000;
-pub const O_RSYNC: u32 = 0o4010000;
+// O_* values for the target (sys.O), plus private bits for the dd-only flags.
+pub const O_APPEND = sys.O.APPEND;
+pub const O_DIRECT = sys.O.DIRECT;
+pub const O_DIRECTORY = sys.O.DIRECTORY;
+pub const O_DSYNC = sys.O.DSYNC;
+pub const O_NOATIME = sys.O.NOATIME;
+pub const O_NOCTTY = sys.O.NOCTTY;
+pub const O_NOFOLLOW = sys.O.NOFOLLOW;
+pub const O_NONBLOCK = sys.O.NONBLOCK;
+pub const O_SYNC = sys.O.SYNC;
+pub const O_RSYNC = sys.O.SYNC;
 pub const O_FULLBLOCK: u32 = 1 << 28;
 pub const O_NOCACHE: u32 = 1 << 29;
 pub const O_COUNT_BYTES: u32 = 1 << 30;

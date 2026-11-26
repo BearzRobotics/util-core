@@ -948,19 +948,59 @@ fn cstr(buf: *[4097]u8, path: []const u8) ?[*:0]const u8 {
     return @ptrCast(buf);
 }
 
+/// open(2) flags as raw bits for `openFd`. Linux numbers some of them
+/// differently on each architecture (DIRECTORY, NOFOLLOW and DIRECT swap
+/// places on arm), so every value comes from std's per-target layout.
 pub const O = struct {
     pub const RDONLY: u32 = 0;
     pub const WRONLY: u32 = 1;
     pub const RDWR: u32 = 2;
-    pub const CREAT: u32 = 0o100;
-    pub const EXCL: u32 = 0o200;
-    pub const NOCTTY: u32 = 0o400;
-    pub const TRUNC: u32 = 0o1000;
-    pub const NONBLOCK: u32 = 0o4000;
-    pub const DIRECTORY: u32 = 0o200000;
-    pub const NOFOLLOW: u32 = 0o400000;
-    pub const CLOEXEC: u32 = 0o2000000;
+    pub const CREAT = openBits(.{ .CREAT = true });
+    pub const EXCL = openBits(.{ .EXCL = true });
+    pub const NOCTTY = openBits(.{ .NOCTTY = true });
+    pub const TRUNC = openBits(.{ .TRUNC = true });
+    pub const APPEND = openBits(.{ .APPEND = true });
+    pub const NONBLOCK = openBits(.{ .NONBLOCK = true });
+    pub const DSYNC = openBits(.{ .DSYNC = true });
+    pub const DIRECT = openBits(.{ .DIRECT = true });
+    pub const DIRECTORY = openBits(.{ .DIRECTORY = true });
+    pub const NOFOLLOW = openBits(.{ .NOFOLLOW = true });
+    pub const NOATIME = openBits(.{ .NOATIME = true });
+    pub const CLOEXEC = openBits(.{ .CLOEXEC = true });
+    /// O_SYNC includes O_DSYNC.
+    pub const SYNC = openBits(.{ .SYNC = true, .DSYNC = true });
 };
+
+fn openBits(o: LX.O) u32 {
+    return @bitCast(o);
+}
+
+// The numbers in the kernel's asm/fcntl.h headers, checked when each target
+// is compiled (cross builds cannot run tests).
+comptime {
+    if (is_linux) switch (builtin.cpu.arch) {
+        .x86_64 => std.debug.assert(O.DIRECT == 0o40000 and O.DIRECTORY == 0o200000 and O.NOFOLLOW == 0o400000),
+        .aarch64, .arm => std.debug.assert(O.DIRECTORY == 0o40000 and O.NOFOLLOW == 0o100000 and O.DIRECT == 0o200000),
+        else => {},
+    };
+}
+
+test "open flags do what they are named for" {
+    if (!is_linux) return;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    try tmp.dir.writeFile(io, .{ .sub_path = "file", .data = "x" });
+    try tmp.dir.symLink(io, "file", "link", .{});
+    var buf: [128]u8 = undefined;
+    var err: LX.E = .SUCCESS;
+    const file = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}/file", .{tmp.sub_path});
+    try std.testing.expect(openFd(file, O.RDONLY | O.DIRECTORY, 0, &err) == null);
+    try std.testing.expectEqual(LX.E.NOTDIR, err);
+    const link = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}/link", .{tmp.sub_path});
+    try std.testing.expect(openFd(link, O.RDONLY | O.NOFOLLOW, 0, &err) == null);
+    try std.testing.expectEqual(LX.E.LOOP, err);
+}
 
 /// openat(AT_FDCWD, path, flags | O_CLOEXEC, mode).
 pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
