@@ -37,6 +37,7 @@ const userdb = @import("../userdb.zig");
 const fileinfo = @import("../fileinfo.zig");
 const datetime = @import("../datetime.zig");
 const quotearg = @import("../quotearg.zig");
+const quote = @import("../quote.zig");
 const modemod = @import("../mode.zig");
 
 pub const Env = common.Env;
@@ -218,6 +219,8 @@ const OutFile = struct {
     buf: std.ArrayList(u8) = .empty,
     /// Why some of the output is missing; reported at the end of the run.
     failure: ?[]const u8 = null,
+    /// A terminal, so names written to it are made harmless (`RunOptions`).
+    terminal: bool = false,
 };
 
 pub const Follow = enum { physical, command_line, logical };
@@ -229,6 +232,8 @@ const State = struct {
     observer: Observer,
     /// Standard output of the run (null outside `Expr.run`).
     writer: ?*Io.Writer = null,
+    /// Standard output is a terminal (`RunOptions.terminals`).
+    stdout_terminal: bool = false,
     /// Where -fprint /dev/stderr goes.
     stderr: ?*Io.Writer = null,
     confirm: ?Confirm = null,
@@ -1308,7 +1313,12 @@ fn evalNode(st: *State, n: *Node) bool {
         .writable => return sys.accessAt(st.at().dir, st.at().name, 2) == null,
         .executable => return sys.accessAt(st.at().dir, st.at().name, 1) == null,
         .print => {
-            emit(st, st.cur_path);
+            if (st.stdout_terminal) {
+                var shown: std.ArrayList(u8) = .empty;
+                defer shown.deinit(st.gpa);
+                appendName(st, &shown, st.cur_path, true);
+                emit(st, shown.items);
+            } else emit(st, st.cur_path);
             emit(st, "\n");
             return true;
         },
@@ -1330,7 +1340,10 @@ fn evalNode(st: *State, n: *Node) bool {
             return true;
         },
         .fprint => {
-            outWrite(st, n.out.?, st.cur_path);
+            var shown: std.ArrayList(u8) = .empty;
+            defer shown.deinit(st.gpa);
+            appendName(st, &shown, st.cur_path, n.out.?.terminal);
+            outWrite(st, n.out.?, shown.items);
             outWrite(st, n.out.?, "\n");
             return true;
         },
@@ -1374,6 +1387,13 @@ fn dirIsEmpty(st: *State) bool {
     }
     pathError(st, st.cur_path, failure.?);
     return false;
+}
+
+/// A file name for output; `terminal`: the destination is one.
+fn appendName(st: *State, out: *std.ArrayList(u8), name: []const u8, terminal: bool) void {
+    if (terminal) {
+        quote.appendForTerminal(out, st.gpa, name, st.utf8) catch st.nomem();
+    } else out.appendSlice(st.gpa, name) catch st.nomem();
 }
 
 fn pathError(st: *State, path: []const u8, errno: LX.E) void {
@@ -1827,6 +1847,7 @@ fn printFormat(st: *State, parts: []const FmtPart, o: ?*OutFile) void {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(st.gpa);
     const s = getSt(st);
+    const terminal = if (o) |f| f.terminal else st.stdout_terminal;
     for (parts) |pt| {
         out.appendSlice(st.gpa, pt.lit) catch st.nomem();
         if (pt.stop) break;
@@ -1837,15 +1858,15 @@ fn printFormat(st: *State, parts: []const FmtPart, o: ?*OutFile) void {
         defer tmp.deinit(st.gpa);
         var is_num = false;
         switch (pt.dir) {
-            'p' => tmp.appendSlice(st.gpa, st.cur_path) catch st.nomem(),
-            'f' => tmp.appendSlice(st.gpa, baseOf(st.cur_path)) catch st.nomem(),
-            'h' => tmp.appendSlice(st.gpa, dirnameOf(st.cur_path)) catch st.nomem(),
-            'H' => tmp.appendSlice(st.gpa, st.cur_root) catch st.nomem(),
+            'p' => appendName(st, &tmp, st.cur_path, terminal),
+            'f' => appendName(st, &tmp, baseOf(st.cur_path), terminal),
+            'h' => appendName(st, &tmp, dirnameOf(st.cur_path), terminal),
+            'H' => appendName(st, &tmp, st.cur_root, terminal),
             'P' => {
                 if (st.cur_path.len > st.cur_root.len) {
                     var r = st.cur_path[st.cur_root.len..];
                     if (r.len > 0 and r[0] == '/') r = r[1..];
-                    tmp.appendSlice(st.gpa, r) catch st.nomem();
+                    appendName(st, &tmp, r, terminal);
                 }
             },
             'd' => {
@@ -1885,7 +1906,7 @@ fn printFormat(st: *State, parts: []const FmtPart, o: ?*OutFile) void {
                 if (s) |sv| if (sv.isLink()) {
                     var buf: [4096]u8 = undefined;
                     var err: LX.E = .SUCCESS;
-                    if (sys.readlinkAt(st.at().dir, st.at().name, &buf, &err)) |k| tmp.appendSlice(st.gpa, buf[0..k]) catch st.nomem();
+                    if (sys.readlinkAt(st.at().dir, st.at().name, &buf, &err)) |k| appendName(st, &tmp, buf[0..k], terminal);
                 };
             },
             's' => if (s) |sv| {
@@ -2170,7 +2191,15 @@ pub const Result = struct {
     write_failed: bool = false,
 };
 
+/// Which of the process's standard streams are terminals.
+pub const Terminals = struct { stdout: bool = false, stderr: bool = false };
+
 pub const RunOptions = struct {
+    /// For output a person reads. When set, file names that -print, -fprint,
+    /// -printf and -fprintf write to a terminal (one of these streams, or a
+    /// terminal named to -fprint) have their unprintable characters replaced,
+    /// as GNU find does. Null: names are always written byte for byte.
+    terminals: ?Terminals = null,
     /// Target of -fprint /dev/stderr (dropped when null).
     stderr: ?*Io.Writer = null,
     confirm: ?Confirm = null,
@@ -2206,6 +2235,19 @@ pub const Expr = struct {
         st.writer = writer;
         st.stderr = options.stderr;
         st.confirm = options.confirm;
+        st.stdout_terminal = if (options.terminals) |t| t.stdout else false;
+        for (st.outs.items) |o| {
+            const t = options.terminals orelse {
+                o.terminal = false;
+                continue;
+            };
+            o.terminal = if (o.fd == Io.File.stdout().handle)
+                t.stdout
+            else if (o.fd == Io.File.stderr().handle)
+                t.stderr
+            else
+                (Io.File{ .handle = o.fd, .flags = .{ .nonblocking = false } }).isTty(st.env.io) catch false;
+        }
         defer {
             st.writer = null;
             st.stderr = null;

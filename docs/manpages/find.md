@@ -59,6 +59,8 @@ none (locale variables are ignored; behaviour is that of the C locale)
 
 Results go to standard output; diagnostics go to standard error prefixed with the command name.
 
+As in GNU find, where -print, -fprint, -printf or -fprintf write to a terminal, each unprintable character of a file name (%p, %f, %h, %H, %P, %l) is shown as `?`, so that a name cannot send control sequences to the terminal. In the C locale that is every byte outside printable ASCII. Pipes, files, -print0 and -fprint0 get the names byte for byte, and -ls quotes them wherever it writes.
+
 # COMPATIBILITY
 
 Reference: GNU findutils 4.10.0 (`/usr/bin/find --version` on the development machine). Consulted 2026-11-07: the GNU find manual (https://www.gnu.org/software/findutils/manual/html_mono/find.html) and POSIX.1-2024 find, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/find.html. Behaviour was checked by differential tests against the GNU binary (`sh test/test_find.sh`).

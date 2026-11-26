@@ -639,6 +639,35 @@ else
 fi
 cd "$W/t"
 
+# On a terminal, unprintable characters in names are shown as '?', as GNU does.
+# Pipes and files get every byte. script(1) provides the terminal.
+mkdir "$W/term"; cd "$W/term"; mkdir d
+: > "d/$(printf 'e\033]0;x\007\033[2J\nz\177')"; : > "d/$(printf 'u\303\251\302\233q')"; : > "d/$(printf 'i\351z')"; : > "d/$(printf 'cut\342\200')"
+ln -s "$(printf 't\033[2J')" d/link
+if script -qec true /dev/null </dev/null >/dev/null 2>&1; then
+    on_tty() { # LOCALE FIND ARGS
+        LC_ALL="$1" SHELL=/bin/sh script -qec "'$2' d $3" /dev/null </dev/null | od -An -c
+    }
+    for loc in C C.UTF-8; do
+        for args in "-print" "-fprint /dev/stdout" "-fprint /dev/stderr" "-printf '[%-12p|%.3f|%h|%H|%P|%l]\\n'" \
+                    "-fprintf /dev/stdout '\\033lit %p\\n'" "-print0"; do
+            exp=$(on_tty $loc /usr/bin/find "$args"); act=$(on_tty $loc "$BIN_DIR/find" "$args")
+            if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); printf 'PASS terminal %s %s\n' $loc "$args"
+            else FAIL=$((FAIL + 1)); printf 'FAIL terminal %s %s\n  GNU : %s\n  ours: %s\n' $loc "$args" "$exp" "$act"; fi
+        done
+    done
+    # A file named to -fprint is no terminal, whatever standard output is.
+    on_tty C /usr/bin/find "-fprint gnu.txt" > /dev/null; on_tty C "$BIN_DIR/find" "-fprint ours.txt" > /dev/null
+    if cmp -s gnu.txt ours.txt; then PASS=$((PASS + 1)); echo "PASS -fprint to a file keeps every byte"
+    else FAIL=$((FAIL + 1)); echo "FAIL -fprint to a file keeps every byte"; fi
+else
+    SKIP=$((SKIP + 1)); echo "SKIP terminal output (needs script(1))"
+fi
+for args in "-print" "-printf %p|%f|%l\n"; do
+    CMP_LOCALE=C.UTF-8 fd "not a terminal: $args" d $args
+done
+cd "$W/t"
+
 # Any time the file system can hold: no crash, and where the year does not fit
 # a struct tm the seconds are printed, as GNU does. (Skipped where the file
 # system clamps such times.)

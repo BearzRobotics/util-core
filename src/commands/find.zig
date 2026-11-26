@@ -197,7 +197,14 @@ pub fn main(ctx: cli.Context) u8 {
 
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &.{});
     var stderr = Io.File.stderr().writerStreaming(ctx.io, &.{});
-    const result = expr.run(starts.items, &stdout.interface, .{ .stderr = &stderr.interface, .confirm = .{ .func = confirm } }, observer) catch return oom(ctx);
+    const result = expr.run(starts.items, &stdout.interface, .{
+        .stderr = &stderr.interface,
+        .confirm = .{ .func = confirm },
+        .terminals = .{
+            .stdout = Io.File.stdout().isTty(ctx.io) catch false,
+            .stderr = Io.File.stderr().isTty(ctx.io) catch false,
+        },
+    }, observer) catch return oom(ctx);
     if (result.write_failed) cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
     return result.exit_status;
 }

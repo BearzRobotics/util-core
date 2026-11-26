@@ -116,6 +116,21 @@ pub fn classRanges(c: Class) []const Range {
     };
 }
 
+/// Whether the codepoint is in the print class (iswprint).
+pub fn isPrint(cp: u32) bool {
+    var lo: usize = 0;
+    var hi: usize = tables.print.len;
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        if (cp < tables.print[mid][0]) {
+            hi = mid;
+        } else if (cp > tables.print[mid][1]) {
+            lo = mid + 1;
+        } else return true;
+    }
+    return false;
+}
+
 /// A set of codepoints kept as sorted, merged ranges.
 pub const Set = struct {
     ranges: std.ArrayList(Range) = .empty,
