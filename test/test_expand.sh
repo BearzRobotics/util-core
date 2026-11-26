@@ -83,4 +83,10 @@ done
 [ $bad -eq 0 ] && { PASS=$((PASS + 1)); echo "PASS $n random comparisons"; } || { FAIL=$((FAIL + 1)); echo "FAIL $bad of $n random comparisons differ"; }
 
 cd /; rm -rf "$W"
+# Tab stops too large to be one.
+printf 'a\tb\n' > hugetab
+for t in 9223372036854775808 18446744073709551615 99999999999999999999 '3,18446744073709551615' '3,/18446744073709551615' '3,+99999999999999999999'; do
+    run_cmp "tab stop too large $t" -t "$t" hugetab
+done
+
 print_summary
