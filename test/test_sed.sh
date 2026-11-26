@@ -446,6 +446,11 @@ run_tree_t '-i *.orig' "$SET" -i'*.orig' 's/a/A/' f
 run_tree_t '-i d/*' "$SET" -i'd/*' 's/a/A/' f
 run_tree_t '-i sub dir file' "$SET" -i 's/q/Q/' d/k
 run_tree_t '-i sub dir file bak' "$SET" -i.bak 's/q/Q/' d/k
+# The backup cannot be made: GNU stops there and the file is not replaced.
+run_tree_t '-i backup in missing dir' "$SET" -i'nodir/*' 's/a/A/' f g
+run_tree_t '-i backup is a directory' "$SET; mkdir f.bak" -i.bak 's/[ax]/A/' f g
+run_tree_t '-i backup fails after q' "$SET" -i'nodir/*' 2q f g
+run_tree_t '-i backup fails, w kept' "$SET" -i'nodir/*' -e 'w out' f g
 run_tree_t '--in-place' "$SET" --in-place 's/a/A/' f
 run_tree_t '--in-place=.b' "$SET" --in-place=.b 's/a/A/' f
 run_tree_t '-i missing' "$SET" -i 's/a/A/' nosuch

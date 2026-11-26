@@ -141,7 +141,8 @@ pub const Event = union(enum) {
     write_error: struct { name: []const u8, items: usize, errno: ?LX.E },
     /// "couldn't open temporary file PATH: ERRNO" (status 4, continues).
     temp_open_failed: struct { path: []const u8, errno: LX.E },
-    /// "cannot rename NAME: ERRNO" (status 4, continues).
+    /// "cannot rename NAME: ERRNO" (fatal, status 4). The original is not
+    /// replaced.
     rename_failed: struct { name: []const u8, errno: LX.E },
     /// An empty regex with no previous one (fatal, status 1). The chunk is
     /// the script's first.
@@ -1246,6 +1247,12 @@ const Exec = struct {
     }
 
     fn deinit(e: *Exec) void {
+        // The run stopped inside an in-place edit: drop the unfinished copy and
+        // leave the original as it was.
+        if (e.in_place_tmp) |tmp| {
+            if (e.cur_out.fd != sys.invalid_handle) _ = sys.closeFd(e.cur_out.fd);
+            _ = sys.unlinkPath(tmp, false);
+        }
         e.ps.deinit(e.gpa);
         e.hs.deinit(e.gpa);
         e.append_q.deinit(e.gpa);
@@ -1483,6 +1490,7 @@ const Exec = struct {
             _ = sys.closeFd(ofd);
         }
         _ = sys.closeFd(o.fd);
+        o.fd = sys.invalid_handle;
         if (e.s.opts.suffix) |suf| {
             const name = e.in_place_target;
             const slash = std.mem.lastIndexOfScalar(u8, name, '/');
@@ -1501,18 +1509,20 @@ const Exec = struct {
                 bk.items
             else
                 std.fmt.allocPrint(e.ar(), "{s}{s}", .{ dir, bk.items }) catch return error.OutOfMemory;
-            if (sys.renamePath(name, full, 0)) |er| {
-                e.s.obs.emit(.{ .rename_failed = .{ .name = name, .errno = er } });
-                e.s.exit_code = 4;
-            }
+            // Without the backup the original must not be replaced.
+            if (sys.renamePath(name, full, 0)) |er| return e.renameFailed(name, er);
         }
-        if (sys.renamePath(tmp, e.in_place_target, 0)) |er| {
-            e.s.obs.emit(.{ .rename_failed = .{ .name = tmp, .errno = er } });
-            e.s.exit_code = 4;
-            _ = sys.unlinkPath(tmp, false);
-        }
+        if (sys.renamePath(tmp, e.in_place_target, 0)) |er| return e.renameFailed(tmp, er);
         e.in_place_tmp = null;
         e.cur_out = e.stdout_o;
+    }
+
+    /// Fatal, as in GNU sed. `deinit` removes the temporary file.
+    fn renameFailed(e: *Exec, name: []const u8, errno: LX.E) Err {
+        e.s.obs.emit(.{ .rename_failed = .{ .name = name, .errno = errno } });
+        try e.flushAll();
+        e.s.exit_code = 4;
+        return error.Abort;
     }
 
     /// True when the current file (and, unless separate, all later ones) has

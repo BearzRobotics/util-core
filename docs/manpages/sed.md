@@ -26,7 +26,7 @@ Stream editor for filtering and transforming text.
 : Use extended regular expressions.
 
 -i[SUFFIX], --in-place[=SUFFIX]
-: Edit files in place; with SUFFIX keep a backup (a `*` in SUFFIX stands for the base name, a `/` makes it a path).
+: Edit files in place; with SUFFIX keep a backup (a `*` in SUFFIX stands for the base name, a `/` makes it a path). If the backup cannot be made, sed stops with status 4 and leaves the file unchanged.
 
 --follow-symlinks
 : Edit the target of a symbolic link when editing in place.
