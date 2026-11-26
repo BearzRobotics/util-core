@@ -186,6 +186,9 @@ pub const Event = union(enum) {
     read_error: struct { name: []const u8, errno: LX.E },
     is_directory: []const u8,
     input_is_output: []const u8,
+    /// A directory that is also one of those being searched (a symbolic link
+    /// leads back up); it is not entered again.
+    directory_loop: []const u8,
     /// Matches were found in a file with binary data and not printed.
     binary_matches: []const u8,
     /// "warning: X at start of expression" (a '{' is reported as '{').
@@ -1240,7 +1243,12 @@ pub const Result = struct {
 pub const RunError = error{ OutOfMemory, WriteFailed };
 const Err = RunError;
 
+/// What identifies a directory that is being searched.
+const DirId = struct { dev_major: u32, dev_minor: u32, ino: u64 };
+
 const G = struct {
+    /// The directories from the operand down to the one being searched.
+    dir_stack: std.ArrayList(DirId) = .empty,
     env: Env,
     gpa: std.mem.Allocator,
     w: *Io.Writer,
@@ -1326,6 +1334,7 @@ pub fn run(env: Env, options: Options, matcher: *Matcher, inputs: []const Input,
         flushBefore(&g);
         g.before_q.deinit(g.gpa);
         g.out.deinit(g.gpa);
+        g.dir_stack.deinit(g.gpa);
         g.buf.deinit(g.gpa);
     }
     g.eol = if (g.o.null_data) 0 else '\n';
@@ -2402,6 +2411,22 @@ fn grepDir(g: *G, path: []const u8, display: []const u8, cmdline: bool) Err!bool
         if (!dirIncluded(g, if (std.mem.lastIndexOfScalar(u8, nm, '/')) |k| nm[k + 1 ..] else nm)) return false;
     }
     var any = false;
+    var id_err: LX.E = .SUCCESS;
+    if (sys.fileStat(path, true, &id_err)) |s| {
+        const id: DirId = .{ .dev_major = s.dev_major, .dev_minor = s.dev_minor, .ino = s.ino };
+        for (g.dir_stack.items) |above| {
+            if (std.meta.eql(above, id)) {
+                g.obs.emit(.{ .directory_loop = display });
+                return false;
+            }
+        }
+        try g.dir_stack.append(g.gpa, id);
+    } else {
+        g.obs.emit(.{ .read_error = .{ .name = display, .errno = id_err } });
+        g.errseen = true;
+        return false;
+    }
+    defer _ = g.dir_stack.pop();
     const dir_h = Io.Dir.cwd().openDir(g.env.io, path, .{ .iterate = true }) catch |e| {
         const emap: LX.E = switch (e) {
             error.AccessDenied => .ACCES,

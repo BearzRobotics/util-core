@@ -314,5 +314,20 @@ gd 'exit status 1' nums zzz nums
 gd 'exit status 2 error + match' nums two nums nosuch
 gd 'exit status -q error' nums -q zzz nosuch
 gd 'long line' longline x longline
+# A symbolic link that leads back up is not searched again, however many
+# there are. Warning, status and (sorted) matches are GNU's.
+mkdir -p loops/one/a loops/two; echo match > loops/one/a/f; ln -s .. loops/one/a/up
+echo match > loops/two/f; ln -s . loops/two/s1; ln -s . loops/two/s2
+for t in loops/one loops/two loops; do
+    for opts in -R -Rs -Rc; do
+        exp=$(LC_ALL=C "${GNU_BIN:-/usr/bin}/grep" $opts match $t 2>"$W/gerr"; echo "status $?")
+        act=$(LC_ALL=C timeout 10 "$BIN_DIR/grep" $opts match $t 2>"$W/oerr"; echo "status $?")
+        exp=$(printf '%s\n' "$exp" | sort); act=$(printf '%s\n' "$act" | sort)
+        gerr=$(sed 's#^[^ ]*grep:#grep:#' "$W/gerr" | sort); oerr=$(sed 's#^[^ ]*grep:#grep:#' "$W/oerr" | sort)
+        if [ "$exp" = "$act" ] && [ "$gerr" = "$oerr" ]; then PASS=$((PASS + 1)); printf 'PASS directory loop %s %s\n' "$opts" "$t"
+        else FAIL=$((FAIL + 1)); printf 'FAIL directory loop %s %s\n' "$opts" "$t"; printf '%s\n%s\n---\n%s\n%s\n' "$exp" "$gerr" "$act" "$oerr" | head -c 600; fi
+    done
+done
+rm -rf loops
 help_cmp
 cd /; print_summary

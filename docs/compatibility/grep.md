@@ -30,6 +30,7 @@ GNU grep 3.12 (`/usr/bin/grep --version` on the development machine). Consulted 
 - Binary files print `grep: FILE: binary file matches` to standard error after the first match; lines that are not valid UTF-8 are skipped individually in UTF-8 locales.
 - ERE leniency of GNU grep: leading `*`, `+`, `?` and `{n}` are ignored with a warning, an unmatched `)` and a `{` that does not start an interval are literals.
 - Leftmost-longest matching for alternation is emulated (see sed); `-w` and `-x` are implemented with look-around, so they pick the same match GNU's retry loop does.
+- `-R` (and the other modes that follow links) does not search a directory that is already being searched; as GNU grep it warns `recursive directory loop` (not with `-s`), which does not change the exit status.
 
 ## Extensions
 

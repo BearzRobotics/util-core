@@ -555,6 +555,7 @@ fn report(context: ?*anyopaque, ev: grep.Event) void {
         .read_error => |e| if (!st.no_messages) cli.warn(ctx, "{s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
         .is_directory => |n| if (!st.no_messages) cli.warn(ctx, "{s}: Is a directory", .{n}),
         .input_is_output => |n| if (!st.no_messages) cli.warn(ctx, "{s}: input file is also the output", .{n}),
+        .directory_loop => |n| if (!st.no_messages) cli.warn(ctx, "{s}: warning: recursive directory loop", .{n}),
         .binary_matches => |n| cli.warn(ctx, "{s}: binary file matches", .{n}),
         .leading_operator => |ch| switch (ch) {
             '{' => cli.warn(ctx, "warning: {{...}} at start of expression", .{}),
