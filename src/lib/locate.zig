@@ -9,9 +9,8 @@
 //! Fatal conditions (a corrupt database, a bad regular expression) are
 //! reported as an event and returned as `error.Fatal`; the executable exits 1.
 //!
-//! Deviations (also in docs/compatibility/locate.md): a failed write to the
-//! output writer is dropped silently, as the executable always did, and
-//! `Result.write_failed` tells the caller.
+//! A failed write to the output writer does not stop the search;
+//! `Result.write_failed` tells the caller, who reports it.
 
 const std = @import("std");
 const rx = @import("../regexutil.zig");
@@ -22,6 +21,7 @@ const fu = @import("fu_common.zig");
 const sys = @import("../sys.zig");
 const regex = @import("regex");
 const fnmatch = @import("../fnmatch.zig");
+const quote = @import("../quote.zig");
 const tzmod = @import("../tz.zig");
 const strftime = @import("../strftime.zig");
 
@@ -57,6 +57,12 @@ pub const Options = struct {
     print: bool = true,
     /// Terminator after each name (0 for -0).
     separator: u8 = '\n',
+    /// The writer is a terminal: as GNU locate does, show the unprintable
+    /// characters of names as '?' (not with a NUL separator). The names in a
+    /// database were chosen by whoever created the files.
+    terminal: bool = false,
+    /// UTF-8 locale: which characters `terminal` takes for printable.
+    utf8: bool = false,
     /// --max-database-age in days.
     max_age_days: u64 = 8,
 };
@@ -334,7 +340,9 @@ fn searchDb(l: *L, data: []const u8, dbname: []const u8, patterns: []const []con
             if (nl) st.newline += 1;
         }
         if (l.o.print) {
-            try l.out.appendSlice(l.gpa, original);
+            if (l.o.terminal and l.o.separator != 0) {
+                try quote.appendForTerminal(&l.out, l.gpa, original, l.o.utf8);
+            } else try l.out.appendSlice(l.gpa, original);
             try l.out.append(l.gpa, l.o.separator);
             if (l.out.items.len > 65536) flush(l);
         }
@@ -427,7 +435,7 @@ pub fn run(env: Env, options: Options, patterns: []const []const u8, writer: *Io
                 mtime = .{ st.mtime_s, st.mtime_ns };
                 const now = Io.Timestamp.now(env.io, .real);
                 const now_s: i64 = @intCast(@divFloor(now.nanoseconds, std.time.ns_per_s));
-                const age: f64 = @floatFromInt(now_s - st.mtime_s);
+                const age: f64 = @floatFromInt(now_s -| st.mtime_s);
                 const warn_s: f64 = @floatFromInt(@as(u32, 86400) *% @as(u32, @truncate(o.max_age_days)));
                 if (age > warn_s) {
                     flush(&l);

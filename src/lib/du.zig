@@ -6,6 +6,12 @@
 //! (the per-level accumulation, the skipped hard links and the exclude rules
 //! were studied there and rewritten as a recursive walk).
 //!
+//! The walk is descriptor-relative (dirat.zig): every entry is examined and
+//! every directory opened by its own name in the open directory above it, so
+//! depth is not limited by PATH_MAX and a directory replaced by a link while
+//! du runs is not followed. Path strings (one shared buffer) are for the
+//! report, the messages and the exclude patterns.
+//!
 //! Use: `var d = Du.init(env, options, writer, observer); defer d.deinit();`,
 //! `walk` each argument, then `finish`. Argument parsing, option validation and
 //! the wording of diagnostics are in src/commands/du.zig.
@@ -19,6 +25,7 @@ const tzmod = @import("../tz.zig");
 const strftime = @import("../strftime.zig");
 const human = @import("../human.zig");
 const diskusage = @import("../diskusage.zig");
+const dirat = @import("../dirat.zig");
 const fnmatch = @import("../fnmatch.zig");
 
 pub const Env = common.Env;
@@ -131,6 +138,8 @@ pub const Du = struct {
     json_count: usize = 0,
     json_total: bool = false,
     ancestors: std.ArrayList(DevIno) = .empty,
+    /// The path of the entry being visited.
+    path: std.ArrayList(u8) = .empty,
 
     /// Start a run. `writer` receives the report; nothing is written until
     /// the first `walk`.
@@ -168,6 +177,7 @@ pub const Du = struct {
         s.patterns.deinit(s.env.gpa);
         s.seen.deinit();
         s.ancestors.deinit(s.env.gpa);
+        s.path.deinit(s.env.gpa);
         if (s.zone_loaded) s.zone.deinit();
         if (s.json) |*aw| aw.deinit();
     }
@@ -181,7 +191,9 @@ pub const Du = struct {
             var e: std.os.linux.E = .SUCCESS;
             if (sys.fileStat(name, s.deref != .physical, &e)) |st| dev = devKey(st);
         }
-        return visit(s, name, 0, &top, dev);
+        s.path.clearRetainingCapacity();
+        s.path.appendSlice(s.env.gpa, name) catch return false;
+        return visit(s, null, name, 0, &top, dev);
     }
 
     /// Print the grand total (`--total`), close the JSON array and flush.
@@ -309,10 +321,15 @@ fn isSpace(c: u8) bool {
     return c == ' ' or (c >= '\t' and c <= '\r');
 }
 
-/// du.c process_file for one entry and (recursively) its children. `parent`
-/// is the accumulator for the group of entries this one belongs to.
-fn visit(s: *Du, path: []const u8, level: u64, parent: *Level, root_dev: u64) bool {
+/// du.c process_file for one entry and (recursively) its children. The entry
+/// is `name` in the open directory `dir` (null: an argument, relative to the
+/// current directory) and `s.path` holds its path. `parent` is the accumulator
+/// for the group of entries this one belongs to.
+fn visit(s: *Du, dir: ?*dirat.Level, name: []const u8, level: u64, parent: *Level, root_dev: u64) bool {
     const ctx = s.env;
+    // Both are taken again after anything that may grow the buffer.
+    const path_len = s.path.items.len;
+    var path: []const u8 = s.path.items;
     var ok = true;
     const follow = switch (s.deref) {
         .logical => true,
@@ -320,10 +337,10 @@ fn visit(s: *Du, path: []const u8, level: u64, parent: *Level, root_dev: u64) bo
         .physical => false,
     };
     var err: std.os.linux.E = .SUCCESS;
-    const st_opt = sys.fileStat(path, follow, &err);
+    const st_opt = sys.fileStatAt(dirat.fdOf(dir), name, follow, &err);
     var dangling = false;
     if (st_opt == null and follow and err == .NOENT) {
-        if (sys.fileStat(path, false, &err)) |_| {
+        if (sys.fileStatAt(dirat.fdOf(dir), name, false, &err)) |_| {
             dangling = true;
         }
     }
@@ -366,39 +383,52 @@ fn visit(s: *Du, path: []const u8, level: u64, parent: *Level, root_dev: u64) bo
 
     var children: Level = .{};
     if (is_dir) {
-        if (Io.Dir.cwd().openDir(ctx.io, path, .{ .iterate = true })) |d| {
-            var dir = d;
-            var names: std.ArrayList([]u8) = .empty;
+        var below: dirat.Level = undefined;
+        if (dirat.enter(&below, dir, name, .{ .follow = follow, .expect = st })) |e| {
+            s.observer.emit(.{ .cannot_read_dir = .{ .path = path, .errno = e } });
+            ok = false;
+        } else {
+            // A failure to get back to the directory above is seen there.
+            defer _ = dirat.leave(&below);
+            // The whole listing is taken before anything is visited.
+            var read_err: std.os.linux.E = .SUCCESS;
+            const entries: []sys.RawEntry = sys.readDirFd(ctx.gpa, below.fd, &read_err) orelse blk: {
+                s.observer.emit(.{ .cannot_read_dir = .{ .path = path, .errno = read_err } });
+                ok = false;
+                break :blk &.{};
+            };
             defer {
-                for (names.items) |n| ctx.gpa.free(n);
-                names.deinit(ctx.gpa);
+                for (entries) |entry| ctx.gpa.free(entry.name);
+                ctx.gpa.free(entries);
             }
-            var it = dir.iterate();
-            while (it.next(ctx.io) catch null) |entry| {
-                const dup = ctx.gpa.dupe(u8, entry.name) catch break;
-                names.append(ctx.gpa, dup) catch {
-                    ctx.gpa.free(dup);
+            s.ancestors.append(ctx.gpa, .{ .dev = devKey(st), .ino = st.ino }) catch {};
+            // fts: one trailing slash of the parent is replaced.
+            const trailing_slash = path_len > 0 and s.path.items[path_len - 1] == '/';
+            const base_len = path_len - @intFromBool(trailing_slash);
+            for (entries) |entry| {
+                if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
+                s.path.shrinkRetainingCapacity(base_len);
+                s.path.ensureUnusedCapacity(ctx.gpa, entry.name.len + 1) catch {
+                    // The totals would be short without a word.
+                    s.observer.emit(.{ .cannot_read_dir = .{ .path = s.path.items[0..base_len], .errno = .NOMEM } });
+                    ok = false;
                     break;
                 };
+                s.path.appendAssumeCapacity('/');
+                s.path.appendSliceAssumeCapacity(entry.name);
+                if (!visit(s, &below, entry.name, level + 1, &children, root_dev)) ok = false;
+                // Deep trees close the directories far above; this one was
+                // moved while below it, so its other entries are out of reach.
+                if (!below.open) {
+                    s.observer.emit(.{ .cannot_read_dir = .{ .path = s.path.items[0..base_len], .errno = .NOENT } });
+                    ok = false;
+                    break;
+                }
             }
-            dir.close(ctx.io);
-            s.ancestors.append(ctx.gpa, .{ .dev = devKey(st), .ino = st.ino }) catch {};
-            for (names.items) |n| {
-                // fts: one trailing slash of the parent is replaced.
-                const base = if (path.len > 0 and path[path.len - 1] == '/') path[0 .. path.len - 1] else path;
-                const child = std.fmt.allocPrint(ctx.gpa, "{s}/{s}", .{ base, n }) catch continue;
-                defer ctx.gpa.free(child);
-                if (!visit(s, child, level + 1, &children, root_dev)) ok = false;
-            }
+            s.path.shrinkRetainingCapacity(base_len);
+            if (trailing_slash) s.path.appendAssumeCapacity('/');
+            path = s.path.items;
             _ = s.ancestors.pop();
-        } else |e| {
-            const emap: std.os.linux.E = switch (e) {
-                error.AccessDenied => .ACCES,
-                error.PermissionDenied => .PERM,
-                else => .IO,
-            };
-            s.observer.emit(.{ .cannot_read_dir = .{ .path = path, .errno = emap } });
-            ok = false;
         }
     }
 

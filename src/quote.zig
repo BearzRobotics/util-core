@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const Io = std.Io;
-
+const unicode = @import("unicode.zig");
 
 /// A file name as GNU `quotef` prints it in diagnostics (shell-escape quoting
 /// with ':' treated as special): plain when safe, otherwise in single quotes
@@ -124,4 +124,42 @@ pub const QuotedC = struct {
 
 pub fn quoteC(text: []const u8) QuotedC {
     return .{ .text = text };
+}
+
+/// Append a file name as GNU find and locate write it to a terminal: every
+/// unprintable character becomes '?', so a name cannot send control sequences.
+/// In the C locale that is each byte outside printable ASCII; with `utf8`, each
+/// unprintable character and each byte that is not part of a valid sequence.
+pub fn appendForTerminal(out: *std.ArrayList(u8), gpa: std.mem.Allocator, name: []const u8, utf8: bool) std.mem.Allocator.Error!void {
+    var i: usize = 0;
+    while (i < name.len) {
+        const d: unicode.Decoded = if (utf8) unicode.decode(name, i) else .{ .cp = name[i], .len = 1, .valid = name[i] < 0x80 };
+        if (d.valid and unicode.isPrint(d.cp)) {
+            try out.appendSlice(gpa, name[i..][0..d.len]);
+        } else {
+            try out.append(gpa, '?');
+            // A character cut off by the end of the name is one '?'.
+            if (utf8 and !d.valid and isCutShort(name[i..])) return;
+        }
+        i += d.len;
+    }
+}
+
+/// Whether `s` is the beginning of a UTF-8 sequence and nothing else.
+fn isCutShort(s: []const u8) bool {
+    const need = std.unicode.utf8ByteSequenceLength(s[0]) catch return false;
+    if (s.len >= need) return false;
+    for (s[1..]) |c| if (c & 0xc0 != 0x80) return false;
+    return true;
+}
+
+test "appendForTerminal" {
+    const t = std.testing;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
+    try appendForTerminal(&out, t.allocator, "a\x1b[2J\n\x7f caf\xc3\xa9\xc2\x9b\xe9", true);
+    try t.expectEqualStrings("a?[2J?? caf\xc3\xa9??", out.items);
+    out.clearRetainingCapacity();
+    try appendForTerminal(&out, t.allocator, "a\x1b\xc3\xa9", false);
+    try t.expectEqualStrings("a???", out.items);
 }

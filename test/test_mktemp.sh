@@ -91,6 +91,23 @@ run_mask "--dry-run"             "$S" --dry-run fooXXXX
 run_mask "--quiet"               "$S" --quiet nodir/XXXX
 run_mask "--directory"           "$S" --directory fooXXXX
 
+# An empty $TMPDIR or directory counts as unset. -u only prints the name, so
+# nothing is created in /tmp (or, were it broken, in /).
+empty_cmp() { # DESC TMPDIR ARGS...
+    description="$1"; tmpdir="$2"; shift 2
+    g=$(TMPDIR="$tmpdir" LC_ALL=C gnu -u "$@" 2>&1 | mask); o=$(TMPDIR="$tmpdir" ours -u "$@" 2>&1 | mask)
+    if [ "$g" = "$o" ]; then PASS=$((PASS + 1)); printf "PASS %s\n" "$description"; else FAIL=$((FAIL + 1)); printf "FAIL %s (GNU %s, ours %s)\n" "$description" "$g" "$o"; fi
+}
+empty_cmp "empty TMPDIR"                ''
+empty_cmp "empty TMPDIR, template -t"   '' -t abcXXXX
+empty_cmp "empty TMPDIR, --tmpdir tmpl" '' --tmpdir abcXXXX
+empty_cmp "empty TMPDIR, -p dir -t"     '' -p /var/tmp -t abcXXXX
+empty_cmp "-p ''"                       '' -p ''
+empty_cmp "--tmpdir="                   '' --tmpdir=
+empty_cmp "-p '' with TMPDIR"           /var/tmp -p ''
+empty_cmp "--tmpdir= with TMPDIR"       /var/tmp --tmpdir= abcXXXX
+empty_cmp "-t -p '' empty TMPDIR"       '' -p '' -t abcXXXX
+
 # Literal parts and permissions (GNU and ours must agree on these exactly).
 D="$TEST_TMP/lit"; mkdir -p "$D"; cd "$D"
 chk() { desc="$1"; shift; if "$@"; then PASS=$((PASS + 1)); printf "PASS %s\n" "$desc"; else FAIL=$((FAIL + 1)); printf "FAIL %s\n" "$desc"; fi; }

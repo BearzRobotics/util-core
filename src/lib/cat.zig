@@ -666,6 +666,9 @@ pub fn run(env: Env, options: Options, inputs: []const Input, writer: *Io.Writer
             } else if (options.plain()) {
                 out.write(buf[0..n]);
             } else fmt.feed(buf[0..n]);
+            // As in GNU, what has been read is written before waiting for
+            // more: the input may be someone typing.
+            out.flush();
             if (out.failed) return error.WriteFailed;
         }
     }

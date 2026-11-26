@@ -40,6 +40,11 @@ Copy files and set attributes.
 --help, --version
 : Print help or version and exit.
 
+# DIFFERENCES FROM GNU
+
+- A symbolic link put in place of an installed file or a created directory
+  before install sets its mode, owner or times is not followed.
+
 # EXIT STATUS
 
 | Status | Meaning |

@@ -8,7 +8,7 @@ GNU coreutils 9.7 (`/usr/bin/mkdir --version` on the development machine, instal
 
 ## Supported options
 
-- `-m, --mode=MODE`: Set the mode of each created directory (chmod syntax, relative to a=rwx; the umask applies only to clauses without who). Does not affect parents made by -p.
+- `-m, --mode=MODE`: Set the mode of each created directory (chmod syntax, relative to a=rwx; the umask applies only to clauses without who). Does not affect parents made by -p. In a directory, set-ID bits the mode does not mention are kept as inherited (a numeric mode of fewer than five digits mentions only those it sets), so a set-group-ID parent keeps passing its group on; as in GNU, the umask shows in write bits a mode such as `g-s` leaves open. Parents made by -p keep an inherited set-group-ID bit.
 - `-p, --parents`: Create missing parents (mode: umask-modified rwx plus u+wx); existing directories are not an error.
 - `-v, --verbose`: Print `mkdir: created directory 'X'` on standard output for each directory created.
 - `-Z, --context[=CTX]`: Accepted and ignored (no SELinux/SMACK support).
@@ -17,8 +17,12 @@ GNU coreutils 9.7 (`/usr/bin/mkdir --version` on the development machine, instal
 ## Supported behaviour
 
 - Modes: octal (0-7777) and symbolic (`u=rwx,g=rx,o=`, `a-x`, `g=u`, `u+s`, ...), implemented in src/mode.zig and checked against GNU mkdir -m for 25+ modes and three umasks.
-- The directory is created with MODE & 0777 (masked further by the umask) and then chmod'ed to the exact mode, so it is never less restrictive than MODE (POSIX).
+- The directory is created with the mode's permission and sticky bits (without group and other write when set-ID or sticky bits are to be settled, as GNU does; masked further by the umask) and then chmod'ed: the bits the mode decides are exact, the rest stay as created.
 - Errors as GNU: `cannot create directory 'X': File exists / No such file or directory / Not a directory`. Processing continues after an error (exit 1).
+
+## Safety
+
+The new file is created and its mode set relative to one open descriptor of its parent directory, and the mode is never set through a symbolic link. If another user replaces the new file before the mode is set, mkdir reports `cannot set permissions` and leaves the other file alone.
 
 ## Library
 

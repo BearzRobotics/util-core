@@ -18,10 +18,17 @@ pub fn errText(err: anyerror) []const u8 {
         error.DirNotEmpty => "Directory not empty",
         error.ReadOnlyFileSystem => "Read-only file system",
         error.NoSpaceLeft => "No space left on device",
+        error.FileTooBig => "File too large",
+        // ftruncate's EINVAL: a FIFO or device has no length to set.
+        error.NonResizable => "Invalid argument",
+        error.InputOutput => "Input/output error",
+        error.NotOpenForReading, error.NotOpenForWriting => "Bad file descriptor",
         error.DiskQuota => "Disk quota exceeded",
         error.FileBusy => "Device or resource busy",
         error.LinkQuotaExceeded => "Too many links",
         error.SystemResources => "Cannot allocate memory",
+        error.ProcessFdQuotaExceeded => "Too many open files",
+        error.SystemFdQuotaExceeded => "Too many open files in system",
         else => @errorName(err),
     };
 }

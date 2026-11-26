@@ -6,8 +6,16 @@
 //! Resolved component by component so that `-m` can handle missing
 //! components and `-s` can skip symlinks. Symlinks are expanded up to 40
 //! levels (ELOOP, as the kernel does).
+//!
+//! As in gnulib, every component is examined, and any failure to do so is an
+//! error: a name that could not be checked is never reported as canonical.
+//! `.missing` (-m) tolerates all of them; `.canonical` (-f) only a last
+//! component that does not exist (and `.logical_only` any missing one that
+//! only names follow).
 
 const std = @import("std");
+const errtext = @import("errtext.zig");
+const sys = @import("sys.zig");
 const Io = std.Io;
 
 pub const Mode = enum {
@@ -18,7 +26,89 @@ pub const Mode = enum {
     logical_only, // realpath -s: no symlink expansion
 };
 
-pub const Error = error{ NotFound, NotDir, Loop, OutOfMemory, NameTooLong };
+pub const Error = error{
+    NotFound,
+    NotDir,
+    Loop,
+    OutOfMemory,
+    NameTooLong,
+    AccessDenied,
+    PermissionDenied,
+    InputOutput,
+    SystemResources,
+    /// Any other failure to examine a component.
+    Unexpected,
+};
+
+fn mapError(e: anyerror) Error {
+    return switch (e) {
+        error.FileNotFound => error.NotFound,
+        error.NotDir => error.NotDir,
+        error.SymLinkLoop => error.Loop,
+        error.NameTooLong => error.NameTooLong,
+        error.AccessDenied => error.AccessDenied,
+        error.PermissionDenied => error.PermissionDenied,
+        error.FileSystem, error.InputOutput => error.InputOutput,
+        error.SystemResources => error.SystemResources,
+        else => error.Unexpected,
+    };
+}
+
+/// The diagnostic text of a failure.
+pub fn errorText(e: Error) []const u8 {
+    return switch (e) {
+        error.NotFound => "No such file or directory",
+        error.Loop => "Too many levels of symbolic links",
+        error.Unexpected => "Unexpected error",
+        else => errtext.errText(e),
+    };
+}
+
+/// True when what follows a component demands that it be a directory: a
+/// trailing slash, or "." or ".." (with only more "." between). A following
+/// name needs no check here, since examining it fails if this is not one.
+fn needsDirectory(rest: []const u8) bool {
+    if (rest.len == 0) return false;
+    var it = std.mem.tokenizeScalar(u8, rest, '/');
+    while (it.next()) |c| {
+        if (std.mem.eql(u8, c, ".")) continue;
+        return std.mem.eql(u8, c, "..");
+    }
+    return true;
+}
+
+/// Check that `name` exists, as a directory when `directory`. `name` is
+/// borrowed and left as it was.
+fn mustExist(gpa: std.mem.Allocator, name: *std.ArrayList(u8), directory: bool) Error!void {
+    const len = name.items.len;
+    // "name/" only exists when it is a directory (or leads to one).
+    if (directory and name.items[len - 1] != '/') try name.append(gpa, '/');
+    defer name.shrinkRetainingCapacity(len);
+    var e: sys.E = .SUCCESS;
+    if (sys.fileStat(name.items, true, &e) != null) return;
+    return switch (e) {
+        .NOENT => error.NotFound,
+        .NOTDIR => error.NotDir,
+        .LOOP => error.Loop,
+        .NAMETOOLONG => error.NameTooLong,
+        .ACCES => error.AccessDenied,
+        .PERM => error.PermissionDenied,
+        .IO => error.InputOutput,
+        .NOMEM => error.SystemResources,
+        else => error.Unexpected,
+    };
+}
+
+test "needsDirectory" {
+    try std.testing.expect(needsDirectory("/"));
+    try std.testing.expect(needsDirectory("/./"));
+    try std.testing.expect(needsDirectory("/./.."));
+    try std.testing.expect(needsDirectory("//../x"));
+    try std.testing.expect(!needsDirectory(""));
+    try std.testing.expect(!needsDirectory("/x"));
+    try std.testing.expect(!needsDirectory("/./x/.."));
+    try std.testing.expect(!needsDirectory("/..."));
+}
 
 /// Absolute canonical form of `path` (caller frees). `ctx` is anything with
 /// `.io` and `.gpa` (a `cli.Context` or a `common.Env`).
@@ -49,10 +139,8 @@ pub fn resolveLogical(ctx: anytype, path: []const u8, mode: Mode, dotdot_first: 
         try pending.appendSlice(gpa, path);
     }
     // `pending` starts with '/'; consume components from its front.
-    const trailing_slash = path.len > 1 and path[path.len - 1] == '/';
     var links: usize = 0;
     var pos: usize = 0;
-    var missing = false; // a component did not exist (-m / last component of -f)
     while (true) {
         while (pos < pending.items.len and pending.items[pos] == '/') pos += 1;
         if (pos >= pending.items.len) break;
@@ -61,7 +149,6 @@ pub fn resolveLogical(ctx: anytype, path: []const u8, mode: Mode, dotdot_first: 
         pos = end;
         if (std.mem.eql(u8, comp, ".")) continue;
         if (std.mem.eql(u8, comp, "..")) {
-            if (missing and mode == .logical_only) return error.NotFound;
             // Pop the last component of the result (never above the root).
             if (result.items.len > 1) {
                 var k = result.items.len;
@@ -73,85 +160,49 @@ pub fn resolveLogical(ctx: anytype, path: []const u8, mode: Mode, dotdot_first: 
         const before = result.items.len;
         if (result.items.len > 1) try result.append(gpa, '/');
         try result.appendSlice(gpa, comp);
-        if (mode == .logical_only) {
-            // -s: symlinks stay as they are, but the path must still be valid.
-            if (Io.Dir.cwd().statFile(ctx.io, result.items, .{})) |_| {} else |e| switch (e) {
-                error.FileNotFound => missing = true, // tolerated, except before a ".."
-                error.NotDir => return error.NotDir,
-                error.SymLinkLoop => return error.Loop,
-                else => {},
-            }
-            continue;
-        }
-
-        var lbuf: [4096]u8 = undefined;
-        if (Io.Dir.cwd().readLink(ctx.io, result.items, &lbuf)) |n| {
-            links += 1;
-            if (links > 40) {
-                // -m tolerates a loop and keeps the component unresolved.
-                if (mode == .missing) {
-                    missing = true;
-                    continue;
-                }
-                return error.Loop;
-            }
-            // Replace the component by its target and keep going.
-            result.shrinkRetainingCapacity(before);
-            var rest: std.ArrayList(u8) = .empty;
-            defer rest.deinit(gpa);
-            try rest.appendSlice(gpa, lbuf[0..n]);
-            try rest.append(gpa, '/');
-            try rest.appendSlice(gpa, pending.items[pos..]);
-            pending.clearRetainingCapacity();
-            try pending.appendSlice(gpa, rest.items);
-            pos = 0;
-            if (lbuf[0] == '/') {
-                result.clearRetainingCapacity();
-                try result.append(gpa, '/');
-            }
-            continue;
-        } else |e| switch (e) {
-            error.NotLink => {},
-            error.FileNotFound => {
-                missing = true;
-            },
-            error.NotDir => {
-                if (mode == .missing) {
-                    missing = true;
-                } else return error.NotDir;
-            },
-            else => {},
-        }
-        if (missing) {
-            const more = std.mem.indexOfNone(u8, pending.items[pos..], "/") != null;
-            switch (mode) {
-                .existing => return error.NotFound,
-                .canonical => if (more) return error.NotFound,
-                else => {},
-            }
-        }
-        // A component that exists and is not the last must be a directory.
-        if (!missing and std.mem.indexOfNone(u8, pending.items[pos..], "/") != null) {
-            const st = Io.Dir.cwd().statFile(ctx.io, result.items, .{}) catch |e| {
-                if (e == error.FileNotFound) return error.NotFound;
+        const rest = pending.items[pos..];
+        const failure: Error = failed: {
+            if (mode == .logical_only) {
+                // -s: symlinks stay as they are, but the path must still be
+                // valid.
+                mustExist(gpa, &result, needsDirectory(rest)) catch |e| break :failed e;
                 continue;
-            };
-            if (st.kind != .directory and mode != .missing) return error.NotDir;
-        }
-    }
-    if (mode == .existing and !missing) {
-        // Final existence check for -e (covers a trailing symlink to nothing).
-        _ = Io.Dir.cwd().statFile(ctx.io, result.items, .{}) catch return error.NotFound;
-    }
-    if (trailing_slash and mode != .missing) {
-        // "name/" demands a directory.
-        if (Io.Dir.cwd().statFile(ctx.io, result.items, .{})) |st| {
-            if (st.kind != .directory) return error.NotDir;
-        } else |e| switch (e) {
-            error.FileNotFound => if (mode != .none) return error.NotFound,
-            error.NotDir => return error.NotDir,
-            else => {},
-        }
+            }
+            var lbuf: [4096]u8 = undefined;
+            if (Io.Dir.cwd().readLink(ctx.io, result.items, &lbuf)) |n| {
+                links += 1;
+                if (links > 40) break :failed error.Loop;
+                // Replace the component by its target and keep going.
+                result.shrinkRetainingCapacity(before);
+                var target: std.ArrayList(u8) = .empty;
+                defer target.deinit(gpa);
+                try target.appendSlice(gpa, lbuf[0..n]);
+                try target.appendSlice(gpa, rest);
+                pending.clearRetainingCapacity();
+                try pending.appendSlice(gpa, target.items);
+                pos = 0;
+                if (lbuf[0] == '/') {
+                    result.clearRetainingCapacity();
+                    try result.append(gpa, '/');
+                }
+                continue;
+            } else |e| switch (e) {
+                // It exists and is not a link.
+                error.NotLink, error.UnsupportedReparsePointType => {
+                    if (needsDirectory(rest)) mustExist(gpa, &result, true) catch |de| break :failed de;
+                    continue;
+                },
+                else => break :failed mapError(e),
+            }
+        };
+        // The component stays in the result unresolved when tolerated.
+        if (failure == error.OutOfMemory) return failure;
+        if (mode == .missing) continue;
+        const last = std.mem.indexOfNone(u8, rest, "/") == null;
+        if (failure == error.NotFound and last and mode != .existing) continue;
+        // As GNU, -s lets names go on past a missing one, but not "." or "..".
+        if (failure == error.NotFound and mode == .logical_only and !needsDirectory(rest)) continue;
+        return failure;
     }
     return result.toOwnedSlice(gpa);
 }

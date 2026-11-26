@@ -3,6 +3,7 @@
 # include symlink targets.
 UTIL="ln"
 . "$(dirname "$0")/testlib.sh"
+TREE_LINKS=1    # a copy must not pass for a hard link
 S='echo A > a; echo B > b; mkdir d; echo C > d/c; ln -s a sl; ln -s d sd; ln -s nowhere dang'
 
 printf "\n[ Hard links ]\n"
@@ -86,6 +87,24 @@ run_tree "--backup=existing none"  "$S" --backup=existing a b
 run_tree "--backup=none"           "$S" --backup=none a b
 run_tree "--backup=bogus"          "$S" --backup=bogus a b
 run_tree "-S suffix"               "$S" -b -S .bak a b
+# Backup naming is the same as cp's, mv's and install's.
+B='echo A > a; echo cur > b; echo oldsimple > b~'
+run_tree "existing: only .~10~ left"  "$B; echo ten > b.~10~" -f -b -s a b
+run_tree "numbered: after the highest" "$B; echo five > b.~5~" -f --backup=numbered -s a b
+run_tree "numbered: past a gap"      "$B; : > b.~1~; : > b.~9~" --backup=t a b
+run_tree "-S alone makes a backup"   "$S" -S .bak a b
+run_tree "-f -S keeps the old file"  "$B" -f -S .bak a b
+run_tree "--suffix= alone"           "$B" -f --suffix=.orig a b
+run_tree "empty suffix is ~"         "$S" -b -S '' a b
+run_tree "suffix with a slash is ~"  "$S; mkdir sub" -b -S /../sub/x a b
+run_tree "-S .bak --backup=numbered" "$S" -S .bak --backup=numbered a b
+run_tree "--backup= (empty)"         "$S" --backup= a b
+for v in numbered existing simple none bogus ''; do
+    VERSION_CONTROL=$v run_tree "VERSION_CONTROL='$v' -b" "$S" -b a b
+done
+for v in '' /x .env; do
+    SIMPLE_BACKUP_SUFFIX=$v run_tree "SIMPLE_BACKUP_SUFFIX='$v'" "$S" -b a b
+done
 run_tree "--suffix=.orig"          "$S" -b --suffix=.orig a b
 run_tree "-bv"                     "$S" -bv a b
 run_tree "-sbv"                    "$S" -sbv a b
@@ -103,4 +122,76 @@ run_tree "empty dest"              "$S" a ''
 run_tree "-S missing arg"          "$S" a b -S
 run_tree "unreadable dest dir"     'echo A > a; mkdir d; chmod 500 d' a d/x
 run_tree "-d -F accepted"          "$S" -d -F a new
+
+printf "\n[ A link that cannot be made leaves the destination alone ]\n"
+LONG=$(awk 'BEGIN { while (n++ < 5000) printf "a" }')
+# (the symlink target is too long; GNU keeps b, and restores it after -b)
+run_tree "-sf failure keeps dest"   "$S" -sf "$LONG" b
+run_tree "-sfb failure restores"    "$S" -sfb "$LONG" b
+run_tree "-sb failure restores"     "$S" -sb "$LONG" b
+run_tree "-sf failure into dir"     "$S; echo D > d/x" -sf "$LONG" d/x
+# A hard link to another file system.
+other=$(mktemp /dev/shm/lntest.XXXXXX 2>/dev/null)
+if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$TEST_TMP")" ]; then
+    run_tree "-f across devices keeps dest"  "$S" -f "$other" b
+    run_tree "-fb across devices restores"   "$S" -f -b "$other" b
+    run_tree "-b across devices restores"    "$S" -b "$other" b
+else
+    skip_test "hard links across devices (no second file system)"
+fi
+[ -z "$other" ] || rm -f "$other"
+run_tree "-f replaces a hard link"  "$S" -f a b
+run_tree "-sf replaces"             "$S" -sf a b
+run_tree "-sf replaces in subdir"   "$S" -sf a d/c
+
+printf "\n[ Same file ]\n"
+# The destination is the only name of the data the source leads to.
+ONE='echo data > a; ln -s a l; ln -s l l2; mkdir d; echo data > d/b; ln -s d/b m'
+TWO='echo data > a; ln a h; ln -s a l'
+export TREE_CONTENT=1
+run_tree "-sf link to dest"          "$ONE" -sf l a
+run_tree "-sf link chain to dest"    "$ONE" -sf l2 a
+run_tree "-sf link into subdir"      "$ONE" -sf m d/b
+run_tree "-sfn link to dest"         "$ONE" -sfn l a
+run_tree "-sf same entry"            "$ONE" -sf ./a a
+run_tree "-sf same entry, two names" "$TWO" -sf ./a a
+run_tree "-sf other hard link"       "$TWO" -sf a h
+run_tree "-f other hard link"        "$TWO" -f a h
+run_tree "-sf link, data kept by h"  "$TWO" -sf l a
+run_tree "-Lf link to dest"          "$ONE" -Lf l a
+run_tree "-f onto own symlink"       "$ONE" -f a l
+run_tree "-sf onto own symlink"      "$ONE" -sf a l
+run_tree "-sfb link to dest"         "$ONE" -sfb l a
+run_tree "-b onto itself"            "$ONE" -b a a
+run_tree "-b onto other hard link"   "$TWO" -b a h
+unset TREE_CONTENT
+# -i: GNU 9.7 answers "yes" by destroying the data; we refuse as with -f.
+d=$(mktemp -d); echo data > "$d/a"; ln -s a "$d/l"
+out=$(cd "$d" && echo y | ours -si l a 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && [ "$(cat "$d/a")" = data ] && [ ! -L "$d/a" ]; then
+    PASS=$((PASS + 1)); echo "PASS -si link to dest is refused"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL -si link to dest is refused (rc=$rc $out)"
+fi
+rm -rf "$d"
+# A hard link of a symbolic link, put in place of the file the link leads to,
+# would point at itself and lose the data. GNU 9.7 does that; we refuse.
+for case in "-f l a" "-fn l a" "-f m a" "-f sub/up a" "-i l a" "-f l ./a"; do
+    d=$(mktemp -d); echo data > "$d/a"; ln -s a "$d/l"; ln -s l "$d/m"; mkdir "$d/sub"; ln -s ../a "$d/sub/up"
+    out=$(cd "$d" && echo y | ours $case 2>&1); rc=$?
+    set -- $case
+    if [ "$rc" -eq 1 ] && [ "$out" = "ln: '$2' and '$3' are the same file" ] && [ "$(cat "$d/a")" = data ] && [ ! -L "$d/a" ]; then
+        PASS=$((PASS + 1)); echo "PASS ln $case keeps the data"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL ln $case keeps the data (rc=$rc $out)"
+    fi
+    rm -rf "$d"
+done
+# The data stays reachable: through another name, or in the backup.
+TREE_CONTENT=1
+run_tree "-f link to a file with two names" 'echo data > a; ln a h; ln -s h l' -f l a
+run_tree "-fb link to dest"                 'echo data > a; ln -s a l' -fb l a
+run_tree "-f link to another file"          'echo data > a; echo b > b; ln -s b l' -f l a
+run_tree "-f dangling link"                 'echo data > a; ln -s nowhere l' -f l a
+unset TREE_CONTENT
 print_summary

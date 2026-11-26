@@ -5,6 +5,7 @@ UTIL="cp"
 . "$(dirname "$0")/testlib.sh"
 help_cmp
 export TREE_CONTENT=1
+export TREE_LINKS=1    # a copy must not pass for a hard link
 SETUP='mkdir -p d/sub e; printf "one\n" > a; printf "two\n" > b; printf x > d/f; printf y > d/sub/g; ln -s a l; ln -s nowhere dang; ln -s d dl; ln a hard; mkfifo ff; : > empty; chmod 640 b; chmod 755 d; mkdir ro; printf z > ro/r; chmod 444 ro/r; chmod 555 ro; printf s > sp; truncate -s 100000 sp2; printf q >> sp2'
 
 # run_tree_t: like run_tree, but every file gets the same timestamp first so
@@ -123,6 +124,10 @@ done
 run_tree "cp backup existing numbered" "$SETUP; : > b.~1~; : > b.~3~" --backup=existing a b
 run_tree "cp backup numbered gap" "$SETUP; : > b.~1~; : > b.~9~; : > b.~x~; : > b.~09~" --backup=numbered a b
 run_tree "cp backup 99" "$SETUP; : > b.~99~" --backup=numbered a b
+for last in 99999999999999999999 18446744073709551615 99999999999999999999999; do
+    run_tree "cp backup after number $last" "$SETUP; : > 'b.~$last~'; : > b.~7~" --backup=numbered a b
+done
+run_tree "cp backup existing, huge number" "$SETUP; : > 'b.~18446744073709551615~'" -b a b
 run_tree "cp backup env" "$SETUP" -b a b
 run_tree "cp backup symlink" "$SETUP; ln -s a z" -b b z
 run_tree "cp backup dir existing" "$SETUP; mkdir z" -b -r d z
@@ -201,6 +206,9 @@ for s in never auto always bogus a n; do
     run_tree "cp --sparse=$s" "$SETUP" --sparse=$s sp2 z
     run_tree "cp --sparse=$s small" "$SETUP; printf '\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' > zeros" --sparse=$s zeros z
     run_tree "cp --sparse=$s empty" "$SETUP" --sparse=$s empty z
+    # The allocated blocks tell whether holes were kept, made or filled.
+    TREE_BLOCKS=1 run_tree "cp --sparse=$s: blocks of a file with a hole" 'truncate -s 1M holes; printf q >> holes' --sparse=$s holes z
+    TREE_BLOCKS=1 run_tree "cp --sparse=$s: blocks of a file of zeros" 'head -c 1048576 /dev/zero > zeros; printf q >> zeros' --sparse=$s zeros z
 done
 for r in auto always never bogus; do
     run_tree "cp --reflink=$r" "$SETUP" --reflink=$r a z
@@ -272,4 +280,204 @@ run_tree "cp -r symlink dest dir" "$SETUP; ln -s e z" -r d z
 run_tree "cp -r symlink dest dir/" "$SETUP; ln -s e z" -r d z/
 run_tree "cp dir symlink to dir dest" "$SETUP" a dl
 run_tree "cp onto symlink dir" "$SETUP" a dl/
+
+# A directory that cannot be read to its end must make the copy fail (strace
+# injects the read error). 3000 names need more than one read.
+for when in 1 2; do
+    d=$(mktemp -d); mkdir "$d/src"; (cd "$d/src" && seq 1 3000 | xargs touch)
+    if can_inject; then
+        (cd "$d" && strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=$when "$BIN_DIR/cp" -r src dst > out 2>&1); rc=$?
+        if [ "$rc" -eq 1 ] && [ "$(cat "$d/out")" = "cp: cannot access 'src': Input/output error" ]; then
+            PASS=$((PASS + 1)); echo "PASS cp -r reports read error $when"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL cp -r reports read error $when (rc=$rc: $(head -n 3 "$d/out"))"
+        fi
+    else
+        skip_test "cp -r reports read error $when (no strace)"
+    fi
+done
+
+# cp -lf to another file system fails and keeps the destination.
+other=$(mktemp /dev/shm/cptest.XXXXXX 2>/dev/null)
+if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$TEST_TMP")" ]; then
+    TREE_CONTENT=1 run_tree "cp -lf across devices keeps dest" "$SETUP" -lf "$other" a
+else
+    skip_test "cp -lf across devices (no second file system)"
+fi
+[ -z "$other" ] || rm -f "$other"
+
+# --reflink=always is not implemented: it must fail and change nothing. GNU
+# succeeds where the file system can clone, so only ours is checked.
+for o in "" -f --remove-destination -b --backup=numbered; do
+    d=$(mktemp -d); echo SRC > "$d/s"; echo PRECIOUS > "$d/d"
+    (cd "$d" && ours --reflink=always $o s d > "$TEST_TMP/reflink.out" 2>&1); rc=$?
+    if [ "$rc" -eq 1 ] && [ "$(cat "$d/d")" = PRECIOUS ] && [ "$(ls "$d" | tr '\n' ' ')" = "d s " ] &&
+        [ "$(cat "$TEST_TMP/reflink.out")" = "cp: failed to clone 'd' from 's': Operation not supported" ]; then
+        PASS=$((PASS + 1)); echo "PASS cp --reflink=always $o keeps an existing destination"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL cp --reflink=always $o keeps an existing destination (rc=$rc, $(cat "$TEST_TMP/reflink.out"))"
+    fi
+done
+run_tree "cp --reflink=always -n existing" "$SETUP" -n --reflink=always a b
+run_tree "cp --reflink=always --attributes-only" "$SETUP" --attributes-only --reflink=always a b
+# --preserve=mode takes the POSIX ACLs along. Without them the group bits of a
+# file with an ACL (the mask) would go to its owning group.
+mkdir -p "$TEST_TMP/aclprobe"; : > "$TEST_TMP/aclprobe/f"
+if setfacl -m u:nobody:rw "$TEST_TMP/aclprobe/f" 2>/dev/null; then
+    ACL='echo s > secret; chmod 600 secret; setfacl -m u:nobody:rw secret; echo p > plain; chmod 640 plain
+         mkdir tree; setfacl -d -m u:nobody:rx tree; setfacl -m u:daemon:rx tree; echo f > tree/f
+         mkdir bare; echo b > bare/f; mkdir dflt; setfacl -d -m u:nobody:rwx dflt
+         echo q > old; chmod 600 old; setfacl -m u:daemon:rwx old; mkfifo ff; setfacl -m u:nobody:rw ff
+         mkdir -p par/in out; setfacl -m u:nobody:rx par/in; echo x > par/in/f'
+    acl_cmp() {
+        description="$1"; shift
+        base="$TEST_TMP/acl"; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
+        for x in g o; do (cd "$base/$x" && eval "$ACL"); done
+        (cd "$base/g" && LC_ALL=C gnu "$@" > ../g.out 2>&1; echo $? > ../g.rc)
+        (cd "$base/o" && LC_ALL=C ours "$@" > ../o.out 2>&1; echo $? > ../o.rc)
+        for x in g o; do (cd "$base/$x" && find . | sort | xargs -d '\n' getfacl -n -P) > "$base/$x.acl" 2>&1; done
+        if cmp -s "$base/g.out" "$base/o.out" && cmp -s "$base/g.rc" "$base/o.rc" && cmp -s "$base/g.acl" "$base/o.acl"; then
+            PASS=$((PASS + 1)); echo "PASS $description"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL $description"; diff "$base/g.acl" "$base/o.acl" | head -12
+        fi
+    }
+    for o in -p -a --preserve=mode -dR "-R --preserve=mode" --attributes-only "-p --attributes-only" ""; do
+        acl_cmp "acl: cp $o file"                 $o -r secret copy
+        acl_cmp "acl: cp $o over a file with one" $o -r plain old
+        acl_cmp "acl: cp $o tree"                 $o -r tree copy
+        acl_cmp "acl: cp $o into a default ACL"   $o -r plain dflt/x
+        acl_cmp "acl: cp $o onto a default ACL"   $o -r bare/. dflt/
+    done
+    acl_cmp "acl: cp -a fifo" -a ff copy
+    acl_cmp "acl: cp -p --parents" -rp --parents par/in/f out
+    # A destination that cannot store ACLs: said, and no wider than before.
+    if strace -o /dev/null -e trace=fsetxattr -e inject=fsetxattr:error=EOPNOTSUPP true 2>/dev/null; then
+        base="$TEST_TMP/aclfail"; mkdir -p "$base"
+        (cd "$base" && echo s > secret && chmod 600 secret && setfacl -m u:nobody:rw secret &&
+            strace -f -o trace -e trace=fsetxattr -e inject=fsetxattr:error=EOPNOTSUPP "$BIN_DIR/cp" -p secret out 2> err)
+        rc=$?
+        if [ "$rc" = 1 ] && [ "$(stat -c %a "$base/out")" = 600 ] && [ "$(cat "$base/err")" = "cp: preserving permissions for 'out': Operation not supported" ]; then
+            PASS=$((PASS + 1)); echo "PASS acl: a lost ACL gives the group nothing it did not have"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL acl: a lost ACL (rc=$rc mode $(stat -c %a "$base/out"))"; cat "$base/err"
+        fi
+    else
+        skip_test "acl: lost ACL (no usable strace)"
+    fi
+else
+    skip_test "ACL preservation (needs setfacl and a file system with ACLs)"
+fi
+# A directory of the source replaced by a link while cp runs is not followed.
+# strace holds cp before the call that matches PATTERN while the test swaps
+# tree/a/sub for a link to a directory outside the tree.
+swap_race() { # DESC SYSCALL PATTERN ARGS...
+    description="$1"; call="$2"; pattern="$3"; shift 3
+    base="$TEST_TMP/swap"
+    swap_setup() {
+        chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/tree/a/sub" "$base/victim"
+        echo mine > "$base/tree/a/sub/data"; echo VICTIM > "$base/victim/data"; echo VICTIM > "$base/victim/other"
+    }
+    swap_setup
+    (cd "$base" && strace -o trace -e trace="$call" "$BIN_DIR/cp" "$@" > /dev/null 2>&1)
+    n=$(grep "^$call(" "$base/trace" | grep -n -e "$pattern" | head -n 1 | cut -d: -f1)
+    swap_setup
+    (cd "$base" && exec timeout 30 strace -o trace -e trace="$call" -e inject="$call":delay_enter=3000000:when="${n:-1}" "$BIN_DIR/cp" "$@" > out 2>&1) & cp_pid=$!
+    tries=0
+    while [ "$(cat "$base/trace" 2>/dev/null | grep -c "^$call(")" -lt $((${n:-1} - 1)) ] && [ $tries -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    sleep 1
+    mv "$base/tree/a/sub" "$base/moved"; ln -s "$base/victim" "$base/tree/a/sub"
+    wait $cp_pid
+    if [ -n "$n" ] && ! grep -r -q VICTIM "$base/copy" 2>/dev/null && [ "$(cat "$base/victim/data")" = VICTIM ]; then
+        PASS=$((PASS + 1)); echo "PASS $description"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $description (call $n)"; cat "$base/out"; (cd "$base" && find copy | head)
+    fi
+}
+if can_inject; then
+    swap_race "cp -r: directory swapped before a file is examined" statx '[/"]data", AT_' -r tree copy
+    swap_race "cp -r: directory swapped before it is listed" openat '[/"]sub", .*O_DIRECTORY' -r tree copy
+    swap_race "cp -r: directory swapped before a file is read" openat '[/"]data", O_RDONLY' -r tree copy
+    swap_race "cp -a: directory swapped before a file is read" openat '[/"]data", O_RDONLY' -a tree copy
+    # cp -al makes hard links to the source files.
+    swap_race "cp -al: directory swapped before a file is linked" linkat '[/"]data", ' -al tree copy
+else
+    skip_test "cp source swap races (no usable strace)"
+fi
+# The same for the destination: a directory of the copy replaced by a link to
+# "victim" while cp runs must leave victim as it was. strace holds cp before
+# the call that matches PATTERN while the test swaps SWAP.
+dest_race() { # DESC SYSCALL PATTERN SWAP ARGS...
+    description="$1"; call="$2"; pattern="$3"; swap="$4"; shift 4
+    base="$TEST_TMP/destswap"
+    dest_setup() {
+        chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/tree/a/sub" "$base/victim" "$base/out"
+        echo mine > "$base/tree/a/sub/data"; echo VICTIM > "$base/victim/other"
+        chmod 777 "$base/tree/a/sub"; chmod 700 "$base/victim"; chmod 600 "$base/victim/other"
+        touch -d '2001-01-01 00:00:00' "$base/victim/other" "$base/victim"
+    }
+    victim_state() { find "$base/victim" -printf '%P %m %T@ %s\n' | sort; cat "$base/victim/other"; }
+    dest_setup
+    (cd "$base" && strace -o trace -e trace="$call" "$BIN_DIR/cp" "$@" > /dev/null 2>&1)
+    n=$(grep "^$call(" "$base/trace" | grep -n -e "$pattern" | head -n 1 | cut -d: -f1)
+    dest_setup
+    before=$(victim_state)
+    (cd "$base" && exec timeout 30 strace -o trace -e trace="$call" -e inject="$call":delay_enter=3000000:when="${n:-1}" "$BIN_DIR/cp" "$@" > msgs 2>&1) & cp_pid=$!
+    tries=0
+    while [ "$(cat "$base/trace" 2>/dev/null | grep -c "^$call(")" -lt $((${n:-1} - 1)) ] && [ $tries -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    sleep 1
+    swapped=no
+    mv "$base/$swap" "$base/moved" && ln -s "$base/victim" "$base/$swap" && swapped=yes
+    wait $cp_pid
+    if [ -n "$n" ] && [ "$swapped" = yes ] && [ "$(victim_state)" = "$before" ]; then
+        PASS=$((PASS + 1)); echo "PASS $description"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $description (call $n, swapped $swapped)"; cat "$base/msgs"; victim_state
+    fi
+}
+if can_inject; then
+    dest_race "cp -r: destination directory swapped before a file is created" openat '[/"]data", O_WRONLY' copy/a/sub -r tree copy
+    dest_race "cp -a: destination directory swapped before its times and mode are set" utimensat '[/"]sub", \[' copy/a/sub -a tree copy
+    dest_race "cp --parents: destination directory swapped before a file is created" openat '[/"]data", O_WRONLY' out/tree/a/sub -a --parents tree/a/sub/data out
+else
+    skip_test "cp destination swap races (no usable strace)"
+fi
+# A copy deeper than PATH_MAX can be written.
+d="$TEST_TMP/deepdst"; mkdir -p "$d"
+name=$(printf 'n%.0s' $(seq 200))
+long=$(i=0; while [ $i -lt 19 ]; do printf '%s/' "$name"; i=$((i + 1)); done)in
+( cd "$d" && mkdir -p "src/$name/$name" && echo deep > "src/$name/$name/file" && ln -s file "src/$name/$name/link" && mkfifo "src/$name/$name/pipe" &&
+  i=0; while [ $i -lt 19 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done )
+if (cd "$d" && ours -a src "$long" > out 2>&1) &&
+    (cd "$d" && i=0; while [ $i -lt 19 ]; do cd -P "$name" || exit 1; i=$((i + 1)); done
+     cd -P "in/$name/$name" && [ "$(cat file)" = deep ] && [ "$(readlink link)" = file ] && [ -p pipe ] &&
+     [ "$(stat -c %y .)" = "$(stat -c %y "$d/src/$name/$name")" ]); then
+    PASS=$((PASS + 1)); echo "PASS cp -a writes destinations past PATH_MAX"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL cp -a writes destinations past PATH_MAX"; head -c 300 "$d/out"; echo
+fi
+/usr/bin/rm -rf "$d"
+# Destinations that go through symbolic links do so as in GNU.
+LINKED='mkdir -p src/dir out real; echo new > src/f; echo x > src/dir/inner; echo old > out/target; ln -s ../out/target dst_f; mkdir dst; ln -s ../out/target dst/f; ln -s ../out dst/dir; ln -s real lk; chmod 750 src'
+run_tree "cp -r onto a file link in the destination" "$LINKED" -r src/. dst
+run_tree "cp -a onto a file link in the destination" "$LINKED" -a src/. dst
+run_tree "cp -rp -T a directory link with a slash" "$LINKED" -rpT src lk/
+run_tree "cp -r --copy-contents --keep-directory-symlink" "$LINKED; rm dst/f" -r --copy-contents --keep-directory-symlink --preserve=mode src/. dst
+run_tree "cp -rp --parents through a directory link" "$LINKED; mkdir -p out/src; ln -s ../out/src real/src" -rp --parents src/dir real
+run_tree "cp -rb into an existing tree" "$LINKED; rm dst/dir; mkdir -p dst/dir; echo y > dst/dir/inner" -rbv src/. dst
+
+# A source deeper than PATH_MAX is copied when the copy's names are shorter.
+d="$TEST_TMP/deepsrc"; mkdir -p "$d"
+name=$(printf 'n%.0s' $(seq 200))
+( cd "$d" && i=0; while [ $i -lt 19 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done
+  mkdir -p "in/$name/$name" && cd -P "in/$name/$name" && mkdir sub && echo deep > sub/file && ln -s file sub/link )
+prefix=$(i=0; while [ $i -lt 19 ]; do printf '%s/' "$name"; i=$((i + 1)); done)
+# (the operand is just short enough; the files below it are not)
+long="$prefix"in
+if (cd "$d" && ours -r "$long" got > out 2>&1) && [ "$(cat "$d/got/$name/$name/sub/file")" = deep ] && [ "$(readlink "$d/got/$name/$name/sub/link")" = file ]; then
+    PASS=$((PASS + 1)); echo "PASS cp -r reads sources past PATH_MAX"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL cp -r reads sources past PATH_MAX"; head -c 300 "$d/out"; echo
+fi
+/usr/bin/rm -rf "$d"
 cd /; print_summary

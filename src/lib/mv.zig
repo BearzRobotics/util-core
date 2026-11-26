@@ -16,6 +16,7 @@ const copy = @import("../copy.zig");
 const quote = @import("../quote.zig");
 const errtext = @import("../errtext.zig");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 const E = std.os.linux.E;
 
 pub const Env = common.Env;
@@ -93,54 +94,51 @@ fn say(c: *copy.Copier, comptime fmt: []const u8, args: anytype) void {
     c.emit(.{ .out = std.fmt.bufPrint(&b, fmt, args) catch "" });
 }
 
-/// rm -r on the source after an inter-device copy.
-fn removeTree(c: *copy.Copier, path: []const u8, verbose: bool) bool {
-    const env = c.env;
+/// rm -r on the source after an inter-device copy. The walk is
+/// descriptor-relative (dirat.zig): a symbolic link put where a directory was
+/// is removed or refused, never followed. `name` is the file's name in the
+/// open directory `parent` (the operand itself when null); `path` is for
+/// messages.
+fn removeTree(c: *copy.Copier, parent: ?*dirat.Level, name: []const u8, path: []const u8, verbose: bool) bool {
     var e: E = .SUCCESS;
-    const st = sys.fileStat(path, false, &e) orelse {
-        c.errPrint("cannot remove {f}: {s}", .{ quote.quoteA(path), sys.errnoText(e) });
-        return false;
-    };
-    var ok = true;
+    const st = sys.fileStatAt(dirat.fdOf(parent), name, false, &e) orelse return cannotRemove(c, path, e);
     if (st.isDir()) {
-        var dir = Io.Dir.cwd().openDir(env.io, path, .{ .iterate = true }) catch |err| {
-            c.errPrint("cannot remove {f}: {s}", .{ quote.quoteA(path), errtext.errText(err) });
-            return false;
-        };
-        var names: std.ArrayList([]u8) = .empty;
-        defer {
-            for (names.items) |n| env.gpa.free(n);
-            names.deinit(env.gpa);
-        }
-        var it = dir.iterate();
-        while (it.next(env.io) catch null) |entry| {
-            const dup = env.gpa.dupe(u8, entry.name) catch break;
-            names.append(env.gpa, dup) catch {
-                env.gpa.free(dup);
-                break;
-            };
-        }
-        dir.close(env.io);
-        for (names.items) |n| {
-            const child = copy.joinName(env.gpa, path, n) catch continue;
-            defer env.gpa.free(child);
-            if (!removeTree(c, child, verbose)) ok = false;
-        }
-        if (ok) {
-            if (sys.unlinkPath(path, true)) |ue| {
-                c.errPrint("cannot remove {f}: {s}", .{ quote.quoteA(path), sys.errnoText(ue) });
-                return false;
-            }
-            if (verbose) say(c, "removed directory {f}\n", .{quote.quoteA(path)});
-        }
-        return ok;
+        if (!removeContents(c, parent, name, path, st, verbose)) return false;
+        if (sys.unlinkAt(dirat.fdOf(parent), name, true)) |ue| return cannotRemove(c, path, ue);
+        if (verbose) say(c, "removed directory {f}\n", .{quote.quoteA(path)});
+        return true;
     }
-    if (sys.unlinkPath(path, false)) |ue| {
-        c.errPrint("cannot remove {f}: {s}", .{ quote.quoteA(path), sys.errnoText(ue) });
-        return false;
-    }
+    if (sys.unlinkAt(dirat.fdOf(parent), name, false)) |ue| return cannotRemove(c, path, ue);
     if (verbose) say(c, "removed {f}\n", .{quote.quoteA(path)});
     return true;
+}
+
+fn cannotRemove(c: *copy.Copier, path: []const u8, e: E) bool {
+    c.errPrint("cannot remove {f}: {s}", .{ quote.quoteA(path), sys.errnoText(e) });
+    return false;
+}
+
+/// Remove everything in the directory; false when something is left.
+fn removeContents(c: *copy.Copier, parent: ?*dirat.Level, name: []const u8, path: []const u8, seen: sys.FileStat, verbose: bool) bool {
+    const env = c.env;
+    var level: dirat.Level = undefined;
+    if (dirat.enter(&level, parent, name, .{ .expect = seen })) |e| return cannotRemove(c, path, e);
+    var ok = true;
+    var e: E = .SUCCESS;
+    if (sys.readDirNamesFd(env.gpa, level.fd, &e)) |names| {
+        defer sys.freeDirEntries(env.gpa, names);
+        for (names) |n| {
+            if (!level.open) break;
+            const child = copy.joinName(env.gpa, path, n.name) catch {
+                ok = cannotRemove(c, path, .NOMEM);
+                break;
+            };
+            defer env.gpa.free(child);
+            if (!removeTree(c, &level, n.name, child, verbose)) ok = false;
+        }
+    } else ok = cannotRemove(c, path, e);
+    if (dirat.leave(&level)) |le| return cannotRemove(c, path, le);
+    return ok;
 }
 
 fn doMove(c: *copy.Copier, source: []const u8, dest: []const u8) bool {
@@ -155,7 +153,7 @@ fn doMove(c: *copy.Copier, source: []const u8, dest: []const u8) bool {
             // renamed, or the user declined
         } else remove = true;
         if (remove) {
-            if (!removeTree(c, source, c.x.verbose)) ok = false;
+            if (!removeTree(c, null, source, source, c.x.verbose)) ok = false;
         }
     }
     return ok;

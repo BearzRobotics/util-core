@@ -24,6 +24,16 @@ trap 'chmod -R u+rwx "$W" 2>/dev/null; chmod -R u+rwx "$TEST_TMP" 2>/dev/null; r
 ln -s dir1 d2/loopback 2>/dev/null
 
 td() { d="$1"; shift; CMP_STDIN=/dev/null run_cmp "$d" "$@"; }
+# tree_o DESC ARG...: with -o, each writes a file of its own; the two files,
+# what is printed besides, and the status must agree.
+tree_o() {
+    d="$1"; shift
+    rm -f "$W/o.gnu" "$W/o.ours"
+    exp=$(LC_ALL="$CMP_LOCALE" gnu -o "$W/o.gnu" "$@" 2>&1; echo "status $?")
+    act=$(LC_ALL="$CMP_LOCALE" ours -o "$W/o.ours" "$@" 2>&1; echo "status $?")
+    if [ "$exp" = "$act" ] && [ -s "$W/o.gnu" ] && cmp -s "$W/o.gnu" "$W/o.ours"; then PASS=$((PASS + 1)); printf "PASS %s\n" "$d"
+    else FAIL=$((FAIL + 1)); printf "FAIL %s (%s / %s)\n" "$d" "$exp" "$act"; diff "$W/o.gnu" "$W/o.ours" | head -6; fi
+}
 
 for loc in C C.UTF-8; do
   CMP_LOCALE=$loc
@@ -53,7 +63,7 @@ for loc in C C.UTF-8; do
   td "$loc deep -L 3" -L 3 deep
   td "$loc deep -f" -f deep
   td "$loc deep -pugsD" -pugsD deep
-  td "$loc -o out" -o out.txt dir1
+  tree_o "$loc -o out" dir1
   td "$loc -o out missing dir" -o /nonexistent/out dir1
   td "$loc -- args" -- dir1
   td "$loc --version" --version
@@ -89,4 +99,41 @@ help_cmp_tree() {
     else FAIL=$((FAIL + 1)); printf "FAIL --help text\n"; fi
 }
 help_cmp_tree
+# Any time the file system can hold: no crash, the seconds are shown where there
+# is no calendar form. (tree 2.3.1 crashes, so there is nothing to compare with.
+# Skipped where the file system clamps such times.)
+mkdir "$W/times"
+for secs in -9223372036854775808 -100000000000000000 100000000000000000 9223372036854775807; do
+    : > "$W/times/f"; touch -m -d "@$secs" "$W/times/f"
+    if [ "$(stat -c %Y "$W/times/f")" != "$secs" ]; then SKIP=$((SKIP + 1)); echo "SKIP mtime $secs not stored here"; continue; fi
+    for o in "-D" "-J -D" "-X -D" "-D --timefmt %Y"; do
+        out=$(cd "$W" && ours $o times 2>&1); rc=$?
+        if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -e "\\[$secs\\]" -e "\"$secs\"" -e ">$secs<"; then PASS=$((PASS + 1)); echo "PASS mtime $secs: tree $o"
+        else FAIL=$((FAIL + 1)); echo "FAIL mtime $secs: tree $o (rc=$rc)"; printf '%s\n' "$out" | head -8; fi
+    done
+done
+# Link loops end in every output mode, not only in the text listing. (With a
+# timeout: without loop detection these never finish.)
+mkdir -p "$W/loops/two/d" "$W/loops/up/a/b/c" "$W/loops/cross/one" "$W/loops/cross/other"
+ln -s . "$W/loops/two/d/s1"; ln -s . "$W/loops/two/d/s2"
+ln -s ../.. "$W/loops/up/a/b/c/back"; ln -s a "$W/loops/up/q"; echo z > "$W/loops/up/a/b/c/z"
+ln -s ../other "$W/loops/cross/one/over"; ln -s ../one "$W/loops/cross/other/back"; echo y > "$W/loops/cross/other/y"
+cd "$W/loops"
+ours() { timeout 20 "$BIN_DIR/$UTIL" "$@"; }
+for o in "-l" "-J -l" "-X -l" "--du -l" "--du -l -h" "-J --du -l" "-X --du -l" "-J -l -s" "-X -l -s" "-J --du -l -s" "-J -l --noreport" "-J -l -d" "-J -l -a"; do
+    for t in two up cross; do
+        td "loop $o $t" $o $t
+    done
+done
+td "loop -J -l two roots" -J -l two cross
+ours() { "$BIN_DIR/$UTIL" "$@"; }
+# Characters that are not printable are escaped in a UTF-8 locale too, the C1
+# controls (U+009B starts a control sequence) among them.
+mkdir -p "$W/c1/d"; cd "$W/c1"
+: > "d/$(printf 'a\302\2332Jb')"; : > "d/$(printf 'b\302\200\302\205\302\237')"; : > "d/$(printf 'c\315\270\342\200\250\357\277\276')"
+: > "d/$(printf 'd\303\251\302\240\342\200\213\360\237\230\200\356\200\200')"; ln -s "$(printf 't\302\233q')" d/link
+for o in "" "-q" "-N" "-Q" "-f" "-F" "-p" "-qQ"; do
+    CMP_LOCALE=C.UTF-8 td "unprintable characters $o" $o --noreport d
+    CMP_LOCALE=C td "unprintable characters, C locale $o" $o --noreport d
+done
 cd /; print_summary

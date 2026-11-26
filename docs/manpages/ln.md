@@ -23,7 +23,7 @@ Make links between files.
 : Prompt (reads y/n from standard input).
 
 -b, --backup[=CONTROL]
-: Back up replaced files (`none`, `simple`, `numbered`, `existing` and their aliases); `-S SUFFIX` and `SIMPLE_BACKUP_SUFFIX` set the simple suffix.
+: Back up replaced files (`none`, `simple`, `numbered`, `existing` and their aliases); `-S SUFFIX` (which also turns backups on) and `SIMPLE_BACKUP_SUFFIX` set the simple suffix; one that is empty or contains `/` means `~`. Backups are named as by cp, mv and install: `existing` is numbered when any numbered backup exists, and `numbered` takes the highest number plus one.
 
 -L, -P
 : Hard links follow / do not follow symbolic-link sources.
@@ -56,7 +56,7 @@ Make links between files.
 
 # ENVIRONMENT
 
-none (locale variables are ignored; behaviour is that of the C locale)
+`VERSION_CONTROL` chooses the backup type when `--backup` gives none; `SIMPLE_BACKUP_SUFFIX` sets the simple backup suffix. Locale variables are ignored; behaviour is that of the C locale.
 
 # STANDARD STREAMS
 
@@ -68,9 +68,13 @@ Reference: GNU coreutils 9.7 (`/usr/bin/ln --version` on the development machine
 
 See docs/compatibility/ln.md for details.
 
+# DIFFERENCES FROM GNU
+
+- With -i and no backup, a destination that holds the source's data is refused ("'SRC' and 'DEST' are the same file", status 1), as it is with -f. GNU 9.7 asks and then destroys the data.
+- For a hard link (without -L and without a backup), a TARGET that is a symbolic link leading to LINK_NAME is refused the same way when LINK_NAME is the file's only name (`ln -f link file`). GNU 9.7 replaces the file by a link that points at itself, losing the data.
+
 # LIMITATIONS
 
-- Same-file detection compares inode numbers only (`std.Io.File.Stat` has no device number), so files on different devices with equal inode numbers would be taken for one file.
 - `--help` is shorter than GNU's.
 
 # SEE ALSO

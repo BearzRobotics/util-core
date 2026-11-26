@@ -233,14 +233,11 @@ fn report(context: ?*anyopaque, ev: csplit.Event) void {
     }
 }
 
+/// A regexp offset: digits with at most one sign.
 fn parseSigned(text: []const u8) ?i64 {
-    var t = text;
-    var neg = false;
-    if (t.len > 0 and (t[0] == '+' or t[0] == '-')) {
-        neg = t[0] == '-';
-        t = t[1..];
-    }
-    if (t.len == 0) return null;
-    const v = std.fmt.parseInt(i64, t, 10) catch return null;
-    return if (neg) -v else v;
+    const signed = text.len > 0 and (text[0] == '+' or text[0] == '-');
+    const digits = text[@intFromBool(signed)..];
+    if (digits.len == 0) return null;
+    for (digits) |c| if (!std.ascii.isDigit(c)) return null;
+    return std.fmt.parseInt(i64, text, 10) catch null;
 }

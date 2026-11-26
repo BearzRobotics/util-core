@@ -5,6 +5,13 @@
 //! Deviations: --preserve-root=all is treated as plain --preserve-root (the
 //! caller maps both to `preserve_root`).
 //!
+//! The walk is descriptor-relative (dirat.zig): each directory is opened in
+//! its parent without following a symbolic link, checked to be the one that
+//! was examined, and everything in it is examined and removed through that
+//! descriptor. Renaming things in the tree while rm runs cannot send it
+//! outside, and the depth is not limited by PATH_MAX. Path strings are only
+//! for prompts and messages.
+//!
 //! The library never prompts or prints: confirmation goes through a
 //! caller-supplied `Confirm` callback, and everything that is reported
 //! (failures, refusals, the -v "removed" lines) through the `Observer`.
@@ -13,6 +20,7 @@ const std = @import("std");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 
 pub const Env = common.Env;
 
@@ -37,11 +45,16 @@ pub const Event = union(enum) {
     /// Removed `path` (the -v message); `dir` is true for a directory.
     removed: struct { path: []const u8, dir: bool },
     /// Could not remove `path`.
-    failed: struct { path: []const u8, err: anyerror },
+    failed: struct { path: []const u8, errno: sys.E },
+    /// The directory `path` could not be listed; nothing in it was touched.
+    unreadable: struct { path: []const u8, errno: sys.E },
     /// "." or ".." given as an operand with -r.
     refuse_dot: []const u8,
-    /// An operand that is (or resolves to) "/" with preserve_root.
+    /// An operand that is "/" (the same file, however it is named) with
+    /// preserve_root.
     refuse_root: struct { path: []const u8, literal: bool },
+    /// preserve_root could not examine "/", so nothing is removed.
+    unknown_root: sys.E,
     /// A directory on another device with --one-file-system.
     other_device: []const u8,
 };
@@ -75,6 +88,8 @@ const State = struct {
     ok: bool = true,
     root_dev: u64 = 0, // device of the current operand (--one-file-system)
     nerr: usize = 0, // hard failures so far (declined prompts do not count)
+    /// What "/" is, with recursive and preserve_root.
+    root: ?sys.FileStat = null,
 
     fn fail(st: *State) void {
         st.ok = false;
@@ -85,6 +100,13 @@ const State = struct {
 /// Remove each operand. Returns false when anything failed.
 pub fn run(env: Env, options: Options, paths: []const []const u8, observer: Observer, confirm: Confirm) bool {
     var st: State = .{ .env = env, .opts = options, .observer = observer, .confirm = confirm };
+    if (options.recursive and options.preserve_root) {
+        var e: sys.E = .SUCCESS;
+        st.root = sys.fileStat("/", false, &e) orelse {
+            observer.emit(.{ .unknown_root = e });
+            return false;
+        };
+    }
     for (paths) |p| removeArg(&st, p);
     return st.ok;
 }
@@ -99,130 +121,157 @@ fn removeArg(st: *State, path: []const u8) void {
         st.fail();
         return;
     }
-    if (cfg.preserve_root and cfg.recursive and isRoot(st.env, path)) {
-        st.observer.emit(.{ .refuse_root = .{ .path = path, .literal = std.mem.eql(u8, path, "/") } });
-        st.fail();
-        return;
-    }
-    _ = remove(st, path, true);
+    _ = remove(st, null, path, path, true);
 }
 
-fn isRoot(env: Env, p: []const u8) bool {
-    if (p.len > 0 and std.mem.indexOfNone(u8, p, "/") == null) return true;
-    var buf: [4096]u8 = undefined;
-    const n = Io.Dir.cwd().realPathFile(env.io, p, &buf) catch return false;
-    return std.mem.eql(u8, buf[0..n], "/");
+/// Whether `a` and `b` are the same file: so is "/" under any name, such as
+/// a bind mount of it or a symbolic link to it followed by a slash.
+fn sameFile(a: sys.FileStat, b: sys.FileStat) bool {
+    return a.ino == b.ino and dirat.devOf(a) == dirat.devOf(b);
 }
 
-/// Remove `path` (recursively when asked). Returns true when it is gone.
-fn remove(st: *State, path: []const u8, is_arg: bool) bool {
-    const env = st.env;
+/// How `remove` reaches one file: `name` in the open directory `parent` (an
+/// operand is named by its path, from the current directory). `path` is what
+/// prompts and messages call it.
+const Target = struct {
+    parent: ?*dirat.Level,
+    name: []const u8,
+    path: []const u8,
+};
+
+fn failed(st: *State, path: []const u8, errno: sys.E) bool {
+    st.observer.emit(.{ .failed = .{ .path = path, .errno = errno } });
+    st.fail();
+    return false;
+}
+
+/// Remove one file (recursively when asked). Returns true when it is gone.
+fn remove(st: *State, parent: ?*dirat.Level, name: []const u8, path: []const u8, is_arg: bool) bool {
     const cfg = st.opts;
-    const cwd = Io.Dir.cwd();
-    const lst = cwd.statFile(env.io, path, .{ .follow_symlinks = false }) catch |e| {
-        if (cfg.force and e == error.FileNotFound) return true;
-        st.observer.emit(.{ .failed = .{ .path = path, .err = e } });
-        st.fail();
-        return false;
+    const file: Target = .{ .parent = parent, .name = name, .path = path };
+    var le: sys.E = .SUCCESS;
+    const lst = sys.fileStatAt(dirat.fdOf(parent), name, false, &le) orelse {
+        if (cfg.force and le == .NOENT) return true;
+        return failed(st, path, le);
     };
 
-    if (lst.kind == .directory) {
+    if (lst.isDir()) {
         if (!cfg.recursive) {
-            if (cfg.dirs) return removeEmptyDir(st, path, lst);
-            st.observer.emit(.{ .failed = .{ .path = path, .err = error.IsDir } });
-            st.fail();
-            return false;
+            if (cfg.dirs) return removeEmptyDir(st, file, lst);
+            return failed(st, path, .ISDIR);
         }
-        if (cfg.one_file_system) {
-            var de: std.os.linux.E = .SUCCESS;
-            if (sys.fileStat(path, false, &de)) |fs| {
-                const dev = (@as(u64, fs.dev_major) << 32) | fs.dev_minor;
-                if (is_arg) {
-                    st.root_dev = dev;
-                } else if (dev != st.root_dev) {
-                    st.observer.emit(.{ .other_device = path });
-                    st.fail();
-                    return false;
-                }
-            }
-        }
-        if (cfg.interactive == .always) {
-            if (!st.confirm.ask(.{ .path = path, .kind = lst.kind, .size = lst.size, .action = .descend })) return false;
-        }
-        var dir = cwd.openDir(env.io, path, .{ .iterate = true }) catch |e| {
-            st.observer.emit(.{ .failed = .{ .path = path, .err = e } });
+        // Decided on the examination the walk is then bound to (`lst`).
+        if (is_arg) if (st.root) |root| if (sameFile(lst, root)) {
+            st.observer.emit(.{ .refuse_root = .{ .path = path, .literal = std.mem.eql(u8, path, "/") } });
             st.fail();
             return false;
         };
-        var names: std.ArrayList([]u8) = .empty;
-        defer {
-            for (names.items) |n| env.gpa.free(n);
-            names.deinit(env.gpa);
+        if (cfg.one_file_system) {
+            const dev = dirat.devOf(lst);
+            if (is_arg) {
+                st.root_dev = dev;
+            } else if (dev != st.root_dev) {
+                st.observer.emit(.{ .other_device = path });
+                st.fail();
+                return false;
+            }
         }
-        var it = dir.iterate();
-        while (it.next(env.io) catch null) |entry| {
-            const dup = env.gpa.dupe(u8, entry.name) catch break;
-            names.append(env.gpa, dup) catch {
-                env.gpa.free(dup);
-                break;
-            };
+        if (cfg.interactive == .always) {
+            if (!st.confirm.ask(.{ .path = path, .kind = .directory, .size = lst.size, .action = .descend })) return false;
         }
-        dir.close(env.io);
-        var kept = false; // a child failed or was declined, so the directory cannot be empty
-        for (names.items) |n| {
-            const child = if (std.mem.endsWith(u8, path, "/"))
-                std.fmt.allocPrint(env.gpa, "{s}{s}", .{ path, n }) catch return false
-            else
-                std.fmt.allocPrint(env.gpa, "{s}/{s}", .{ path, n }) catch return false;
-            defer env.gpa.free(child);
-            if (!remove(st, child, false)) kept = true;
-        }
-        if (kept) return false; // GNU leaves the directory without asking again
-        return removeEmptyDir(st, path, lst);
+        if (!removeContents(st, file, lst)) return false; // GNU leaves the directory without asking again
+        return removeEmptyDir(st, file, lst);
     }
 
     // Anything that is not a directory.
+    const kind = kindOf(lst.mode);
     switch (cfg.interactive) {
         .always => {
-            const wp = lst.kind != .sym_link and !writable(env, path);
-            if (!st.confirm.ask(.{ .path = path, .kind = lst.kind, .size = lst.size, .action = .remove, .write_protected = wp })) return false;
+            const wp = kind != .sym_link and !writable(file);
+            if (!st.confirm.ask(.{ .path = path, .kind = kind, .size = lst.size, .action = .remove, .write_protected = wp })) return false;
         },
-        .default => if (cfg.stdin_tty and lst.kind != .sym_link and !writable(env, path)) {
-            if (!st.confirm.ask(.{ .path = path, .kind = lst.kind, .size = lst.size, .action = .remove, .write_protected = true })) return false;
+        .default => if (cfg.stdin_tty and kind != .sym_link and !writable(file)) {
+            if (!st.confirm.ask(.{ .path = path, .kind = kind, .size = lst.size, .action = .remove, .write_protected = true })) return false;
         },
         else => {},
     }
-    cwd.deleteFile(env.io, path) catch |e| {
-        st.observer.emit(.{ .failed = .{ .path = path, .err = e } });
-        st.fail();
-        return false;
-    };
+    if (sys.unlinkAt(dirat.fdOf(parent), name, false)) |e| return failed(st, path, e);
     if (cfg.verbose) st.observer.emit(.{ .removed = .{ .path = path, .dir = false } });
     return true;
 }
 
-fn writable(env: Env, path: []const u8) bool {
-    Io.Dir.cwd().access(env.io, path, .{ .write = true }) catch return false;
-    return true;
-}
-
-fn removeEmptyDir(st: *State, path: []const u8, lst: Io.File.Stat) bool {
+/// Remove everything in the directory `dir`. False when something is left (a
+/// failure or a declined prompt), so that the directory cannot be removed.
+/// On return `dir.parent` is open again, or a failure has been reported.
+fn removeContents(st: *State, dir: Target, seen: sys.FileStat) bool {
     const env = st.env;
-    const cfg = st.opts;
-    if (cfg.interactive == .always) {
-        const wp = lst.kind != .sym_link and !writable(env, path);
-        if (!st.confirm.ask(.{ .path = path, .kind = lst.kind, .size = lst.size, .action = .remove, .write_protected = wp })) return false;
-    } else if (cfg.interactive == .default and cfg.stdin_tty and !writable(env, path)) {
-        if (!st.confirm.ask(.{ .path = path, .kind = .directory, .size = lst.size, .action = .remove, .write_protected = true })) return false;
-    }
-    Io.Dir.cwd().deleteDir(env.io, path) catch |e| {
-        // rmdir("/") says EBUSY; GNU's message is the one for a non-empty directory.
-        // Likewise "." (EINVAL) is reported as a non-empty directory.
-        const busy_root = (e == error.FileBusy and isRoot(env, path)) or (e == error.Unexpected and std.mem.endsWith(u8, std.mem.trimEnd(u8, path, "/"), "."));
-        st.observer.emit(.{ .failed = .{ .path = path, .err = if (busy_root) error.DirNotEmpty else e } });
+    var level: dirat.Level = undefined;
+    if (dirat.enter(&level, dir.parent, dir.name, .{ .expect = seen, .same_device = st.opts.one_file_system })) |e| {
+        st.observer.emit(.{ .unreadable = .{ .path = dir.path, .errno = e } });
         st.fail();
         return false;
+    }
+    var kept = false;
+    var de: sys.E = .SUCCESS;
+    if (sys.readDirNamesFd(env.gpa, level.fd, &de)) |names| {
+        defer sys.freeDirEntries(env.gpa, names);
+        for (names) |n| {
+            // A level that could not be reopened cannot be worked in further.
+            if (!level.open) break;
+            const separator = if (std.mem.endsWith(u8, dir.path, "/")) "" else "/";
+            const child = std.fmt.allocPrint(env.gpa, "{s}{s}{s}", .{ dir.path, separator, n.name }) catch {
+                _ = failed(st, dir.path, .NOMEM);
+                kept = true;
+                break;
+            };
+            defer env.gpa.free(child);
+            if (!remove(st, &level, n.name, child, false)) kept = true;
+        }
+    } else {
+        st.observer.emit(.{ .unreadable = .{ .path = dir.path, .errno = de } });
+        st.fail();
+        kept = true;
+    }
+    if (dirat.leave(&level)) |e| {
+        // The way back is gone: someone moved this directory meanwhile.
+        return failed(st, dir.path, e);
+    }
+    return !kept;
+}
+
+fn kindOf(mode: u32) Io.File.Kind {
+    return switch (mode & 0o170000) {
+        0o100000 => .file,
+        0o040000 => .directory,
+        0o120000 => .sym_link,
+        0o060000 => .block_device,
+        0o020000 => .character_device,
+        0o010000 => .named_pipe,
+        0o140000 => .unix_domain_socket,
+        else => .unknown,
     };
+}
+
+fn writable(file: Target) bool {
+    return sys.accessAt(dirat.fdOf(file.parent), file.name, 2) == null;
+}
+
+fn removeEmptyDir(st: *State, dir: Target, lst: sys.FileStat) bool {
+    const cfg = st.opts;
+    const path = dir.path;
+    if (cfg.interactive == .always) {
+        if (!st.confirm.ask(.{ .path = path, .kind = .directory, .size = lst.size, .action = .remove, .write_protected = !writable(dir) })) return false;
+    } else if (cfg.interactive == .default and cfg.stdin_tty and !writable(dir)) {
+        if (!st.confirm.ask(.{ .path = path, .kind = .directory, .size = lst.size, .action = .remove, .write_protected = true })) return false;
+    }
+    if (sys.unlinkAt(dirat.fdOf(dir.parent), dir.name, true)) |e| {
+        // rmdir("/") says EBUSY; GNU's message is the one for a non-empty directory.
+        // Likewise "." (EINVAL) is reported as a non-empty directory.
+        var root_err: sys.E = .SUCCESS;
+        const root = sys.fileStat("/", false, &root_err);
+        const busy_root = (e == .BUSY and root != null and sameFile(lst, root.?)) or (e == .INVAL and std.mem.endsWith(u8, std.mem.trimEnd(u8, path, "/"), "."));
+        return failed(st, path, if (busy_root) .NOTEMPTY else e);
+    }
     if (cfg.verbose) st.observer.emit(.{ .removed = .{ .path = path, .dir = true } });
     return true;
 }

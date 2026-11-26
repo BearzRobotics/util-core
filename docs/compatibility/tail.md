@@ -10,7 +10,7 @@ GNU coreutils 9.7 (`/usr/bin/tail --version` on the development machine, install
 
 - `-c, --bytes=[+]NUM`: Output the last NUM bytes; with `+`, start at byte NUM.
 - `-n, --lines=[+]NUM`: Output the last NUM lines (default 10); with `+`, start at line NUM.
-- `-f, --follow[=descriptor]`: Keep reading data appended to regular files (polling).
+- `-f, --follow[=descriptor]`: Keep reading data appended to regular files (polling). As in GNU, following also ends when standard output is a pipe or socket whose reader has closed it (Linux and other POSIX systems; elsewhere only the next write notices).
 - `-s, --sleep-interval=N`: With -f, seconds between polls (default 1).
 - `--pid=PID`: With -f, stop after process PID has exited.
 - `-q, --quiet, --silent`: Never print file name headers.

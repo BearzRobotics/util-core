@@ -33,12 +33,22 @@ STABLE="--output=source,fstype,itotal,size,target"
 
 printf "\n[ Listing ]\n"
 retry_cmp "default"
-for o in -a -h -H -i -T -P -k -m "-B 1M" "-B 1000" "-B 4096" "-B K" "-B KB" "-B human-readable" "-B si" --total "-l" "-t tmpfs" "-t ext4" "-t tmpfs -t ext4" "-x tmpfs" "-x tmpfs -x ext4" "-a -T" "-ahT" "-aiT" "-hT --total" "-iT --total" "-l -T" "-P -T" "-P -k" "-P -m" "-i -h" "-i -k" "-i -P" "-hi" "-Hi" "--sync" "--no-sync" -v "-t nosuchfs" "-a -t proc" "-a -x proc" "-a -l" "-a --total" "-aP" "-aH" "--output" "--output=source" "--output=source,target" "--output=file" "--output=pcent,ipcent,avail,iavail,used,iused,size,itotal,fstype,source,target,file" "--output=size,used,avail --total" "--output -h" "--output=size -h" "--output=size -H" "--output=size -k" "--output=size -m" "--output=size -B 1M" "--output=size -B 1000" "--output=size -B 4096" "--output=size -BKB" "--output=size,used -P" "--output=source -a" "--output=target -a" "--output=itotal -i" "--output=fstype -T"; do
+for o in -a -h -H -i -T -P -k -m "-B 1M" "-B 1000" "-B 4096" "-B K" "-B KB" "-B human-readable" "-B si" --total "-l" "-t tmpfs" "-t ext4" "-t tmpfs -t ext4" "-x tmpfs" "-x tmpfs -x ext4" "-a -T" "-ahT" "-aiT" "-hT --total" "-iT --total" "-l -T" "-P -T" "-P -k" "-P -m" "-i -h" "-i -k" "-i -P" "-hi" "-Hi" "--no-sync" -v "-t nosuchfs" "-a -t proc" "-a -x proc" "-a -l" "-a --total" "-aP" "-aH" "--output" "--output=source" "--output=source,target" "--output=file" "--output=pcent,ipcent,avail,iavail,used,iused,size,itotal,fstype,source,target,file" "--output=size,used,avail --total" "--output -h" "--output=size -h" "--output=size -H" "--output=size -k" "--output=size -m" "--output=size -B 1M" "--output=size -B 1000" "--output=size -B 4096" "--output=size -BKB" "--output=size,used -P" "--output=source -a" "--output=target -a" "--output=itotal -i" "--output=fstype -T"; do
     retry_cmp "$o"          $o
 done
+# --sync calls sync(2) for every mounted file system, which can block for many
+# minutes, so it only runs when asked for.
+if [ -n "${SYNC_GLOBAL:-}" ]; then
+    retry_cmp "--sync"      --sync
+else
+    skip_test "--sync (flushes every file system; set SYNC_GLOBAL=1)"
+fi
 for e in DF_BLOCK_SIZE BLOCK_SIZE BLOCKSIZE; do
     for v in 1 1K 1M 4096 human-readable si 1KB zz 0 ''; do
-        eval "$e='$v' retry_cmp '$e=$v' ''" 2>/dev/null
+        # Exported around the call: a subshell would lose the counters.
+        export "$e=$v"
+        retry_cmp "$e=$v" /
+        unset "$e"
     done
 done
 POSIXLY_CORRECT=1 retry_cmp "POSIXLY_CORRECT -P" -P

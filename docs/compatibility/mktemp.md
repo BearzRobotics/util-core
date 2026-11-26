@@ -12,7 +12,7 @@ GNU coreutils 9.7 (`/usr/bin/mktemp --version` on the development machine, insta
 - `-u, --dry-run`: Print a name without creating anything.
 - `-q, --quiet`: Suppress diagnostics about creation failure.
 - `--suffix=SUFF`: Append SUFF (no slash); the template must then end in X.
-- `-p DIR, --tmpdir[=DIR]`: Put the file in DIR ($TMPDIR or /tmp without DIR).
+- `-p DIR, --tmpdir[=DIR]`: Put the file in DIR ($TMPDIR or /tmp without DIR). An empty DIR, like an empty `TMPDIR`, counts as not given.
 - `-t`: Interpret TEMPLATE relative to $TMPDIR, else the -p directory, else /tmp.
 - `--help, --version`: Print help or version and exit.
 
@@ -36,7 +36,7 @@ None. Output, diagnostics and exit status follow GNU (decision 0005).
 
 ## Tests
 
-`sh test/test_mktemp.sh`: 74 differential cases against GNU mktemp 9.7 in the C locale. The random characters differ between runs, so output and tree are compared with every letter and digit masked; fixed text and permissions are checked separately.
+`sh test/test_mktemp.sh`: 83 cases against GNU mktemp 9.7 in the C locale, mostly differential. The random characters differ between runs, so output and tree are compared with every letter and digit masked; fixed text and permissions are checked separately.
 
 ## Not yet done
 

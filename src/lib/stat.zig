@@ -91,6 +91,12 @@ const Ctx = struct {
     fn emit(s: *const Ctx, ev: Event) void {
         s.observer.emit(ev);
     }
+
+    /// Report that a field could not be built; true: the file failed.
+    fn outOfMemory(s: *const Ctx) bool {
+        s.emit(.out_of_memory);
+        return true;
+    }
 };
 
 fn padStr(out: *Sink, f: Flags, text: []const u8) void {
@@ -269,42 +275,38 @@ fn outStrPad(out: *Sink, f: Flags, text: []const u8) void {
     padStr(out, ff, text);
 }
 
-fn quoteName(s: *Ctx, name: []const u8, buf: *std.ArrayList(u8)) void {
-    var tmp: [8192]u8 = undefined;
-    var w: Io.Writer = .fixed(&tmp);
+/// Write `name` in the QUOTING_STYLE in use. Escaping can make it several
+/// times as long, so the writer must not have a fixed size.
+fn quoteName(s: *Ctx, name: []const u8, w: *Io.Writer) Io.Writer.Error!void {
     const st = s.quoting;
-    if (std.mem.eql(u8, st, "literal")) {
-        buf.appendSlice(s.env.gpa, name) catch {};
-        return;
-    }
+    if (std.mem.eql(u8, st, "literal")) return try w.writeAll(name);
     if (std.mem.eql(u8, st, "c") or std.mem.eql(u8, st, "clocale") or std.mem.eql(u8, st, "escape")) {
         const quoted = !std.mem.eql(u8, st, "escape");
-        if (quoted) w.writeByte('"') catch {};
+        if (quoted) try w.writeByte('"');
         for (name) |ch| switch (ch) {
-            '\\' => w.writeAll("\\\\") catch {},
-            '"' => if (quoted) w.writeAll("\\\"") catch {} else w.writeByte('"') catch {},
-            7 => w.writeAll("\\a") catch {},
-            8 => w.writeAll("\\b") catch {},
-            9 => w.writeAll("\\t") catch {},
-            10 => w.writeAll("\\n") catch {},
-            11 => w.writeAll("\\v") catch {},
-            12 => w.writeAll("\\f") catch {},
-            13 => w.writeAll("\\r") catch {},
-            ' ' => if (quoted) w.writeByte(' ') catch {} else w.writeAll("\\ ") catch {},
-            else => if (ch < 0x20 or ch >= 0x7f) w.print("\\{o:0>3}", .{ch}) catch {} else w.writeByte(ch) catch {},
+            '\\' => try w.writeAll("\\\\"),
+            '"' => if (quoted) try w.writeAll("\\\"") else try w.writeByte('"'),
+            7 => try w.writeAll("\\a"),
+            8 => try w.writeAll("\\b"),
+            9 => try w.writeAll("\\t"),
+            10 => try w.writeAll("\\n"),
+            11 => try w.writeAll("\\v"),
+            12 => try w.writeAll("\\f"),
+            13 => try w.writeAll("\\r"),
+            ' ' => if (quoted) try w.writeByte(' ') else try w.writeAll("\\ "),
+            else => if (ch < 0x20 or ch >= 0x7f) try w.print("\\{o:0>3}", .{ch}) else try w.writeByte(ch),
         };
-        if (quoted) w.writeByte('"') catch {};
+        if (quoted) try w.writeByte('"');
     } else if (std.mem.eql(u8, st, "shell") or std.mem.eql(u8, st, "shell-always") or std.mem.eql(u8, st, "locale")) {
         const needs = std.mem.eql(u8, st, "shell-always") or std.mem.eql(u8, st, "locale") or std.mem.indexOfAny(u8, name, " \t\n'\"\\$`!&|;<>()*?[]{}~#^=") != null or name.len == 0;
         if (needs) {
-            w.writeByte('\'') catch {};
-            for (name) |ch| if (ch == '\'') w.writeAll("'\\''") catch {} else w.writeByte(ch) catch {};
-            w.writeByte('\'') catch {};
-        } else w.writeAll(name) catch {};
+            try w.writeByte('\'');
+            for (name) |ch| if (ch == '\'') try w.writeAll("'\\''") else try w.writeByte(ch);
+            try w.writeByte('\'');
+        } else try w.writeAll(name);
     } else {
-        (Quoted{ .name = name, .always = std.mem.eql(u8, st, "shell-escape-always") }).format(&w) catch {};
+        try (Quoted{ .name = name, .always = std.mem.eql(u8, st, "shell-escape-always") }).format(w);
     }
-    buf.appendSlice(s.env.gpa, w.buffered()) catch {};
 }
 
 fn printStat(s: *Ctx, spec: []const u8, mod: u8, m: u8, filename: []const u8, st: *const sys.FileStat, follow: bool) bool {
@@ -315,30 +317,25 @@ fn printStat(s: *Ctx, spec: []const u8, mod: u8, m: u8, filename: []const u8, st
     switch (m) {
         'n' => padStr(out, f, filename),
         'N' => {
-            var q: std.ArrayList(u8) = .empty;
-            defer q.deinit(gpa);
-            quoteName(s, filename, &q);
+            var q: Io.Writer.Allocating = .init(gpa);
+            defer q.deinit();
+            quoteName(s, filename, &q.writer) catch return s.outOfMemory();
             if (st.isLink()) {
                 var lbuf: [4096]u8 = undefined;
                 const target = Io.Dir.cwd().readLink(s.env.io, filename, &lbuf) catch |e| {
                     s.emit(.{ .cannot_read_link = .{ .name = filename, .err = e } });
                     return true;
                 };
-                var lq: std.ArrayList(u8) = .empty;
-                defer lq.deinit(gpa);
-                quoteName(s, lbuf[0..target], &lq);
-                q.appendSlice(gpa, " -> ") catch {};
-                q.appendSlice(gpa, lq.items) catch {};
+                var lq: Io.Writer.Allocating = .init(gpa);
+                defer lq.deinit();
+                quoteName(s, lbuf[0..target], &lq.writer) catch return s.outOfMemory();
                 // GNU prints the two quoted names separately, each padded by the format.
-                var first: std.ArrayList(u8) = .empty;
-                defer first.deinit(gpa);
-                quoteName(s, filename, &first);
-                padStr(out, f, first.items);
+                padStr(out, f, q.written());
                 out.write(" -> ");
-                padStr(out, f, lq.items);
+                padStr(out, f, lq.written());
                 return false;
             }
-            padStr(out, f, q.items);
+            padStr(out, f, q.written());
         },
         'd' => {
             const dev: u64 = (@as(u64, st.dev_major) << 8) | (st.dev_minor & 0xff) | ((@as(u64, st.dev_minor) & ~@as(u64, 0xff)) << 12);
@@ -366,7 +363,7 @@ fn printStat(s: *Ctx, spec: []const u8, mod: u8, m: u8, filename: []const u8, st
             const g = s.db.?.groupByGid(st.gid);
             padStr(out, f, if (g) |x| x.name else "UNKNOWN");
         },
-        'm' => fail = outMountPoint(s, f, filename, st, follow),
+        'm' => fail = outMountPoint(s, f, filename, st),
         's' => outNum(out, f, st.size, 10, false),
         'r' => {
             if (mod == 'H') outNum(out, f, st.rdev_major, 10, false) else if (mod == 'L') outNum(out, f, st.rdev_minor, 10, false) else outNum(out, f, (@as(u64, st.rdev_major) << 8) | (st.rdev_minor & 0xff) | ((@as(u64, st.rdev_minor) & ~@as(u64, 0xff)) << 12), 10, false);
@@ -416,14 +413,17 @@ fn printStat(s: *Ctx, spec: []const u8, mod: u8, m: u8, filename: []const u8, st
     return fail;
 }
 
-fn outMountPoint(s: *Ctx, f: Flags, filename: []const u8, st: *const sys.FileStat, follow: bool) bool {
-    _ = follow;
+fn outMountPoint(s: *Ctx, f: Flags, filename: []const u8, st: *const sys.FileStat) bool {
     const gpa = s.env.gpa;
     // Canonicalise, then walk up while the device number stays the same.
     var path: std.ArrayList(u8) = .empty;
     defer path.deinit(gpa);
+    // A link that was not followed is where its directory is; its target
+    // may be on another file system, or missing. (As GNU's find_mount_point.)
+    const is_link = st.isLink();
+    const start = if (is_link) std.fs.path.dirname(filename) orelse "." else filename;
     var real_buf: [4096]u8 = undefined;
-    const real_len = Io.Dir.cwd().realPathFile(s.env.io, filename, &real_buf) catch {
+    const real_len = Io.Dir.cwd().realPathFile(s.env.io, start, &real_buf) catch {
         s.emit(.{ .cannot_canonicalize = filename });
         padStr(&s.out, f, "?");
         return true;
@@ -431,8 +431,15 @@ fn outMountPoint(s: *Ctx, f: Flags, filename: []const u8, st: *const sys.FileSta
     path.appendSlice(gpa, real_buf[0..real_len]) catch return true;
     var dev_major = st.dev_major;
     var dev_minor = st.dev_minor;
-    if (st.isLink()) {
-        // lstat of the link itself: use the device of its directory.
+    if (is_link) {
+        var err: std.os.linux.E = .SUCCESS;
+        const dir = sys.fileStat(path.items, true, &err) orelse {
+            s.emit(.{ .cannot_canonicalize = filename });
+            padStr(&s.out, f, "?");
+            return true;
+        };
+        dev_major = dir.dev_major;
+        dev_minor = dir.dev_minor;
     }
     while (path.items.len > 1) {
         const slash = std.mem.lastIndexOfScalar(u8, path.items, '/') orelse break;
@@ -626,6 +633,7 @@ pub const Event = union(enum) {
     cannot_read_link: struct { name: []const u8, err: anyerror },
     cannot_get_context: NameErrno,
     cannot_canonicalize: []const u8,
+    out_of_memory,
     /// A printf escape that GNU does not know (warning only).
     unrecognized_escape: u8,
     backslash_at_end,

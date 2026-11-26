@@ -64,7 +64,8 @@ pub const Plan = struct {
 pub const Prepared = union(enum) { ok: Plan, bad: Problem };
 
 /// Validate the options and build the path template. `tmpdir_env` is the value
-/// of $TMPDIR (the caller reads it). `arena` owns the result.
+/// of $TMPDIR (the caller reads it). As in GNU, an empty $TMPDIR or directory
+/// counts as unset. `arena` owns the result.
 pub fn prepare(arena: std.mem.Allocator, opts: Options, tmpdir_env: ?[]const u8) error{OutOfMemory}!Prepared {
     var use_tmpdir = opts.use_tmpdir;
     var template: []const u8 = default_template;
@@ -90,15 +91,17 @@ pub fn prepare(arena: std.mem.Allocator, opts: Options, tmpdir_env: ?[]const u8)
 
     var full: []u8 = undefined;
     if (use_tmpdir) {
+        const env_dir = nonEmpty(tmpdir_env);
+        const opt_dir = nonEmpty(opts.dir);
         var dir: []const u8 = undefined;
         if (opts.tmpdir_t) {
-            dir = tmpdir_env orelse (opts.dir orelse "/tmp");
+            dir = env_dir orelse (opt_dir orelse "/tmp");
             if (std.mem.indexOfScalar(u8, template, '/') != null) return .{ .bad = .{ .template_has_slash = template } };
         } else {
-            dir = opts.dir orelse (tmpdir_env orelse "/tmp");
+            dir = opt_dir orelse (env_dir orelse "/tmp");
             if (template.len > 0 and template[0] == '/') return .{ .bad = .{ .template_absolute = template } };
         }
-        const sep: []const u8 = if (dir.len > 0 and dir[dir.len - 1] == '/') "" else "/";
+        const sep: []const u8 = if (dir[dir.len - 1] == '/') "" else "/";
         full = try std.fmt.allocPrint(arena, "{s}{s}{s}{s}", .{ dir, sep, body, suffix });
     } else {
         full = try std.fmt.allocPrint(arena, "{s}{s}", .{ body, suffix });
@@ -110,6 +113,12 @@ pub fn prepare(arena: std.mem.Allocator, opts: Options, tmpdir_env: ?[]const u8)
         .directory = opts.directory,
         .dry_run = opts.dry_run,
     } };
+}
+
+/// An empty name must not become a directory: "" plus "/" would be the root.
+fn nonEmpty(name: ?[]const u8) ?[]const u8 {
+    const n = name orelse return null;
+    return if (n.len == 0) null else n;
 }
 
 pub const Created = union(enum) {

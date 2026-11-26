@@ -56,7 +56,7 @@ The report goes to standard output. The end-of-input message (`cmp: EOF on FILE 
 
 # DIFFERENCES FROM GNU
 
-None known in the text modes. `--json` is an extension. The check whether two operands are the same file uses the inode and the modification time, because `std.Io` offers no device number.
+None known in the text modes. `--json` is an extension.
 
 # SEE ALSO
 

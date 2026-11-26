@@ -50,7 +50,9 @@ pub fn main(ctx: cli.Context) u8 {
 fn report(context: ?*anyopaque, ev: lib.Event) void {
     const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
     switch (ev) {
-        .open_failed => |e| cli.warn(ctx.*, "error opening {f}: {s}", .{ cli.quoteA(e.name), cli.errText(e.err) }),
+        .open_failed => |e| cli.warn(ctx.*, "error opening {f}: {s}", .{ cli.quoteA(e.name), sys.errnoText(e.errno) }),
+        .blocking_failed => |e| cli.warn(ctx.*, "couldn't reset non-blocking mode {f}: {s}", .{ cli.quoteA(e.name), sys.errnoText(e.errno) }),
         .sync_failed => |e| cli.warn(ctx.*, "error syncing {f}: {s}", .{ cli.quoteA(e.name), sys.errnoText(e.errno) }),
+        .close_failed => |e| cli.warn(ctx.*, "failed to close {f}: {s}", .{ cli.quoteA(e.name), sys.errnoText(e.errno) }),
     }
 }

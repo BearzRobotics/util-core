@@ -30,6 +30,8 @@ GNU grep 3.12 (`/usr/bin/grep --version` on the development machine). Consulted 
 - Binary files print `grep: FILE: binary file matches` to standard error after the first match; lines that are not valid UTF-8 are skipped individually in UTF-8 locales.
 - ERE leniency of GNU grep: leading `*`, `+`, `?` and `{n}` are ignored with a warning, an unmatched `)` and a `{` that does not start an interval are literals.
 - Leftmost-longest matching for alternation is emulated (see sed); `-w` and `-x` are implemented with look-around, so they pick the same match GNU's retry loop does.
+- `-R` (and the other modes that follow links) does not search a directory that is already being searched; as GNU grep it warns `recursive directory loop` (not with `-s`), which does not change the exit status.
+- A recursive search reaches files through the open directories. Where links are not followed, a symbolic link that takes the place of a file or directory after it was listed is not followed either. It stops with `File name too long` below 10000 levels (4000 in a debug build) or 64 KiB of path.
 
 ## Extensions
 
@@ -37,11 +39,11 @@ Every extension is opt-in and leaves GNU behaviour unchanged when not used (deci
 
 | Option | Kind | Why / semantics | Test oracle |
 |---|---|---|---|
-| `--json` | ripgrep | JSON Lines, ripgrep's schema (begin, match, context, end, summary; `{"bytes": base64}` for non-UTF-8). Searches every file as text; `-o`, `--replace` do not change the messages. | `rg --json`, timings normalised |
+| `--json` | ripgrep | JSON Lines, ripgrep's schema (begin, match, context, end, summary; `{"bytes": base64}` for non-UTF-8). Searches every file as text; `-o`, `--replace` do not change the messages. No group separators or `--stats` text; `-c`, `-l`, `-L`, `--count-matches` are refused (rg: the later of the two options wins). | `rg --json`, timings normalised |
 | `--smart-case` | ripgrep | Case-insensitive unless a pattern has an uppercase letter; escapes (`\S`) do not count; `-i` wins. | `rg --smart-case` |
 | `--glob=GLOB` | ripgrep | Include/exclude (`!`) with gitignore-style globs, later wins, only while walking (command-line files are never filtered, as in rg). | `rg -g` |
 | `--hidden`, `--no-hidden` | ripgrep | GNU `-r` already searches hidden files, so `--hidden` is the default spelled out and `--no-hidden` skips dot names. rg's default (hidden skipped) is `--no-hidden`. | `rg --hidden`, `rg` |
-| `--ignore-vcs`, `--no-ignore` | ripgrep | `.gitignore` / `.ignore` honoured only when asked (GNU does not read them); `--no-ignore` is the default. Only files inside the searched directories are read (no parent, global or `.git/info/exclude` files; rg reads those). | `rg --no-require-git` |
+| `--ignore-vcs`, `--no-ignore` | ripgrep | `.gitignore` / `.ignore` honoured only when asked (GNU does not read them); `--no-ignore` is the default. Only files inside the searched directories are read (no parent, global or `.git/info/exclude` files; rg reads those). Ignore files must be regular files of at most 4 MiB; a symbolic link is not followed for `.gitignore` (git does not; rg does). A skipped file is reported. | `rg --no-require-git` |
 | `--replace=TEXT` | ripgrep | Replacement with `$N`, `${name}`, `$name`, `$$`; whole line or, with `-o`, each match. | `rg -r` |
 | `--count-matches` | ripgrep | Matches per file; files with none are omitted (rg's rule, unlike GNU `-c`). | `rg --count-matches` |
 | `--stats` | ripgrep | Statistics block after the results. | `rg --stats`, times normalised |
@@ -52,7 +54,7 @@ Every extension is opt-in and leaves GNU behaviour unchanged when not used (deci
 | `-O`, `-p`, `-S` | FreeBSD | Symbolic links with `-r`: command line only, never, all (`-S` is GNU's `-R` behaviour). `-O`/`-p` read links to files met while walking; GNU `-r` skips them. FreeBSD's default (`-R` follows all links) is not adopted: GNU wins. | FreeBSD grep |
 | `--include-dir=GLOB` | FreeBSD | Descend only into matching directories (also tested on the starting directory). | FreeBSD grep |
 | `--mmap` | FreeBSD | Accepted, ignored. | FreeBSD grep |
-| `--decompress` | FreeBSD (`-Z`/`-z`/`-J`...) | gzip, zlib, xz, zstd by magic number, through std.compress. bzip2 is detected and reported, searched raw; lzma/lz4/brotli/zip unsupported. Not applied to standard input. FreeBSD's short letters clash with GNU (`-Z`, `-z`, `-X`) and are not provided. | `ugrep -z` (same formats) |
+| `--decompress` | FreeBSD (`-Z`/`-z`/`-J`...) | gzip, zlib, xz, zstd by magic number, through std.compress. bzip2 is detected and reported, searched raw; lzma/lz4/brotli/zip unsupported. Not applied to standard input. All gzip members, xz streams (with stream padding) and zstd frames are searched; other data after gzip, zlib or xz data is reported (status 2). FreeBSD's short letters clash with GNU (`-Z`, `-z`, `-X`) and are not provided. | `ugrep -z` (same formats) |
 
 Better diagnostics (kind "diagnostic"; stdout and exit status are GNU's, only stderr text differs; tests check status and the text):
 
@@ -79,13 +81,14 @@ How lines are selected: the pattern is analysed once (src/lib/grep_scan.zig). A 
 
 Results on the 100 MB file: a rare literal 36 ms (GNU 64, ripgrep 16, ugrep 17; was 224); `-i` 28 ms (GNU 62; was 117); `-w -c` 95 ms (GNU 155; was 209); `-E` alternation of three literals 34 ms (GNU 99; was 200). Multi-literal round (10 MB unless noted): `-f` with 3000 words 49 ms (GNU 135, rg 52, ugrep 36; was 236); `-F -f` 1000 words 46 ms (GNU 154; was 104); `-F` with 10 patterns over 100 MB 86 ms (GNU 289, rg 58, ugrep 69; was 382); `-E '(two|the)s?'` 9 ms (GNU 12; was 33). A 3000-word `-w` list, which took minutes through the DFA, takes 60 ms. `-r --include` skips a regular file the globs reject from the directory entry alone (no stat), as GNU does.
 
-Still behind GNU: patterns that need the DFA on every line (`^[a-m]+[[:space:]][n-z]+` 8.5x, `-x` with a regex 3x, UTF-8 `-i` and `.` 3x). The regex-zig 0.3.0 DFA loop costs 30-60 instructions per byte; see the notes in docs/benchmarks/grep.md. Also `-r` over 10000 small files is about 1.1x GNU (one stat, open, read and close per file, as GNU).
+Still behind GNU: patterns that need the DFA on every line (`^[a-m]+[[:space:]][n-z]+` 8.5x, `-x` with a regex 3x, UTF-8 `-i` and `.` 3x). The regex-zig 0.3.0 DFA loop costs 30-60 instructions per byte; see the notes in docs/benchmarks/grep.md. Also `-r` over 10000 small files was measured at about 1.1x GNU with one stat, open, read and close per file; there is now also an fstat of the opened file (not re-measured).
 
 ## Known deviations and gaps
 
 - `-P` uses the Perl dialect of regex-zig, not PCRE2: features such as recursion, conditionals and Unicode properties are missing and error messages differ (`invalid Perl regular expression`).
 - Large pattern lists use the combined DFA (or the Aho-Corasick search) only for line selection and only without back-references; `-o`, colour and `--replace` with thousands of patterns compile each pattern on first use and are slow. With `-f` lists the line selection itself uses the Aho-Corasick search (faster than GNU); `-o` and colour need the per-pattern search.
 - Not adopted: regex-zig's native POSIX BRE (the BRE/ERE-to-Perl translation in posixre.zig carries GNU's leniency rules and diagnostics, and was not re-verified against 7049 cases with the native parser).
+- `\<` and `\>` in the C locale: the pattern is translated for regex-zig's Perl dialect, which has only `\b`. Where a literal word character or `\w` is next to the anchor on the word's side (`\<foo`, `bar\>`), `\b` means the same and is used. Elsewhere (`s/\>//`, `\<[a-z]*`) a lookahead is added, which, as in UTF-8 locales, needs the backtracking engine: it is slower, and on very long lines the search can reach its limit. Removing that needs word-start and word-end assertions in the Perl dialect of regex-zig.
 - Binary detection looks at each 96 KiB read rather than at GNU's buffer boundaries, so a NUL byte appearing far into a large file may switch to binary mode at a slightly different line.
 - Binary detection at GNU's exact buffer boundaries is not matched (kept above); the `-q`/`/dev/null` early exit gap is closed.
 - UTF-8 character classes use Unicode 16 tables and may differ from glibc's C.UTF-8 for rare code points; other locales are treated as C.

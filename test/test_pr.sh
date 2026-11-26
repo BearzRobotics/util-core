@@ -258,5 +258,39 @@ while IFS= read -r combo; do
     run_cmp "random ff [$combo]" $combo ff
 done < combos
 
+# A read error is reported where it happens and ends the run, as in GNU.
+# (/proc/self/mem opens but cannot be read.)
+CMP_STDIN=/dev/null
+printf 'hello\nworld\n' > "$TEST_TMP/after"
+if [ -r /proc/self/mem ]; then
+    for o in -t "" -2 "-t -2" -a2 +2; do
+        run_cmp "read error $o" $o /proc/self/mem "$TEST_TMP/after"
+        run_cmp "read error after a file $o" $o "$TEST_TMP/after" /proc/self/mem
+        run_cmp "read error -m $o" -t -m "$TEST_TMP/after" /proc/self/mem
+    done
+else
+    skip_test "pr read errors (no /proc/self/mem)"
+fi
+closed_case() { # DESC ARGS...: standard input is closed
+    d="$1"; shift
+    g=$(LC_ALL=C "${GNU_BIN:-/usr/bin}/pr" "$@" 2>&1 <&-; echo "status $?")
+    o=$(LC_ALL=C "$BIN_DIR/pr" "$@" 2>&1 <&-; echo "status $?")
+    g=$(printf '%s' "$g" | sed "s#${GNU_BIN:-/usr/bin}/##")
+    if [ "$g" = "$o" ]; then PASS=$((PASS + 1)); echo "PASS $d"
+    else FAIL=$((FAIL + 1)); echo "FAIL $d"; printf '%s\n---\n%s\n' "$g" "$o" | head -8; fi
+}
+closed_case "closed standard input" -t
+closed_case "closed standard input, named" -t - "$TEST_TMP/after"
+# Tab and number widths beyond any fixed buffer, and layouts too large to build.
+printf 'a\tb\nc\n' > "$TEST_TMP/wide"
+for o in "-e100" "-e65" "-ex100" "-n:100" "-n97" "-n200" "-n:100 -2" "-e100 -2" "-e100 -J -2" "-n70 -m" "-e100 -v -n:80 -o3" "-2 -l2147483647" "-w2147483647 -2" "-N2147483647 -n"; do
+    run_cmp "wide $o" -t $o "$TEST_TMP/wide"
+done
+for o in "-e2147483647" "-n:2147483647" "-n2147483647" "-i2147483647 -o200 -e100" "-d -l2147483647 -e100" "-o2147483647"; do
+    g=$(LC_ALL=C timeout 10 "${GNU_BIN:-/usr/bin}/pr" -t $o "$TEST_TMP/wide" 2>/dev/null | head -c 4000 | cksum)
+    u=$(LC_ALL=C timeout 10 "$BIN_DIR/pr" -t $o "$TEST_TMP/wide" 2>/dev/null | head -c 4000 | cksum)
+    if [ "$g" = "$u" ]; then PASS=$((PASS + 1)); echo "PASS huge $o"
+    else FAIL=$((FAIL + 1)); echo "FAIL huge $o: GNU $g, ours $u"; fi
+done
 print_summary
 [ "$FAIL" -eq 0 ]

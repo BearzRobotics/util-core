@@ -5,6 +5,7 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const count_arg = @import("../count_arg.zig");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "no-create", "io-blocks", "reference", "size", "help", "version" };
@@ -119,6 +120,12 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         }
         amount = c.?.value;
+        // count_arg saturates (head and tail treat that as "everything"); any
+        // value that was clamped is beyond this limit too.
+        if (amount > truncate.maxAmount(rel)) {
+            cli.warn(ctx, "Invalid number: {f}: Value too large for defined data type", .{cli.quoteC(if (rel == .extend or rel == .reduce) t else s)});
+            return 1;
+        }
         if ((rel == .round_down or rel == .round_up) and amount == 0) {
             cli.warn(ctx, "division by zero", .{});
             return 1;
@@ -157,11 +164,13 @@ pub fn main(ctx: cli.Context) u8 {
 fn report(context: ?*anyopaque, ev: truncate.Event) void {
     const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
     switch (ev) {
-        .open_failed => |f| cli.warn(ctx.*, "cannot open {f} for writing: {s}", .{ cli.quoteA(f.path), cli.errText(f.err) }),
+        .open_failed => |f| cli.warn(ctx.*, "cannot open {f} for writing: {s}", .{ cli.quoteA(f.path), sys.errnoText(f.errno) }),
         .size_failed => |f| if (f.err) |e|
             cli.warn(ctx.*, "cannot get the size of {f}: {s}", .{ cli.quoteA(f.path), cli.errText(e) })
         else
             cli.warn(ctx.*, "cannot get the size of {f}", .{cli.quoteA(f.path)}),
+        .block_overflow => |f| cli.warn(ctx.*, "overflow in {s}{d} * {d} byte blocks for file {f}", .{ if (f.negative and f.blocks != 0) "-" else "", f.blocks, f.block_size, cli.quoteA(f.path) }),
+        .extend_overflow => |f| cli.warn(ctx.*, "overflow extending size of file {f}", .{cli.quoteA(f.path)}),
         .truncate_failed => |f| cli.warn(ctx.*, "failed to truncate {f} at {d} bytes: {s}", .{ cli.quoteA(f.path), f.size, cli.errText(f.err) }),
     }
 }

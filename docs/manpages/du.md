@@ -87,6 +87,7 @@ See docs/compatibility/du.md for details.
 # LIMITATIONS
 
 - fts is not used: entries are visited in the order the file system returns them, and cycles reached through symbolic links under -L are skipped quietly as fts does while -P cycles produce the `Circular directory structure` warning.
+- Trees deeper than PATH_MAX are measured. The walk stops, with `cannot read directory ...: File name too long`, below 10000 levels or 64 KiB of path; GNU has no such limit.
 - The mount-point test behind `-x` compares device numbers only (GNU uses the same rule); bind mounts of one device are not special-cased.
 - Times are formatted in the local zone from /usr/share/zoneinfo or TZ; leap seconds are not applied.
 

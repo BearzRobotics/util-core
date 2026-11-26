@@ -70,7 +70,8 @@ run_x "not executable" in2 /etc/passwd
 run_x "directory command" in2 /tmp
 run_x "stdin /dev/null for child" in2 sh -c 'cat | wc -c'
 run_x "env passthrough" in2 -n1 sh -c 'echo $HOME_TEST'
-run_x "-P2 slot" in2 -P2 -n1 --process-slot-var=SLOT sh -c 'echo slot=$SLOT >/dev/null'
+# (One command at a time, for a fixed order; slots with -P2 are tested below.)
+run_x "--process-slot-var" in2 -P1 -n1 --process-slot-var=SLOT sh -c 'echo "slot=${SLOT-unset} $*"' x
 run_x "-t quoting" in3 -t printf '%s\n'
 run_x "--verbose" in2 --verbose -n2 echo
 run_x "--no-run-if-empty" empty --no-run-if-empty echo
@@ -128,4 +129,119 @@ for a in "--show-limits" "--show-limits -s 1000" "-s 50 --show-limits"; do
     e=$(env -i LC_ALL=C /usr/bin/xargs $a -r < /dev/null 2>&1 | sed 's#/usr/bin/xargs#xargs#'); o=$(env -i LC_ALL=C "$BIN_DIR/xargs" $a -r < /dev/null 2>&1)
     if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS env -i $a"; else FAIL=$((FAIL+1)); echo "FAIL env -i $a"; fi
 done
+# With -a the items do not come from standard input, which the commands then
+# get; otherwise theirs is /dev/null. "-a -" is standard input itself.
+printf 'item two\n' > aitems; echo dashfile > ./-
+a_stdin() {
+    d="$1"; shift
+    e=$(echo FROMSTDIN | LC_ALL=C /usr/bin/xargs "$@" 2>&1; echo "status $?"); o=$(echo FROMSTDIN | LC_ALL=C "$BIN_DIR/xargs" "$@" 2>&1; echo "status $?")
+    if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS $d"; else FAIL=$((FAIL+1)); echo "FAIL $d"; printf '  GNU: %s\n  ours: %s\n' "$e" "$o"; fi
+}
+a_stdin "-a gives the commands standard input" -a aitems sh -c 'echo "$@"; cat' x
+a_stdin "-a with -n1: the first command reads it" -a aitems -n1 sh -c 'echo "$@"; cat' x
+a_stdin "-a with -P" -a aitems -P2 -n2 sh -c 'cat; echo "$@"' x
+a_stdin "--arg-file=- reads standard input" --arg-file=- echo
+a_stdin "-a /dev/stdin" -a /dev/stdin echo
+a_stdin "-a ./- is a file" -a ./- echo
+a_stdin "without -a the commands read nothing" sh -c 'echo "$@"; cat' x
+rm -f ./- aitems
+# As execvp, a script without a "#!" line is run by /bin/sh: the file PATH
+# leads to, not a file of that name in the current directory.
+mkdir shbin; printf 'echo script-ran "$0" "$@"\n' > shbin/noshebang; chmod +x shbin/noshebang
+printf 'echo PLANTED\n' > noshebang; printf 'echo a script in this directory\n' > ./-dashed; chmod +x ./-dashed
+sb() {
+    d="$1"; shift
+    e=$(echo a b | PATH="$PWD/shbin:/usr/bin:/bin" LC_ALL=C /usr/bin/xargs "$@" 2>&1; echo "status $?")
+    o=$(echo a b | PATH="$PWD/shbin:/usr/bin:/bin" LC_ALL=C "$BIN_DIR/xargs" "$@" 2>&1; echo "status $?")
+    if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS $d"; else FAIL=$((FAIL+1)); echo "FAIL $d"; printf '  GNU: %s\n  ours: %s\n' "$e" "$o"; fi
+}
+sb 'no "#!": from PATH' noshebang
+sb 'no "#!": a path' shbin/noshebang
+sb 'no "#!": with -I and -P' -P2 -I{} noshebang {}
+sb 'no "#!": with --process-slot-var' --process-slot-var=SLOT noshebang
+rm -rf shbin noshebang ./-dashed
+
+# With -P whichever command ends first frees its slot. "slow" waits (10 s at
+# most) for the last item to have run, which needs the other slot to be reused
+# while "slow" still runs.
+cat > parallel.sh <<'END'
+case $1 in
+slow) i=0; while [ ! -e last.done ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+      if [ -e last.done ]; then echo "slow: the others did not wait"; else echo "slow: gave up"; fi ;;
+last) echo "last slot=$SLOT"; : > last.done ;;
+quick*) echo "$1 slot=$SLOT" ;;
+stop) exit 255 ;;
+zombies) sleep 1; n=0; for p in $(cat /proc/$PPID/task/$PPID/children 2>/dev/null); do
+             case $(cat /proc/$p/stat 2>/dev/null) in *') Z '*) n=$((n + 1)) ;; esac; done
+         echo "zombies: $n" ;;
+after) echo "started after a 255" ;;
+esac
+END
+parallel() { # DESC ITEMS XARGS-ARG...
+    d="$1"; items="$2"; shift 2
+    rm -f last.done
+    e=$(printf '%s\n' $items | LC_ALL=C timeout 30 /usr/bin/xargs "$@" sh parallel.sh 2>&1; echo "status $?")
+    rm -f last.done
+    o=$(printf '%s\n' $items | LC_ALL=C timeout 30 "$BIN_DIR/xargs" "$@" sh parallel.sh 2>&1; echo "status $?")
+    # (Sorted: commands that run at once may finish in either order.)
+    o=$(printf '%s\n' "$o" | sed 's#^[^ ]*/xargs: #xargs: #' | sort); e=$(printf '%s\n' "$e" | sed 's#^/usr/bin/xargs: #xargs: #' | sort)
+    if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS $d"; else FAIL=$((FAIL+1)); echo "FAIL $d"; printf '  GNU: %s\n  ours: %s\n' "$e" "$o"; fi
+}
+parallel "-P2: a finished command frees its slot" "slow quick1 quick2 last" -P2 -n1
+parallel "-P2: the lowest free slot number is reused" "slow quick1 quick2 last" -P2 -n1 --process-slot-var=SLOT
+# After a 255 nothing more is started, though an older command still runs.
+parallel "-P2: status 255 of a younger command stops at once" "slow stop after" -P2 -n1
+if [ -r /proc/self/task/$$/children ] || [ -r /proc/self/stat ]; then
+    # "zombies" counts, a second in, its finished siblings that xargs has not
+    # collected, though they were started after it.
+    parallel "-P0: finished commands are collected as it goes" "zombies quick1 quick2" -P0 -n1
+fi
+rm -f parallel.sh last.done
+
+# -s limits the length of one item too, and reading stops as soon as an item
+# cannot fit. (Compared: standard output, the diagnostic and the status;
+# where the diagnostic falls between the command's output is left open.)
+long=$(printf 'a%.0s' $(seq 40)); fit=aaaaaaaaaaaaaa; nofit=aaaaaaaaaaaaaaa
+too_long() { # DESC INPUT-FORMAT ARG...
+    d="$1"; printf "$2" > toolong.in; shift 2
+    run_x "$d" toolong.in "$@"
+}
+too_long "-s: an item that just fits" "x\n$fit\n" -s 20 echo
+too_long "-s: an item that cannot fit follows others" "x\n$nofit\n" -s 20 echo
+too_long "-s: a far too long item" "x\ny\n$long\nz\n" -s 20 echo
+too_long "-s: a far too long item, no newline" "x y $long" -s 20 echo
+too_long "-s: too long, in quotes" "x\n\"$long\n" -s 20 echo
+too_long "-s: too long, -0" "x\0y\0$long\0" -s 20 -0 echo
+too_long "-s: too long, -d" "x,y,$long," -s 20 -d , echo
+too_long "-s: too long, -L" "x y $long\n" -s 20 -L1 echo
+too_long "-s: too long, -x" "x y $long\n" -s 20 -x -n 9 echo
+too_long "-s: too long, -E" "x\n$long\n" -s 20 -E "$long" echo
+too_long "-s: -I reads an item one shorter than the limit" "$long\n" -s 41 -I{} echo hi
+too_long "-s: -I refuses an item as long as the limit" "$long\n" -s 40 -I{} echo hi
+rm -f toolong.in
+# An endless item must not be collected: bounded memory.
+for o in "-0" ""; do
+    o_out=$( (ulimit -v 600000; tr '\0' a < /dev/zero | LC_ALL=C timeout 20 "$BIN_DIR/xargs" $o true 2>&1; echo "status $?") )
+    if printf '%s\n' "$o_out" | grep -q 'argument line too long' && printf '%s\n' "$o_out" | grep -q '^status 1$'; then
+        PASS=$((PASS+1)); echo "PASS an endless item $o"
+    else FAIL=$((FAIL+1)); echo "FAIL an endless item $o"; printf '%s\n' "$o_out" | head -c 300; fi
+done
+
+# An empty replacement string: GNU's "command too long" for any argument that
+# is not empty, at once (a time limit and a memory limit: it must not grow
+# the argument without end).
+printf 'a\nb\n' > two
+empty_repl() {
+    d="$1"; shift
+    e=$(LC_ALL=C timeout 10 /usr/bin/xargs "$@" < two 2>&1; echo "status $?")
+    o=$( (ulimit -v 1000000; LC_ALL=C timeout 10 "$BIN_DIR/xargs" "$@" < two 2>&1; echo "status $?") )
+    e=$(printf '%s\n' "$e" | sed 's#^/usr/bin/xargs:#xargs:#'); o=$(printf '%s\n' "$o" | sed 's#^[^ ]*/xargs:#xargs:#')
+    if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS $d"; else FAIL=$((FAIL+1)); echo "FAIL $d"; printf '  GNU: %s\n  ours: %s\n' "$e" "$(printf '%s' "$o" | head -c 300)"; fi
+}
+empty_repl "-I '' with an argument" -I '' echo xx
+empty_repl "-I '' with the command alone" -I '' echo
+empty_repl "-I '' with an empty argument" -I '' echo ''
+empty_repl "-I '' with empty arguments then another" -I '' echo '' y
+empty_repl "--replace= with -t" -t --replace= echo x
+rm -f two
 cd /; print_summary

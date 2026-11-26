@@ -130,6 +130,9 @@ test {
     _ = @import("lines.zig");
     _ = @import("tabs.zig");
     _ = @import("sys.zig");
+    _ = @import("dirat.zig");
+    _ = @import("posixacl.zig");
+    _ = @import("programpath.zig");
     _ = @import("bytes.zig");
     _ = @import("multisearch.zig");
     _ = @import("hash.zig");

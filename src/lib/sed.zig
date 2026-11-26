@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! sed library: stream editor. Reference: GNU sed 4.9 (compile.c, execute.c)
 //! and POSIX sed. Regular expressions go through src/posixre.zig (BRE/ERE
-//! translated to the regex-zig Perl dialect), so alternation is
-//! leftmost-first rather than POSIX leftmost-longest.
+//! translated to the regex-zig Perl dialect); `posixre.Finder` gives
+//! alternation its POSIX leftmost-longest meaning.
 //!
 //! Two steps (decision 0004):
 //!   - `compile` turns script chunks (-e text, -f file contents) into a
@@ -26,6 +26,7 @@ const common = @import("common.zig");
 const posixre = @import("../posixre.zig");
 const regex = @import("regex");
 const sys = @import("../sys.zig");
+const posixacl = @import("../posixacl.zig");
 const unicode = @import("../unicode.zig");
 const Io = std.Io;
 const LX = std.os.linux;
@@ -132,6 +133,9 @@ pub const Event = union(enum) {
     cant_read: struct { name: []const u8, errno: LX.E },
     /// "couldn't edit NAME: not a regular file" (status 4, continues).
     cant_edit: []const u8,
+    /// "error in subprocess": /bin/sh could not be run for `e` or `s///e`
+    /// (fatal, status 4).
+    subprocess_failed,
     /// "read error on NAME: ERRNO" (fatal, status 4).
     read_error: struct { name: []const u8, errno: LX.E },
     /// "couldn't write ITEMS items to NAME: ERRNO" (fatal, status 4). `name`
@@ -141,8 +145,18 @@ pub const Event = union(enum) {
     write_error: struct { name: []const u8, items: usize, errno: ?LX.E },
     /// "couldn't open temporary file PATH: ERRNO" (status 4, continues).
     temp_open_failed: struct { path: []const u8, errno: LX.E },
-    /// "cannot rename NAME: ERRNO" (status 4, continues).
+    /// "cannot rename NAME: ERRNO" (fatal, status 4). The original is not
+    /// replaced.
     rename_failed: struct { name: []const u8, errno: LX.E },
+    /// An in-place edit could not give the new file the old one's group (the
+    /// edit goes on; the group gets no more than others had).
+    group_not_kept: struct { name: []const u8, errno: LX.E },
+    /// An in-place edit could not give the new file all of the old one's
+    /// mode and access ACL (the edit goes on; it allows nobody more).
+    permissions_not_kept: struct { name: []const u8, errno: LX.E },
+    /// "couldn't close NAME: ERRNO" (fatal, status 4). Some file systems only
+    /// report a failed write here. An in-place original is not replaced.
+    close_failed: struct { name: []const u8, errno: LX.E },
     /// An empty regex with no previous one (fatal, status 1). The chunk is
     /// the script's first.
     no_previous_regex: Chunk,
@@ -165,9 +179,25 @@ pub const Program = struct {
     gpa: std.mem.Allocator,
     st: *State,
 
+    /// Close the `w` files after the last run, reporting through `observer`.
+    /// False if any close failed, which means output may be missing. The
+    /// program cannot run again if it has `w` files.
+    pub fn closeFiles(p: *Program, observer: Observer) bool {
+        var ok = true;
+        for (p.st.outs.items) |o| {
+            if (isStdFd(o.fd) or o.fd == sys.invalid_handle) continue;
+            if (sys.closeFd(o.fd)) |er| {
+                observer.emit(.{ .close_failed = .{ .name = o.path, .errno = er } });
+                ok = false;
+            }
+            o.fd = sys.invalid_handle;
+        }
+        return ok;
+    }
+
     pub fn deinit(p: *Program) void {
         for (p.st.outs.items) |o| {
-            if (!isStdFd(o.fd)) _ = sys.closeFd(o.fd);
+            if (!isStdFd(o.fd) and o.fd != sys.invalid_handle) _ = sys.closeFd(o.fd);
         }
         const gpa = p.gpa;
         p.arena.deinit();
@@ -313,7 +343,7 @@ fn errnoMsg(e: LX.E) []const u8 {
     return sys.errnoText(e);
 }
 
-const Re = struct { re: regex.Regex, groups: u32, multiline: bool, longest: ?regex.Regex = null, src: []const u8 = "", icase: bool = false, mb: bool = false };
+const Re = struct { re: regex.Regex, groups: u32, multiline: bool, longest: ?posixre.Longest = null, src: []const u8 = "", icase: bool = false, mb: bool = false };
 
 const AddrKind = enum { none, line, step, last, re, zero, plus, mult };
 const Addr = struct {
@@ -361,7 +391,6 @@ const Cmd = struct {
     ypairs: ?[]const [2]u32 = null,
     ysrc: []const u8 = "",
     ydst: []const u8 = "",
-    depth: u16 = 0,
 };
 
 fn isStdFd(fd: sys.Handle) bool {
@@ -539,9 +568,7 @@ const Parser = struct {
         };
         const r = try s.arena.create(Re);
         r.* = .{ .re = re, .groups = re.groupCount(), .multiline = mline, .src = pat, .icase = icase, .mb = rflags.mb };
-        if (posixre.longestSource(s.arena, body, if (mline) "(?sm)" else "(?s)", rflags) catch null) |ls| {
-            r.longest = regex.Regex.compile(s.arena, ls, .{ .dialect = .perl, .ignore_case = icase, .limits = posixre.big_limits }, null) catch null;
-        }
+        r.longest = try posixre.Longest.compile(s.arena, .{ .pattern = conv, .ere = s.opts.ere, .body = body, .prefix = if (mline) "(?sm)" else "(?s)", .flags = rflags, .ignore_case = icase, .utf8 = s.opts.utf8, .multiline = mline });
         return r;
     }
 
@@ -986,7 +1013,6 @@ const Parser = struct {
                 }
             }
             cmd.c = c;
-            cmd.depth = @intCast(s.blocks.items.len);
             switch (c) {
                 '#' => {
                     if (cmd.a1.kind != .none) return p.fail("comments don't accept any addresses", .{});
@@ -1009,7 +1035,6 @@ const Parser = struct {
                     if (cmd.a1.kind != .none) return p.fail("}} doesn't want any addresses", .{});
                     const open = s.blocks.pop() orelse return p.fail("unexpected `}}'", .{});
                     s.cmds.items[open].jump = s.cmds.items.len;
-                    cmd.depth = @intCast(s.blocks.items.len);
                     try s.cmds.append(s.arena, cmd);
                     try p.endOfCmd();
                     continue;
@@ -1045,7 +1070,10 @@ const Parser = struct {
                     const x = p.skipBlank();
                     if (x) |d| {
                         if (std.ascii.isDigit(d)) {
-                            cmd.int = @intCast(p.readNumber(d));
+                            const n = p.readNumber(d);
+                            // A width too large to hold wraps no line. An
+                            // exit status is the low byte, which masking keeps.
+                            cmd.int = @intCast(if (c == 'l') @min(n, std.math.maxInt(i64)) else n & std.math.maxInt(i64));
                         } else p.unget();
                     }
                     try p.endOfCmd();
@@ -1205,16 +1233,53 @@ fn convertEscapes(a: std.mem.Allocator, pat: []const u8, is_re: bool) ![]u8 {
 
 // -------------------------------------------------------------- executor
 
+/// One input being read: only what has not been used yet is held, so that a
+/// stream is processed as it arrives and memory does not grow with its length.
+const Reader = struct {
+    fd: sys.Handle = sys.invalid_handle,
+    /// Opened here, to be closed here; otherwise the caller's descriptor.
+    owned: bool = false,
+    /// `buf.items[pos..]` is read but not used; no delimiter is before
+    /// `scanned`.
+    buf: std.ArrayList(u8) = .empty,
+    pos: usize = 0,
+    scanned: usize = 0,
+    eof: bool = true,
+    /// Reading may wait (a pipe, a terminal): write what is pending first.
+    may_wait: bool = false,
+    name: []const u8 = "-",
+    /// Which of the inputs this is.
+    index: usize = 0,
+
+    fn unused(r: *const Reader) usize {
+        return r.buf.items.len - r.pos;
+    }
+
+    /// Done with the input. A caller's descriptor that can seek is left
+    /// just after what was used, for whoever reads it next (`q` in a
+    /// shell's `{ sed 1q; cat; } < file`).
+    fn close(r: *Reader, gpa: std.mem.Allocator) void {
+        if (r.owned) {
+            _ = sys.closeFd(r.fd);
+        } else if (r.fd != sys.invalid_handle and r.unused() > 0) {
+            var e: LX.E = .SUCCESS;
+            _ = sys.seekFd(r.fd, -@as(i64, @intCast(r.unused())), 1, &e);
+        }
+        r.buf.deinit(gpa);
+        r.* = .{};
+    }
+};
+
 const Cursor = struct {
     files: []const Input,
     next_file: usize = 0,
-    data: []const u8 = &.{},
-    pos: usize = 0,
+    cur: Reader = .{},
+    /// The next input with anything in it, opened to find out whether the
+    /// current line is the last one.
+    ahead: ?Reader = null,
     name: []const u8 = "-",
     opened: bool = false,
     line_no: u64 = 0,
-    pre: ?[]const u8 = null,
-    pre_idx: usize = 0,
 };
 
 const Exec = struct {
@@ -1234,6 +1299,9 @@ const Exec = struct {
     delim: u8 = '\n',
     in_place_tmp: ?[]const u8 = null,
     in_place_target: []const u8 = "",
+    /// Of the descriptor being edited, from before anything ran: the name may
+    /// lead to another file by the time the edit is done.
+    in_place_st: ?sys.FileStat = null,
     stdout_o: *Output,
     last_re: ?*Re = null,
     dbg_level: usize = 0,
@@ -1246,6 +1314,14 @@ const Exec = struct {
     }
 
     fn deinit(e: *Exec) void {
+        // The run stopped inside an in-place edit: drop the unfinished copy and
+        // leave the original as it was.
+        if (e.in_place_tmp) |tmp| {
+            if (e.cur_out.fd != sys.invalid_handle) _ = sys.closeFd(e.cur_out.fd);
+            _ = sys.unlinkPath(tmp, false);
+        }
+        if (e.in.ahead) |*r| r.close(e.gpa);
+        e.in.cur.close(e.gpa);
         e.ps.deinit(e.gpa);
         e.hs.deinit(e.gpa);
         e.append_q.deinit(e.gpa);
@@ -1345,53 +1421,94 @@ const Exec = struct {
         };
     }
 
+    /// Open input `index`. Null, after the diagnostic, when it cannot be.
+    fn openReader(e: *Exec, index: usize) ?Reader {
+        const input = e.in.files[index];
+        const name = inputName(input);
+        var r: Reader = .{ .eof = false, .name = name, .index = index };
+        var err: LX.E = .SUCCESS;
+        switch (input.source) {
+            .file => |f| r.fd = f.handle,
+            .path => |path| {
+                r.fd = sys.openFd(path, sys.O.RDONLY, 0, &err) orelse {
+                    e.s.obs.emit(.{ .cant_read = .{ .name = name, .errno = err } });
+                    e.s.exit_code = 2;
+                    return null;
+                };
+                r.owned = true;
+            },
+        }
+        const st = sys.fstatFd(r.fd, &err);
+        r.may_wait = st == null or !st.?.isReg();
+        return r;
+    }
+
+    /// Read some more of `r`, at its end noting that. With -u no more is
+    /// taken than is used, as with GNU sed.
+    fn fill(e: *Exec, r: *Reader) Err!void {
+        const left = r.unused();
+        if (r.pos > 0) {
+            std.mem.copyForwards(u8, r.buf.items[0..left], r.buf.items[r.pos..]);
+            r.buf.shrinkRetainingCapacity(left);
+            r.scanned -|= r.pos;
+            r.pos = 0;
+        }
+        const want: usize = if (e.s.opts.unbuffered) 1 else 65536;
+        r.buf.ensureUnusedCapacity(e.gpa, want) catch return error.OutOfMemory;
+        // Whoever writes the input may be waiting to see our output.
+        if (r.may_wait) try e.flushAll();
+        var err: LX.E = .SUCCESS;
+        const n = sys.readFd(r.fd, r.buf.unusedCapacitySlice()[0..want], &err) orelse {
+            e.s.obs.emit(.{ .read_error = .{ .name = r.name, .errno = err } });
+            try e.flushAll();
+            e.s.exit_code = 4;
+            return error.Abort;
+        };
+        if (n == 0) r.eof = true else r.buf.items.len += n;
+    }
+
+    /// Read until `r` has something unused or is at its end.
+    fn peek(e: *Exec, r: *Reader) Err!bool {
+        while (r.unused() == 0 and !r.eof) try e.fill(r);
+        return r.unused() > 0;
+    }
+
     fn openNext(e: *Exec) Err!bool {
         const in = &e.in;
         while (true) {
             if (in.next_file >= in.files.len) return false;
-            const input = in.files[in.next_file];
-            const name = inputName(input);
+            const index = in.next_file;
+            const input = in.files[index];
             in.next_file += 1;
-            var data: std.ArrayList(u8) = .empty;
-            if (in.pre != null and in.pre_idx == in.next_file - 1) {
-                try data.appendSlice(e.ar(), in.pre.?);
-                in.pre = null;
-                in.name = name;
-            } else if (input.source == .file) {
-                if (!try e.readAll(input.source.file.handle, &data, name)) continue;
-                in.name = name;
-            } else {
-                const path = input.source.path;
-                var err: LX.E = .SUCCESS;
-                const fd = sys.openFd(path, sys.O.RDONLY, 0, &err) orelse {
-                    e.s.obs.emit(.{ .cant_read = .{ .name = name, .errno = err } });
-                    e.s.exit_code = 2;
+            var r: Reader = undefined;
+            if (in.ahead != null and in.ahead.?.index == index) {
+                r = in.ahead.?;
+                in.ahead = null;
+            } else r = e.openReader(index) orelse continue;
+            var in_place_st: ?sys.FileStat = null;
+            if (e.s.opts.in_place) {
+                var serr: LX.E = .SUCCESS;
+                in_place_st = sys.fstatFd(r.fd, &serr);
+                if (input.source == .path and (in_place_st == null or !in_place_st.?.isReg())) {
+                    e.s.obs.emit(.{ .cant_edit = r.name });
+                    e.s.exit_code = 4;
+                    r.close(e.gpa);
                     continue;
-                };
-                defer _ = sys.closeFd(fd);
-                if (e.s.opts.in_place) {
-                    var serr: LX.E = .SUCCESS;
-                    const st = sys.fstatFd(fd, &serr);
-                    if (st == null or !st.?.isReg()) {
-                        e.s.obs.emit(.{ .cant_edit = name });
-                        e.s.exit_code = 4;
-                        continue;
-                    }
                 }
-                if (!try e.readAll(fd, &data, name)) continue;
-                in.name = name;
             }
-            in.data = data.items;
-            in.pos = 0;
+            in.cur.close(e.gpa);
+            in.cur = r;
+            e.in_place_st = in_place_st;
+            in.name = r.name;
             in.opened = true;
             if (e.s.opts.separate) {
                 in.line_no = 0;
                 e.resetRanges();
             }
             if (e.s.opts.in_place) {
-                const path = if (input.source == .path) input.source.path else name;
+                const path = if (input.source == .path) input.source.path else in.name;
                 if (!try e.beginInPlace(if (e.s.opts.follow) try e.resolveLink(path) else path)) {
-                    in.data = &.{};
+                    in.cur.close(e.gpa);
                     continue;
                 }
             }
@@ -1471,18 +1588,15 @@ const Exec = struct {
         const tmp = e.in_place_tmp orelse return;
         const o = e.cur_out;
         try e.flushOut(o);
-        // copy mode and owner from the original
-        var serr: LX.E = .SUCCESS;
-        var ofd: sys.Handle = sys.invalid_handle;
-        if (sys.openFd(e.in_place_target, sys.O.RDONLY, 0, &serr)) |f| ofd = f;
-        if (ofd != sys.invalid_handle) {
-            if (sys.fstatFd(ofd, &serr)) |st| {
-                _ = sys.fchmodFd(o.fd, st.mode & 0o7777);
-                _ = sys.fchownFd(o.fd, st.uid, st.gid);
-            }
-            _ = sys.closeFd(ofd);
+        if (e.in_place_st) |st| e.keepAttributes(e.in.cur.fd, o.fd, st);
+        const close_error = sys.closeFd(o.fd);
+        o.fd = sys.invalid_handle;
+        if (close_error) |er| {
+            e.s.obs.emit(.{ .close_failed = .{ .name = tmp, .errno = er } });
+            try e.flushAll();
+            e.s.exit_code = 4;
+            return error.Abort;
         }
-        _ = sys.closeFd(o.fd);
         if (e.s.opts.suffix) |suf| {
             const name = e.in_place_target;
             const slash = std.mem.lastIndexOfScalar(u8, name, '/');
@@ -1501,78 +1615,96 @@ const Exec = struct {
                 bk.items
             else
                 std.fmt.allocPrint(e.ar(), "{s}{s}", .{ dir, bk.items }) catch return error.OutOfMemory;
-            if (sys.renamePath(name, full, 0)) |er| {
-                e.s.obs.emit(.{ .rename_failed = .{ .name = name, .errno = er } });
-                e.s.exit_code = 4;
-            }
+            // Without the backup the original must not be replaced.
+            if (sys.renamePath(name, full, 0)) |er| return e.renameFailed(name, er);
         }
-        if (sys.renamePath(tmp, e.in_place_target, 0)) |er| {
-            e.s.obs.emit(.{ .rename_failed = .{ .name = tmp, .errno = er } });
-            e.s.exit_code = 4;
-            _ = sys.unlinkPath(tmp, false);
-        }
+        if (sys.renamePath(tmp, e.in_place_target, 0)) |er| return e.renameFailed(tmp, er);
         e.in_place_tmp = null;
         e.cur_out = e.stdout_o;
+    }
+
+    /// Give the finished copy `fd` the owner, group, mode and access ACL of
+    /// the file `from` that it replaces, as far as this user may.
+    fn keepAttributes(e: *Exec, from: sys.Handle, fd: sys.Handle, old: sys.FileStat) void {
+        var mode = old.mode & 0o7777;
+        var same_group = true;
+        // The owner first: changing it clears the set-ID bits.
+        if (sys.fchownFd(fd, old.uid, old.gid) != null) {
+            // Only a privileged user can give a file away; the group alone
+            // can be set by any of its members.
+            const group_error = sys.fchownFd(fd, std.math.maxInt(u32), old.gid);
+            var serr: LX.E = .SUCCESS;
+            const new = sys.fstatFd(fd, &serr);
+            // A set-ID bit must not pass to another user or group.
+            if (new == null or new.?.uid != old.uid) mode &= ~@as(u32, 0o4000);
+            if (new == null or new.?.gid != old.gid) {
+                mode &= ~@as(u32, 0o2000);
+                same_group = false;
+                e.s.obs.emit(.{ .group_not_kept = .{ .name = e.in_place_target, .errno = group_error orelse serr } });
+            }
+        }
+        if (posixacl.replacement(from, fd, mode, same_group)) |er| {
+            e.s.obs.emit(.{ .permissions_not_kept = .{ .name = e.in_place_target, .errno = er } });
+        }
+    }
+
+    /// Fatal, as in GNU sed. `deinit` removes the temporary file.
+    fn renameFailed(e: *Exec, name: []const u8, errno: LX.E) Err {
+        e.s.obs.emit(.{ .rename_failed = .{ .name = name, .errno = errno } });
+        try e.flushAll();
+        e.s.exit_code = 4;
+        return error.Abort;
     }
 
     /// True when the current file (and, unless separate, all later ones) has
     /// no more lines.
     fn atEof(e: *Exec) Err!bool {
         const in = &e.in;
-        if (in.pos < in.data.len) return false;
+        if (try e.peek(&in.cur)) return false;
         if (e.s.opts.separate) return true;
         // look ahead: skip to the next file with data without finishing this one
-        while (in.next_file < in.files.len) {
-            const input = in.files[in.next_file];
-            const name = inputName(input);
-            var data: std.ArrayList(u8) = .empty;
-            if (input.source == .file) {
-                if (!try e.readAll(input.source.file.handle, &data, name)) {
-                    in.next_file += 1;
-                    continue;
-                }
-            } else {
-                var err: LX.E = .SUCCESS;
-                const fd = sys.openFd(input.source.path, sys.O.RDONLY, 0, &err) orelse {
-                    e.s.obs.emit(.{ .cant_read = .{ .name = name, .errno = err } });
-                    e.s.exit_code = 2;
-                    in.next_file += 1;
-                    continue;
-                };
-                defer _ = sys.closeFd(fd);
-                if (!try e.readAll(fd, &data, name)) {
-                    in.next_file += 1;
-                    continue;
-                }
+        if (in.ahead != null) return false;
+        while (in.next_file < in.files.len) : (in.next_file += 1) {
+            var r = e.openReader(in.next_file) orelse continue;
+            const found = e.peek(&r) catch |err| {
+                r.close(e.gpa);
+                return err;
+            };
+            if (found) {
+                in.ahead = r;
+                return false;
             }
-            if (data.items.len == 0) {
-                in.next_file += 1;
-                continue;
-            }
-            in.pre = data.items;
-            in.pre_idx = in.next_file;
-            return false;
+            r.close(e.gpa);
         }
         return true;
     }
 
     fn readLine(e: *Exec) Err!bool {
         const in = &e.in;
-        while (in.pos >= in.data.len) {
+        while (true) {
+            const r = &in.cur;
+            if (std.mem.indexOfScalarPos(u8, r.buf.items, @max(r.scanned, r.pos), e.delim)) |i| {
+                e.ps.clearRetainingCapacity();
+                e.ps.appendSlice(e.gpa, r.buf.items[r.pos..i]) catch return error.OutOfMemory;
+                r.pos = i + 1;
+                r.scanned = r.pos;
+                e.ps_chomped = true;
+                break;
+            }
+            r.scanned = r.buf.items.len;
+            if (!r.eof) {
+                try e.fill(r);
+                continue;
+            }
+            if (r.unused() > 0) {
+                e.ps.clearRetainingCapacity();
+                e.ps.appendSlice(e.gpa, r.buf.items[r.pos..]) catch return error.OutOfMemory;
+                r.pos = r.buf.items.len;
+                e.ps_chomped = false;
+                break;
+            }
             if (e.s.opts.in_place and e.in_place_tmp != null) try e.finishInPlace();
             if (!try e.openNext()) return false;
-        }
-        const rest = in.data[in.pos..];
-        if (std.mem.indexOfScalar(u8, rest, e.delim)) |i| {
-            e.ps.clearRetainingCapacity();
-            e.ps.appendSlice(e.gpa, rest[0..i]) catch return error.OutOfMemory;
-            in.pos += i + 1;
-            e.ps_chomped = true;
-        } else {
-            e.ps.clearRetainingCapacity();
-            e.ps.appendSlice(e.gpa, rest) catch return error.OutOfMemory;
-            in.pos = in.data.len;
-            e.ps_chomped = false;
         }
         in.line_no += 1;
         return true;
@@ -1594,14 +1726,14 @@ const Exec = struct {
                 'r' => {
                     try e.missingNl(e.cur_out);
                     var data: std.ArrayList(u8) = .empty;
-                    if (std.mem.eql(u8, a.text, "/dev/stdin")) {
+                    // As in GNU, /dev/stdin is opened like any name: a file
+                    // is read from its start, a pipe from where it is.
+                    var err: LX.E = .SUCCESS;
+                    if (sys.openFd(a.text, sys.O.RDONLY, 0, &err)) |fd| {
+                        defer _ = sys.closeFd(fd);
+                        _ = try e.readAll(fd, &data, a.text);
+                    } else if (std.mem.eql(u8, a.text, "/dev/stdin")) {
                         _ = try e.readAll(std.Io.File.stdin().handle, &data, a.text);
-                    } else {
-                        var err: LX.E = .SUCCESS;
-                        if (sys.openFd(a.text, sys.O.RDONLY, 0, &err)) |fd| {
-                            defer _ = sys.closeFd(fd);
-                            _ = try e.readAll(fd, &data, a.text);
-                        }
                     }
                     try e.emit(e.cur_out, data.items);
                 },
@@ -1697,11 +1829,12 @@ const Exec = struct {
             },
             .plus => {
                 if (c.a2.n == 0) return true;
-                c.range_end = l + c.a2.n;
+                // A range that ends past any line number goes to the end.
+                c.range_end = l +| c.a2.n;
             },
             .mult => {
                 if (c.a2.n == 0) return true;
-                c.range_end = (l / c.a2.n + 1) * c.a2.n;
+                c.range_end = (l / c.a2.n + 1) *| c.a2.n;
             },
             else => {},
         }
@@ -2062,23 +2195,27 @@ const Exec = struct {
         return true;
     }
 
+    /// What `/bin/sh -c COMMAND` writes to its standard output, for `e` and
+    /// `s///e`. As with GNU sed's popen, the command is passed unchanged, the
+    /// text comes through a pipe and the shell's exit status is ignored.
     fn runShell(e: *Exec, command: []const u8) Err![]u8 {
         try e.flushAll();
-        var tmpl: [64]u8 = undefined;
-        const pid: u32 = @intCast(LX.getpid());
-        const outp = std.fmt.bufPrint(&tmpl, "/tmp/.sed-e-{d}", .{pid}) catch unreachable;
-        const sh = std.fmt.allocPrint(e.gpa, "( {s} ) > {s}", .{ command, outp }) catch return error.OutOfMemory;
-        defer e.gpa.free(sh);
-        const child = std.process.spawn(e.s.env.io, .{ .argv = &.{ "/bin/sh", "-c", sh } }) catch return &.{};
-        _ = sys.waitPid(child.id.?, true);
+        const io = e.s.env.io;
+        var child = std.process.spawn(io, .{ .argv = &.{ "/bin/sh", "-c", command }, .stdout = .pipe }) catch return e.subprocessFailed();
         var data: std.ArrayList(u8) = .empty;
-        var err: LX.E = .SUCCESS;
-        if (sys.openFd(outp, sys.O.RDONLY, 0, &err)) |fd| {
-            _ = try e.readAll(fd, &data, outp);
-            _ = sys.closeFd(fd);
-        }
-        _ = sys.unlinkPath(outp, false);
+        // Closing the pipe in wait() ends a child still writing after a
+        // failed read.
+        errdefer _ = child.wait(io) catch {};
+        _ = try e.readAll(child.stdout.?.handle, &data, "subprocess");
+        _ = child.wait(io) catch return e.subprocessFailed();
         return data.items;
+    }
+
+    fn subprocessFailed(e: *Exec) Err {
+        e.s.obs.emit(.subprocess_failed);
+        e.flushAll() catch {};
+        e.s.exit_code = 4;
+        return error.Abort;
     }
 
     /// Run the script once on the current pattern space. Returns true to quit.

@@ -4,7 +4,7 @@ UTIL="cmp"
 . "$(dirname "$0")/testlib.sh"
 . "$(dirname "$0")/difflib.sh"
 
-if ! have_jq; then echo "SKIP: jq not installed"; exit 0; fi
+if ! have_jq; then echo "SKIP: jq not installed"; SUMMARY_DONE=1; exit 0; fi
 W="$(mktemp -d)"; cd "$W"
 printf 'abc\ndef\nghi\n' > a
 printf 'abc\ndXf\nghi\nzz' > b

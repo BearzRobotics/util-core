@@ -26,7 +26,7 @@ Stream editor for filtering and transforming text.
 : Use extended regular expressions.
 
 -i[SUFFIX], --in-place[=SUFFIX]
-: Edit files in place; with SUFFIX keep a backup (a `*` in SUFFIX stands for the base name, a `/` makes it a path).
+: Edit files in place; with SUFFIX keep a backup (a `*` in SUFFIX stands for the base name, a `/` makes it a path). If the backup cannot be made, sed stops with status 4 and leaves the file unchanged. The new file gets the owner, group, permissions and POSIX access ACL of the file that was read, as far as the user may set them (see DIFFERENCES FROM GNU).
 
 --follow-symlinks
 : Edit the target of a symbolic link when editing in place.
@@ -41,7 +41,7 @@ Stream editor for filtering and transforming text.
 : Lines are separated by NUL.
 
 -u, --unbuffered
-: Flush output after every line.
+: Flush output after every line, and take no more from a pipe than is used.
 
 --posix
 : Disable some GNU extensions (N at end of input discards the pattern space).
@@ -54,6 +54,12 @@ Stream editor for filtering and transforming text.
 
 --help, --version
 : Print help or version and exit.
+
+# DIFFERENCES FROM GNU
+
+- A range `ADDR,+N` whose end is past the largest line number goes to the end of the input; GNU's sum wraps around and ends it at once.
+- `-i`, when the new file cannot be given the old one's group: GNU says nothing and keeps the group permission bits, which then apply to another group. We limit that group to what others had, drop the set-group-ID bit and warn on standard error. The set-user-ID bit is likewise dropped when the owner cannot be kept. Output and exit status are as in GNU.
+- `-i`, when the mode or access ACL cannot be set on the new file: we warn on standard error; the new file allows nobody more than the old one did.
 
 # EXIT STATUS
 
@@ -82,10 +88,11 @@ See docs/compatibility/sed.md for details.
 
 # LIMITATIONS
 
-- Regular expressions use the Perl-dialect engine of regex-zig through src/posixre.zig: alternation is leftmost-first, POSIX and GNU use leftmost-longest, so `s/a|ab/X/` differs on "ab".
+- Regular expressions use the Perl-dialect engine of regex-zig through src/posixre.zig. Alternation is made leftmost-longest, as in POSIX and GNU, except in patterns containing `$` or a word anchor, which are leftmost-first; group positions follow the Perl rule.
 - `--debug` is accepted but prints nothing extra (GNU prints the program and a trace).
 - C locale only: no multibyte characters.
-- `e` and `s///e` run the command through `/bin/sh` and a temporary file in /tmp.
+- `-i` does not carry over other extended attributes (GNU sed does not either), nor an SELinux context (GNU sed does).
+- `e` and `s///e` run the command with `/bin/sh -c` and read its output through a pipe; no temporary file is used.
 - `--version` prints an abbreviated banner.
 
 # SEE ALSO

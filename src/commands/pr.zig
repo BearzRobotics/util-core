@@ -294,7 +294,10 @@ pub fn main(ctx: cli.Context) u8 {
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const env: pr.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
     const result = pr.run(env, opts, files.items, &stdout.interface, .{ .context = @constCast(&ctx), .func = report }) catch |e| switch (e) {
-        error.OutOfMemory => return 1,
+        error.OutOfMemory => {
+            cli.warn(ctx, "memory exhausted", .{});
+            return 1;
+        },
         error.WriteFailed => {
             cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
             return 1;
@@ -308,7 +311,9 @@ fn report(context: ?*anyopaque, ev: pr.Event) void {
     switch (ev) {
         .page_width_too_narrow => cli.warn(ctx.*, "page width too narrow", .{}),
         .open_failed => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
+        .read_failed => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
         .start_page_exceeds => |e| cli.warn(ctx.*, "starting page number {d} exceeds page count {d}", .{ e.page, e.count }),
         .page_number_overflow => cli.warn(ctx.*, "page number overflow", .{}),
+        .integer_overflow => cli.warn(ctx.*, "integer overflow", .{}),
     }
 }

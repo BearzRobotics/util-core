@@ -27,6 +27,8 @@ fn report(context: ?*anyopaque, ev: updatedb.Event) void {
     switch (ev) {
         .find_error => |e| stderrLine(ctx.*, "find: '{s}': {s}\n", .{ e.path, e.text }),
         .find_bad_number => |e| stderrLine(ctx.*, "find: Expected a positive decimal integer argument to {s}, but got '{s}'\n", .{ e.option, e.value }),
+        .user_failed => |e| stderrLine(ctx.*, "{s}: cannot search as user '{s}': {s}\n", .{ ctx.name, e.user, e.text }),
+        .find_bad_regex => |e| stderrLine(ctx.*, "find: failed to compile regular expression '{s}': {s}\n", .{ e.pattern, e.text }),
         .find_unknown_predicate => |o| stderrLine(ctx.*, "find: unknown predicate `{s}'\n", .{o}),
         .prune_trailing_slash => |pp| stderrLine(ctx.*, "{s}: {s}: pruned paths should not contain trailing slashes\n", .{ ctx.name, pp }),
         .create_failed => |e| stderrLine(ctx.*, "{s}: {s}: {s}\nFailed to generate {s}\n", .{ ctx.name, e.tmp, e.text, e.tmp }),
@@ -43,6 +45,8 @@ pub fn main(ctx: cli.Context) u8 {
         .prunepaths = envOr(ctx, "PRUNEPATHS", updatedb.default_prunepaths),
         .prunefs = envOr(ctx, "PRUNEFS", updatedb.default_prunefs),
         .output = envOr(ctx, "LOCATE_DB", updatedb.default_output),
+        .localuser = envOr(ctx, "LOCALUSER", ""),
+        .netuser = envOr(ctx, "NETUSER", "daemon"),
     };
     var dbformat: []const u8 = "";
     for (ctx.args) |arg| {
@@ -51,7 +55,7 @@ pub fn main(ctx: cli.Context) u8 {
         const opt = if (eq) |k| a[0..k] else a;
         const val = if (eq) |k| a[k + 1 ..] else a;
         const m = std.mem.eql;
-        if (m(u8, opt, "--findoptions")) o.findoptions = val else if (m(u8, opt, "--localpaths")) o.searchpaths = val else if (m(u8, opt, "--netpaths")) o.netpaths = val else if (m(u8, opt, "--prunepaths")) o.prunepaths = val else if (m(u8, opt, "--prunefs")) o.prunefs = val else if (m(u8, opt, "--output")) o.output = val else if (m(u8, opt, "--netuser") or m(u8, opt, "--localuser")) {} else if (m(u8, opt, "--changecwd")) o.changecwd = val else if (m(u8, opt, "--dbformat")) dbformat = val else if (m(u8, opt, "--version")) {
+        if (m(u8, opt, "--findoptions")) o.findoptions = val else if (m(u8, opt, "--localpaths")) o.searchpaths = val else if (m(u8, opt, "--netpaths")) o.netpaths = val else if (m(u8, opt, "--prunepaths")) o.prunepaths = val else if (m(u8, opt, "--prunefs")) o.prunefs = val else if (m(u8, opt, "--output")) o.output = val else if (m(u8, opt, "--netuser")) o.netuser = val else if (m(u8, opt, "--localuser")) o.localuser = val else if (m(u8, opt, "--changecwd")) o.changecwd = val else if (m(u8, opt, "--dbformat")) dbformat = val else if (m(u8, opt, "--version")) {
             const v =
                 \\
                 \\updatedb (GNU findutils) 4.10.0

@@ -29,7 +29,7 @@ None. Output, diagnostics and exit status follow GNU (decision 0005).
 
 ## Tests
 
-test/test_link.sh (15 cases) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
+test/test_link.sh (15 cases) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets, link counts and which names are one file are compared).
 
 ## Not yet done
 

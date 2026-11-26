@@ -162,6 +162,20 @@ sd 'addr 0,/re/ -s' nums -s -n '0,/o/p' nums nums
 sd 'addr 2,4 -s' nums -s -n '2,4p' nums nums
 sd 'addr 2,4 no -s' nums -n '2,4p' nums nums
 
+# Numbers that do not fit where they are used, and very deep blocks.
+huge=18446744073709551615
+# (GNU's sum wraps around and ends such a range after two lines.)
+got=$(printf '1\n2\n3\n4\n' | "$BIN_DIR/sed" -n "2,+${huge}p" 2>&1 | tr '\n' ' ')
+if [ "$got" = '2 3 4 ' ]; then PASS=$((PASS + 1)); echo "PASS a range +N past any line goes to the end"
+else FAIL=$((FAIL + 1)); echo "FAIL a range +N past any line goes to the end ($got)"; fi
+sd 'range ~N with a huge multiple' nums -n "2,~${huge}p"
+sd 'l width 2^63' abc 'l 9223372036854775808'
+sd 'q status 2^63' nums 'q 9223372036854775808'
+sd 'q status 2^63+7' nums 'q 9223372036854775815'
+sd 'Q status 2^64+3 wraps' nums 'Q 18446744073709551619'
+awk 'BEGIN { for (i = 0; i < 70000; i++) printf "{"; printf "p"; for (i = 0; i < 70000; i++) printf "}"; print "" }' > deep.sed
+sd '70000 nested blocks' one -f deep.sed
+
 # ---- other commands, per input
 for f in nums text abc nonl nonl3 empty one; do
     sd "p $f" $f p
@@ -345,6 +359,21 @@ sd '--sandbox w' nums --sandbox 'w x'
 sd '--sandbox e' nums --sandbox 'e echo'
 sd '--sandbox s///e' nums --sandbox 's/a/b/e'
 sd '--sandbox s///w' nums --sandbox 's/a/b/w x'
+# e and s///e pass the command to the shell unchanged and read it from a pipe.
+sd 'e with a trailing comment' nums '1e echo hi # note'
+printf 'echo hi # c\nprintf "a\\n\\n"\n' > shcmds
+sd 'e on pattern space with a comment' shcmds e
+sd 's///e with a here-document' one 's/.*/cat <<E\nbody\nE/e'
+sd 'e with a failing command' nums '1e exit 3'
+# No capture file: a link planted for the old predictable name is not followed.
+printf 'PRECIOUS\n' > victim
+bash -c 'ln -sf "$PWD/victim" /tmp/.sed-e-$$ && exec "$1" "1e echo hijacked" one >e.out' _ "$BIN_DIR/sed"
+if [ "$(cat victim)" = PRECIOUS ] && [ "$(head -n 1 e.out)" = hijacked ]; then PASS=$((PASS + 1)); echo "PASS e writes no file in /tmp"
+else FAIL=$((FAIL + 1)); echo "FAIL e writes no file in /tmp"; fi
+for l in /tmp/.sed-e-*; do
+    if [ -L "$l" ] && [ "$(readlink "$l")" = "$PWD/victim" ]; then rm -f "$l"; fi
+done
+
 sd '--follow-symlinks' nums --follow-symlinks 2p
 sd '-l bad' nums -l x p
 sd '-l 5' nums -l 5 -n l
@@ -446,6 +475,102 @@ run_tree_t '-i *.orig' "$SET" -i'*.orig' 's/a/A/' f
 run_tree_t '-i d/*' "$SET" -i'd/*' 's/a/A/' f
 run_tree_t '-i sub dir file' "$SET" -i 's/q/Q/' d/k
 run_tree_t '-i sub dir file bak' "$SET" -i.bak 's/q/Q/' d/k
+# The backup cannot be made: GNU stops there and the file is not replaced.
+run_tree_t '-i backup in missing dir' "$SET" -i'nodir/*' 's/a/A/' f g
+run_tree_t '-i backup is a directory' "$SET; mkdir f.bak" -i.bak 's/[ax]/A/' f g
+run_tree_t '-i backup fails after q' "$SET" -i'nodir/*' 2q f g
+run_tree_t '-i backup fails, w kept' "$SET" -i'nodir/*' -e 'w out' f g
+# A write error that only close() reports. strace makes that one close fail;
+# the file being edited (or the w file) is picked by name from a first trace.
+# close_fails DESC PATTERN WANT-f ARGS...
+close_fails() {
+    description="$1"; pattern="$2"; want="$3"; shift 3
+    d="$W/close"; rm -rf "$d"; mkdir "$d"
+    printf 'a\n' > "$d/f"
+    (cd "$d" && strace -y -o ../trace -e trace=close "$BIN_DIR/sed" "$@") > /dev/null 2>&1
+    n=$(grep '^close' "$W/trace" | grep -n "$pattern" | head -n 1 | cut -d: -f1)
+    if [ -z "$n" ]; then skip_test "$description (cannot trace)"; return; fi
+    printf 'a\n' > "$d/f"; rm -f "$d/w"
+    (cd "$d" && strace -o ../trace -e trace=close -e inject=close:error=EIO:when="$n" "$BIN_DIR/sed" "$@") > /dev/null 2> "$W/close.err"; rc=$?
+    if [ "$rc" -eq 4 ] && grep -q "couldn't close .*: Input/output error" "$W/close.err" &&
+        [ "$(cat "$d/f")" = "$want" ] && [ -z "$(find "$d" -name 'sed*')" ]; then
+        PASS=$((PASS + 1)); printf 'PASS %s\n' "$description"
+    else
+        FAIL=$((FAIL + 1)); printf 'FAIL %s (rc=%s f=%s) %s\n' "$description" "$rc" "$(cat "$d/f")" "$(cat "$W/close.err")"
+    fi
+}
+close_fails '-i keeps the file when close fails' '/sed[0-9a-f]\{6\}>' a -i 's/a/b/' f
+close_fails '-i.bak keeps the file when close fails' '/sed[0-9a-f]\{6\}>' a -i.bak 's/a/b/' f
+close_fails 'w file close failure' '/w>' a -n 'w w' f
+
+# A run that stops inside an in-place edit leaves no temporary file behind.
+d="$W/aborted"; mkdir "$d"
+seq 20000 > "$d/big"
+(ulimit -f 20; trap '' XFSZ; exec "$BIN_DIR/sed" -i s/1/2/ "$d/big") 2> /dev/null; rc=$?
+left=$(find "$d" -name 'sed*' | wc -l)
+if [ "$rc $left $(wc -l < "$d/big")" = "4 0 20000" ]; then PASS=$((PASS + 1)); echo "PASS -i removes the temporary file after a failed write"
+else FAIL=$((FAIL + 1)); echo "FAIL -i removes the temporary file after a failed write (rc=$rc left=$left)"; fi
+printf 'a\nb\n' > "$d/ab"
+"$BIN_DIR/sed" -i '2{s///}' "$d/ab" 2> /dev/null; rc=$?
+left=$(find "$d" -name 'sed*' | wc -l)
+if [ "$rc $left $(tr '\n' ' ' < "$d/ab")" = "1 0 a b " ]; then PASS=$((PASS + 1)); echo "PASS -i removes the temporary file after a script error"
+else FAIL=$((FAIL + 1)); echo "FAIL -i removes the temporary file after a script error (rc=$rc left=$left)"; fi
+
+# -i: the new file takes the attributes of the file that was read.
+ok_if() { # DESC GOT WANT
+    if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); printf 'PASS %s\n' "$1"
+    else FAIL=$((FAIL + 1)); printf 'FAIL %s (got "%s", want "%s")\n' "$1" "$2" "$3"; fi
+}
+d="$W/attr"; mkdir "$d"
+printf 'a\n' > "$d/f"; chmod 600 "$d/f"; printf 'o\n' > "$d/other"; chmod 666 "$d/other"
+(cd "$d" && "$BIN_DIR/sed" -i "1e ln -sf $d/other f" f)
+ok_if '-i takes the mode from the file read, not the name' "$(stat -c %a "$d/f")" 600
+# A group of ours that new files do not get by themselves.
+grp=$(id -G | tr ' ' '\n' | grep -v "^$(id -g)\$" | head -n 1)
+printf 'a\n' > "$d/g"
+if [ -z "$grp" ] || ! chgrp "$grp" "$d/g" 2>/dev/null || ! can_inject; then
+    skip_test '-i keeps the group when the owner cannot be set (no second group or strace)'
+    skip_test '-i limits the permissions of a group it cannot keep'
+else
+    chmod 2764 "$d/g"
+    strace -o /dev/null -e trace=fchown -e inject=fchown:error=EPERM:when=1 "$BIN_DIR/sed" -i s/a/b/ "$d/g" 2> "$d/err"
+    ok_if '-i keeps the group when the owner cannot be set' "$? $(stat -c '%a %g' "$d/g") $(cat "$d/err")" "0 2764 $grp "
+    printf 'a\n' > "$d/g"; chmod 2764 "$d/g"
+    strace -o /dev/null -e trace=fchown -e inject=fchown:error=EPERM:when=1+ "$BIN_DIR/sed" -i s/a/b/ "$d/g" 2> "$d/err"
+    ok_if '-i limits the permissions of a group it cannot keep' \
+        "$? $(stat -c '%a %g' "$d/g") $(cat "$d/g") $(grep -c 'could not keep the group' "$d/err")" "0 744 $(id -g) b 1"
+fi
+# The access ACL goes with the file, and one inherited from the directory by
+# the new copy must not be added. acl_of lists a file's entries.
+acl_of() { getfacl -cpE "$1" | tr '\n' ' '; }
+d="$W/acl"; mkdir "$d"; printf 'x\n' > "$d/a"
+if ! command -v getfacl > /dev/null || ! setfacl -m u:65534:r "$d/a" 2>/dev/null; then
+    for t in 'keeps an access ACL' 'adds no inherited ACL' 'warns when the ACL is lost' 'limits the ACL entry of another group'; do
+        skip_test "-i $t (no ACL support)"
+    done
+else
+    cp -p "$d/a" "$d/b"; "$BIN_DIR/sed" -i s/x/y/ "$d/a"; "${GNU_BIN:-/usr/bin}/sed" -i s/x/y/ "$d/b"
+    ok_if '-i keeps an access ACL' "$(acl_of "$d/a")" "$(acl_of "$d/b")"
+    mkdir "$d/in"; setfacl -d -m u:65534:rwx "$d/in"
+    printf 'x\n' > "$d/in/a"; cp "$d/in/a" "$d/in/b"; setfacl -b "$d/in/a" "$d/in/b"; chmod 640 "$d/in/a" "$d/in/b"
+    "$BIN_DIR/sed" -i s/x/y/ "$d/in/a"; "${GNU_BIN:-/usr/bin}/sed" -i s/x/y/ "$d/in/b"
+    ok_if '-i adds no inherited ACL' "$(acl_of "$d/in/a")" "$(acl_of "$d/in/b")"
+    if can_inject; then
+        printf 'x\n' > "$d/l"; chmod 600 "$d/l"; setfacl -m u:65534:rw "$d/l"
+        strace -o /dev/null -e trace=fsetxattr -e inject=fsetxattr:error=EPERM "$BIN_DIR/sed" -i s/x/y/ "$d/l" 2> "$d/err"
+        ok_if '-i warns when the ACL is lost' "$? $(stat -c %a "$d/l") $(grep -c 'could not keep all of its permissions' "$d/err")" "0 600 1"
+        printf 'x\n' > "$d/g"; chmod 660 "$d/g"; setfacl -m u:65534:rw "$d/g"
+        if [ -n "$grp" ] && chgrp "$grp" "$d/g" 2>/dev/null; then
+            strace -o /dev/null -e trace=fchown -e inject=fchown:error=EPERM:when=1+ "$BIN_DIR/sed" -i s/x/y/ "$d/g" 2> /dev/null
+            ok_if '-i limits the ACL entry of another group' "$(acl_of "$d/g")" 'user::rw- user:nobody:rw- group::--- mask::rw- other::---  '
+        else
+            skip_test '-i limits the ACL entry of another group (no second group)'
+        fi
+    else
+        skip_test '-i warns when the ACL is lost (cannot inject)'
+        skip_test '-i limits the ACL entry of another group (cannot inject)'
+    fi
+fi
 run_tree_t '--in-place' "$SET" --in-place 's/a/A/' f
 run_tree_t '--in-place=.b' "$SET" --in-place=.b 's/a/A/' f
 run_tree_t '-i missing' "$SET" -i 's/a/A/' nosuch
@@ -486,6 +611,11 @@ run_tree_t 'W' "$SET" -n 'N;W new' f
 run_tree_t 'w no name' "$SET" 'w' f
 
 # ---- UTF-8 locale (C.UTF-8) and alternation
+# No empty match inside a multibyte character: \B must not split one.
+printf '\303\211\na\303\251\n\303\251 \303\251\n\342\202\254a\n\360\235\224\270\n\355\237\277x\364\217\277\277\n\340\240\200\360\220\200\200\n. \251.\n' > midchar
+CMP_LOCALE=C.UTF-8 CMP_STDIN=midchar run_cmp 'UTF-8 \B keeps characters whole' 's/\B/X/g'
+CMP_LOCALE=C.UTF-8 CMP_STDIN=midchar run_cmp 'UTF-8 \B next to a repeat' 's/x*\B/X/g'
+
 printf 'héllo wörld ñ ÀÉÎ 日本語 😀 abc_1\nstraße İ\n' > u8
 printf '\377\376 abc \303 é\n' > u8bad
 printf 'abcd abcd foobarbaz ababc\n' > altin
@@ -523,6 +653,14 @@ sd 'ERE leading +' altin -E 's/+a/x/'
 sd 'ERE unmatched (' altin -E 's/(/x/'
 sd 'ERE unmatched )' altin -E 's/)/x/'
 sd 'BRE a**' altin 's/a**/x/'
+
+# Each word anchor by itself, in places where \< , \> and \b differ, in the C
+# locale and in a UTF-8 one (the two are translated differently).
+printf 'abc def\n abc_1 -x-  abcdef\nfoo.bar  (baz)\n\n_ _a a_\nab abab b\n' > anchors
+for sc in 's/\>/X/g' 's/\</X/g' 's/\b/X/g' 's/\B/X/g' 's/.\>/X/g' 's/\<./X/g' 's/\>./X/g' 's/.\</X/g' \
+    's/\<[a-z]*/<&>/g' 's/[a-z]*\>/<&>/g' 's/abc\>/X/g' 's/\>abc/X/g' '/\<\W/d'; do
+    for loc in C C.UTF-8; do CMP_LOCALE=$loc sd "anchor $loc $sc" anchors "$sc"; done
+done
 
 # ---- --debug (program listing and execution trace)
 printf 'a/b\n' > dab; printf 'tab\there\\x\001\n' > dweird; printf 'zz\n' > rf.txt
@@ -607,4 +745,58 @@ help_text_cmp() {
     else FAIL=$((FAIL + 1)); printf "FAIL --help text\n"; fi
 }
 help_text_cmp
+# \< and \> are each one end of a word, also in the C locale and next to
+# something that need not be a word character.
+printf 'abc def\n abc_1 -x-  abcdef\nfoo.bar  (baz)\n\n_ _a a_\nab abab b\n' > "$TEST_TMP/words"
+for p in '\<' '\>' '\<.' '.\>' 'abc\<' '\>abc' '\<a*' 'ab*\>' '\W\>' '\<\W' '\<[a-z]*def\>' '\<abc\>' '\<\w\+\>' '\<a\?b' '\(abc\)\>'; do
+    CMP_STDIN="$TEST_TMP/words" run_cmp "word ends: s/$p/[&]/g" "s/$p/[&]/g"
+    CMP_STDIN="$TEST_TMP/words" run_cmp "word ends: -E s/$p" -n -E "s/$p/<&>/gp"
+done
+# Leftmost-longest alternation stays fast on long lines (this used to take
+# minutes) and does not turn into leftmost-first far from the end of a line.
+python3 -I -c 'print("a" * 20000)' > "$TEST_TMP/longalt" 2>/dev/null ||
+    { head -c 20000 /dev/zero | tr '\0' a; echo; } > "$TEST_TMP/longalt"
+got=$(timeout 20 "$BIN_DIR/sed" -E 's/a|b/x/g' "$TEST_TMP/longalt" | tr -d '\n' | tr -s x | wc -c)
+n=$(timeout 20 "$BIN_DIR/grep" -oE 'a|b' "$TEST_TMP/longalt" 2>/dev/null | wc -l)
+if [ "$got" -eq 1 ] && { [ ! -x "$BIN_DIR/grep" ] || [ "$n" -eq 20000 ]; }; then
+    PASS=$((PASS + 1)); echo "PASS alternation on a long line"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL alternation on a long line ($got, $n)"
+fi
+{ printf abcd; head -c 6000 /dev/zero | tr '\0' .; echo; } > "$TEST_TMP/longalt"
+CMP_STDIN="$TEST_TMP/longalt" run_cmp "longest alternative before a long rest" -E 's/a|abcd/X/'
+printf 'aaa abcabc xab\nab\n' > "$TEST_TMP/altin"
+for p in 'a|abc|abcabc' '(a|ab)(c|bcab)?' 'x{,2}a|xab' '^a|aaa a' '(ab|a)|b c' 'A|AAA'; do
+    CMP_STDIN="$TEST_TMP/altin" run_cmp "longest -E $p" -E "s/$p/<&>/g"
+    CMP_STDIN="$TEST_TMP/altin" run_cmp "longest -E I $p" -E "s/$p/<&>/gI"
+done 2>/dev/null
+CMP_STDIN="$TEST_TMP/altin" run_cmp "longest with the M flag" -E 'N;s/^a|^ab/X/Mg'
+CMP_STDIN="$TEST_TMP/altin" run_cmp "longest BRE" 's/a\|aaa\|ab\(c\|cab\)/<&>/g'
+# Input is processed as it arrives. (The memory limit stops a sed that keeps
+# reading an endless input; the timeouts one that waits for its end.)
+stream_case() { # DESC SHELL-SCRIPT using "$S"
+    e=$(cd "$TEST_TMP" && S="${GNU_BIN:-/usr/bin}/sed" LC_ALL=C timeout 20 sh -c "ulimit -v 400000; $2" 2>&1; echo "status $?")
+    a=$(cd "$TEST_TMP" && S="$BIN_DIR/sed" LC_ALL=C timeout 20 sh -c "ulimit -v 400000; $2" 2>&1; echo "status $?")
+    if [ "$e" = "$a" ]; then PASS=$((PASS + 1)); echo "PASS $1"
+    else FAIL=$((FAIL + 1)); echo "FAIL $1"; printf '%s\n---\n%s\n' "$e" "$a" | head -c 600; fi
+}
+printf '1\n2\n3\n4\n5\n' > "$TEST_TMP/five"; printf 'x' > "$TEST_TMP/nonl"; : > "$TEST_TMP/nothing"
+stream_case "q ends an endless input"            'yes | timeout 5 "$S" 5q'
+# Without -u GNU keeps this in its buffer; we write it before waiting.
+got=$(cd "$TEST_TMP" && { echo a; sleep 3; } | { timeout 2 "$BIN_DIR/sed" p > out1; true; }; cat "$TEST_TMP/out1")
+if [ "$got" = "a
+a" ]; then PASS=$((PASS + 1)); echo "PASS output before the input ends"
+else FAIL=$((FAIL + 1)); echo "FAIL output before the input ends ($got)"; fi
+stream_case "output before the input ends, -u"   '{ echo a; sleep 3; } | { timeout 2 "$S" -u p > out2; true; }; cat out2'
+stream_case "q leaves a file after the line"     '{ "$S" 2q; cat; } < five'
+stream_case "Q leaves a file after the line"     '{ "$S" 2Q; cat; } < five'
+stream_case "q after looking for the last line"  '{ "$S" -n "2{\$p;q}"; cat; } < five'
+stream_case "-u takes only what it uses"         'cat five | { "$S" -u 2q; echo rest; cat; }'
+stream_case "last line across empty files"       '"$S" "\$s/\$/ last/" five nothing nothing'
+stream_case "last line with more files to come"  '"$S" -n "\$=" five nonl nothing five'
+stream_case "N across a file without newline"    '"$S" "N;N;s/\n/ /g" nonl five'
+stream_case "F and the last line of stdin"       'printf "a\nb\n" | "$S" -e F -e "\$s/^/end /" - nothing'
+stream_case "r /dev/stdin from a file"           '"$S" "1r /dev/stdin" < five'
+stream_case "r /dev/stdin from a pipe"           'cat five | "$S" "1r /dev/stdin"'
+stream_case "a line longer than a read"          '{ head -c 300000 /dev/zero | tr "\0" a; echo; echo end; } | "$S" "s/a\{5\}/b/g" | cksum'
 cd /; print_summary

@@ -15,6 +15,7 @@ GNU coreutils 9.7 (`/usr/bin/sync --version` on the development machine, install
 ## Supported behaviour
 
 - With no FILE, sync(2); with FILEs, fsync each (or fdatasync/syncfs).
+- As in sync.c, a FILE is opened for reading, or for writing if that is refused, without waiting for the other end of a FIFO. A failure to close it is reported.
 - `--data` needs at least one FILE and cannot be combined with `--file-system`.
 
 ## Library

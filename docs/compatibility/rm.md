@@ -14,7 +14,7 @@ GNU coreutils 9.7 (`/usr/bin/rm --version` on the development machine, installed
 - `-d, --dir`: Remove empty directories.
 - `-v, --verbose`: Explain what is being done.
 - `--one-file-system`: With -r, skip (and report) directories on a different device from the command-line argument; the parent is then kept and the exit status is 1.
-- `--preserve-root[=all], --no-preserve-root`: Refuse to operate recursively on `/` (default). `=all` is treated as plain --preserve-root.
+- `--preserve-root[=all], --no-preserve-root`: Refuse to operate recursively on `/` (default). As in GNU, `/` is recognised by device and inode, so a bind mount of it, or a link to it with a trailing slash, is refused too, with or without /proc; if `/` cannot be examined nothing is removed. --no-preserve-root must be written in full. `=all` is treated as plain --preserve-root.
 - `--help, --version`: Print help or version and exit.
 
 ## Supported behaviour
@@ -22,6 +22,7 @@ GNU coreutils 9.7 (`/usr/bin/rm --version` on the development machine, installed
 - Prompts read answers from standard input and follow GNU's wording (`descend into directory`, `remove regular empty file`, `remove write-protected ...`).
 - A directory whose contents could not all be removed (error or --one-file-system skip) is left in place without a further prompt; declined prompts do not block the parent's own prompt.
 - Exit status 0 when everything requested was removed (or missing with -f), 1 otherwise.
+- As GNU rm, a recursive removal works relative to the open directories: a directory is opened without following a symbolic link, checked to be the one that was examined, and its contents are examined and removed through that descriptor, so renaming things in the tree meanwhile cannot send rm outside it. Paths longer than PATH_MAX are removed. Unlike GNU, rm stops with `File name too long` below 10000 levels (4000 in a debug build) or 64 KiB of path. The same applies to the removal of the source by `mv` across file systems.
 
 ## Library
 

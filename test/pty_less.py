@@ -13,7 +13,7 @@ def check(name, ok):
     if not ok:
         failures.append(name)
 
-def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05):
+def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdin=False):
     """steps: list of (bytes_to_send_to_terminal, seconds_to_wait).
     stdin_feed: list of byte strings written to the program's stdin one by one
     (delay apart), then closed. Returns (output, exit status or None)."""
@@ -21,7 +21,9 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05):
     pid, master = pty.fork()
     if pid == 0:
         os.environ['TERM'] = 'xterm-256color'
-        if stdin_feed is None:
+        if tty_stdin:
+            pass
+        elif stdin_feed is None:
             fd = os.open('/dev/null', os.O_RDONLY); os.dup2(fd, 0)
         else:
             os.dup2(r_in, 0)
@@ -116,11 +118,47 @@ r_in, w_in = None, None
 out, st, mid = session([less], [(b'F', 0.2), (b'x', 0.2), (b'q', 0.5)], stdin_feed=[b"first\n"], delay=0.2)
 check("less: F shows 'Waiting for data'", 'Waiting for data' in out)
 
+# Follow a file that is still being written, scrolling meanwhile
+def following(argv, grow):
+    """Follow `grow`, adding a line before each key is sent."""
+    with open(grow, 'w') as f:
+        f.write(''.join(f"old {i}\n" for i in range(60)))
+    def add(line):
+        return "echo %s >> '%s'" % (line, grow)
+    script = ("(sleep 1; %s; sleep 2; %s) & exec %s" %
+              (add('added-first'), add('added-later'), argv))
+    # F; wait for the first line; scroll up while the second arrives; G; quit.
+    return session(['/bin/sh', '-c', script],
+                   [(b'F', 2.0), (b'k', 2.0), (b'G', 1.0), (b'q', 0.5)])
+
+grow = os.path.join(tmp, 'pty_grow.log')
+for label, argv in [('less FILE', "'%s' '%s'" % (less, grow)), ('less <FILE', "'%s' <'%s'" % (less, grow))]:
+    out, st, _ = following(argv, grow)
+    check('%s: F shows what is added to a file' % label, 'added-first' in out)
+    check('%s: following goes on after scrolling' % label,
+          'Following (G' in out and 'added-later' in out and st == 0)
+
 # -F: fits on one screen: printed, no alternate screen, exits by itself
 out, st, _ = session([less, '-F', short], [])
 check("less -F: short file printed and exits", st == 0 and 'alpha' in out and '\x1b[?1049h' not in out)
 out, st, _ = session([less, '-F', big], [(b'q', 0.5)])
 check("less -F: long file is paged", '\x1b[?1049h' in out)
+
+# -F shows a short file as the pager would: no control sequence of the file
+# reaches the terminal without -R.
+hostile = os.path.join(tmp, 'pty_esc.txt')
+with open(hostile, 'wb') as f:
+    f.write(b'hi\x1b]0;OWNED\x07\x1b[2J\rthere\r\nred \x1b[31mtext\x1b[0m\n\ttab')
+out, st, _ = session([less, '-F', hostile], [])
+check('less -F: control characters of a short file are shown, not sent',
+      st == 0 and '\x1b' not in out and '\x07' not in out and 'hi^[]0;OWNED^G^[[2J^Mthere' in out
+      and '^[[31mtext' in out and '        tab' in out)
+out, st, _ = session([less, '-F', '-R', hostile], [])
+check('less -F -R: colours pass', st == 0 and 'red \x1b[31mtext\x1b[0m' in out)
+out, st, _ = session([less, '-F', '-N', short], [])
+check('less -F -N: lines are numbered', st == 0 and '     2 ' in visible(out) and 'beta' in out)
+out, st, _ = session([cat, '-p', '--color=never', hostile], [])
+check('cat: a short file is written as it is', st == 0 and 'hi\x1b]0;OWNED\x07\x1b[2J' in out)
 
 # cat: a long file is paged, a short one is not
 out, st, _ = session([cat, big], [(b'q', 0.5)])
@@ -138,5 +176,73 @@ with open(src, 'w') as f:
     f.write('const std = @import("std");\npub fn main() void {\n    // hi\n    const x: u32 = 42;\n}\n')
 out, st, _ = session([cat, src], [])
 check("cat: built-in Zig grammar colours the source", re.search(r'\x1b\[(?:3[0-9]|38;[25];[0-9;]+)m', out) is not None and st == 0)
+
+# cat reading the terminal is just cat: no pager takes the keys, nothing is
+# decorated, and Ctrl-D ends the input.
+for label, argv in [('cat', [cat]), ('cat -', [cat, '-']), ('cat /dev/tty', [cat, '/dev/tty'])]:
+    out, st, _ = session(argv, [(b'hello\r', 0.3), (b'world\r', 0.3), (b'\x04', 0.5)], tty_stdin=True)
+    check('%s: typed lines are echoed and copied' % label,
+          st == 0 and out.replace('\r', '') == 'hello\nhello\nworld\nworld\n')
+
+# Another program in the pipeline reads the terminal: cat leaves it alone.
+prompt = os.path.join(tmp, 'pty_prompt.sh')
+with open(prompt, 'w') as f:
+    f.write('printf "Password: " > /dev/tty\nIFS= read -r pw < /dev/tty\necho "producer got [$pw]"\n')
+out, st, _ = session(['/bin/sh', '-c', 'sh "%s" | "%s"' % (prompt, cat)], [(b'hunter2\r', 0.8)], tty_stdin=True)
+check('cat: a prompt earlier in the pipeline gets the keyboard', st == 0 and 'producer got [hunter2]' in out)
+
+# What is typed while a short output is produced stays for the next reader.
+for label, command in [('cat', '"%s"' % cat), ('less -F', '"%s" -F' % less)]:
+    out, st, _ = session(['/bin/sh', '-c', '{ sleep 1; echo short; } | %s; IFS= read -r x; echo "next got [$x]"' % command],
+                         [(b'typed ahead\r', 1.5)], tty_stdin=True)
+    check('%s: input typed ahead is not consumed' % label, st == 0 and 'next got [typed ahead]' in out)
+
+# A long stream is still paged.
+feed = [("piped %d\n" % i).encode() for i in range(60)]
+out, st, _ = session([cat], [(b'', 0.5), (b'q', 0.5)], stdin_feed=feed, delay=0.01)
+check('cat: a long piped stream is paged and quits with q', '\x1b[?1049h' in out and '\x1b[?1049l' in out and st == 0)
+
+# cat with itself as the pager, directly or through a script. Unfixed, each cat
+# starts another without end, so these run only inside a systemd scope that caps
+# the number of processes and the memory, and which is stopped afterwards.
+import shutil, subprocess
+cap = ['-p', 'TasksMax=50', '-p', 'MemoryMax=1G', '-p', 'MemorySwapMax=0']
+can_cap = shutil.which('systemd-run') is not None and subprocess.run(
+    ['systemd-run', '--user', '--scope', '-q', *cap, '/bin/true'], capture_output=True).returncode == 0
+if can_cap:
+    bindir = os.path.join(tmp, 'pty_bin')
+    os.makedirs(bindir, exist_ok=True)
+    if not os.path.lexists(os.path.join(bindir, 'cat')):
+        os.symlink(os.path.abspath(cat), os.path.join(bindir, 'cat'))
+    wrapper = os.path.join(bindir, 'wrapper')
+    with open(wrapper, 'w') as f:
+        f.write('#!/bin/sh\nexec cat\n')
+    os.chmod(wrapper, 0o755)
+    one = os.path.join(tmp, 'pty_one.txt')
+    with open(one, 'w') as f:
+        f.write('only-this-line\n')
+    cases = [('PAGER=cat', {'PAGER': 'cat'}, ''),
+             ('BAT_PAGER=cat', {'BAT_PAGER': 'cat'}, ''),
+             ('PAGER=/path/to/cat', {'PAGER': os.path.join(bindir, 'cat')}, ''),
+             ('--pager=cat --paging=always', {}, '--pager=cat --paging=always '),
+             ('a pager with arguments that runs cat', {'PAGER': 'cat -u'}, ''),
+             ('a pager script that runs cat', {'PAGER': wrapper}, '')]
+    for n, (label, env, options) in enumerate(cases):
+        unit = 'util-core-pager-test-%d-%d.scope' % (os.getpid(), n)
+        assign = ' '.join('%s="%s"' % kv for kv in env.items())
+        # The unit variables are needed by systemd-run only.
+        script = 'unset BAT_PAGER PAGER; export PATH="%s:/usr/bin:/bin"; %s exec "%s/cat" %s"%s"' % (
+            bindir, ('export %s;' % assign) if assign else '', bindir, options, one)
+        try:
+            out, st, _ = session(['/usr/bin/env', 'systemd-run', '--user', '--scope', '-q', '--unit=' + unit,
+                                  *cap, '/bin/sh', '-c', script], [(b'', 1.0)])
+        finally:
+            subprocess.run(['systemctl', '--user', 'kill', '--signal=KILL', unit], capture_output=True)
+        check('cat: %s shows the file once and ends' % label, st == 0 and out.count('only-this-line') == 1)
+        if label.startswith('a pager'):
+            check('cat: %s does not number it twice' % label, len(re.findall(r'1[^\n]*only-this-line', visible(out))) <= 1
+                  and visible(out).count('pty_one.txt') == 1)
+else:
+    print('SKIP cat as its own pager (no systemd scope to cap processes)')
 
 sys.exit(1 if failures else 0)

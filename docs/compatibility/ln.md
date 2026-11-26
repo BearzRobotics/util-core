@@ -11,7 +11,7 @@ GNU coreutils 9.7 (`/usr/bin/ln --version` on the development machine, installed
 - `-s, --symbolic`: Symbolic links.
 - `-f, --force`: Replace existing destinations.
 - `-i, --interactive`: Prompt (reads y/n from standard input).
-- `-b, --backup[=CONTROL]`: Back up replaced files (`none`, `simple`, `numbered`, `existing` and their aliases); `-S SUFFIX` and `SIMPLE_BACKUP_SUFFIX` set the simple suffix.
+- `-b, --backup[=CONTROL]`: Back up replaced files (`none`, `simple`, `numbered`, `existing` and their aliases); `-S SUFFIX` (which also turns backups on) and `SIMPLE_BACKUP_SUFFIX` set the simple suffix; one that is empty or contains `/` means `~`. Backups are named as by cp, mv and install: `existing` is numbered when any numbered backup exists, and `numbered` takes the highest number plus one.
 - `-L, -P`: Hard links follow / do not follow symbolic-link sources.
 - `-n, --no-dereference`: Treat a symlink-to-directory destination as a file.
 - `-r, --relative`: With -s, make the link relative to its own directory.
@@ -23,6 +23,8 @@ GNU coreutils 9.7 (`/usr/bin/ln --version` on the development machine, installed
 ## Supported behaviour
 
 - Operand forms and every diagnostic reproduce GNU 9.7; the 'same file' test is only made when the destination would be replaced (-f, -i or a backup), as GNU does.
+- With -i and no backup the 'same file' test is made as with -f. GNU 9.7 does not make it, so answering yes to `ln -si LINK FILE`, where LINK points to FILE, destroys FILE; here it is refused with status 1.
+- `ln -f LINK FILE` (a hard link, without -L or a backup), where LINK is a symbolic link leading to FILE and FILE has no other name, is refused as 'same file'. GNU 9.7 replaces FILE by a link to itself and the data is lost.
 
 ## Library
 
@@ -34,12 +36,11 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Known deviations and gaps
 
-- Same-file detection compares inode numbers only (`std.Io.File.Stat` has no device number), so files on different devices with equal inode numbers would be taken for one file.
 - `--help` is shorter than GNU's.
 
 ## Tests
 
-test/test_ln.sh (87 cases: hard, symbolic, relative, backup and interactive forms and their errors) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
+test/test_ln.sh (142 cases: hard, symbolic, relative, backup and interactive forms and their errors) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets, link counts and which names are one file are compared).
 
 ## Not yet done
 

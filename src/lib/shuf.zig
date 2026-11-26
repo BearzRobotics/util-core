@@ -236,7 +236,8 @@ pub fn run(env: Env, opts: Options, out_w: *Io.Writer, obs: Observer) Error!void
             try starts.append(gpa, data.items.len);
             n_lines = operands.len;
         },
-        .range => |r| n_lines = r[1] - r[0] + 1,
+        // LO = HI + 1 is an empty range, hence the wrapping arithmetic.
+        .range => |r| n_lines = r[1] -% r[0] +% 1,
         .file => |in| {
             const name: []const u8 = in.name orelse "-";
             const f = in.open(io) catch |e| {

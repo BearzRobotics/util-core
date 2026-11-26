@@ -137,9 +137,16 @@ pub const Tm = struct {
     }
 };
 
-/// Broken-down representation of `epoch + utoff` (UTC arithmetic).
+/// Whether the year of `tm` fits the `int tm_year` of struct tm. Where it does
+/// not, the GNU tools print the time as a number of seconds instead.
+pub fn fitsStructTm(tm: *const Tm) bool {
+    return std.math.cast(i32, tm.year - 1900) != null;
+}
+
+/// Broken-down representation of `epoch + utoff` (UTC arithmetic). Accepts any
+/// `epoch`: file times are whatever the file system says.
 pub fn breakdown(epoch: i64, utoff: i32) Tm {
-    const local = epoch + utoff;
+    const local = epoch +| utoff;
     const days = @divFloor(local, 86400);
     const secs: i64 = @mod(local, 86400);
     const c = civilFromDays(days);
@@ -273,8 +280,10 @@ fn ruleAt(r: Rule, t: i64) Type {
     const dst = r.dst orelse return r.std;
     // Year of `t` in standard time.
     const year = breakdown(t, r.std.utoff).year;
-    const start = dayOfRule(year, r.start) * 86400 + r.start.time - r.std.utoff;
-    const end = dayOfRule(year, r.end) * 86400 + r.end.time - dst.utoff;
+    // Saturating: a transition in the first or last year of the i64 range of
+    // seconds can lie outside it.
+    const start = dayOfRule(year, r.start) *| 86400 +| (r.start.time - r.std.utoff);
+    const end = dayOfRule(year, r.end) *| 86400 +| (r.end.time - dst.utoff);
     const in_dst = if (start < end) (t >= start and t < end) else !(t >= end and t < start);
     return if (in_dst) dst else r.std;
 }
@@ -511,4 +520,18 @@ test "posix TZ rule" {
     try t.expectEqual(@as(i32, -5 * 3600), z.at(1768478400).utoff);
     z.rule = parsePosix("<+0530>-5:30").?;
     try t.expectEqual(@as(i32, 5 * 3600 + 1800), z.at(0).utoff);
+}
+
+test "any i64 time can be broken down" {
+    const t = std.testing;
+    const zones = [_][]const u8{ "UTC0", "EST5EDT,M3.2.0,M11.1.0", "AAA-10BBB,J1,J365" };
+    for (zones) |text| {
+        var zone: Zone = .{ .gpa = t.allocator, .rule = parsePosix(text).? };
+        for ([_]i64{ std.math.minInt(i64), std.math.maxInt(i64) }) |epoch| {
+            const tm = localtime(&zone, epoch);
+            try t.expect(!fitsStructTm(&tm));
+        }
+    }
+    const tm = breakdown(0, 0);
+    try t.expect(fitsStructTm(&tm));
 }

@@ -1,8 +1,10 @@
 #!/bin/sh
 # testlib.sh - Shared helpers for all util test scripts
 
-# Safety net: no test may write more than ~100 MB to any one file.
-ulimit -f 200000 2>/dev/null
+# Safety net: no test may write more than ~100 MB to any one file. The limit
+# also stops large sparse files, so a suite whose subject is file sizes (and
+# that never writes that much data) sets SPARSE_FILES=1 before sourcing this.
+[ "${SPARSE_FILES:-}" = 1 ] || ulimit -f 200000 2>/dev/null
 
 PASS=0
 FAIL=0
@@ -20,8 +22,10 @@ BIN_DIR="$(cd "$(dirname "$0")/../zig-out/bin" 2>/dev/null && pwd)"
 # The reference must be GNU: a different implementation (e.g. uutils) would make
 # every differential comparison below meaningless.
 # `test --version` is just the test "--version" (no output); `[` has the banner.
+# GNU banners read "(GNU coreutils)", "(GNU grep)" and so on; GNU dd alone says
+# "(coreutils)". uutils says "(uutils coreutils)" and must not match.
 GNU_PROBE="$UTIL"; [ "$UTIL" = test ] && GNU_PROBE='['
-if [ -z "$ORACLE_OK" ] && ! "${GNU_BIN:-/usr/bin}/$GNU_PROBE" --version 2>/dev/null | head -n 1 | grep -q 'GNU\|coreutils'; then
+if [ -z "$ORACLE_OK" ] && ! "${GNU_BIN:-/usr/bin}/$GNU_PROBE" --version 2>/dev/null | head -n 1 | grep -q '(GNU [^)]*)\|(coreutils)'; then
     echo "FATAL: ${GNU_BIN:-/usr/bin}/$UTIL is not a GNU implementation; refusing to run." >&2
     exit 2
 fi
@@ -143,23 +147,52 @@ TEST_TMP="$(mktemp -d)"
 TMPDIR="$TEST_TMP"; export TMPDIR
 TMPDIR_CMP="$TEST_TMP/cmp"
 # Tests may leave read-only directories behind; make them removable first.
-trap 'chmod -R u+rwx "$TEST_TMP" 2>/dev/null; rm -rf "$TEST_TMP"' EXIT
+# A script that stops before print_summary has not run its cases, so it must not
+# report success. (A script that replaces this trap loses that check.)
+SUMMARY_DONE=
+testlib_exit() {
+    status=$?
+    chmod -R u+rwx "$TEST_TMP" 2>/dev/null; rm -rf "$TEST_TMP"
+    if [ -z "$SUMMARY_DONE" ] && [ "$status" -eq 0 ]; then
+        echo "FAIL the suite stopped before its summary" >&2
+        status=1
+    fi
+    exit "$status"
+}
+trap testlib_exit EXIT
+
+# Of the tree in the current directory: the link count of everything but
+# directories, then one line for each set of names that are one file. Inode
+# numbers differ between two trees, so they are used only to group the names.
+tree_links() {
+    find . ! -type d -printf '%p nlink %n\n' | sort
+    find . ! -type d -links +1 -printf '%D:%i %p\n' | sort -k2 | awk '{ id = $1; name = substr($0, length(id) + 2); if (id in group) group[id] = group[id] " = " name; else { order[++n] = id; group[id] = name } } END { for (i = 1; i <= n; i++) print "same file: " group[order[i]] }'
+}
 
 # run_tree DESC SETUP_CMD ARGS...
 # For commands that change the file system. SETUP_CMD (a shell snippet) runs in
 # two fresh directories, then GNU and ours run the same arguments, one in each.
 # Compared: stdout, normalised stderr, exit status, and the resulting tree
-# (path, type, octal mode). Set TREE_UMASK to run both under a given umask.
+# (path, type, octal mode). Set TREE_UMASK to run both under a given umask,
+# TREE_SIZES to compare the sizes of regular files too (and the contents of
+# those up to 4 MiB, so that huge sparse files cost nothing), TREE_LINKS to
+# compare link counts and which names share a file, and TREE_BLOCKS to compare
+# the blocks allocated to regular files (holes).
 run_tree() {
     description="$1"; setup="$2"; shift 2
     base="$(dirname "$TMPDIR_CMP")/tree"; chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
     for x in g o; do (cd "$base/$x" && eval "$setup"); done
+    # An access time set by the command itself (install -C reads the file it
+    # compares) is the wall clock of that run, so the two runs cannot match.
+    # Anything this recent is shown as "now"; a copied, older time is compared.
+    # The margin covers file time stamps lagging the clock by a tick.
+    tree_start=$(($(date +%s) - 2))
     (umask "${TREE_UMASK:-022}"; cd "$base/g" && LC_ALL=C gnu "$@" < "${TREE_STDIN:-/dev/null}" > "$base/g.out" 2> "$base/g.err"; echo $? > "$base/g.rc")
     (umask "${TREE_UMASK:-022}"; cd "$base/o" && ours "$@" < "${TREE_STDIN:-/dev/null}" > "$base/o.out" 2> "$base/o.err"; echo $? > "$base/o.rc")
     # Trees are compared with symlink targets (%l); the two working directories
     # differ only in their last component, which is masked in the output.
     for x in g o; do
-        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort | awk '$1 ~ /^\.\/(z|e)(\/|$)/ { print } $1 !~ /^\.\/(z|e)(\/|$)/ { print $1, "-", $3 }'; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; true; } 2>/dev/null > "$base/$x.tree")
+        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort | awk -v start="$tree_start" '$2 + 0 >= start { $2 = "now" } $1 ~ /^\.\/(z|e)(\/|$)/ { print } $1 !~ /^\.\/(z|e)(\/|$)/ { print $1, "-", $3 }'; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; [ -n "$TREE_SIZES" ] && { find . -type f -printf '%p size %s\n' | sort; find . -type f -size -4097k -exec cksum {} + | sort -k3; }; [ -n "$TREE_LINKS" ] && tree_links; [ -n "$TREE_BLOCKS" ] && find . -type f -printf '%p size %s blocks %b\n' | sort; true; } 2>/dev/null > "$base/$x.tree")
         rel="${base#/}"
         norm_err < "$base/$x.err" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.err2"
         norm_err < "$base/$x.out" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.out2"
@@ -203,7 +236,15 @@ print_summary() {
         fi
     fi
     printf "======================================\n"
+    SUMMARY_DONE=1
+    # The suites end with print_summary, so this is their exit status.
+    [ "$FAIL" -eq 0 ]
 }
+# For fault injection: true when strace can trace and inject here.
+can_inject() {
+    strace -o /dev/null -e trace=close -e inject=close:error=EIO:when=9999 /usr/bin/true > /dev/null 2>&1
+}
+
 # help_cmp: ours --help must equal GNU's --help minus the "GNU coreutils online
 # help" footer (that footer names the GNU project, which we are not).
 help_cmp() {

@@ -10,7 +10,8 @@ head -c 5000 /dev/urandom > rnd; : > empty; printf 'ABCDEFGHIJKLMNOPQRSTUVWXYZ01
 printf 'abc\ndefgh\n\nij\n' > lines; printf 'abc  def  \nxy  \n' > blank
 head -c 70000 /dev/zero > zeros
 
-mask() { sed -E 's/^([0-9]+ bytes?( \([^)]*\))?) copied, .*/\1 copied, TIME/'; }
+# The elapsed time must be a number as %g writes it; its value and the rate vary.
+mask() { sed -E 's/^([0-9]+ bytes?( \([^)]*\))?) copied, [0-9]+(\.[0-9]+)?(e-[0-9]+)? s, .*/\1 copied, TIME/'; }
 # dd_cmp DESC ARGS... (stdin from $DD_IN or /dev/null, output compared as a file too)
 dd_cmp() {
     description="$1"; shift
@@ -111,4 +112,78 @@ DD_IN=lines dd_cmp "block short cbs" conv=block cbs=2
 DD_IN=lines dd_cmp "unblock short cbs" conv=unblock cbs=2
 DD_IN=lines dd_cmp "block cbs=1" conv=block cbs=1
 DD_IN=lines dd_cmp "ebcdic cbs=0" conv=ebcdic cbs=0
+
+# Offsets that do not fit in a file offset are diagnosed, not computed.
+cp pre out; dd_cmp "skip= overflow" if=text skip=18014398509481984 bs=1024
+dd_cmp "skip= largest count" if=text skip=9223372036854775807
+dd_cmp "skip= largest count bs=1" if=text skip=9223372036854775807 bs=1
+cp pre out; dd_cmp "skip= overflow of=out" if=text of=out skip=18014398509481984 bs=1024
+DD_IN=text dd_cmp "skip= overflow stdin" skip=18014398509481984 bs=1024
+dd_cmp "skip= overflow /dev/zero" if=/dev/zero of=/dev/null skip=18014398509481984 bs=1024 count=2
+cp pre out; dd_cmp "seek= overflow" if=text of=out seek=18014398509481984 bs=1024
+cp pre out; dd_cmp "seek= largest count" if=text of=out seek=9223372036854775807
+dd_cmp "seek= overflow new file" if=text of=newfile seek=9223372036854775807
+[ ! -e newfile ] && { PASS=$((PASS + 1)); echo "PASS seek= overflow creates nothing"; } || { FAIL=$((FAIL + 1)); echo "FAIL seek= overflow creates nothing"; }
+cp pre out; dd_cmp "seek= overflow notrunc" if=text of=out seek=18014398509481984 bs=1024 conv=notrunc
+cp pre out; dd_cmp "seek= overflow stdout" if=text seek=18014398509481984 bs=1024
+for a in skip=18014398509481984 skip=9223372036854775807; do
+    printf abc | LC_ALL=C /usr/bin/dd $a bs=1024 > o.g 2> e.g; rg=$?
+    printf abc | "$BIN_DIR/dd" $a bs=1024 > o.o 2> e.o; ro=$?
+    if [ "$rg" = "$ro" ] && cmp -s o.g o.o && [ "$(norm_err < e.g | mask)" = "$(norm_err < e.o | mask)" ]; then
+        PASS=$((PASS + 1)); echo "PASS pipe $a"
+    else FAIL=$((FAIL + 1)); echo "FAIL pipe $a"; cat e.o; fi
+done
+
+# The elapsed time is the real one. The writer holds the pipe open for 0.3 s.
+{ printf a; timeout 0.3 tail -f /dev/null; } | "$BIN_DIR/dd" 2>e.o >/dev/null
+secs=$(sed -n 's/^1 byte copied, \([0-9.]*\) s, .*/\1/p' e.o)
+if awk -v t="$secs" 'BEGIN { exit !(t >= 0.25 && t < 60) }'; then PASS=$((PASS + 1)); echo "PASS elapsed time is reported"
+else FAIL=$((FAIL + 1)); echo "FAIL elapsed time is reported"; cat e.o; fi
+
+# status=progress: about one line a second, however long a block takes. 22
+# blocks 117 ms apart run for at least 2.5 s.
+(i=0; while [ $i -lt 22 ]; do timeout 0.117 tail -f /dev/null; printf x; i=$((i + 1)); done) |
+    "$BIN_DIR/dd" status=progress of=/dev/null 2>e.o
+lines=$(tr '\r' '\n' < e.o | grep -c 'copied, [0-9]* s,')
+if [ "$lines" -ge 2 ] && [ "$lines" -le 4 ]; then PASS=$((PASS + 1)); echo "PASS status=progress once a second"
+else FAIL=$((FAIL + 1)); echo "FAIL status=progress once a second ($lines lines)"; tr '\r' '\n' < e.o; fi
+
+# Signals. dd reads a FIFO that the test feeds, so each step waits for the one
+# before it. (A shell starts background jobs with SIGINT ignored; env undoes it.)
+wait_for() { # wait_for COMMAND...: poll for up to 5 s
+    tries=0
+    until "$@" 2>/dev/null; do
+        tries=$((tries + 1)); [ "$tries" -lt 100 ] || return 1
+        timeout 0.05 tail -f /dev/null
+    done
+}
+trap '' PIPE # a dd that has died must fail its case, not end the suite
+rm -f fifo sigout sigerr; mkfifo fifo
+"$BIN_DIR/dd" if=fifo of=sigout bs=3 2> sigerr & pid=$!
+exec 3> fifo
+printf abc >&3; wait_for grep -q abc sigout
+kill -USR1 "$pid"; wait_for grep -q 'records out' sigerr
+asked=$(head -n 2 sigerr)
+printf def >&3; exec 3>&-
+wait "$pid"; rc=$?
+if [ "$rc" = 0 ] && [ "$(cat sigout)" = abcdef ] && [ "$asked" = "$(printf '1+0 records in\n1+0 records out')" ] && [ "$(grep -c 'records in' sigerr)" = 2 ]; then
+    PASS=$((PASS + 1)); echo "PASS SIGUSR1 prints statistics and the copy goes on"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL SIGUSR1 prints statistics and the copy goes on (rc=$rc) $(cat sigerr)"
+fi
+rm -f fifo sigout sigerr; mkfifo fifo
+env --default-signal=INT "$BIN_DIR/dd" if=fifo of=sigout bs=3 2> sigerr & pid=$!
+exec 3> fifo
+printf abc >&3; wait_for grep -q abc sigout
+kill -INT "$pid"; wait_for grep -q 'records out' sigerr
+# Should the signal be lost, the end of input still ends dd.
+exec 3>&-
+wait "$pid"; rc=$?
+if [ "$rc" = 130 ] && [ "$(grep -c 'records in' sigerr)" = 1 ] && grep -q '^3 bytes copied' sigerr; then
+    PASS=$((PASS + 1)); echo "PASS SIGINT prints statistics and ends dd"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL SIGINT prints statistics and ends dd (rc=$rc) $(cat sigerr)"
+fi
+rm -f fifo sigout sigerr
+trap - PIPE
 cd /; print_summary

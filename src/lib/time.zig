@@ -632,7 +632,9 @@ pub fn delta(f: Summary, m: Summary) Delta {
 }
 
 fn writeMeasurement(w: *Io.Writer, ansi: bool, m: Summary, name: []const u8, first: ?Summary, command_count: usize) Io.Writer.Error!void {
-    if (m.max == 0) return;
+    // A CPU time of 0 is a measurement. A memory or counter row that is 0
+    // throughout was not available (no permission, no such counter).
+    if (m.n == 0 or (m.max == 0 and m.unit != .nanoseconds)) return;
     try w.print("  {s}", .{name});
     try w.splatByteAll(' ', 19 -| name.len);
     try sc(w, ansi, esc_bright_green);
@@ -1098,6 +1100,25 @@ test "writeBenchmark: crap's column layout" {
     aw.clearRetainingCapacity();
     try writeBenchmark(&aw.writer, false, 1, &.{"only"}, a, null, 1, default_shown);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "delta") == null);
+}
+
+test "writeBenchmark: a time of 0 is shown, an unavailable counter is not" {
+    var aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    var r: BenchResult = .{ .runs = 2 };
+    r.metrics[@intFromEnum(Metric.user_time)] = .{ .n = 2, .unit = .nanoseconds };
+    r.metrics[@intFromEnum(Metric.system_time)] = .{ .n = 2, .unit = .nanoseconds };
+    r.metrics[@intFromEnum(Metric.peak_rss)] = .{ .n = 2, .unit = .bytes };
+    r.metrics[@intFromEnum(Metric.instructions)] = .{ .n = 2, .unit = .count };
+    const all: Shown = @splat(true);
+    try writeBenchmark(&aw.writer, false, 1, &.{"x"}, r, null, 1, all);
+    const out = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\n  user_time ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\n  system_time ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "peak_rss") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "instructions") == null);
+    // Metrics without samples draw nothing.
+    try std.testing.expect(std.mem.indexOf(u8, out, "wall_time") == null);
 }
 
 test "splitCommand: quotes and escapes" {

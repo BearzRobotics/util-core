@@ -56,7 +56,7 @@ Every option below is opt-in; without it grep behaves as GNU grep 3.12 (decision
 From ripgrep (tested against `rg` 15):
 
 --json
-: Print JSON Lines in ripgrep's message schema (`begin`, `match`, `context`, `end`, `summary`); text that is not UTF-8 is `{"bytes": base64}`. Binary detection is off (every file is searched as text), `-o` is ignored.
+: Print JSON Lines in ripgrep's message schema (`begin`, `match`, `context`, `end`, `summary`); text that is not UTF-8 is `{"bytes": base64}`. Binary detection is off (every file is searched as text), `-o` is ignored. Nothing but JSON is written: there are no group separators, `--stats` adds nothing (the `end` and `summary` messages carry the numbers), and `-c`, `-l`, `-L` and `--count-matches` are refused (status 2; ripgrep instead lets whichever of the two comes last win).
 
 --smart-case
 : Ignore case unless a pattern has an uppercase letter (an escaped letter such as `\S` does not count). `-i` wins.
@@ -71,7 +71,7 @@ From ripgrep (tested against `rg` 15):
 : GNU `-r` searches hidden files; `--hidden` says so explicitly and `--no-hidden` skips names starting with a dot.
 
 --ignore-vcs, --no-ignore
-: With `-r`, honour `.gitignore` and `.ignore` files found in the searched directories (negation, `dir/`, anchored and `**` patterns). Off by default, so recursion stays GNU. `--no-ignore` turns it off again.
+: With `-r`, honour `.gitignore` and `.ignore` files found in the searched directories (negation, `dir/`, anchored and `**` patterns). Off by default, so recursion stays GNU. `--no-ignore` turns it off again. An ignore file is used only if it is a regular file of at most 4 MiB, and a `.gitignore` only if it is not a symbolic link (as in git); otherwise a warning says so (`-s` silences it) and nothing is hidden on its account.
 
 --replace=TEXT
 : Print each selected line with every match replaced by TEXT, or with `-o` only the replaced matches. TEXT may use `$1`, `${name}`, `$name` (longest word) and `$$`; an unknown group is empty.
@@ -105,7 +105,7 @@ From FreeBSD grep (tested against the FreeBSD grep of the Chimera Linux sysroot)
 : Accepted and ignored.
 
 --decompress
-: Search inside gzip, zlib, xz and zstd files (recognised by their magic number) and, otherwise, the file as it is. bzip2, lzma and lz4 are not supported (a diagnostic is printed and the file is searched as is). Standard input is not decompressed. FreeBSD's `-J`, `-Z`, `-X`, `-M` and `-z` conflict with GNU and are not provided.
+: Search inside gzip, zlib, xz and zstd files (recognised by their magic number) and, otherwise, the file as it is. All gzip members, xz streams and zstd frames of a file are searched; if anything else follows gzip, zlib or xz data (zero padding aside), what could be decompressed is searched, the rest is reported and the status is 2. bzip2, lzma and lz4 are not supported (a diagnostic is printed and the file is searched as is). Standard input is not decompressed. FreeBSD's `-J`, `-Z`, `-X`, `-M` and `-z` conflict with GNU and are not provided.
 
 Abbreviations of long options keep GNU's meaning: `--cou` is `--count` although `--count-matches` also starts that way.
 

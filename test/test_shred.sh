@@ -60,4 +60,30 @@ shred_cmp "-uz names" -uvz tiny
 # cannot be killed). Opt in with SHRED_DEVFULL=1 on an idle machine.
 [ -n "${SHRED_DEVFULL:-}" ] && shred_cmp "dev full" /dev/full
 shred_cmp "dash" - 
+# A file system without RENAME_NOREPLACE (NFS, CIFS, many FUSE ones) fails the
+# renameat2 call; the name must still be wiped.
+if strace -o /dev/null -e inject=renameat2:error=EINVAL true 2>/dev/null; then
+    base="$TEST_TMP/noreplace"; mkdir -p "$base"
+    for err in EINVAL ENOSYS; do
+        (cd "$base" && printf secret > longsecretname &&
+            strace -f -o "$base.tr" -e trace=renameat2 -e inject=renameat2:error=$err "$BIN_DIR/shred" -uv longsecretname 2> "$base.err")
+        rc=$?
+        if [ "$rc" = 0 ] && grep -q 'renamed to 0$' "$base.err" && [ -z "$(ls -A "$base")" ]; then
+            PASS=$((PASS + 1)); echo "PASS the name is wiped when renameat2 gives $err"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL the name is wiped when renameat2 gives $err (rc=$rc)"; tail -4 "$base.err"
+        fi
+    done
+    # When no rename works at all, say so.
+    (cd "$base" && printf secret > longsecretname &&
+        strace -f -o "$base.tr" -e trace=renameat2 -e inject=renameat2:error=EPERM "$BIN_DIR/shred" -u longsecretname 2> "$base.err")
+    rc=$?
+    if [ "$rc" = 0 ] && [ "$(grep -c 'not fully wiped' "$base.err")" = 1 ] && [ -z "$(ls -A "$base")" ]; then
+        PASS=$((PASS + 1)); echo "PASS a name that cannot be wiped is reported once"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL a name that cannot be wiped is reported once (rc=$rc)"; tail -4 "$base.err"
+    fi
+else
+    skip_test "renameat2 without RENAME_NOREPLACE (no usable strace)"
+fi
 cd /; print_summary

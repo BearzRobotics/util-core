@@ -105,8 +105,8 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         },
     };
-    if (result.bad_base) |d| {
-        if (!quiet) cli.warn(ctx, "{f}: No such file or directory", .{cli.quote(d)});
+    if (result.bad_base) |b| {
+        if (!quiet) cli.warn(ctx, "{f}: {s}", .{ cli.quote(b.name), paths.errorText(b.failure) });
         return 1;
     }
     if (!cli.flushWriter(&stdout)) return 1;
@@ -123,13 +123,7 @@ fn report(context: ?*anyopaque, ev: realpath.Event) void {
     const r: *Report = @ptrCast(@alignCast(context.?));
     if (r.quiet) return;
     r.out.flush() catch {};
-    const msg = switch (ev.failure) {
-        error.NotDir => "Not a directory",
-        error.Loop => "Too many levels of symbolic links",
-        error.NameTooLong => "File name too long",
-        else => "No such file or directory",
-    };
-    cli.warn(r.ctx.*, "{f}: {s}", .{ cli.quote(ev.name), msg });
+    cli.warn(r.ctx.*, "{f}: {s}", .{ cli.quote(ev.name), paths.errorText(ev.failure) });
 }
 
 fn help(ctx: cli.Context) u8 {

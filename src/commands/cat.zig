@@ -29,6 +29,11 @@ const Style = cat.Style;
 
 const When = cli.When;
 
+/// Set in the environment of the pager cat starts. A cat found with it set was
+/// reached through that pager (`PAGER` names a script that runs cat, say), so
+/// starting a pager again could repeat without end.
+const in_pager_variable = "UTIL_CORE_CAT_PAGER";
+
 fn parseWhen(v: []const u8) ?When {
     return When.parse(v);
 }
@@ -157,10 +162,22 @@ pub fn main(ctx: cli.Context) u8 {
     const inputs: []const []const u8 = if (files.items.len == 0) &stdin_only else files.items;
 
     const tty = Io.File.stdout().isTty(ctx.io) catch false;
+    const in_pager = cli.getenv(ctx, in_pager_variable) != null;
+    if (in_pager) paging = .never;
+    // As part of the pager, the stream from the first cat is passed on as it
+    // is, not decorated a second time.
+    const passing_on = in_pager and inputs.len == 1 and std.mem.eql(u8, inputs[0], "-") and
+        !(Io.File.stdin().isTty(ctx.io) catch false);
+    // Reading a terminal, cat is just cat: what is typed comes straight back,
+    // and nothing else may read the keyboard.
+    const from_terminal = for (inputs) |path| {
+        if (isTerminal(ctx, path)) break true;
+    } else false;
+    if (from_terminal) paging = .never;
     const decorated = !opts.gnuFormatting() and switch (decorations) {
         .always => true,
         .never => false,
-        .auto => tty,
+        .auto => tty and !passing_on and !from_terminal,
     };
     // On a Windows console escapes work only after enabling VT processing; if
     // that fails, treat the console as one that cannot show them.
@@ -226,12 +243,15 @@ pub fn main(ctx: cli.Context) u8 {
     // A pager given by --pager, $BAT_PAGER or $PAGER runs as a process; with
     // none configured, the built-in one (the same as `less`) takes over and
     // scrolls while cat is still writing.
-    var pager: ?Pager = if (want_pager) Pager.start(ctx, pager_cmd) else null;
+    const choice: Pager.Choice = if (want_pager) Pager.start(ctx, pager_cmd) else .off;
+    var pager: ?Pager = if (choice == .process) choice.process else null;
     defer if (pager) |*p| p.finish(ctx);
-    var ui: ?*pager_ui.Ui = if (want_pager and pager == null)
+    var ui: ?*pager_ui.Ui = if (choice == .built_in)
         pager_ui.Ui.start(ctx.gpa, ctx.io, .{ .raw = true }, "", true)
     else
         null;
+    // Short output is cat's bytes themselves.
+    if (ui) |u| u.verbatim = true;
     var sink_buf: [16384]u8 = undefined;
     var stdout = (if (pager) |p| p.stdin else Io.File.stdout()).writerStreaming(ctx.io, &buf);
     const sink: *Io.Writer = if (ui) |u| u.sink(&sink_buf) else &stdout.interface;
@@ -258,16 +278,37 @@ pub fn main(ctx: cli.Context) u8 {
     return if (result.failed) 1 else 0;
 }
 
+/// Whether the operand `path` reads a terminal.
+fn isTerminal(ctx: cli.Context, path: []const u8) bool {
+    if (std.mem.eql(u8, path, "-")) return Io.File.stdin().isTty(ctx.io) catch false;
+    // Only a character device can be one (/dev/tty, /dev/stdin).
+    var e: std.os.linux.E = .SUCCESS;
+    const st = sys.fileStat(path, true, &e) orelse return false;
+    if (st.mode & 0o170000 != 0o020000) return false;
+    const fd = sys.openFd(path, sys.O.RDONLY | sys.O.NOCTTY | sys.O.NONBLOCK, 0, &e) orelse return false;
+    defer _ = sys.closeFd(fd);
+    return (Io.File{ .handle = fd, .flags = .{ .nonblocking = true } }).isTty(ctx.io) catch false;
+}
+
 /// A pager process fed through a pipe. Started only for a terminal view and only
 /// when one is configured; if it cannot be started the built-in pager is used.
 const Pager = struct {
     child: std.process.Child,
     stdin: Io.File,
 
-    /// --pager, $BAT_PAGER, then $PAGER; null when none is set. `less` without arguments gets
+    const Choice = union(enum) {
+        /// Write straight to the terminal.
+        off,
+        /// None is configured (or it cannot be started).
+        built_in,
+        process: Pager,
+    };
+
+    /// --pager, $BAT_PAGER, then $PAGER. `less` without arguments gets
     /// `-FRX` (quit if one screen, pass colors, keep the screen) as in bat.
-    fn start(ctx: cli.Context, given: ?[]const u8) ?Pager {
-        const cmd = given orelse cli.getenv(ctx, "BAT_PAGER") orelse cli.getenv(ctx, "PAGER") orelse return null;
+    /// A pager that is just `cat` is the usual way to ask for no paging.
+    fn start(ctx: cli.Context, given: ?[]const u8) Choice {
+        const cmd = given orelse cli.getenv(ctx, "BAT_PAGER") orelse cli.getenv(ctx, "PAGER") orelse return .built_in;
         var argv: [8][]const u8 = undefined;
         var n: usize = 0;
         var it = std.mem.tokenizeAny(u8, cmd, " \t");
@@ -276,20 +317,29 @@ const Pager = struct {
             argv[n] = w;
             n += 1;
         }
-        if (n == 0) return null; // an empty value means no pager
+        if (n == 0) return .built_in;
         const base = std.Io.Dir.path.basename(argv[0]);
+        if (n == 1 and (std.mem.eql(u8, base, "cat") or std.ascii.eqlIgnoreCase(base, "cat.exe"))) return .off;
         if (n == 1 and (std.mem.eql(u8, base, "less") or std.mem.eql(u8, base, "less.exe"))) {
             argv[1] = "-FRX";
             n = 2;
         }
+        var environ: ?std.process.Environ.Map = null;
+        defer if (environ) |*m| m.deinit();
+        if (ctx.environ) |inherited| {
+            // Without the mark the pager must not be started.
+            environ = inherited.clone(ctx.gpa) catch return .off;
+            environ.?.put(in_pager_variable, "1") catch return .off;
+        }
         const child = std.process.spawn(ctx.io, .{
             .argv = argv[0..n],
             .stdin = .pipe,
-        }) catch return null;
-        const f = child.stdin orelse return null;
+            .environ_map = if (environ) |*m| m else null,
+        }) catch return .built_in;
+        const f = child.stdin orelse return .built_in;
         // Ctrl-C belongs to the pager while it runs (it uses it for searches).
         _ = sys.setSignal(sys.signo.INT, .ignore);
-        return .{ .child = child, .stdin = f };
+        return .{ .process = .{ .child = child, .stdin = f } };
     }
 
     /// Close the pipe and wait until the user leaves the pager.
@@ -437,7 +487,7 @@ fn help(ctx: cli.Context) u8 {
         "                           $BAT_PAGER, $PAGER or `less -FRX`; with none set, the\n" ++
         "                           built-in pager (see less --help) scrolls while cat writes\n" ++
         "  -P, --no-paging          same as --paging=never\n" ++
-        "      --pager=CMD          the pager command\n" ++
+        "      --pager=CMD          the pager command (just cat: no paging)\n" ++
         "  -l, --language=NAME      highlight as NAME (language, scope or extension)\n" ++
         "      --syntax-dir=DIR     also load .sublime-syntax grammars from DIR\n" ++
         "      --list-languages     list loaded grammars\n" ++

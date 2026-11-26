@@ -1,9 +1,12 @@
 #!/bin/sh
 # truncate: differential tests against GNU truncate 9.7 (C locale). File sizes
-# are part of the compared tree through the %s of a size listing.
+# are part of the compared tree (TREE_SIZES), as are the contents of files up
+# to 4 MiB. The 1G and 1T cases make sparse files, which the file size limit of
+# testlib.sh would stop (SPARSE_FILES); truncate writes no data.
 UTIL="truncate"
+SPARSE_FILES=1
 . "$(dirname "$0")/testlib.sh"
-sz() { :; }
+TREE_SIZES=1
 S='printf 0123456789 > ten; : > empty; head -c 5000 /dev/zero > big'
 for sz in 0 1 5 10 11 100 4096 1K 1KB 1KiB 2M 1G 1T 2K 1b; do
     run_tree "-s $sz new file"     "$S" -s $sz newfile
@@ -43,4 +46,57 @@ run_tree "--bogus"                 "$S" --bogus -s 5 ten
 run_tree "-- operand"              "$S" -s 5 -- -dash
 run_tree "-s attached"             "$S" -s5 ten
 run_tree "-r attached"             "$S" -rten empty
+# A size, block count or result beyond off_t is an error and leaves the file
+# alone. The size is not part of the run_tree comparison, so it is listed here.
+size_cmp() {
+    description="$1"; shift
+    for x in gnu ours; do
+        d="$TEST_TMP/size-$x"; rm -rf "$d"; mkdir "$d"
+        (cd "$d" && printf 'precious\n' > f && { LC_ALL=C $x "$@" f > /dev/null 2> ../size-$x.err; echo "rc=$? size=$(stat -c %s f)"; } > ../size-$x.out)
+        norm_err < "$TEST_TMP/size-$x.err" >> "$TEST_TMP/size-$x.out"
+    done
+    if cmp -s "$TEST_TMP/size-gnu.out" "$TEST_TMP/size-ours.out"; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s\n     GNU : %s\n     OURS: %s\n" "$description" "$(cat "$TEST_TMP/size-gnu.out")" "$(cat "$TEST_TMP/size-ours.out")"
+    fi
+}
+for sz in -1Z -99999999999999999999999 /1Z '<1Z' '>1Z' '%1Z' 1Z +1Z 8E -8E 9223372036854775808 -9223372036854775808 -9223372036854775809 +9223372036854775807; do
+    size_cmp "out of range: -s $sz" -s "$sz"
+done
+for sz in /1E '<1E' 9223372036854775807 -9223372036854775807 -1E +4611686018427387904; do
+    size_cmp "out of range: -o -s $sz" -o -s "$sz"
+done
+# A FIFO with no reader must fail at once, not block in open(). run_tree has no
+# time limit, so the comparisons run only after the bounded check has passed.
+d="$TEST_TMP/fifo"; mkdir "$d"; mkfifo "$d/p"
+(cd "$d" && timeout 5 "$BIN_DIR/truncate" -s 0 p 2>/dev/null); rc=$?
+if [ "$rc" = 1 ]; then
+    PASS=$((PASS + 1)); printf "PASS fifo does not hang\n"
+    run_tree "fifo without a reader"    'mkfifo p' -s 0 p
+    run_tree "fifo without a reader -c" 'mkfifo p' -c -s 0 p
+else
+    FAIL=$((FAIL + 1)); printf "FAIL fifo does not hang (rc=%s)\n" "$rc"
+fi
+# A FIFO that has a reader opens, and then cannot be given a length.
+d="$TEST_TMP/fifo2"
+for x in gnu ours; do
+    mkdir -p "$d"; mkfifo "$d/p"
+    (cd "$d" && exec 3<> p && LC_ALL=C timeout 5 sh -c 'exec "$0" -s 0 p' "$([ $x = gnu ] && echo "${GNU_BIN:-/usr/bin}/truncate" || echo "$BIN_DIR/truncate")" 2> "../$x.fifo.err"; echo "rc=$?" > "../$x.fifo.rc")
+    rm -rf "$d"
+done
+if [ "$(norm_err < "$TEST_TMP/gnu.fifo.err"; cat "$TEST_TMP/gnu.fifo.rc")" = "$(norm_err < "$TEST_TMP/ours.fifo.err"; cat "$TEST_TMP/ours.fifo.rc")" ]; then
+    PASS=$((PASS + 1)); printf "PASS fifo with a reader\n"
+else
+    FAIL=$((FAIL + 1)); printf "FAIL fifo with a reader: %s\n" "$(cat "$TEST_TMP/ours.fifo.err")"
+fi
+# Extending leaves a hole: no blocks are allocated for it.
+d="$TEST_TMP/hole"; mkdir "$d"
+(cd "$d" && ours -s 1G sparse)
+if [ "$(stat -c '%s %b' "$d/sparse" 2>/dev/null)" = "1073741824 0" ]; then
+    PASS=$((PASS + 1)); printf "PASS extending leaves a hole\n"
+else
+    FAIL=$((FAIL + 1)); printf "FAIL extending leaves a hole: %s\n" "$(stat -c '%s %b' "$d/sparse" 2>&1)"
+fi
+rm -rf "$d"
 print_summary

@@ -15,6 +15,7 @@ const common = @import("common.zig");
 const copy = @import("../copy.zig");
 const quote = @import("../quote.zig");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 const E = std.os.linux.E;
 
 pub const Env = common.Env;
@@ -34,6 +35,10 @@ pub const Options = struct {
     x: copy.Opts = .{},
     mode: u32 = 0o755,
     dir_mode: u32 = 0o755,
+    /// The bits `dir_mode` decides (mode.zig `applyTracked`), all of them
+    /// unless -m was given. -d leaves the others of an existing directory as
+    /// they are, and a new one the set-ID bits it inherits.
+    dir_mode_decided: u32 = 0o7777,
     /// `unset` keeps the current owner/group.
     owner_id: u32 = unset,
     group_id: u32 = unset,
@@ -193,14 +198,16 @@ fn needCopy(s: *St, src: []const u8, dest: []const u8) bool {
     return !sameContent(src, dest);
 }
 
-fn changeAttributes(s: *St, name: []const u8) bool {
+/// `name` is the file at `spot`: a symbolic link put there since it was
+/// installed is not followed.
+fn changeAttributes(s: *St, spot: dirat.Spot, name: []const u8) bool {
     if (!(s.o.owner_id == unset and s.o.group_id == unset)) {
-        if (sys.chownAt(name, s.o.owner_id, s.o.group_id, true)) |ce| {
+        if (sys.chownAtDir(spot.dir, spot.name, s.o.owner_id, s.o.group_id, true)) |ce| {
             s.warn("cannot change ownership of {f}: {s}", .{ quote.quoteA(name), sys.errnoText(ce) });
             return false;
         }
     }
-    if (sys.chmodPath(name, s.o.mode, false)) |ce| {
+    if (spot.setMode(0o100000, s.o.mode)) |ce| {
         s.warn("cannot change permissions of {f}: {s}", .{ quote.quoteA(name), sys.errnoText(ce) });
         return false;
     }
@@ -260,14 +267,19 @@ fn installFileInFile(s: *St, c: *copy.Copier, from: []const u8, to: []const u8) 
             return false;
         }
     }
+    const spot = dirat.Spot.open(to, &e) orelse {
+        s.warn("cannot change permissions of {f}: {s}", .{ quote.quoteA(to), sys.errnoText(e) });
+        return false;
+    };
+    defer spot.close();
     if (c.x.preserve_timestamps and (s.o.strip_files or !from_sb.isReg())) {
         const ts = [2]sys.TimeSpec{ .{ .sec = from_sb.atime_s, .nsec = from_sb.atime_ns }, .{ .sec = from_sb.mtime_s, .nsec = from_sb.mtime_ns } };
-        if (sys.setTimes(to, sys.invalid_handle, ts, false)) |te| {
+        if (sys.setTimesAt(spot.dir, spot.name, ts, true)) |te| {
             s.warn("cannot set timestamps for {f}: {s}", .{ quote.quoteA(to), sys.errnoText(te) });
             return false;
         }
     }
-    return changeAttributes(s, to);
+    return changeAttributes(s, spot, to);
 }
 
 fn announceMkdir(s: *St, dir: []const u8) void {
@@ -276,6 +288,15 @@ fn announceMkdir(s: *St, dir: []const u8) void {
         const t = std.fmt.bufPrint(&buf, "{s}: creating directory {f}\n", .{ s.o.name, quote.quoteA(dir) }) catch return;
         s.sink.observer.emit(.{ .out = t });
     }
+}
+
+/// Whether mkdir failed only because the directory appeared after we looked,
+/// as when several installs create a shared directory at once.
+fn madeMeanwhile(path: []const u8, failure: E) bool {
+    if (failure != .EXIST) return false;
+    var e: E = .SUCCESS;
+    const st = sys.fileStat(path, true, &e) orelse return false;
+    return st.isDir();
 }
 
 /// Create every missing leading directory of `path` (not `path` itself).
@@ -292,10 +313,11 @@ fn mkAncestors(s: *St, path: []const u8) bool {
             }
         } else {
             if (sys.mkdirPath(prefix, 0o755)) |me| {
-                s.warn("cannot create directory {f}: {s}", .{ quote.quoteA(path), sys.errnoText(me) });
-                return false;
-            }
-            announceMkdir(s, prefix);
+                if (!madeMeanwhile(prefix, me)) {
+                    s.warn("cannot create directory {f}: {s}", .{ quote.quoteA(path), sys.errnoText(me) });
+                    return false;
+                }
+            } else announceMkdir(s, prefix);
         }
         i = sl + 1;
         while (i < path.len and path[i] == '/') i += 1;
@@ -309,7 +331,13 @@ fn processDir(s: *St, dir_in: []const u8) bool {
     const dir = dir_in[0..end];
     if (!mkAncestors(s, dir)) return false;
     var e: E = .SUCCESS;
+    var existed = false;
+    // The operand was already a symbolic link (to a directory).
+    var linked = false;
     if (sys.fileStat(dir, true, &e)) |st| {
+        existed = true;
+        const own = sys.fileStat(dir, false, &e);
+        linked = own != null and own.?.isLink();
         if (!st.isDir()) {
             s.warn("cannot create directory {f}: File exists", .{quote.quoteA(dir)});
             return false;
@@ -317,20 +345,33 @@ fn processDir(s: *St, dir_in: []const u8) bool {
     } else {
         const create_mode = if (s.o.owner_id != unset or s.o.group_id != unset) s.o.dir_mode & 0o700 else s.o.dir_mode;
         if (sys.mkdirPath(dir, create_mode)) |me| {
-            if (me == .ACCES) {
-                s.warn("cannot change permissions of {f}: No such file or directory", .{quote.quoteA(dir)});
-            } else s.warn("cannot create directory {f}: {s}", .{ quote.quoteA(dir), sys.errnoText(me) });
-            return false;
-        }
-        announceMkdir(s, dir);
+            if (madeMeanwhile(dir, me)) {
+                existed = true;
+            } else {
+                if (me == .ACCES) {
+                    s.warn("cannot change permissions of {f}: No such file or directory", .{quote.quoteA(dir)});
+                } else s.warn("cannot create directory {f}: {s}", .{ quote.quoteA(dir), sys.errnoText(me) });
+                return false;
+            }
+        } else announceMkdir(s, dir);
     }
+    const spot = dirat.Spot.open(dir, &e) orelse {
+        s.warn("cannot change permissions of {f}: {s}", .{ quote.quoteA(dir), sys.errnoText(e) });
+        return false;
+    };
+    defer spot.close();
     if (!(s.o.owner_id == unset and s.o.group_id == unset)) {
-        if (sys.chownAt(dir, s.o.owner_id, s.o.group_id, true)) |ce| {
+        if (sys.chownAtDir(spot.dir, spot.name, s.o.owner_id, s.o.group_id, true)) |ce| {
             s.warn("cannot change owner and permissions of {f}: {s}", .{ quote.quoteA(dir), sys.errnoText(ce) });
             return false;
         }
     }
-    if (sys.chmodPath(dir, s.o.dir_mode, false)) |ce| {
+    var dir_mode = s.o.dir_mode;
+    const kept: u32 = if (existed) 0o7777 else 0o6000;
+    if (sys.fileStat(dir, true, &e)) |now| dir_mode |= now.mode & kept & ~s.o.dir_mode_decided;
+    // A link that appears at the name from here on is not followed.
+    const failed = if (linked) sys.chmodPath(dir, dir_mode, false) else spot.setMode(0o040000, dir_mode);
+    if (failed) |ce| {
         s.warn("cannot change permissions of {f}: {s}", .{ quote.quoteA(dir), sys.errnoText(ce) });
         return false;
     }

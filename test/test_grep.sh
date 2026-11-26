@@ -314,5 +314,122 @@ gd 'exit status 1' nums zzz nums
 gd 'exit status 2 error + match' nums two nums nosuch
 gd 'exit status -q error' nums -q zzz nosuch
 gd 'long line' longline x longline
+# A directory that cannot be listed to the end is an error, not "no match".
+mkdir -p listerr/D; echo foo > listerr/D/a
+if can_inject; then
+    out=$(cd listerr && strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=1 "$BIN_DIR/grep" -r foo D 2>&1); rc=$?
+    if [ "$rc" -eq 2 ] && [ "$out" = "grep: D: Input/output error" ]; then PASS=$((PASS + 1)); echo "PASS -r reports a directory read error"
+    else FAIL=$((FAIL + 1)); echo "FAIL -r reports a directory read error (rc=$rc: $out)"; fi
+else
+    skip_test "-r reports a directory read error (no strace)"
+fi
+rm -rf listerr
+
+# -r does not follow a link that takes the place of an entry after the
+# directory was listed. strace holds grep just after the listing.
+for swapped in file directory; do
+    rm -rf race; mkdir -p race/t race/secrets; echo 'match SECRET' > race/secrets/zzz
+    if [ "$swapped" = file ]; then echo 'match innocent' > race/t/zzz; target=../secrets/zzz
+    else mkdir race/t/zzz; echo 'match innocent' > race/t/zzz/zzz; target=../secrets; fi
+    if can_inject; then
+        (cd race && exec timeout 30 strace -o /dev/null -e trace=getdents64 -e inject=getdents64:delay_exit=3000000:when=1 "$BIN_DIR/grep" -r match t > ../race.out 2>&1) & race_pid=$!
+        sleep 1.5
+        mv race/t/zzz race/moved && ln -s "$target" race/t/zzz
+        wait "$race_pid"
+        if ! grep -q SECRET race.out; then PASS=$((PASS + 1)); printf 'PASS -r does not follow a swapped-in link to a %s\n' "$swapped"
+        else FAIL=$((FAIL + 1)); printf 'FAIL -r does not follow a swapped-in link to a %s\n' "$swapped"; head -n 3 race.out; fi
+    else
+        skip_test "grep -r link race (needs strace)"
+    fi
+done
+rm -rf race race.out
+# Directory trees deeper than the walker keeps open, with few descriptors.
+mkdir -p "deep/$(awk 'BEGIN { for (i = 0; i < 90; i++) printf "n/"; print "n" }')"
+echo match > "deep/$(awk 'BEGIN { for (i = 0; i < 90; i++) printf "n/"; print "n" }')/leaf"
+for opts in -r -R; do
+    exp=$(LC_ALL=C "${GNU_BIN:-/usr/bin}/grep" $opts match deep 2>&1)
+    act=$(ulimit -n 48 && LC_ALL=C "$BIN_DIR/grep" $opts match deep 2>&1)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); printf 'PASS %s of a deep tree with 48 descriptors\n' "$opts"
+    else FAIL=$((FAIL + 1)); printf 'FAIL %s of a deep tree with 48 descriptors: %.200s\n' "$opts" "$act"; fi
+done
+rm -rf deep
+
+# A symbolic link that leads back up is not searched again, however many
+# there are. Warning, status and (sorted) matches are GNU's.
+mkdir -p loops/one/a loops/two; echo match > loops/one/a/f; ln -s .. loops/one/a/up
+echo match > loops/two/f; ln -s . loops/two/s1; ln -s . loops/two/s2
+for t in loops/one loops/two loops; do
+    for opts in -R -Rs -Rc; do
+        exp=$(LC_ALL=C "${GNU_BIN:-/usr/bin}/grep" $opts match $t 2>"$W/gerr"; echo "status $?")
+        act=$(LC_ALL=C timeout 10 "$BIN_DIR/grep" $opts match $t 2>"$W/oerr"; echo "status $?")
+        exp=$(printf '%s\n' "$exp" | sort); act=$(printf '%s\n' "$act" | sort)
+        gerr=$(sed 's#^[^ ]*grep:#grep:#' "$W/gerr" | sort); oerr=$(sed 's#^[^ ]*grep:#grep:#' "$W/oerr" | sort)
+        if [ "$exp" = "$act" ] && [ "$gerr" = "$oerr" ]; then PASS=$((PASS + 1)); printf 'PASS directory loop %s %s\n' "$opts" "$t"
+        else FAIL=$((FAIL + 1)); printf 'FAIL directory loop %s %s\n' "$opts" "$t"; printf '%s\n%s\n---\n%s\n%s\n' "$exp" "$gerr" "$act" "$oerr" | head -c 600; fi
+    done
+done
+rm -rf loops
+# Pipes and FIFOs that are named are waited for: the writer starts late.
+# (timeout bounds a grep that never gets the data, and the writers.)
+late() { sleep 0.5; printf 'one\nhello\n'; }
+pipe_case() { # DESC SHELL-SCRIPT-USING-$G
+    rm -rf pipes; mkdir -p pipes/dir; mkfifo pipes/p pipes/dir/f
+    exp=$(G="${GNU_BIN:-/usr/bin}/grep" LC_ALL=C timeout 20 bash -c "$(declare_late); $2" 2>&1; echo "status $?")
+    rm -rf pipes; mkdir -p pipes/dir; mkfifo pipes/p pipes/dir/f
+    act=$(G="$BIN_DIR/grep" LC_ALL=C timeout 20 bash -c "$(declare_late); $2" 2>&1 | sed "s#$BIN_DIR/##"; echo "status $?")
+    exp=$(printf '%s' "$exp" | sed "s#${GNU_BIN:-/usr/bin}/##"); act=$(printf '%s' "$act")
+    if [ "${exp%status *}" = "${act%status *}" ]; then PASS=$((PASS + 1)); echo "PASS $1"
+    else FAIL=$((FAIL + 1)); echo "FAIL $1"; printf '%s\n---\n%s\n' "$exp" "$act" | head -c 600; fi
+}
+declare_late() { echo "late() { sleep 0.5; printf 'one\\nhello\\n'; }"; }
+if command -v bash > /dev/null; then
+    pipe_case "process substitution with a late writer" '"$G" hello <(late); echo $?'
+    pipe_case "/dev/stdin with a late writer"           'late | "$G" -n hello /dev/stdin; echo $?'
+    pipe_case "FIFO opened before its writer"           '{ sleep 0.5; timeout 5 sh -c "echo hello > pipes/p"; } & timeout 8 "$G" hello pipes/p; echo $?; wait'
+    pipe_case "-r on a FIFO operand"                    '{ sleep 0.5; timeout 5 sh -c "echo hello > pipes/p"; } & timeout 8 "$G" -r hello pipes/p; echo $?; wait'
+    pipe_case "-r -D read waits for a FIFO in the tree" '{ sleep 0.5; timeout 5 sh -c "echo hello > pipes/dir/f"; } & timeout 8 "$G" -r -D read hello pipes/dir; echo $?; wait'
+    pipe_case "-r skips a FIFO in the tree"             'timeout 8 "$G" -r hello pipes/dir; echo $?'
+    pipe_case "-D skip on a FIFO operand"               'timeout 8 "$G" -D skip hello pipes/p; echo $?'
+else
+    skip_test "grep on pipes with late writers (needs bash)"
+fi
+rm -rf pipes
+# \< and \> are each one end of a word (C locale, next to anything).
+printf 'abc def\n abc_1 -x-  abcdef\nfoo.bar  (baz)\n\n_ _a a_\nab abab b\n' > words
+for p in '\<' '\>' '\<.' '.\>' 'abc\<' '\>abc' '\<a*' 'ab*\>' '\W\>' '\<\W' '\<[a-z]*def\>' '\<abc\>' '\<\w\+\>' '\<a\?b' '\(abc\)\>'; do
+    gd "word ends: -on '$p'" words -on -- "$p"
+    gd "word ends: -c '$p'" words -c -- "$p"
+done
+# Several '*' in a file name pattern take no longer than one (a time limit:
+# trying every position for every '*' would run for hours).
+mkdir stars; printf 'x\n' > "stars/$(printf 'a%.0s' $(seq 200))"; printf 'x\n' > stars/aaab
+for o in --include --exclude; do
+    exp=$(LC_ALL=C timeout 20 /usr/bin/grep -r "$o=*a*a*a*a*a*a*a*a*a*a*b" x stars > stars.out; echo "status $?"; sort stars.out)
+    act=$(LC_ALL=C timeout 20 "$BIN_DIR/grep" -r "$o=*a*a*a*a*a*a*a*a*a*a*b" x stars > stars.out; echo "status $?"; sort stars.out)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $o with many stars"
+    else FAIL=$((FAIL + 1)); echo "FAIL $o with many stars"; fi
+done
+rm -rf stars stars.out
+# UTF-8: neither \B nor an empty -w match may be found inside a character.
+printf '\303\251\na\303\251\nab \303\251\n\342\202\254\na \303\251 b\n\360\235\224\270\n' > "$TEST_TMP/midchar"
+midchar() { CMP_LOCALE=C.UTF-8 CMP_STDIN="$TEST_TMP/midchar" run_cmp "UTF-8 characters stay whole: $*" -n "$@"; }
+midchar -E '\B'
+midchar -o -E '\B|a'
+midchar -w 'x*'
+midchar -w -e 'x*' -e zz
+midchar -w -E '()'
+midchar -w -e ''
+midchar -w -F -e '' -e zz
+midchar -P -w 'x*'
+# A back-reference is one digit: what follows it is a literal.
+printf 'aa0\naa8\naa9\na\010\n' > "$TEST_TMP/backref"
+for p in '\(a\)\10' '\(a\)\18' '\(a\)\19' '\(a\)\1\0'; do
+    gd "back-reference then digit: $p" "$TEST_TMP/backref" -e "$p"
+done
+gd "back-reference then digit: -E" "$TEST_TMP/backref" -E '(a)\10'
+# Hundreds of capture groups in one pattern are still accepted.
+many=$(awk 'BEGIN { for (i = 0; i < 600; i++) printf "%s(w%d)+x", i ? "|" : "", i }')
+printf 'w5x\nw599x\nnone\n' > "$TEST_TMP/many"
+gd "600 alternatives with a group each" "$TEST_TMP/many" -E "$many"
 help_cmp
 cd /; print_summary

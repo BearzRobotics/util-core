@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Backup file naming and renaming (gnulib backupfile.c, coreutils 9.6,
-//! consulted 2026-11-07) shared by cp, mv and install. Library code (decision
+//! consulted 2026-11-07) shared by cp, mv, install and ln. Library code (decision
 //! 0004): no argument handling and no process-wide state; the caller resolves
 //! the version-control argument and the suffix (see backup_args.zig).
 
@@ -19,13 +19,15 @@ fn dirOf(path: []const u8) []const u8 {
     return if (d == 0) "/" else path[0..d];
 }
 
-/// Highest existing numbered backup of `file` (0 when none) and whether the
-/// number is all 9s.
-fn highestNumbered(env: common.Env, file: []const u8, base: []const u8) ?struct { n: u64 } {
-    var dir = Io.Dir.cwd().openDir(env.io, dirOf(file), .{ .iterate = true }) catch return null;
+/// The number of the highest existing numbered backup of `file`, as its
+/// digits (allocated with `arena`), or "" when there is none. A name is chosen
+/// by whoever can create files in that directory, so the number may be larger
+/// than any integer type; it is kept and incremented as text.
+fn highestNumbered(env: common.Env, arena: std.mem.Allocator, from: sys.Handle, file: []const u8, base: []const u8) error{OutOfMemory}![]const u8 {
+    const start: Io.Dir = .{ .handle = from };
+    var dir = start.openDir(env.io, dirOf(file), .{ .iterate = true }) catch return "";
     defer dir.close(env.io);
-    var best: u64 = 0;
-    var found = false;
+    var best: []u8 = &.{};
     var it = dir.iterate();
     while (it.next(env.io) catch null) |entry| {
         const nm = entry.name;
@@ -40,16 +42,30 @@ fn highestNumbered(env: common.Env, file: []const u8, base: []const u8) ?struct 
         for (digits) |d| if (d < '0' or d > '9') {
             ok = false;
         };
-        if (!ok) continue;
-        const v = std.fmt.parseInt(u64, digits, 10) catch continue;
-        if (!found or v > best) best = v;
-        found = true;
+        if (!ok or !laterNumber(digits, best)) continue;
+        best = try arena.dupe(u8, digits);
     }
-    if (!found) return .{ .n = 0 };
-    return .{ .n = best };
+    return best;
 }
 
-fn nameFor(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, file: []const u8, btype: *Type, numbered_ok: *bool) ![]const u8 {
+/// Whether the number `a` is greater than `b`; neither has leading zeros.
+fn laterNumber(a: []const u8, b: []const u8) bool {
+    return if (a.len != b.len) a.len > b.len else std.mem.order(u8, a, b) == .gt;
+}
+
+/// The decimal number after `digits` ("" counts as zero).
+fn increment(arena: std.mem.Allocator, digits: []const u8) error{OutOfMemory}![]const u8 {
+    // One spare leading zero takes the carry out of a run of nines.
+    const out = try arena.alloc(u8, digits.len + 1);
+    out[0] = '0';
+    @memcpy(out[1..], digits);
+    var i = out.len - 1;
+    while (out[i] == '9') : (i -= 1) out[i] = '0';
+    out[i] += 1;
+    return if (out[0] == '0') out[1..] else out;
+}
+
+fn nameFor(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, from: sys.Handle, file: []const u8, btype: *Type, numbered_ok: *bool) ![]const u8 {
     var end = file.len;
     while (end > 1 and file[end - 1] == '/') end -= 1;
     const f = file[0..end];
@@ -57,40 +73,37 @@ fn nameFor(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, file: 
     const base = f[base_off..];
     numbered_ok.* = true;
     if (btype.* == .simple) return std.fmt.allocPrint(arena, "{s}{s}", .{ f, suffix });
-    const hi = highestNumbered(env, f, base);
-    const n: u64 = if (hi) |h| h.n else 0;
-    if (n == 0) {
-        if (btype.* == .numbered_existing) {
-            btype.* = .simple;
-            return std.fmt.allocPrint(arena, "{s}{s}", .{ f, suffix });
-        }
-        return std.fmt.allocPrint(arena, "{s}.~1~", .{f});
+    const highest = try highestNumbered(env, arena, from, f, base);
+    if (highest.len == 0 and btype.* == .numbered_existing) {
+        btype.* = .simple;
+        return std.fmt.allocPrint(arena, "{s}{s}", .{ f, suffix });
     }
-    return std.fmt.allocPrint(arena, "{s}.~{d}~", .{ f, n + 1 });
+    return std.fmt.allocPrint(arena, "{s}.~{s}~", .{ f, try increment(arena, highest) });
 }
 
 /// The name a backup of `file` would get (nothing is renamed).
 pub fn findBackupName(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, file: []const u8, btype_in: Type) ?[]const u8 {
     var bt = btype_in;
     var ok: bool = true;
-    return nameFor(env, suffix, arena, file, &bt, &ok) catch null;
+    return nameFor(env, suffix, arena, sys.cwdFd(), file, &bt, &ok) catch null;
 }
 
-/// Rename `file` to its backup name; returns the new name, or null with
-/// `err` set (ENOENT when the file does not exist).
-pub fn backupRename(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, file: []const u8, btype_in: Type, err: *E) ?[]const u8 {
+/// Rename `file`, resolved from the open directory `dir`, to its backup name;
+/// returns the new name (relative to `dir` like `file`), or null with `err` set
+/// (ENOENT when the file does not exist).
+pub fn backupRename(env: common.Env, suffix: []const u8, arena: std.mem.Allocator, dir: sys.Handle, file: []const u8, btype_in: Type, err: *E) ?[]const u8 {
     var attempts: usize = 0;
     while (attempts < 1000) : (attempts += 1) {
         var bt = btype_in;
         var ok: bool = true;
-        const name = nameFor(env, suffix, arena, file, &bt, &ok) catch {
+        const name = nameFor(env, suffix, arena, dir, file, &bt, &ok) catch {
             err.* = .NOMEM;
             return null;
         };
         var end = file.len;
         while (end > 1 and file[end - 1] == '/') end -= 1;
         const flags: u32 = if (bt == .simple) 0 else sys.RENAME_NOREPLACE;
-        if (sys.renamePath(file[0..end], name, flags)) |e| {
+        if (sys.renameAt(dir, file[0..end], dir, name, flags)) |e| {
             if (e == .EXIST and bt != .simple) continue;
             err.* = e;
             return null;
@@ -99,4 +112,21 @@ pub fn backupRename(env: common.Env, suffix: []const u8, arena: std.mem.Allocato
     }
     err.* = .EXIST;
     return null;
+}
+
+test "backup numbers are incremented as text" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][2][]const u8{
+        .{ "", "1" },
+        .{ "1", "2" },
+        .{ "9", "10" },
+        .{ "199", "200" },
+        .{ "18446744073709551615", "18446744073709551616" },
+        .{ "99999999999999999999999", "100000000000000000000000" },
+    }) |case| try std.testing.expectEqualStrings(case[1], try increment(arena, case[0]));
+    try std.testing.expect(laterNumber("10", "9"));
+    try std.testing.expect(laterNumber("1", ""));
+    try std.testing.expect(!laterNumber("5", "5"));
 }

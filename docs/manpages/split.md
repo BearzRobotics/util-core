@@ -62,7 +62,14 @@ Split a file into pieces.
 
 # ENVIRONMENT
 
-none (locale variables are ignored; behaviour is that of the C locale)
+SHELL
+: The shell that runs `--filter` commands (default `/bin/sh`).
+
+TMPDIR
+: Where `-n` copies input whose size it cannot ask for, such as a pipe of more
+than 128 KiB (default `/tmp`). The copy is as large as the input.
+
+Locale variables are ignored; behaviour is that of the C locale.
 
 # STANDARD STREAMS
 

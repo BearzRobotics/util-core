@@ -2,6 +2,7 @@
 # link: differential tests against GNU link 9.7 (C locale).
 UTIL="link"
 . "$(dirname "$0")/testlib.sh"
+TREE_LINKS=1    # a copy must not pass for a hard link
 run_tree "simple"                  'echo hi > a' a b
 run_tree "target exists"           'touch a b' a b
 run_tree "source missing"          : nofile b

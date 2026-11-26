@@ -5,6 +5,7 @@ UTIL="locate"
 FU="${GNU_BIN:-$HOME/.cache/util-core/findutils/bin}"
 if [ ! -x "$FU/locate" ]; then
     echo "SKIP: GNU findutils not built; run tools/build-gnu-findutils.sh" >&2
+    SUMMARY_DONE=1
     exit 0
 fi
 GNU_BIN="$FU"; export GNU_BIN
@@ -132,4 +133,33 @@ loc '-L -e dangling link' locate -d "$W/db3" -L -e lnk
 loc '-P -e dangling link' locate -d "$W/db3" -P -e lnk
 loc '-L -E dangling link' locate -d "$W/db3" -L -E lnk
 loc '-P -E dangling link' locate -d "$W/db3" -P -E lnk
+# Output that cannot be written is an error.
+if [ -e /dev/full ]; then
+    for o in "" "-c" "-S" "-0"; do
+        exp=$("$FU/locate" -d "$W/db1" $o txt 2>&1 >/dev/full; echo "status $?")
+        act=$("$BIN_DIR/locate" -d "$W/db1" $o txt 2>&1 >/dev/full; echo "status $?")
+        exp=$(printf '%s\n' "$exp" | sed 's#^[^ ]*locate: #locate: #'); act=$(printf '%s\n' "$act" | sed 's#^[^ ]*locate: #locate: #')
+        if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS write error $o"
+        else FAIL=$((FAIL + 1)); echo "FAIL write error $o"; printf '  GNU : %s\n  ours: %s\n' "$exp" "$act"; fi
+    done
+fi
+
+# On a terminal, unprintable characters in names are shown as '?', as GNU
+# does; pipes and -0 get every byte. script(1) provides the terminal.
+mkdir "$W/term"; cd "$W/term"; mkdir d
+: > "d/$(printf 'e\033]0;x\007\033[2J\nz\177')"; : > "d/$(printf 'u\303\251\302\233q')"; : > "d/$(printf 'i\351z')"; : > "d/$(printf 'cut\342\200')"
+"$FU/updatedb" --localpaths="$W/term/d" --output="$W/term/db" --prunepaths=/nonexistent
+if script -qec true /dev/null </dev/null >/dev/null 2>&1; then
+    on_tty() { LC_ALL="$1" SHELL=/bin/sh script -qec "'$2' -d db $3" /dev/null </dev/null | od -An -c; }
+    for l in C C.UTF-8; do
+        for args in "d/" "-0 d/" "-b -l 3 ''" "-e d/" "-c d/"; do
+            exp=$(on_tty $l "$FU/locate" "$args"); act=$(on_tty $l "$BIN_DIR/locate" "$args")
+            if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); printf 'PASS terminal %s %s\n' $l "$args"
+            else FAIL=$((FAIL + 1)); printf 'FAIL terminal %s %s\n  GNU : %s\n  ours: %s\n' $l "$args" "$exp" "$act"; fi
+        done
+    done
+else
+    SKIP=$((SKIP + 1)); echo "SKIP terminal output (needs script(1))"
+fi
+CMP_LOCALE=C.UTF-8 loc 'not a terminal keeps every byte' locate -d "$W/term/db" d/
 cd /; print_summary

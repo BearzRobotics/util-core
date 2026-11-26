@@ -16,7 +16,7 @@ It is a small implementation, built into util-core so that paging works on every
 # OPTIONS
 
 -F, --quit-if-one-screen
-: Quit at once, printing the text, if it fits on one screen.
+: Quit at once, printing the text, if it fits on one screen. The terminal is not touched until the text is longer than that, so what is typed meanwhile is left for others. The text is shown as the pager would show it: without `-R`, control characters appear as `^X` and are not sent to the terminal.
 
 -R, --RAW-CONTROL-CHARS, -r
 : Pass colour escape sequences through. Without it, control characters are shown as `^X`.
@@ -41,7 +41,13 @@ It is a small implementation, built into util-core so that paging works on every
 
 # KEYS
 
-space, f, ^F, PgDn: forward one screen. b, ^B, PgUp: backward one screen. d, ^D and u, ^U: half a screen. j, e, ^N, Enter, Down and k, y, ^P, Up: one row. g, <, Home: top. G, >, End: bottom. `/text` and `?text`: search forward and backward (plain text, ignoring colour escape sequences; the search does not wrap). n, N: repeat in the same and the other direction. F: follow, keep reading and show new data until a key is pressed. =: show the position. r, R, ^L: redraw. h: one-line help. q, Q, ^C: quit.
+space, f, ^F, PgDn: forward one screen. b, ^B, PgUp: backward one screen. d, ^D and u, ^U: half a screen. j, e, ^N, Enter, Down and k, y, ^P, Up: one row. g, <, Home: top. G, >, End: bottom. `/text` and `?text`: search forward and backward (plain text, ignoring colour escape sequences; the search does not wrap). n, N: repeat in the same and the other direction. F: follow (see FOLLOWING). =: show the position. r, R, ^L: redraw. h: one-line help. q, Q, ^C: quit (while following, ^C stops following instead).
+
+# FOLLOWING
+
+F goes to the end of the text and shows new data as it arrives, from a pipe or from a file that is still being written, such as a log. All the keys keep working. After scrolling back, the view stays where it is while data continues to be read; G, or scrolling to the end, makes it move with the data again. ^X or ^C stops following and q quits. When several files are given, the last one is followed. A file is followed through the descriptor opened at the start: one that is renamed and replaced (log rotation) is not reopened, and after one is truncated nothing is shown until it grows past what was already read.
+
+Unlike less(1), where no other command works until following is interrupted, scrolling, searching and quitting work while following.
 
 # EXIT STATUS
 

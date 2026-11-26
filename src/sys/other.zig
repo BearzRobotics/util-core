@@ -39,6 +39,11 @@ fn cwd() Io.Dir {
     return Io.Dir.cwd();
 }
 
+/// The `std.Io` view of an open directory (or of `sys.cwdFd()`).
+fn dirOf(h: Handle) Io.Dir {
+    return .{ .handle = h };
+}
+
 fn fileOf(h: Handle) Io.File {
     return .{ .handle = h, .flags = .{ .nonblocking = false } };
 }
@@ -113,6 +118,7 @@ const win = if (is_win) struct {
         max_y: i16,
     };
     extern "kernel32" fn GetConsoleScreenBufferInfo(h: w.HANDLE, info: *CONSOLE_SCREEN_BUFFER_INFO) callconv(.winapi) c_int;
+    extern "kernel32" fn SetFilePointerEx(h: w.HANDLE, distance: i64, new_pos: ?*i64, method: u32) callconv(.winapi) c_int;
     extern "kernel32" fn GetConsoleMode(h: w.HANDLE, mode: *u32) callconv(.winapi) c_int;
     extern "kernel32" fn SetConsoleMode(h: w.HANDLE, mode: u32) callconv(.winapi) c_int;
     extern "kernel32" fn SetConsoleOutputCP(cp: u32) callconv(.winapi) c_int;
@@ -214,6 +220,43 @@ pub fn raiseSelf(sg: u8) ?E {
     return cerr(c.kill(c.getpid(), @enumFromInt(sg)));
 }
 
+fn terminalStopHandler(_: c.SIG) callconv(.c) void {}
+
+pub fn catchTerminalStops() void {
+    if (comptime !is_libc_posix) return;
+    const act: c.Sigaction = .{ .handler = .{ .handler = terminalStopHandler }, .mask = std.posix.sigemptyset(), .flags = c.SA.RESTART };
+    _ = c.sigaction(c.SIG.TTIN, &act, null);
+    _ = c.sigaction(c.SIG.TTOU, &act, null);
+}
+
+pub fn ignoreTerminalStops() void {
+    if (comptime !is_libc_posix) return;
+    const act: c.Sigaction = .{ .handler = .{ .handler = c.SIG.IGN }, .mask = std.posix.sigemptyset(), .flags = 0 };
+    _ = c.sigaction(c.SIG.TTIN, &act, null);
+    _ = c.sigaction(c.SIG.TTOU, &act, null);
+}
+
+fn statisticsHandler(_: c.SIG) callconv(.c) void {
+    sys.recordStatisticsRequest();
+}
+
+fn interruptHandler(_: c.SIG) callconv(.c) void {
+    sys.recordInterrupt();
+}
+
+pub fn catchStatisticsSignals(on_user_signal: bool) void {
+    if (comptime !is_libc_posix) return;
+    if (on_user_signal) {
+        const act: c.Sigaction = .{ .handler = .{ .handler = statisticsHandler }, .mask = std.posix.sigemptyset(), .flags = 0 };
+        _ = c.sigaction(c.SIG.USR1, &act, null);
+        if (comptime @hasField(c.SIG, "INFO")) _ = c.sigaction(c.SIG.INFO, &act, null);
+    }
+    var old: c.Sigaction = undefined;
+    if (c.sigaction(c.SIG.INT, null, &old) != 0 or old.handler.handler == c.SIG.IGN) return;
+    const act: c.Sigaction = .{ .handler = .{ .handler = interruptHandler }, .mask = std.posix.sigemptyset(), .flags = c.SA.RESETHAND };
+    _ = c.sigaction(c.SIG.INT, &act, null);
+}
+
 var saved_catch: [7]c.Sigaction = undefined;
 var saved_catch_valid: [7]bool = @splat(false);
 
@@ -275,7 +318,7 @@ extern "c" fn getgroups(n: c_int, list: [*]u32) c_int;
 extern "c" fn getpriority(which: c_int, who: u32) c_int;
 extern "c" fn setpriority(which: c_int, who: u32, prio: c_int) c_int;
 extern "c" fn chroot(path: [*:0]const u8) c_int;
-extern "c" fn mknod(path: [*:0]const u8, mode: u16, dev: i32) c_int;
+extern "c" fn mknodat(dir: c_int, path: [*:0]const u8, mode: u16, dev: i32) c_int;
 extern "c" fn clock_settime(clk: c_int, ts: *const c.timespec) c_int;
 
 pub fn umask() u16 {
@@ -493,7 +536,7 @@ fn fromCStat(st: c.Stat) FileStat {
     };
 }
 
-pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
+pub fn fileStatAt(dir: Handle, path: []const u8, follow: bool, err: *E) ?FileStat {
     if (comptime is_libc_posix) {
         var b: [4097]u8 = undefined;
         const p = cstr(&b, path) orelse {
@@ -502,13 +545,13 @@ pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
         };
         var st: c.Stat = undefined;
         const flags: u32 = if (follow) 0 else c.AT.SYMLINK_NOFOLLOW;
-        if (cerr(c.fstatat(c.AT.FDCWD, p, &st, flags))) |e| {
+        if (cerr(c.fstatat(dir, p, &st, flags))) |e| {
             err.* = e;
             return null;
         }
         return fromCStat(st);
     }
-    const st = cwd().statFile(io(), path, .{ .follow_symlinks = follow }) catch |e| {
+    const st = dirOf(dir).statFile(io(), path, .{ .follow_symlinks = follow }) catch |e| {
         err.* = errFrom(e);
         return null;
     };
@@ -533,27 +576,95 @@ pub fn fstatFd(fd: Handle, err: *E) ?FileStat {
 
 // ---------------------------------------------------- descriptors and files
 
+/// This system's open(2) flags for the abstract `flags`. DIRECT and NOATIME
+/// are left out: macOS has neither under these names. Where there is no
+/// O_PATH, a file opened only to name it must at least not wait.
+fn nativeOpenFlags(flags: u32) c.O {
+    var out: c.O = .{
+        .ACCMODE = switch (flags & 3) {
+            O.WRONLY => .WRONLY,
+            O.RDWR => .RDWR,
+            else => .RDONLY,
+        },
+        .CREAT = flags & O.CREAT != 0,
+        .EXCL = flags & O.EXCL != 0,
+        .TRUNC = flags & O.TRUNC != 0,
+        .APPEND = flags & O.APPEND != 0,
+        .NONBLOCK = flags & O.NONBLOCK != 0,
+        .NOCTTY = flags & O.NOCTTY != 0,
+        .NOFOLLOW = flags & O.NOFOLLOW != 0,
+        .DIRECTORY = flags & O.DIRECTORY != 0,
+        .CLOEXEC = true,
+    };
+    if (@hasField(c.O, "DSYNC")) out.DSYNC = flags & O.DSYNC != 0;
+    // The abstract SYNC includes DSYNC, as on Linux.
+    if (flags & (O.SYNC & ~O.DSYNC) != 0) out.SYNC = true;
+    if (flags & O.PATH != 0) {
+        if (@hasField(c.O, "PATH")) {
+            out.PATH = true;
+        } else {
+            out.NONBLOCK = true;
+            out.NOCTTY = true;
+        }
+    }
+    return out;
+}
+
+// macOS cannot be run here, so a cross build checks the translation against
+// the numbers in its <sys/fcntl.h>.
+comptime {
+    if (is_darwin) {
+        const bits = struct {
+            fn of(flags: u32) u32 {
+                return @bitCast(nativeOpenFlags(flags));
+            }
+        };
+        const cloexec = 0x1000000;
+        std.debug.assert(bits.of(O.RDONLY | O.NONBLOCK | O.NOCTTY) == cloexec | 0x4 | 0x20000);
+        std.debug.assert(bits.of(O.WRONLY | O.CREAT | O.EXCL | O.TRUNC) == cloexec | 0x1 | 0x200 | 0x800 | 0x400);
+        std.debug.assert(bits.of(O.RDWR | O.APPEND | O.NOFOLLOW) == cloexec | 0x2 | 0x8 | 0x100);
+        std.debug.assert(bits.of(O.DSYNC) == cloexec | 0x400000);
+        std.debug.assert(bits.of(O.SYNC) == cloexec | 0x400000 | 0x80);
+    }
+}
+
 /// O flags of sys.zig are abstract (the Linux values) on every OS other than
-/// Linux; this builds the matching Io open call.
-pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *E) ?Handle {
+/// Linux. The libc systems pass them, translated, to openat(2); elsewhere the
+/// matching Io open call is built, which cannot express all of them.
+pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?Handle {
     const acc = flags & 3;
     const follow = flags & O.NOFOLLOW == 0;
     if (flags & O.DIRECTORY != 0) {
-        const d = cwd().openDir(io(), path, .{ .follow_symlinks = follow }) catch |e| {
+        // A directory opened only to name files in it need not be readable.
+        const d = dirOf(dir).openDir(io(), path, .{ .follow_symlinks = follow, .iterate = flags & O.PATH == 0 }) catch |e| {
             err.* = errFrom(e);
             return null;
         };
         return d.handle;
     }
+    if (comptime is_libc_posix) {
+        var b: [4097]u8 = undefined;
+        const p = cstr(&b, path) orelse {
+            err.* = .NAMETOOLONG;
+            return null;
+        };
+        const rc = c.openat(dir, p, nativeOpenFlags(flags), @as(c_uint, mode));
+        if (cerr(rc)) |e| {
+            // FreeBSD's answer to O_NOFOLLOW on a symbolic link.
+            err.* = if (e == .MLINK and !follow) .LOOP else e;
+            return null;
+        }
+        return rc;
+    }
     const file = if (flags & O.CREAT != 0)
-        cwd().createFile(io(), path, .{
+        dirOf(dir).createFile(io(), path, .{
             .read = acc == O.RDWR,
             .truncate = flags & O.TRUNC != 0,
             .exclusive = flags & O.EXCL != 0,
             .permissions = sys.permissionsFromMode(mode),
         })
     else
-        cwd().openFile(io(), path, .{
+        dirOf(dir).openFile(io(), path, .{
             .mode = switch (acc) {
                 O.WRONLY => .write_only,
                 O.RDWR => .read_write,
@@ -569,7 +680,36 @@ pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *E) ?Handle {
     return f.handle;
 }
 
+/// fcntl(F_GETFL) as abstract flags: the access mode, APPEND and NONBLOCK.
+/// Zero where there are no such flags.
+pub fn getStatusFlags(fd: Handle, err: *E) ?usize {
+    if (comptime !is_libc_posix) return 0;
+    const rc = c.fcntl(fd, c.F.GETFL, @as(c_int, 0));
+    if (cerr(rc)) |e| {
+        err.* = e;
+        return null;
+    }
+    const native: c.O = @bitCast(rc);
+    var flags: u32 = @intFromEnum(native.ACCMODE);
+    if (native.APPEND) flags |= O.APPEND;
+    if (native.NONBLOCK) flags |= O.NONBLOCK;
+    return flags;
+}
+
+/// fcntl(F_SETFL): APPEND and NONBLOCK are set as `flags` has them; the
+/// others stay as they are.
+pub fn setStatusFlags(fd: Handle, flags: usize) ?E {
+    if (comptime !is_libc_posix) return null;
+    const rc = c.fcntl(fd, c.F.GETFL, @as(c_int, 0));
+    if (cerr(rc)) |e| return e;
+    var native: c.O = @bitCast(rc);
+    native.APPEND = flags & O.APPEND != 0;
+    native.NONBLOCK = flags & O.NONBLOCK != 0;
+    return cerr(c.fcntl(fd, c.F.SETFL, @as(c_int, @bitCast(native))));
+}
+
 pub fn closeFd(fd: Handle) ?E {
+    if (comptime is_libc_posix) return cerr(c.close(fd));
     fileOf(fd).close(io());
     return null;
 }
@@ -596,6 +736,19 @@ pub fn writeFd(fd: Handle, bytes: []const u8, err: *E) ?usize {
 
 pub fn writeAllFd(fd: Handle, bytes: []const u8) ?E {
     fileOf(fd).writeStreamingAll(io(), bytes) catch return .IO;
+    return null;
+}
+
+pub fn filePosition(fd: Handle) ?u64 {
+    if (comptime is_win) {
+        var pos: i64 = 0;
+        if (win.SetFilePointerEx(fd, 0, &pos, 1) == 0) return null; // FILE_CURRENT
+        return @intCast(pos);
+    }
+    if (comptime is_libc_posix) {
+        const rc = c.lseek(fd, 0, 1);
+        return if (rc < 0) null else @intCast(rc);
+    }
     return null;
 }
 
@@ -664,13 +817,13 @@ pub fn fchownFd(fd: Handle, uid: u32, gid: u32) ?E {
     return noOwners(uid, gid);
 }
 
-pub fn chownAt(path: []const u8, uid: u32, gid: u32, nofollow: bool) ?E {
+pub fn chownAtDir(dir: Handle, path: []const u8, uid: u32, gid: u32, nofollow: bool) ?E {
     if (comptime is_libc_posix) {
         var b: [4097]u8 = undefined;
         const p = cstr(&b, path) orelse return .NAMETOOLONG;
-        return cerr(c.fchownat(c.AT.FDCWD, p, uid, gid, if (nofollow) c.AT.SYMLINK_NOFOLLOW else 0));
+        return cerr(c.fchownat(dir, p, uid, gid, if (nofollow) c.AT.SYMLINK_NOFOLLOW else 0));
     }
-    _ = .{ path, nofollow };
+    _ = .{ dir, path, nofollow };
     return noOwners(uid, gid);
 }
 
@@ -720,6 +873,17 @@ pub fn dup2(old: Handle, new: i32) ?E {
     return .NOSYS;
 }
 
+pub fn dupFd(fd: Handle, err: *E) ?Handle {
+    if (comptime is_libc_posix) {
+        const copy = c.dup(fd);
+        if (copy >= 0) return copy;
+        err.* = fromC(c.errno(copy));
+        return null;
+    }
+    err.* = .NOSYS;
+    return null;
+}
+
 pub fn fdOpen(fd: i32) bool {
     if (comptime is_libc_posix) return c.fcntl(fd, c.F.GETFD, @as(c_int, 0)) >= 0;
     return true;
@@ -727,43 +891,43 @@ pub fn fdOpen(fd: i32) bool {
 
 // ------------------------------------------------------------------- paths
 
-pub fn mkdirPath(path: []const u8, mode: u32) ?E {
-    cwd().createDir(io(), path, sys.permissionsFromMode(mode)) catch |e| return errFrom(e);
+pub fn mkdirAt(dir: Handle, path: []const u8, mode: u32) ?E {
+    dirOf(dir).createDir(io(), path, sys.permissionsFromMode(mode)) catch |e| return errFrom(e);
     return null;
 }
 
-pub fn unlinkPath(path: []const u8, removedir: bool) ?E {
-    if (removedir) cwd().deleteDir(io(), path) catch |e| return errFrom(e) else cwd().deleteFile(io(), path) catch |e| return errFrom(e);
+pub fn unlinkAt(dir: Handle, path: []const u8, removedir: bool) ?E {
+    if (removedir) dirOf(dir).deleteDir(io(), path) catch |e| return errFrom(e) else dirOf(dir).deleteFile(io(), path) catch |e| return errFrom(e);
     return null;
 }
 
-pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?E {
+pub fn renameAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const u8, flags: u32) ?E {
     if (flags & sys.RENAME_EXCHANGE != 0) return .OPNOTSUPP;
     if (flags & sys.RENAME_NOREPLACE != 0) {
-        Io.Dir.renamePreserve(cwd(), old, cwd(), new, io()) catch |e| return errFrom(e);
+        Io.Dir.renamePreserve(dirOf(old_dir), old, dirOf(new_dir), new, io()) catch |e| return errFrom(e);
         return null;
     }
-    Io.Dir.rename(cwd(), old, cwd(), new, io()) catch |e| return errFrom(e);
+    Io.Dir.rename(dirOf(old_dir), old, dirOf(new_dir), new, io()) catch |e| return errFrom(e);
     return null;
 }
 
-pub fn linkPath(old: []const u8, new: []const u8, follow: bool) ?E {
-    Io.Dir.hardLink(cwd(), old, cwd(), new, io(), .{ .follow_symlinks = follow }) catch |e| return errFrom(e);
+pub fn linkAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const u8, follow: bool) ?E {
+    Io.Dir.hardLink(dirOf(old_dir), old, dirOf(new_dir), new, io(), .{ .follow_symlinks = follow }) catch |e| return errFrom(e);
     return null;
 }
 
-pub fn symlinkPath(target: []const u8, path: []const u8) ?E {
+pub fn symlinkAt(target: []const u8, dir: Handle, path: []const u8) ?E {
     var is_dir = false;
     if (comptime is_win) {
         // Windows distinguishes file and directory links; decide from the target.
-        if (cwd().statFile(io(), target, .{})) |st| is_dir = st.kind == .directory else |_| {}
+        if (dirOf(dir).statFile(io(), target, .{})) |st| is_dir = st.kind == .directory else |_| {}
     }
-    cwd().symLink(io(), target, path, .{ .is_directory = is_dir }) catch |e| return errFrom(e);
+    dirOf(dir).symLink(io(), target, path, .{ .is_directory = is_dir }) catch |e| return errFrom(e);
     return null;
 }
 
-pub fn readlinkPath(path: []const u8, buf: []u8, err: *E) ?usize {
-    return cwd().readLink(io(), path, buf) catch |e| {
+pub fn readlinkAt(dir: Handle, path: []const u8, buf: []u8, err: *E) ?usize {
+    return dirOf(dir).readLink(io(), path, buf) catch |e| {
         err.* = errFrom(e);
         return null;
     };
@@ -774,24 +938,33 @@ pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?E {
     return null;
 }
 
-pub fn accessPath(path: []const u8, mode: u32) ?E {
-    cwd().access(io(), path, .{ .read = mode & 4 != 0, .write = mode & 2 != 0, .execute = mode & 1 != 0 }) catch |e| return errFrom(e);
+/// chmod of `name` in `dir`. Windows has no links to guard against here (and
+/// std cannot change permissions without following one).
+pub fn chmodAt(dir: Handle, name: []const u8, mode: u32, follow: bool) ?E {
+    dirOf(dir).setFilePermissions(io(), name, sys.permissionsFromMode(mode), .{ .follow_symlinks = follow or is_win }) catch |e| return errFrom(e);
     return null;
 }
 
+pub fn accessAt(dir: Handle, path: []const u8, mode: u32) ?E {
+    dirOf(dir).access(io(), path, .{ .read = mode & 4 != 0, .write = mode & 2 != 0, .execute = mode & 1 != 0 }) catch |e| return errFrom(e);
+    return null;
+}
+
+/// futimens only: names go through `setTimesAt`.
 pub fn setTimes(path: ?[]const u8, fd: Handle, times: ?[2]sys.TimeSpec, nofollow: bool) ?E {
+    if (path) |p| return setTimesAt(cwd().handle, p, times, nofollow);
     const T = Io.File.SetTimestamp;
-    var at: T = .now;
-    var mt: T = .now;
-    if (times) |t| {
-        at = conv(t[0]);
-        mt = conv(t[1]);
-    }
-    if (path) |p| {
-        cwd().setTimestamps(io(), p, .{ .follow_symlinks = !nofollow, .access_timestamp = at, .modify_timestamp = mt }) catch |e| return errFrom(e);
-    } else {
-        fileOf(fd).setTimestamps(io(), .{ .access_timestamp = at, .modify_timestamp = mt }) catch |e| return errFrom(e);
-    }
+    const at: T = if (times) |t| conv(t[0]) else .now;
+    const mt: T = if (times) |t| conv(t[1]) else .now;
+    fileOf(fd).setTimestamps(io(), .{ .access_timestamp = at, .modify_timestamp = mt }) catch |e| return errFrom(e);
+    return null;
+}
+
+pub fn setTimesAt(dir: Handle, path: []const u8, times: ?[2]sys.TimeSpec, nofollow: bool) ?E {
+    const T = Io.File.SetTimestamp;
+    const at: T = if (times) |t| conv(t[0]) else .now;
+    const mt: T = if (times) |t| conv(t[1]) else .now;
+    dirOf(dir).setTimestamps(io(), path, .{ .follow_symlinks = !nofollow, .access_timestamp = at, .modify_timestamp = mt }) catch |e| return errFrom(e);
     return null;
 }
 
@@ -826,8 +999,12 @@ pub fn chrootPath(path: [:0]const u8) ?E {
     return .NOSYS;
 }
 
-pub fn mknodPath(path: [:0]const u8, mode: u32, dev: u64) ?E {
-    if (comptime is_libc_posix) return cerr(mknod(path.ptr, @intCast(mode), @intCast(dev)));
+pub fn mknodAt(dir: Handle, path: []const u8, mode: u32, dev: u64) ?E {
+    if (comptime is_libc_posix) {
+        var b: [4097]u8 = undefined;
+        const p = cstr(&b, path) orelse return .NAMETOOLONG;
+        return cerr(mknodat(dir, p, @intCast(mode), @intCast(dev)));
+    }
     return .NOSYS;
 }
 
@@ -847,6 +1024,17 @@ pub fn setRealtime(sec: i64, nsec: u32) ?E {
         return cerr(clock_settime(0, &ts)); // CLOCK_REALTIME
     }
     return .NOSYS;
+}
+
+/// `sys.peekEnded`: on Windows a signalled process handle stays waitable until
+/// it is closed. Elsewhere waitpid would reap the child, so the answer is
+/// `.unknown`.
+pub fn peekEnded(pids: []const Pid) sys.Ended {
+    if (comptime !is_win) return .unknown;
+    for (pids, 0..) |pid, i| {
+        if (waitPid(pid, false) == .exited) return .{ .child = i };
+    }
+    return .none;
 }
 
 pub fn waitPid(pid: Pid, block: bool) sys.WaitResult {
@@ -1091,14 +1279,26 @@ pub fn getXattr(path: []const u8, name: [:0]const u8, follow: bool, buf: []u8, e
     return null;
 }
 
+pub fn getXattrFd(fd: Handle, name: [:0]const u8, buf: []u8, err: *E) ?usize {
+    _ = .{ fd, name, buf };
+    err.* = .OPNOTSUPP;
+    return null;
+}
+
+pub fn setXattrFd(fd: Handle, name: [:0]const u8, value: []const u8) ?E {
+    _ = .{ fd, name, value };
+    return .OPNOTSUPP;
+}
+
+pub fn setXattr(path: []const u8, name: [:0]const u8, value: []const u8) ?E {
+    _ = .{ path, name, value };
+    return .OPNOTSUPP;
+}
+
 /// Directory entries through std.Io, with "." and ".." added (the Linux version
 /// returns them from getdents). `dtype` uses the DT_* values.
-pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *E) ?[]sys.RawEntry {
-    var dir = cwd().openDir(io(), path, .{ .iterate = true }) catch |e| {
-        err.* = errFrom(e);
-        return null;
-    };
-    defer dir.close(io());
+pub fn readDirFd(gpa: std.mem.Allocator, fd: Handle, err: *E) ?[]sys.RawEntry {
+    const dir = dirOf(fd);
     var list: std.ArrayList(sys.RawEntry) = .empty;
     const fail = struct {
         fn f(g: std.mem.Allocator, l: *std.ArrayList(sys.RawEntry), er: *E) ?[]sys.RawEntry {
@@ -1131,7 +1331,7 @@ pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *E) ?[]sys.RawE
             .unix_domain_socket => 12,
             else => 0,
         };
-        list.append(gpa, .{ .name = dup, .dtype = dtype }) catch return fail(gpa, &list, err);
+        list.append(gpa, .{ .name = dup, .dtype = dtype, .ino = @intCast(ent.inode) }) catch return fail(gpa, &list, err);
     }
     return list.toOwnedSlice(gpa) catch fail(gpa, &list, err);
 }

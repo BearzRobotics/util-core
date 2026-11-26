@@ -14,7 +14,7 @@ GNU diffutils 3.12 (`/usr/bin/cmp --version` on the development machine). Consul
 - `-n, --bytes=LIMIT`, `-s, --quiet, --silent`, `-v, --version`, `--help`.
 - SKIP1 and SKIP2 operands, `-` or a missing second operand for standard input.
 - Messages: `A B differ: char N, line L` (`byte` with -b), `cmp: EOF on F after byte N, line L` / `in line L` / `which is empty` (stderr), `options -l and -s are incompatible`, `invalid --bytes value`, `invalid --ignore-initial value`, `extra operand`, `missing operand after`.
-- Exit status 0, 1, 2 as GNU; two operands that are the same file (same inode and time, same skips) are equal without being read.
+- Exit status 0, 1, 2 as GNU; two operands that are the same file (same device and inode, same skips) are equal without being read; on Windows, which gives no device number here, they are always read.
 
 ## Extensions
 
@@ -22,7 +22,6 @@ GNU diffutils 3.12 (`/usr/bin/cmp --version` on the development machine). Consul
 
 ## Known deviations and gaps
 
-- The "same file" shortcut compares inode and modification time (std.Io has no device number); GNU also compares the device.
 - A directory operand fails when it is first read ("Is a directory"), as in GNU, but a directory compared with itself is equal.
 - Not run on macOS or Windows.
 

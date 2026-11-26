@@ -20,6 +20,7 @@ GNU coreutils 9.7 (`/usr/bin/dd --version` on the development machine, installed
 
 - Operand parsing, the copy loop (partial reads, `conv=sync`, `noerror`, `swab`, `block`/`unblock`), the character-set tables and the statistics lines follow dd.c; the transfer summary uses the same SI/IEC wording and rate arithmetic.
 - Only `--help` and `--version` are options.
+- SIGUSR1 (and SIGINFO where it exists) prints the statistics and the copy goes on; it is left alone when POSIXLY_CORRECT is set. SIGINT, unless ignored, prints them and ends the process. Not on Windows. Library callers opt in with `dd.catchSignals`.
 
 ## Library
 
@@ -31,14 +32,13 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Known deviations and gaps
 
-- SIGUSR1 does not print statistics.
-- `status=progress` prints at most one update per second and may skip it for very short copies.
+- `status=progress` follows dd.c: a line is written between blocks once at least a second has passed since the last one, so a copy shorter than that shows none, and none is written while a single read or write blocks.
 - O_DIRECT alignment and posix_fadvise (`nocache`) are not handled.
 - `iflag`/`oflag` flags that need an open file (`append`, `dsync`...) apply to files named with `if=`/`of=`; for standard streams only `fcntl` flags are set.
 
 ## Tests
 
-`sh test/test_dd.sh`: 1055 differential cases against GNU dd 9.7 (C locale) with the timing line masked.
+`sh test/test_dd.sh`: over 1000 differential cases against GNU dd 9.7 (C locale) with the timing line masked.
 
 ## Not yet done
 

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! xargs library: build and execute command lines from a stream of items.
 //! Reference: POSIX.1-2024 xargs and the GNU findutils 4.10 manual (xargs
-//! invocation), checked against `xargs (GNU findutils) 4.10.0`. Parallel runs
-//! (-P) wait for children in the order they were started.
+//! invocation), checked against `xargs (GNU findutils) 4.10.0`. In parallel
+//! runs (-P) any child that ends frees its slot at once (on systems other than
+//! Linux and Windows xargs waits for the oldest).
 //!
 //! The library reads items from a caller-supplied `*Io.Reader`, spawns the
 //! commands through `Env.io`, and reports every diagnostic and the `-t` trace
@@ -13,10 +14,12 @@
 //! have been waited for, exactly as the executable exits.
 
 const std = @import("std");
+const programpath = @import("../programpath.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
 const quotearg = @import("../quotearg.zig");
+const subprog = @import("subprog.zig");
 
 pub const Env = common.Env;
 
@@ -38,6 +41,10 @@ pub const Event = union(enum) {
     /// The command could not be started; the run aborts with 127 (not found)
     /// or 126.
     spawn_failed: struct { name: []const u8, err: anyerror },
+    /// -I with an empty replacement string and an argument that is not empty:
+    /// the string is found at the same place forever, so the command grows
+    /// without end. GNU's "command too long".
+    command_too_long,
     /// -t: the command line about to run, shell-quoted, without newline.
     trace: []const u8,
 };
@@ -70,6 +77,9 @@ pub const Options = struct {
     confirm: ?Confirm = null,
     /// -o: children read from /dev/tty.
     open_tty: bool = false,
+    /// The items do not come from standard input (-a), so the commands get
+    /// it; otherwise their standard input is /dev/null.
+    inherit_stdin: bool = false,
     exit_if_too_long: bool = false,
     /// -P; 0 is unlimited.
     procs: u64 = 1,
@@ -172,7 +182,8 @@ const X = struct {
     exit_status: u8 = 0,
     abort_status: u8 = 0,
     running: std.ArrayList(Running) = .empty,
-    next_slot: usize = 0,
+    /// Scratch space of `endedChild`, sized along with `running`.
+    pids: std.ArrayList(sys.Pid) = .empty,
     ran_any: bool = false,
     nul_warned: bool = false,
 
@@ -186,9 +197,37 @@ fn isBlank(c: u8) bool {
     return c == ' ' or c == '\t';
 }
 
+/// The index in `running` of a child that has ended; with `block`, wait for
+/// one. Null when none has (without `block`). A system that cannot tell which
+/// child ended waits for the oldest.
+fn endedChild(x: *X, block: bool) ?usize {
+    if (x.running.items.len == 1 and block) return 0;
+    x.pids.clearRetainingCapacity();
+    for (x.running.items) |r| x.pids.appendAssumeCapacity(r.child.id.?);
+    while (true) switch (sys.peekEnded(x.pids.items, block)) {
+        .child => |i| return i,
+        .unknown => return if (block) 0 else null,
+        .none => {
+            if (!block) return null;
+            Io.sleep(x.env.io, .fromMilliseconds(10), .awake) catch return 0;
+        },
+    };
+}
+
+/// Take care of the children that have already ended, without waiting: their
+/// slots are free again, and a status that ends the run is acted on.
+fn reapEnded(x: *X) Stop!void {
+    while (x.running.items.len > 0) try reap(x, endedChild(x, false) orelse return);
+}
+
+/// Wait until one of the running children has ended and take care of it.
 fn waitOne(x: *X) Stop!void {
     if (x.running.items.len == 0) return;
-    var r = x.running.orderedRemove(0);
+    try reap(x, endedChild(x, true).?);
+}
+
+fn reap(x: *X, index: usize) Stop!void {
+    var r = x.running.orderedRemove(index);
     const name = x.initial[0];
     const term = r.child.wait(x.env.io) catch {
         x.observer.emit(.{ .wait_failed = name });
@@ -234,6 +273,16 @@ fn runCommand(x: *X) Stop!void {
         // Each initial argument has REPL replaced by the (single) item.
         const item: []const u8 = if (x.items.items.len > 0) x.items.items[0] else "";
         for (x.initial, 0..) |a, ai| {
+            if (ai > 0 and repl.len == 0) {
+                // As in GNU, an empty argument becomes the item.
+                if (a.len != 0) {
+                    x.observer.emit(.command_too_long);
+                    try finishAll(x);
+                    return x.abort(1);
+                }
+                try argv.append(gpa, cutNul(item));
+                continue;
+            }
             if (ai == 0 or std.mem.indexOf(u8, a, repl) == null) {
                 try argv.append(gpa, a);
                 continue;
@@ -284,28 +333,44 @@ fn runCommand(x: *X) Stop!void {
 
     var env_copy: ?std.process.Environ.Map = null;
     defer if (env_copy) |*m| m.deinit();
+    // The lowest slot number no running command has, as GNU xargs.
     var slot: usize = 0;
     if (x.opt.slot_var) |sv| {
+        while (slotInUse(x, slot)) slot += 1;
         if (x.env.environ) |m| {
             env_copy = m.clone(gpa) catch null;
             if (env_copy) |*ec| {
-                slot = x.next_slot % @max(@as(usize, @intCast(@min(x.opt.procs, 1 << 20))), 1);
-                if (x.opt.procs == 0) slot = x.next_slot;
-                x.next_slot += 1;
                 var nb: [24]u8 = undefined;
                 ec.put(sv, std.fmt.bufPrint(&nb, "{d}", .{slot}) catch "0") catch {};
             }
         }
     }
     x.ran_any = true;
-    var stdin_opt: std.process.SpawnOptions.StdIo = .ignore;
+    var stdin_opt: std.process.SpawnOptions.StdIo = if (x.opt.inherit_stdin) .inherit else .ignore;
     var tty_file: ?Io.File = null;
     defer if (tty_file) |f| f.close(x.env.io);
     if (x.opt.open_tty) {
         tty_file = Io.Dir.cwd().openFile(x.env.io, "/dev/tty", .{}) catch null;
         if (tty_file) |f| stdin_opt = .{ .file = f };
     }
-    var child = std.process.spawn(x.env.io, .{
+    // On Windows the program is found through PATH here, so that one in the
+    // current directory is not run for a bare name.
+    const name = argv.items[0];
+    const program: ?[]const u8 = programpath.resolve(x.env, gpa, name) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.FileNotFound => null,
+    };
+    defer if (program) |found| if (found.ptr != name.ptr) gpa.free(found);
+    if (program == null) {
+        x.observer.emit(.{ .spawn_failed = .{ .name = name, .err = error.FileNotFound } });
+        try finishAll(x);
+        return x.abort(127);
+    }
+    argv.items[0] = program.?;
+    // Make room first: a started child must not be lost track of.
+    try x.running.ensureUnusedCapacity(gpa, 1);
+    try x.pids.ensureTotalCapacity(gpa, x.running.items.len + 1);
+    const child = subprog.spawn(x.env, .{
         .argv = argv.items,
         .stdin = stdin_opt,
         .environ_map = if (env_copy) |*m| m else null,
@@ -314,11 +379,16 @@ fn runCommand(x: *X) Stop!void {
         try finishAll(x);
         return x.abort(if (e == error.FileNotFound) 127 else 126);
     };
-    x.running.append(gpa, .{ .child = child, .slot = slot }) catch {
-        child.kill(x.env.io);
-    };
-    if (x.opt.procs == 1) try waitOne(x);
+    x.running.appendAssumeCapacity(.{ .child = child, .slot = slot });
     clearItems(x);
+    if (x.opt.procs == 1) try waitOne(x) else try reapEnded(x);
+}
+
+fn slotInUse(x: *const X, slot: usize) bool {
+    for (x.running.items) |r| {
+        if (r.slot == slot) return true;
+    }
+    return false;
 }
 
 fn cutNul(s: []const u8) []const u8 {
@@ -364,6 +434,12 @@ fn addItem(x: *X, item: []u8) Stop!void {
                 return x.abort(1);
             }
             try runCommand(x);
+            // The item may be too long even for a command line to itself.
+            if (base + len > max_chars) {
+                x.observer.emit(.argument_line_too_long);
+                try finishAll(x);
+                return x.abort(1);
+            }
         }
     }
     try x.items.append(gpa, item);
@@ -386,6 +462,23 @@ fn nextByte(r: *Io.Reader) ?u8 {
     return r.takeByte() catch null;
 }
 
+/// Add a byte to the item being read. An item as long as a whole command line
+/// can never be passed on, so reading stops there instead of collecting an
+/// endless one. As GNU xargs, run the items already waiting first, except
+/// where a command must be complete (-I, -L, -x).
+fn appendByte(x: *X, tok: *std.ArrayList(u8), c: u8) Stop!void {
+    if (tok.items.len + 1 >= x.max_chars) {
+        const partial_ok = x.opt.replace == null and x.opt.max_lines == 0 and !x.opt.exit_if_too_long;
+        if (partial_ok and x.items.items.len > 0) try runCommand(x);
+        // When the command itself does not fit, that is what is wrong.
+        const command_too_big = x.opt.replace == null and initialBytes(x) > x.max_chars;
+        x.observer.emit(if (command_too_big) .cannot_fit_single_argument else .argument_line_too_long);
+        try finishAll(x);
+        return x.abort(1);
+    }
+    try tok.append(x.env.gpa, c);
+}
+
 fn unmatchedQuote(x: *X, quote: u8) Stop {
     x.observer.emit(.{ .unmatched_quote = .{ .single = quote == '\'' } });
     finishAll(x) catch |e| return e;
@@ -393,9 +486,8 @@ fn unmatchedQuote(x: *X, quote: u8) Stop {
 }
 
 fn processInput(x: *X, rd: *Io.Reader) Stop!void {
-    const gpa = x.env.gpa;
     var tok: std.ArrayList(u8) = .empty;
-    defer tok.deinit(gpa);
+    defer tok.deinit(x.env.gpa);
 
     if (x.opt.null_input or x.opt.delimiter != null) {
         const d: u8 = x.opt.delimiter orelse 0;
@@ -407,7 +499,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
                 try finishToken(x, &tok, true);
             } else {
                 have = true;
-                try tok.append(gpa, c);
+                try appendByte(x, &tok, c);
             }
         }
         if (have) try finishToken(x, &tok, true);
@@ -444,7 +536,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
             x.observer.emit(.nul_in_input);
         }
         if (escaped) {
-            try tok.append(gpa, c);
+            try appendByte(x, &tok, c);
             in_token = true;
             escaped = false;
             continue;
@@ -454,7 +546,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
                 if (x.items.items.len > 0 and x.opt.max_lines == 0) try runCommand(x);
                 return unmatchedQuote(x, quote);
             }
-            if (c == quote) quote = 0 else try tok.append(gpa, c);
+            if (c == quote) quote = 0 else try appendByte(x, &tok, c);
             continue;
         }
         if (c == '\\') {
@@ -491,7 +583,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
         }
         if (isBlank(c) and replace_mode and !in_token) continue;
         pending_continue = false;
-        try tok.append(gpa, c);
+        try appendByte(x, &tok, c);
         in_token = true;
     }
 }
@@ -541,6 +633,7 @@ pub fn run(env: Env, options: Options, input: *Io.Reader, observer: Observer) er
         for (x.items.items) |it| env.gpa.free(it);
         x.items.deinit(env.gpa);
         x.running.deinit(env.gpa);
+        x.pids.deinit(env.gpa);
     }
     runAll(&x, input) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,

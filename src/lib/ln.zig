@@ -2,10 +2,6 @@
 //! ln library: make links between files.
 //! Reference: GNU coreutils manual "ln invocation" (9.7); POSIX.1-2024 ln.
 //!
-//! Same-file detection compares inode numbers only (std.Io.File.Stat has no
-//! device number), so two files on different devices that share an inode
-//! number are wrongly taken for one file.
-//!
 //! The caller decides which operands are sources and what the destination is
 //! (`Target`); this module creates the links, handles existing destinations
 //! and backups, and reports through the `Observer`.
@@ -14,10 +10,14 @@ const std = @import("std");
 const Io = std.Io;
 const common = @import("common.zig");
 const paths = @import("../paths.zig");
+const sys = @import("../sys.zig");
+const replacelink = @import("../replacelink.zig");
+const backup = @import("../backup.zig");
 
 pub const Env = common.Env;
 
-pub const Backup = enum { none, simple, numbered, existing };
+/// How backups are named; the same naming as cp, mv and install.
+pub const Backup = backup.Type;
 
 pub const Options = struct {
     symbolic: bool = false,
@@ -51,9 +51,11 @@ pub const Event = union(enum) {
     /// The destination exists and none of force/interactive/backup was given.
     exists: struct { dest: []const u8, symbolic: bool },
     same_file: struct { src: []const u8, dest: []const u8 },
-    backup_failed: struct { dest: []const u8, err: anyerror },
+    backup_failed: struct { dest: []const u8, errno: sys.E },
     remove_failed: struct { dest: []const u8, err: anyerror },
-    link_failed: struct { dest: []const u8, src: []const u8, symbolic: bool, err: anyerror },
+    link_failed: struct { dest: []const u8, src: []const u8, symbolic: bool, errno: sys.E },
+    /// After a failed link, the backup could not be renamed back to `dest`.
+    unbackup_failed: struct { dest: []const u8, errno: sys.E },
 };
 pub const Observer = common.Observer(Event);
 
@@ -100,7 +102,6 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
     const cwd = Io.Dir.cwd();
 
     // Source checks for hard links.
-    var src_stat: ?Io.File.Stat = null;
     if (!cfg.symbolic) {
         const st = cwd.statFile(env.io, src, .{ .follow_symlinks = cfg.logical }) catch |e| {
             observer.emit(.{ .cannot_access = .{ .path = src, .err = e } });
@@ -110,95 +111,98 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
             observer.emit(.{ .directory_source = src });
             return false;
         }
-        src_stat = st;
     }
 
-    var made_backup: ?[]u8 = null;
-    defer if (made_backup) |b| env.gpa.free(b);
+    var arena: std.heap.ArenaAllocator = .init(env.gpa); // holds the backup name
+    defer arena.deinit();
+    var made_backup: ?[]const u8 = null;
+    var replacing = false; // -f or -i, without a backup
     if (exists(env, dest)) |dst| {
         if (!cfg.force and !cfg.interactive and cfg.backup == .none) {
             observer.emit(.{ .exists = .{ .dest = dest, .symbolic = cfg.symbolic } });
             return false;
         }
-        if (src_stat == null) {
-            // Symbolic links: the source need not exist, but if it does, a
-            // destination that is the same file is refused.
-            src_stat = cwd.statFile(env.io, src, .{ .follow_symlinks = cfg.logical }) catch null;
-        }
-        if (src_stat) |ss| {
-            if (ss.inode == dst.inode and cfg.backup == .none) {
-                observer.emit(.{ .same_file = .{ .src = src, .dest = dest } });
-                return false;
-            }
+        if (replacingWouldDestroySource(cfg, src, dest)) {
+            observer.emit(.{ .same_file = .{ .src = src, .dest = dest } });
+            return false;
         }
         if (cfg.interactive) {
             if (!confirm.func(confirm.context, dest)) return false;
         }
         if (cfg.backup != .none) {
-            const bname = backupName(env, cfg, dest) orelse return error.OutOfMemory;
-            cwd.rename(dest, cwd, bname, env.io) catch |e| {
-                observer.emit(.{ .backup_failed = .{ .dest = dest, .err = e } });
-                env.gpa.free(bname);
+            var errno: sys.E = .SUCCESS;
+            made_backup = backup.backupRename(env, cfg.suffix, arena.allocator(), sys.cwdFd(), dest, cfg.backup, &errno) orelse {
+                if (errno == .NOMEM) return error.OutOfMemory;
+                observer.emit(.{ .backup_failed = .{ .dest = dest, .errno = errno } });
                 return false;
             };
-            made_backup = bname;
         } else {
-            if (src_stat) |ss| if (ss.inode == dst.inode) {
-                observer.emit(.{ .same_file = .{ .src = src, .dest = dest } });
+            if (dst.kind == .directory) {
+                observer.emit(.{ .remove_failed = .{ .dest = dest, .err = error.IsDir } });
                 return false;
-            };
-            cwd.deleteFile(env.io, dest) catch |e| {
-                observer.emit(.{ .remove_failed = .{ .dest = dest, .err = e } });
-                return false;
-            };
+            }
+            replacing = true;
         }
     }
 
-    if (cfg.symbolic) {
-        var target: []const u8 = src;
-        var rel: ?[]u8 = null;
-        defer if (rel) |r| env.gpa.free(r);
-        if (cfg.relative) {
-            rel = relativeSymlinkTarget(env, src, dest);
-            if (rel) |r| target = r;
-        }
-        cwd.symLink(env.io, target, dest, .{}) catch |e| {
-            observer.emit(.{ .link_failed = .{ .dest = dest, .src = src, .symbolic = true, .err = e } });
-            return false;
-        };
-        if (cfg.verbose) observer.emit(.{ .linked = .{ .dest = dest, .src = target, .symbolic = true, .backup = made_backup } });
-    } else {
-        cwd.hardLink(src, cwd, dest, env.io, .{ .follow_symlinks = cfg.logical }) catch |e| {
-            observer.emit(.{ .link_failed = .{ .dest = dest, .src = src, .symbolic = false, .err = e } });
-            return false;
-        };
-        if (cfg.verbose) observer.emit(.{ .linked = .{ .dest = dest, .src = src, .symbolic = false, .backup = made_backup } });
+    var target: []const u8 = src;
+    var rel: ?[]u8 = null;
+    defer if (rel) |r| env.gpa.free(r);
+    if (cfg.symbolic and cfg.relative) {
+        rel = relativeSymlinkTarget(env, src, dest);
+        if (rel) |r| target = r;
     }
+    const kind: replacelink.Kind = if (cfg.symbolic) .symbolic else .{ .hard = .{ .follow = cfg.logical } };
+    const failure = if (replacing)
+        replacelink.replace(env.io, target, sys.cwdFd(), dest, kind)
+    else switch (kind) {
+        .symbolic => sys.symlinkPath(target, dest),
+        .hard => |h| sys.linkPath(target, dest, h.follow),
+    };
+    if (failure) |errno| {
+        observer.emit(.{ .link_failed = .{ .dest = dest, .src = src, .symbolic = cfg.symbolic, .errno = errno } });
+        if (made_backup) |b| {
+            if (sys.renamePath(b, dest, 0)) |re| observer.emit(.{ .unbackup_failed = .{ .dest = dest, .errno = re } });
+        }
+        return false;
+    }
+    if (cfg.verbose) observer.emit(.{ .linked = .{ .dest = dest, .src = target, .symbolic = cfg.symbolic, .backup = made_backup } });
     return true;
 }
 
-fn backupName(env: Env, cfg: Options, dest: []const u8) ?[]u8 {
-    var kind = cfg.backup;
-    if (kind == .existing) {
-        // Numbered when a numbered backup of this file already exists.
-        var n: usize = 1;
-        kind = .simple;
-        while (n < 10) : (n += 1) {
-            const cand = std.fmt.allocPrint(env.gpa, "{s}.~{d}~", .{ dest, n }) catch return null;
-            defer env.gpa.free(cand);
-            if (exists(env, cand) != null) {
-                kind = .numbered;
-                break;
-            }
-        }
+/// True when taking `dest` away could take the data of `src` with it: the
+/// refusal GNU calls "same file". With a backup only a hard link needs it (the
+/// backup keeps the data for a symbolic one).
+fn replacingWouldDestroySource(cfg: Options, src: []const u8, dest: []const u8) bool {
+    if (cfg.backup != .none and cfg.symbolic) return false;
+    // A symbolic link reaches the data through every link in `src`, so `src`
+    // is followed; a hard link is made to `src` itself unless -L is given.
+    var err: sys.E = .SUCCESS;
+    const source = sys.fileStat(src, cfg.symbolic or cfg.logical, &err) orelse return false;
+    const destination = sys.fileStat(dest, false, &err) orelse return false;
+    if (sameFile(source, destination)) {
+        // Two names for one file are fine: the data stays under the other name.
+        return source.nlink == 1 or sameEntry(src, dest);
     }
-    if (kind == .simple) return std.fmt.allocPrint(env.gpa, "{s}{s}", .{ dest, cfg.suffix }) catch null;
-    var n: usize = 1;
-    while (true) : (n += 1) {
-        const cand = std.fmt.allocPrint(env.gpa, "{s}.~{d}~", .{ dest, n }) catch return null;
-        if (exists(env, cand) == null) return cand;
-        env.gpa.free(cand);
-    }
+    // A hard link of a symbolic link puts that link at `dest`. If it leads to
+    // the file being replaced, and that has no other name, the data is lost
+    // and the link points at itself. GNU does not look for this.
+    if (cfg.symbolic or cfg.backup != .none or !source.isLink() or destination.nlink != 1) return false;
+    const reached = sys.fileStat(src, true, &err) orelse return false;
+    return sameFile(reached, destination);
+}
+
+fn sameFile(a: sys.FileStat, b: sys.FileStat) bool {
+    return a.ino == b.ino and a.dev_major == b.dev_major and a.dev_minor == b.dev_minor;
+}
+
+/// True when the two paths name one entry of one directory ("a" and "./a").
+fn sameEntry(a: []const u8, b: []const u8) bool {
+    if (!std.mem.eql(u8, baseName(a), baseName(b))) return false;
+    var err: sys.E = .SUCCESS;
+    const first = sys.fileStat(std.fs.path.dirnamePosix(a) orelse ".", true, &err) orelse return false;
+    const second = sys.fileStat(std.fs.path.dirnamePosix(b) orelse ".", true, &err) orelse return false;
+    return first.ino == second.ino and first.dev_major == second.dev_major and first.dev_minor == second.dev_minor;
 }
 
 /// Target of a relative symlink named `dest` pointing at `src`.

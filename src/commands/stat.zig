@@ -33,6 +33,7 @@ const Report = struct {
             .cannot_read_link => |e| cli.warn(ctx, "cannot read symbolic link {f}: {s}", .{ cli.quoteA(e.name), cli.errText(e.err) }),
             .cannot_get_context => |e| cli.warn(ctx, "failed to get security context of {f}: {s}", .{ cli.quoteA(e.name), sys.errnoText(e.errno) }),
             .cannot_canonicalize => |name| cli.warn(ctx, "failed to canonicalize {f}: No such file or directory", .{cli.quoteA(name)}),
+            .out_of_memory => cli.warn(ctx, "memory exhausted", .{}),
             .unrecognized_escape => |c| cli.warn(ctx, "warning: unrecognized escape '\\{c}'", .{c}),
             .backslash_at_end => cli.warn(ctx, "warning: backslash at end of format", .{}),
             .invalid_directive => |text| cli.warn(ctx, "{f}: invalid directive", .{cli.quoteC(text)}),

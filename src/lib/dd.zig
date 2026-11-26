@@ -10,6 +10,10 @@
 //! when it is done. Diagnostics and the statistics go through the observer:
 //! `diag` is the GNU message text without the program-name prefix, `raw`
 //! is text for standard error exactly as it is (statistics, progress).
+//!
+//! A caller that owns the process may call `catchSignals`, so that SIGUSR1
+//! prints the statistics during a run and SIGINT prints them before ending
+//! the process, as with GNU dd.
 
 const std = @import("std");
 const Io = std.Io;
@@ -128,17 +132,17 @@ pub const conversions = [_]Sym{
     .{ .name = "fsync", .value = C_FSYNC },
 };
 
-// O_* values (Linux x86-64) plus private bits for the dd-only flags.
-pub const O_APPEND: u32 = 0o2000;
-pub const O_DIRECT: u32 = 0o40000;
-pub const O_DIRECTORY: u32 = 0o200000;
-pub const O_DSYNC: u32 = 0o10000;
-pub const O_NOATIME: u32 = 0o1000000;
-pub const O_NOCTTY: u32 = 0o400;
-pub const O_NOFOLLOW: u32 = 0o400000;
-pub const O_NONBLOCK: u32 = 0o4000;
-pub const O_SYNC: u32 = 0o4010000;
-pub const O_RSYNC: u32 = 0o4010000;
+// O_* values for the target (sys.O), plus private bits for the dd-only flags.
+pub const O_APPEND = sys.O.APPEND;
+pub const O_DIRECT = sys.O.DIRECT;
+pub const O_DIRECTORY = sys.O.DIRECTORY;
+pub const O_DSYNC = sys.O.DSYNC;
+pub const O_NOATIME = sys.O.NOATIME;
+pub const O_NOCTTY = sys.O.NOCTTY;
+pub const O_NOFOLLOW = sys.O.NOFOLLOW;
+pub const O_NONBLOCK = sys.O.NONBLOCK;
+pub const O_SYNC = sys.O.SYNC;
+pub const O_RSYNC = sys.O.SYNC;
 pub const O_FULLBLOCK: u32 = 1 << 28;
 pub const O_NOCACHE: u32 = 1 << 29;
 pub const O_COUNT_BYTES: u32 = 1 << 30;
@@ -294,16 +298,15 @@ fn printXferStats(d: *Job, progress: bool) void {
     var line: std.ArrayList(u8) = .empty;
     defer line.deinit(ctx.gpa);
     if (progress) line.append(ctx.gpa, '\r') catch {};
+    // dd.c prints "%.0f s" in a progress line and "%g s" at the end.
     var dbuf: [64]u8 = undefined;
-    var dstr: []const u8 = undefined;
+    var dstr: []const u8 = "? s";
     if (progress) {
-        dstr = std.fmt.bufPrint(&dbuf, "{d:.0} s", .{delta_s}) catch "";
-    } else {
-        var fb: [128]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&fb);
-        const g = fmt_float.formatAlloc(fba.allocator(), .{ .conv = 'g' }, delta_s) catch "0";
-        dstr = std.fmt.bufPrint(&dbuf, "{s} s", .{g}) catch "";
-    }
+        dstr = std.fmt.bufPrint(&dbuf, "{d:.0} s", .{delta_s}) catch dstr;
+    } else if (fmt_float.formatAlloc(ctx.gpa, .{ .conv = 'g' }, delta_s)) |g| {
+        defer ctx.gpa.free(g);
+        dstr = std.fmt.bufPrint(&dbuf, "{s} s", .{g}) catch dstr;
+    } else |_| {}
     var tmp: [512]u8 = undefined;
     const lacks = struct {
         fn f(m: []const u8) bool {
@@ -354,10 +357,64 @@ fn diagnose(d: *Job, e: E, comptime fmt: []const u8, args: anytype) void {
     warn(d, fmt ++ ": {s}", args ++ .{sys.errnoText(e)});
 }
 
+// ------------------------------------------------------------------ signals
+
+/// Install the handlers. This changes process-wide state, so `run` does not do
+/// it by itself. GNU dd leaves SIGUSR1 alone when POSIXLY_CORRECT is set.
+pub fn catchSignals(posixly_correct: bool) void {
+    sys.catchStatisticsSignals(!posixly_correct);
+}
+
+/// Act on caught signals; called wherever the copy can be waiting or repeating.
+fn processSignals(d: *Job) void {
+    if (sys.interruptReceived()) {
+        printStats(d);
+        sys.dieOfInterrupt();
+    }
+    if (sys.takeStatisticsRequest()) printStats(d);
+}
+
+/// open(2), again after a signal (opening a FIFO waits for the other end).
+fn openSignalled(d: *Job, path: []const u8, flags: u32, e: *E) ?sys.Handle {
+    while (true) {
+        processSignals(d);
+        if (sys.openFd(path, flags, 0o666, e)) |fd| return fd;
+        if (e.* != .INTR) return null;
+    }
+}
+
+fn syncSignalled(d: *Job, kind: sys.SyncKind) ?E {
+    while (true) {
+        processSignals(d);
+        const result = sys.syncFile(d.out_fd, kind);
+        if (result == null or result.? != .INTR) return result;
+    }
+}
+
+fn truncateSignalled(d: *Job, len: u64) ?E {
+    while (true) {
+        processSignals(d);
+        const result = sys.ftruncateFd(d.out_fd, len);
+        if (result == null or result.? != .INTR) return result;
+    }
+}
+
+/// close(2). An interrupted close has still closed the descriptor.
+fn closeSignalled(fd: sys.Handle) ?E {
+    const result = sys.closeFd(fd) orelse return null;
+    return if (result == .INTR) null else result;
+}
+
 // ------------------------------------------------------------------ I/O
 
 fn iread(d: *Job, buf: []u8, e: *E) ?usize {
-    const n = sys.readFd(d.in_fd, buf, e) orelse return null;
+    const n = while (true) {
+        processSignals(d);
+        if (sys.readFdInterruptible(d.in_fd, buf, e)) |n| break n;
+        if (e.* != .INTR) return null;
+    };
+    // A short read may be the result of a signal.
+    if (n > 0 and n < buf.len) processSignals(d);
     if (n > 0 and d.warn_partial_read) {
         if (d.prev_nread > 0 and @as(usize, @intCast(d.prev_nread)) < buf.len) {
             if (d.status != STATUS_NONE) {
@@ -393,6 +450,7 @@ fn iwrite(d: *Job, buf: []const u8) usize {
         d.oflags &= ~@as(@TypeOf(d.oflags), O_DIRECT);
     }
     while (total < buf.len) {
+        processSignals(d);
         d.final_op_was_seek = false;
         var nwritten: usize = 0;
         if (d.conv & C_SPARSE != 0 and isNul(buf)) {
@@ -406,7 +464,8 @@ fn iwrite(d: *Job, buf: []const u8) usize {
         }
         if (nwritten == 0) {
             var e: E = .SUCCESS;
-            const rc = sys.writeFd(d.out_fd, buf[total..], &e) orelse {
+            const rc = sys.writeFdInterruptible(d.out_fd, buf[total..], &e) orelse {
+                if (e == .INTR) continue;
                 d.last_errno = e;
                 break;
             };
@@ -440,7 +499,7 @@ fn synchronizeOutput(d: *Job) u8 {
     d.conv &= ~(C_FDATASYNC | C_FSYNC);
     var need_fsync = mask & C_FSYNC != 0;
     if (mask & C_FDATASYNC != 0) {
-        if (sys.syncFile(d.out_fd, .data)) |e| {
+        if (syncSignalled(d, .data)) |e| {
             if (e != .NOSYS and e != .INVAL) {
                 diagnose(d, e, "fdatasync failed for {f}", .{quote.quoteA(d.output_file orelse "standard output")});
                 status = 1;
@@ -449,7 +508,7 @@ fn synchronizeOutput(d: *Job) u8 {
         }
     }
     if (need_fsync) {
-        if (sys.syncFile(d.out_fd, .file)) |e| {
+        if (syncSignalled(d, .file)) |e| {
             diagnose(d, e, "fsync failed for {f}", .{quote.quoteA(d.output_file orelse "standard output")});
             return 1;
         }
@@ -546,22 +605,43 @@ fn swabBuffer(buf: []u8, nread: *usize, saved: *i32) []u8 {
     return buf[0..nread.*];
 }
 
+/// The size in bytes of `records` blocks plus `bytes`, or null when that is
+/// more than a file offset can hold.
+fn byteOffset(records: i64, blocksize: usize, bytes: i64) ?i64 {
+    const whole = std.math.mul(i64, records, @intCast(blocksize)) catch return null;
+    return std.math.add(i64, whole, bytes) catch null;
+}
+
+/// `input_offset` is negative once it is no longer known.
+fn advanceInputOffset(d: *Job, n: i64) void {
+    if (d.input_offset < 0) return;
+    d.input_offset = std.math.add(i64, d.input_offset, n) catch -1;
+}
+
 fn skipInput(d: *Job, records_in: i64, bytes: *i64) Fail!i64 {
     // Try lseek first.
     var records = records_in;
     var e: E = .SUCCESS;
-    const offset = records * @as(i64, @intCast(d.input_blocksize)) + bytes.*;
-    if (sys.seekFd(d.in_fd, offset, 1, &e) != null) {
-        if (sys.fstatFd(d.in_fd, &e)) |st| {
-            if (st.isReg() and st.size > 0 and d.input_offset >= 0 and @as(i64, @intCast(st.size)) - d.input_offset < offset) {
-                records = @divTrunc(offset - @as(i64, @intCast(st.size)), @as(i64, @intCast(d.input_blocksize)));
-                d.input_offset = @intCast(st.size);
-            } else {
-                records = 0;
-                d.input_offset += offset;
+    var seek_error: E = .OVERFLOW;
+    if (byteOffset(records, d.input_blocksize, bytes.*)) |offset| {
+        if (sys.seekFd(d.in_fd, offset, 1, &e) != null) {
+            if (sys.fstatFd(d.in_fd, &e)) |st| {
+                if (st.isReg() and st.size > 0 and d.input_offset >= 0 and @as(i64, @intCast(st.size)) - d.input_offset < offset) {
+                    records = @divTrunc(offset - @as(i64, @intCast(st.size)), @as(i64, @intCast(d.input_blocksize)));
+                    d.input_offset = @intCast(st.size);
+                } else {
+                    records = 0;
+                    advanceInputOffset(d, offset);
+                }
             }
+            return records;
         }
-        return records;
+        seek_error = e;
+    }
+    // A file that can seek, but not that far, cannot be skipped by reading.
+    if (sys.seekFd(d.in_fd, 0, 2, &e) != null) {
+        diagnose(d, seek_error, "{f}: cannot skip", .{quote.quote(d.input_file orelse "standard input")});
+        return quit(d);
     }
     // Read and discard.
     var remaining = records;
@@ -579,7 +659,7 @@ fn skipInput(d: *Job, records_in: i64, bytes: *i64) Fail!i64 {
         if (remaining > 0) {
             if (n == d.input_blocksize) remaining -= 1;
         } else bytes.* -= @intCast(n);
-        d.input_offset += @intCast(n);
+        advanceInputOffset(d, @intCast(n));
         if (remaining == 0 and bytes.* == 0) break;
     }
     return remaining;
@@ -644,24 +724,35 @@ fn ddCopy(d: *Job) Fail!u8 {
     }
 
     if (d.skip_records != 0 or d.skip_bytes != 0) {
-        const us_bytes = d.skip_records * @as(i64, @intCast(d.input_blocksize)) + d.skip_bytes;
+        const us_bytes = byteOffset(d.skip_records, d.input_blocksize, d.skip_bytes);
         const off0 = d.input_offset;
         var sb = d.skip_bytes;
         const us_blocks = try skipInput(d, d.skip_records, &sb);
-        if ((us_blocks != 0 or (d.input_offset >= 0 and us_bytes != d.input_offset - off0)) and d.status != STATUS_NONE) {
+        const short = d.input_offset >= 0 and (us_bytes == null or us_bytes.? != d.input_offset - off0);
+        if ((us_blocks != 0 or short) and d.status != STATUS_NONE) {
             warn(d, "{f}: cannot skip to specified offset", .{quote.quote(in_name)});
         }
     }
     if (d.seek_records != 0 or d.seek_bytes != 0) {
-        const off = d.seek_records * @as(i64, @intCast(d.output_blocksize)) + d.seek_bytes;
-        var se: E = .SUCCESS;
-        if (sys.seekFd(d.out_fd, off, 1, &se) == null) {
+        const wanted = byteOffset(d.seek_records, d.output_blocksize, d.seek_bytes);
+        var se: E = .OVERFLOW;
+        if (wanted == null or sys.seekFd(d.out_fd, wanted.?, 1, &se) == null) {
+            var end_error: E = .SUCCESS;
+            if (sys.seekFd(d.out_fd, 0, 2, &end_error) != null) {
+                diagnose(d, se, "{f}: cannot seek", .{quote.quote(out_name)});
+                return quit(d);
+            }
+            const off = wanted orelse {
+                warn(d, "{f}: cannot seek", .{quote.quote(out_name)});
+                return quit(d);
+            };
             // Not seekable: write zeros instead.
             const zeros = d.env.gpa.alloc(u8, d.output_blocksize) catch return 1;
             defer d.env.gpa.free(zeros);
             @memset(zeros, 0);
             var remaining = off;
             while (remaining > 0) {
+                processSignals(d);
                 const n: usize = @intCast(@min(remaining, @as(i64, @intCast(zeros.len))));
                 if (sys.writeAllFd(d.out_fd, zeros[0..n])) |we| {
                     diagnose(d, we, "writing to {f}", .{quote.quoteA(out_name)});
@@ -675,10 +766,15 @@ fn ddCopy(d: *Job) Fail!u8 {
 
     var saved_byte: i32 = -1;
     var partread: usize = 0;
+    var last_progress_ns = d.start_ns;
     while (true) {
+        // As dd.c: between blocks, once a second has passed since the last line.
         if (d.status == STATUS_PROGRESS) {
             const now = nowNs(d);
-            if (now - d.start_ns >= 1_000_000_000 and @mod(@divTrunc(now - d.start_ns, 1_000_000), 1000) < 5) printXferStats(d, true);
+            if (now - last_progress_ns >= std.time.ns_per_s) {
+                printXferStats(d, true);
+                last_progress_ns = now;
+            }
         }
         if (d.r_partial + d.r_full >= d.max_records + @as(i64, @intFromBool(d.max_bytes != 0))) break;
         if (d.conv & C_SYNC != 0 and d.conv & C_NOERROR != 0) {
@@ -689,7 +785,7 @@ fn ddCopy(d: *Job) Fail!u8 {
         const rd = if (d.fullblock) ireadFull(d, d.ibuf[0..want], &e) else iread(d, d.ibuf[0..want], &e);
         if (rd) |n| {
             if (n > 0) {
-                d.input_offset += @intCast(n);
+                advanceInputOffset(d, @intCast(n));
             } else break;
             nread = n;
         } else {
@@ -702,7 +798,7 @@ fn ddCopy(d: *Job) Fail!u8 {
                     diagnose(d, se, "{f}: cannot seek", .{quote.quote(in_name)});
                     exit_status = 1;
                 }
-                d.input_offset += @intCast(bad);
+                advanceInputOffset(d, @intCast(bad));
                 if (d.conv & C_SYNC != 0 and partread == 0) {
                     nread = 0;
                 } else continue;
@@ -772,7 +868,7 @@ fn ddCopy(d: *Job) Fail!u8 {
             if (st.isReg()) {
                 if (sys.seekFd(d.out_fd, 0, 1, &e)) |off| {
                     if (off >= 0 and @as(i64, @intCast(st.size)) < off) {
-                        if (sys.ftruncateFd(d.out_fd, @intCast(off))) |te| {
+                        if (truncateSignalled(d, @intCast(off))) |te| {
                             diagnose(d, te, "failed to truncate to {d} bytes in output file {f}", .{ off, quote.quoteA(out_name) });
                             return 1;
                         }
@@ -793,9 +889,10 @@ pub fn run(d: *Job) u8 {
     if (d.in_fd == sys.invalid_handle) d.in_fd = std.Io.File.stdin().handle;
     if (d.out_fd == sys.invalid_handle) d.out_fd = std.Io.File.stdout().handle;
     applyTranslations(d);
+    d.start_ns = nowNs(d); // for statistics asked for while a file is opening
     var e: E = .SUCCESS;
     if (d.input_file) |inf| {
-        const fd = sys.openFd(inf, sys.O.RDONLY | d.iflags, 0, &e) orelse {
+        const fd = openSignalled(d, inf, sys.O.RDONLY | d.iflags, &e) orelse {
             warn(d, "failed to open {f}: {s}", .{ quote.quoteA(inf), sys.errnoText(e) });
             return 1;
         };
@@ -812,17 +909,25 @@ pub fn run(d: *Job) u8 {
         if (d.conv & C_NOCREAT == 0) opts |= sys.O.CREAT;
         if (d.conv & C_EXCL != 0) opts |= sys.O.EXCL;
         if (!(d.seek_records != 0 or d.conv & C_NOTRUNC != 0)) opts |= sys.O.TRUNC;
-        const size: i64 = d.seek_records * @as(i64, @intCast(d.output_blocksize)) + d.seek_bytes;
+        // The length to truncate to, if that is going to happen (GNU checks
+        // that it exists before it touches the output).
+        var size: i64 = 0;
+        if (d.seek_records != 0 and d.conv & C_NOTRUNC == 0) {
+            size = byteOffset(d.seek_records, d.output_blocksize, d.seek_bytes) orelse {
+                warn(d, "offset too large: cannot truncate to a length of seek={d} ({d}-byte) blocks", .{ d.seek_records, d.output_blocksize });
+                return 1;
+            };
+        }
         var fd: ?sys.Handle = null;
-        if (d.seek_records != 0) fd = sys.openFd(outf, sys.O.RDWR | opts, 0o666, &e);
-        if (fd == null) fd = sys.openFd(outf, sys.O.WRONLY | opts, 0o666, &e);
+        if (d.seek_records != 0) fd = openSignalled(d, outf, sys.O.RDWR | opts, &e);
+        if (fd == null) fd = openSignalled(d, outf, sys.O.WRONLY | opts, &e);
         const ofd = fd orelse {
             warn(d, "failed to open {f}: {s}", .{ quote.quoteA(outf), sys.errnoText(e) });
             return 1;
         };
         d.out_fd = ofd;
         if (d.seek_records != 0 and d.conv & C_NOTRUNC == 0) {
-            if (sys.ftruncateFd(d.out_fd, @intCast(size))) |te| {
+            if (truncateSignalled(d, @intCast(size))) |te| {
                 var se: E = .SUCCESS;
                 if (sys.fstatFd(d.out_fd, &se)) |st| {
                     if (st.isReg() or st.isDir()) {
@@ -841,11 +946,11 @@ pub fn run(d: *Job) u8 {
     exit_status = ddCopy(d) catch return 1;
     const sync_status = synchronizeOutput(d);
     if (sync_status != 0) exit_status = sync_status;
-    if (sys.closeFd(d.in_fd)) |ce| {
+    if (closeSignalled(d.in_fd)) |ce| {
         diagnose(d, ce, "closing input file {f}", .{quote.quoteA(d.input_file orelse "standard input")});
         return 1;
     }
-    if (sys.closeFd(d.out_fd)) |ce| {
+    if (closeSignalled(d.out_fd)) |ce| {
         diagnose(d, ce, "closing output file {f}", .{quote.quoteA(d.output_file orelse "standard output")});
         return 1;
     }

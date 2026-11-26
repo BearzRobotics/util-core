@@ -35,6 +35,10 @@ status=
 --help, --version
 : Print help or version and exit.
 
+# SIGNALS
+
+SIGUSR1 (and SIGINFO where it exists) makes a running dd print the I/O statistics to standard error and carry on; with POSIXLY_CORRECT set it keeps its usual effect. SIGINT, unless it was ignored, prints the statistics before ending dd. Windows has neither.
+
 # EXIT STATUS
 
 | Status | Meaning |
@@ -59,8 +63,7 @@ See docs/compatibility/dd.md for details.
 
 # LIMITATIONS
 
-- SIGUSR1 does not print statistics.
-- `status=progress` prints at most one update per second and may skip it for very short copies.
+- `status=progress` writes a line between blocks once at least a second has passed since the last one (as GNU does), so a shorter copy shows none, and none is written while a single read or write blocks.
 - O_DIRECT alignment and posix_fadvise (`nocache`) are not handled.
 - `iflag`/`oflag` flags that need an open file (`append`, `dsync`...) apply to files named with `if=`/`of=`; for standard streams only `fcntl` flags are set.
 

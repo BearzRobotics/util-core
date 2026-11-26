@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Io = std.Io;
+const sys = @import("../sys.zig");
 const diff = @import("diff.zig");
 const common = @import("common.zig");
 const json = @import("../json.zig");
@@ -85,6 +86,17 @@ const Driver = struct {
         }
         const st = try Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = !d.options.no_dereference });
         return .{ .kind = st.kind, .size = st.size, .mtime = tsToTime(st.mtime.nanoseconds), .inode = @intCast(st.inode) };
+    }
+
+    /// Whether the two names lead to one file. `statPath` has no device
+    /// number, so equal inode numbers are only a hint until this.
+    fn sameFile(d: *Driver, real: [2][]const u8, infos: [2]Info) bool {
+        var ids: [2]sys.FileStat = undefined;
+        for (&ids, real, infos) |*id, path, info| {
+            var e: std.os.linux.E = .SUCCESS;
+            id.* = (if (info.stdin) sys.fstatFd(Io.File.stdin().handle, &e) else sys.fileStat(path, !d.options.no_dereference, &e)) orelse return false;
+        }
+        return sys.isSameFile(ids[0], ids[1]);
     }
 
     /// -q with nothing to ignore and a plain text report style.
@@ -306,7 +318,8 @@ const Driver = struct {
         }
         // The very same file is identical without reading it.
         if (diffsbs.noDiffMeansNoOutput(o) and infos[0].exists and infos[1].exists and infos[0].kind == .file and infos[0].inode != 0 and infos[0].inode == infos[1].inode and
-            infos[0].size == infos[1].size and infos[0].mtime.sec == infos[1].mtime.sec and infos[0].mtime.nsec == infos[1].mtime.nsec)
+            infos[0].size == infos[1].size and infos[0].mtime.sec == infos[1].mtime.sec and infos[0].mtime.nsec == infos[1].mtime.nsec and
+            d.sameFile(real, infos))
         {
             if (o.report_identical or o.json) try d.identical(dn);
             return;

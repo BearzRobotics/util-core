@@ -15,6 +15,7 @@ const std = @import("std");
 const cli = @import("../cli.zig");
 const count_arg = @import("../count_arg.zig");
 const tail = @import("../lib/tail.zig");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "bytes", "lines", "follow", "quiet", "silent", "verbose", "zero-terminated", "sleep-interval", "pid", "retry", "max-unchanged-stats", "help", "version" };
@@ -156,6 +157,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     cfg.header = header;
+    if (cfg.follow and isPipeOrSocket(ctx, Io.File.stdout())) cfg.output = Io.File.stdout();
     var buf: [8192]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const env: tail.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
@@ -170,7 +172,17 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         },
     };
+    if (result.reader_gone) {
+        // End as the next write would have: by SIGPIPE, or silently with
+        // status 1 should the signal not end us.
+        _ = sys.raiseSelf(sys.signo.PIPE);
+    }
     return if (result.failed) 1 else 0;
+}
+
+fn isPipeOrSocket(ctx: cli.Context, file: Io.File) bool {
+    const st = file.stat(ctx.io) catch return false;
+    return st.kind == .named_pipe or st.kind == .unix_domain_socket;
 }
 
 fn report(context: ?*anyopaque, ev: tail.Event) void {

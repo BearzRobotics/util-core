@@ -168,10 +168,12 @@ pub fn main(ctx: cli.Context) u8 {
         return 1;
     }
     o.stdin = Io.File.stdin();
+    o.terminal = Io.File.stdout().isTty(ctx.io) catch false;
 
     var buf: [8192]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const env: locate.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    o.utf8 = fu.localeIsUtf8(env);
     const result = locate.run(env, o, patterns, &stdout.interface, .{ .context = @constCast(&ctx), .func = report }) catch |e| switch (e) {
         error.OutOfMemory => {
             cli.warn(ctx, "memory exhausted", .{});
@@ -179,5 +181,6 @@ pub fn main(ctx: cli.Context) u8 {
         },
         error.Fatal => return 1,
     };
+    if (result.write_failed) cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
     return result.exit_status;
 }

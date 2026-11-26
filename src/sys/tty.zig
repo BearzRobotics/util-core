@@ -119,6 +119,29 @@ pub const Tty = struct {
         return t.readByte();
     }
 
+    /// Whether there is a terminal `open` could take; its modes are left alone.
+    pub fn available(io: Io) bool {
+        if (comptime is_win) {
+            var t = open(io) orelse return false;
+            t.close(io);
+            return true;
+        }
+        const f = Io.Dir.cwd().openFile(io, "/dev/tty", .{ .mode = .read_write }) catch return false;
+        f.close(io);
+        return true;
+    }
+
+    /// The size of the window standard output shows in, for before the
+    /// terminal is opened.
+    pub fn outputSize() ?Size {
+        // Windows asks the output console either way.
+        const t: Tty = if (comptime is_win)
+            .{ .handle = undefined, .saved_termios = {}, .saved_mode = 0 }
+        else
+            .{ .handle = std.posix.STDOUT_FILENO, .saved_termios = undefined, .saved_mode = {} };
+        return t.size();
+    }
+
     /// Current size of the terminal window.
     pub fn size(t: *const Tty) ?Size {
         if (comptime is_win) {

@@ -42,6 +42,7 @@ fn report(context: ?*anyopaque, ev: xargs.Event) void {
         .argument_line_too_long => cli.warn(ctx.*, "argument line too long", .{}),
         .cannot_fit_single_argument => cli.warn(ctx.*, "cannot fit single argument within argument list size limit", .{}),
         .argument_list_too_long => cli.warn(ctx.*, "argument list too long", .{}),
+        .command_too_long => cli.warn(ctx.*, "command too long", .{}),
         .child_exited_255 => |name| cli.warn(ctx.*, "{s}: exited with status 255; aborting", .{name}),
         .child_signaled => |s| cli.warn(ctx.*, "{s}: terminated by signal {d}", .{ s.name, s.signal }),
         .wait_failed => |name| cli.warn(ctx.*, "{s}: wait failed", .{name}),
@@ -213,13 +214,15 @@ pub fn main(ctx: cli.Context) u8 {
 
     var input: Io.File = Io.File.stdin();
     var close_input = false;
-    if (arg_file) |af| {
+    o.inherit_stdin = arg_file != null;
+    // As in GNU, "-" names standard input.
+    if (arg_file) |af| if (!std.mem.eql(u8, af, "-")) {
         input = Io.Dir.cwd().openFile(ctx.io, af, .{}) catch |e| {
             cli.warn(ctx, "Cannot open input file {f}: {s}", .{ cli.quoteA(af), cli.errText(e) });
             return 1;
         };
         close_input = true;
-    }
+    };
     defer if (close_input) input.close(ctx.io);
 
     var rbuf: [8192]u8 = undefined;

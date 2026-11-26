@@ -3,8 +3,8 @@
 //! \| \+ \? in BRE), translated into the Perl dialect of the regex package
 //! (~/de/regex-zig), which has no POSIX dialect yet.
 //!
-//! Known difference: Perl alternation is leftmost-first, POSIX is
-//! leftmost-longest, so `a|ab` against "ab" matches "a" here. Everything else
+//! Perl alternation is leftmost-first and POSIX is leftmost-longest; `Finder`
+//! makes up the difference (see `Longest` for when it cannot). Everything else
 //! (anchors, intervals, back-references, bracket expressions with character
 //! classes) is translated faithfully.
 //! References: POSIX.1-2024 XBD 9 (Regular Expressions); GNU grep manual
@@ -18,7 +18,13 @@ const unicode = @import("unicode.zig");
 pub const Error = error{ OutOfMemory, BadPattern };
 
 /// UTF-8 classes make large patterns; the package defaults are too small.
-pub const big_limits: regex.Limits = .{ .max_pattern_len = 1 << 22, .max_program_len = 1 << 21 };
+/// Capture memory is not capped: the patterns are the command's own user's,
+/// and the default refuses an alternation of a few hundred groups.
+pub const big_limits: regex.Limits = .{
+    .max_pattern_len = 1 << 22,
+    .max_program_len = 1 << 21,
+    .max_capture_bytes = std.math.maxInt(usize),
+};
 
 /// Perl-dialect source equivalent to the BRE (or ERE) in `pat`.
 pub fn translate(gpa: std.mem.Allocator, pat: []const u8, ere: bool) Error![]u8 {
@@ -32,6 +38,10 @@ pub const Opts = struct {
     icase: bool = false,
     /// GNU grep -E: a `{` that does not start a valid interval is literal.
     lenient_brace: bool = false,
+    /// `compileFull` only: `.` also matches a newline, as in POSIX. Not the
+    /// default because GNU's other users of these patterns (ptx, for one)
+    /// ask glibc for the opposite.
+    dot_newline: bool = false,
 };
 
 /// `rest` follows a `{`: true for `n}`, `n,}`, `,m}` and `n,m}`.
@@ -49,6 +59,58 @@ fn validInterval(rest: []const u8) bool {
     if (i >= rest.len or rest[i] != '}') return false;
     if (!comma) return digits1 > 0;
     return digits1 > 0 or digits2 > 0;
+}
+
+fn isWordByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+/// Whether anything matching the pattern text `rest` surely begins with an
+/// ASCII word character: it starts with a literal one, or \w, that cannot be
+/// repeated zero times. False when in doubt.
+fn startsWithWord(rest: []const u8) bool {
+    var after: []const u8 = undefined;
+    if (std.mem.startsWith(u8, rest, "\\w")) {
+        after = rest[2..];
+    } else if (rest.len > 0 and isWordByte(rest[0])) {
+        after = rest[1..];
+    } else return false;
+    // "+" keeps one, but may itself be made optional.
+    if (std.mem.startsWith(u8, after, "\\+")) after = after[2..] else if (std.mem.startsWith(u8, after, "+")) after = after[1..];
+    for ([_][]const u8{ "*", "?", "{", "\\?", "\\{" }) |q| if (std.mem.startsWith(u8, after, q)) return false;
+    return true;
+}
+
+/// Whether anything matching the pattern text `before` surely ends with an
+/// ASCII word character. False when in doubt.
+fn endsWithWord(before: []const u8, ere: bool) bool {
+    const plus: []const u8 = if (ere) "+" else "\\+";
+    const atom = if (std.mem.endsWith(u8, before, plus)) before[0 .. before.len - plus.len] else before;
+    if (atom.len == 0) return false;
+    const last = atom[atom.len - 1];
+    // An escaped letter or digit is something else (\W, \s, \1), except \w.
+    var slashes: usize = 0;
+    while (slashes + 1 < atom.len and atom[atom.len - 2 - slashes] == '\\') slashes += 1;
+    if (slashes % 2 == 1) return last == 'w';
+    return isWordByte(last);
+}
+
+test "word start and end in the C locale" {
+    const gpa = std.testing.allocator;
+    const cases = [_][2][]const u8{
+        .{ "\\<foo\\>", "\\bfoo\\b" },
+        .{ "\\<\\w\\+\\>", "\\b\\w+\\b" },
+        .{ "\\>", "\\b(?![0-9A-Za-z_])" },
+        .{ "\\<.", "\\b(?=[0-9A-Za-z_])." },
+        .{ "\\<a*x", "\\b(?=[0-9A-Za-z_])a*x" },
+        .{ "ab*\\>", "ab*\\b(?![0-9A-Za-z_])" },
+        .{ "\\W\\>", "\\W\\b(?![0-9A-Za-z_])" },
+    };
+    for (cases) |c| {
+        const got = try translate(gpa, c[0], false);
+        defer gpa.free(got);
+        try std.testing.expectEqualStrings(c[1], got);
+    }
 }
 
 /// What the pattern contains that matters for longest-match emulation.
@@ -119,14 +181,24 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                 continue;
             }
             if (std.ascii.isDigit(n) and n != '0') {
-                try out.append(gpa, '\\');
-                try out.append(gpa, n);
+                // A back-reference is one digit. It gets a group of its own
+                // so that a literal digit after it is not read as part of
+                // it: the Perl dialect takes \10 for an octal escape.
+                try out.appendSlice(gpa, &.{ '(', '?', ':', '\\', n, ')' });
                 at_start = false;
                 continue;
             }
             if (n == '<' or n == '>' or n == 'b' or n == 'B' or n == '\'') flags.right = true;
             if ((n == '<' or n == '>') and !opts.utf8) {
+                // The Perl dialect has only \b. That is the same as \< or
+                // \> where the pattern puts a word character on the inner
+                // side. Elsewhere a lookahead says which end is meant, at the
+                // price of the backtracking engine, so it is not added
+                // without need.
                 try out.appendSlice(gpa, "\\b");
+                if (n == '<') {
+                    if (!startsWithWord(pat[i..])) try out.appendSlice(gpa, "(?=[0-9A-Za-z_])");
+                } else if (!endsWithWord(pat[0 .. i - 2], ere)) try out.appendSlice(gpa, "(?![0-9A-Za-z_])");
                 continue;
             }
             if (opts.utf8 and (n == 'w' or n == 'W' or n == 's' or n == 'S')) {
@@ -155,7 +227,8 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                 try unicode.appendSetFlat(gpa, &fl, &set);
                 switch (n) {
                     'b' => try out.print(gpa, "(?:(?<={1s})(?!{0s})|(?<!{1s})(?={0s}))", .{ w.items, fl.items }),
-                    'B' => try out.print(gpa, "(?:(?<={1s})(?={0s})|(?<!{1s})(?!{0s}))", .{ w.items, fl.items }),
+                    // Only the second branch can hold inside a character.
+                    'B' => try out.print(gpa, "(?:(?<={1s})(?={0s})|(?<!{1s})(?!{0s}){2s})", .{ w.items, fl.items, unicode.not_inside_char }),
                     '<' => try out.print(gpa, "(?:(?<!{1s})(?={0s}))", .{ w.items, fl.items }),
                     else => try out.print(gpa, "(?:(?<={1s})(?!{0s}))", .{ w.items, fl.items }),
                 }
@@ -588,9 +661,8 @@ fn bracketLiteral(gpa: std.mem.Allocator, out: *std.ArrayList(u8), c: u8) !void 
 pub const Compiled = struct {
     re: regex.Regex,
     groups: u32,
-    /// `(?:body)\z` for patterns with alternation: used to look for a longer
-    /// match ending at a given offset (POSIX leftmost-longest).
-    longest: ?regex.Regex = null,
+    /// Set for patterns with alternation, for POSIX leftmost-longest.
+    longest: ?Longest = null,
 
     pub fn deinit(c: *Compiled, gpa: std.mem.Allocator) void {
         c.re.deinit(gpa);
@@ -598,48 +670,159 @@ pub const Compiled = struct {
     }
 };
 
-/// Source of the "must end here" companion regex: only for patterns with an
-/// alternation of their own and nothing that looks right of the match.
-pub fn longestSource(gpa: std.mem.Allocator, body: []const u8, prefix: []const u8, flags: Flags) Error!?[]u8 {
-    if (!flags.alt or flags.right) return null;
-    return try std.fmt.allocPrint(gpa, "{s}(?:{s})\\z", .{ prefix, body });
+/// What it takes to turn the leftmost-first match of the translated pattern
+/// into the longest one that starts at the same place.
+pub const Longest = struct {
+    /// `(?:body)\z` in the translation's dialect: the match, with its
+    /// groups, that ends at the end of the text given.
+    ends_here: regex.Regex,
+    /// The untranslated pattern in the package's own POSIX dialect, which is
+    /// leftmost-longest and so says in one pass where the match ends. Null
+    /// when that parser rejects the pattern (it has less of GNU's leniency).
+    oracle: ?regex.Regex,
+    /// `^` also matches after a newline (sed's M flag).
+    multiline: bool,
+
+    pub const Source = struct {
+        /// The POSIX pattern and which kind it is.
+        pattern: []const u8,
+        ere: bool,
+        /// Its translation, and the flag group to put before that.
+        body: []const u8,
+        prefix: []const u8 = "",
+        flags: Flags,
+        ignore_case: bool = false,
+        utf8: bool = false,
+        multiline: bool = false,
+    };
+
+    /// Null for patterns that need no such help: those without an
+    /// alternation of their own, and those with something that looks right
+    /// of the match (where a shortened text would change the answer).
+    pub fn compile(gpa: std.mem.Allocator, src: Source) error{OutOfMemory}!?Longest {
+        if (!src.flags.alt or src.flags.right) return null;
+        const text = try std.fmt.allocPrint(gpa, "{s}(?:{s})\\z", .{ src.prefix, src.body });
+        defer gpa.free(text);
+        var ends_here = regex.Regex.compile(gpa, text, .{ .dialect = .perl, .ignore_case = src.ignore_case, .limits = big_limits }, null) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        errdefer ends_here.deinit(gpa);
+        const native = try oracleSource(gpa, src.pattern, src.ere);
+        defer gpa.free(native);
+        const oracle: ?regex.Regex = regex.Regex.compile(gpa, native, .{
+            .dialect = if (src.ere) .posix_ere else .posix_bre,
+            .ignore_case = src.ignore_case,
+            .utf8 = src.utf8,
+            .limits = big_limits,
+        }, null) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => null,
+        };
+        return .{ .ends_here = ends_here, .oracle = oracle, .multiline = src.multiline };
+    }
+
+    pub fn deinit(l: *Longest, gpa: std.mem.Allocator) void {
+        l.ends_here.deinit(gpa);
+        if (l.oracle) |*o| o.deinit(gpa);
+    }
+};
+
+/// `pat` for the package's POSIX parser, which reads GNU's `{,n}` as text:
+/// written `{0,n}`. Bracket expressions are copied as they are.
+fn oracleSource(gpa: std.mem.Allocator, pat: []const u8, ere: bool) error{OutOfMemory}![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    var i: usize = 0;
+    while (i < pat.len) {
+        const start = i;
+        var interval = false;
+        if (pat[i] == '\\' and i + 1 < pat.len) {
+            interval = !ere and pat[i + 1] == '{';
+            i += 2;
+        } else if (pat[i] == '[') {
+            i += 1;
+            if (i < pat.len and pat[i] == '^') i += 1;
+            if (i < pat.len and pat[i] == ']') i += 1;
+            while (i < pat.len and pat[i] != ']') {
+                // "[:alpha:]" and the like have their own closing bracket.
+                if (pat[i] == '[' and i + 1 < pat.len and (pat[i + 1] == ':' or pat[i + 1] == '.' or pat[i + 1] == '=')) {
+                    if (std.mem.indexOfPos(u8, pat, i + 2, &.{ pat[i + 1], ']' })) |close| i = close + 1;
+                }
+                i += 1;
+            }
+            i = @min(i + 1, pat.len);
+        } else {
+            interval = ere and pat[i] == '{';
+            i += 1;
+        }
+        try out.appendSlice(gpa, pat[start..i]);
+        if (interval and i + 1 < pat.len and pat[i] == ',' and std.ascii.isDigit(pat[i + 1])) try out.append(gpa, '0');
+    }
+    return out.toOwnedSlice(gpa);
 }
+
+/// Without the oracle every end has to be tried in turn, which costs the
+/// square of this per match, so only this far from the start of the match.
+const search_window = 512;
 
 /// Finds POSIX leftmost-longest matches on top of the leftmost-first engine.
 pub const Finder = struct {
     sr: regex.Searcher,
-    sr2: ?regex.Searcher,
+    ends_here: ?regex.Searcher,
+    oracle: ?regex.Searcher,
+    multiline: bool,
 
     pub fn init(gpa: std.mem.Allocator, c: *const Compiled) !Finder {
         return initParts(gpa, &c.re, if (c.longest) |*l| l else null);
     }
 
-    pub fn initParts(gpa: std.mem.Allocator, re: *const regex.Regex, longest: ?*const regex.Regex) !Finder {
-        var sr = try rx.searcher(re, gpa);
-        errdefer sr.deinit();
-        var sr2: ?regex.Searcher = null;
-        if (longest) |l| sr2 = try rx.searcher(l, gpa);
-        return .{ .sr = sr, .sr2 = sr2 };
+    pub fn initParts(gpa: std.mem.Allocator, re: *const regex.Regex, longest: ?*const Longest) !Finder {
+        var f: Finder = .{ .sr = try rx.searcher(re, gpa), .ends_here = null, .oracle = null, .multiline = false };
+        errdefer f.deinit();
+        if (longest) |l| {
+            f.multiline = l.multiline;
+            f.ends_here = try rx.searcher(&l.ends_here, gpa);
+            if (l.oracle) |*o| f.oracle = try rx.searcher(o, gpa);
+        }
+        return f;
     }
 
     pub fn deinit(f: *Finder) void {
         f.sr.deinit();
-        if (f.sr2) |*x| x.deinit();
+        if (f.ends_here) |*x| x.deinit();
+        if (f.oracle) |*x| x.deinit();
     }
 
     pub fn find(f: *Finder, hay: []const u8, from: usize) regex.MatchError!?regex.Match {
         const m = (try f.sr.find(hay, from)) orelse return null;
-        const sr2 = if (f.sr2) |*x| x else return m;
+        const ends_here = if (f.ends_here) |*x| x else return m;
         const s0 = m.start();
         const e0 = m.end();
-        if (hay.len - e0 > 4096) return m;
-        var e = hay.len;
+        if (e0 == hay.len) return m;
+        if (f.oracle) |*oracle| {
+            // The oracle's `^` is the start of its text only.
+            const cut: usize = if (f.multiline and s0 > 0 and hay[s0 - 1] == '\n') s0 else 0;
+            const best = oracle.find(hay[cut..], s0 - cut) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                // Back-references can exhaust its limits.
+                else => return m,
+            };
+            const found = best orelse return m;
+            const end = cut + found.end();
+            if (cut + found.start() != s0 or end <= e0) return m;
+            return try endingAt(ends_here, hay, s0, end) orelse m;
+        }
+        var e = @min(hay.len, s0 +| search_window);
         while (e > e0) : (e -= 1) {
-            if (try sr2.find(hay[0..e], s0)) |m2| {
-                if (m2.start() == s0) return m2;
-            }
+            if (try endingAt(ends_here, hay, s0, e)) |longer| return longer;
         }
         return m;
+    }
+
+    fn endingAt(sr: *regex.Searcher, hay: []const u8, start: usize, end: usize) regex.MatchError!?regex.Match {
+        const m = (try sr.find(hay[0..end], start)) orelse return null;
+        return if (m.start() == start) m else null;
     }
 };
 
@@ -658,19 +841,29 @@ pub fn compileFull(gpa: std.mem.Allocator, pat: []const u8, ere: bool, ignore_ca
     var flags: Flags = .{};
     const body = try translateFlags(gpa, pat, ere, opts, &flags);
     defer gpa.free(body);
-    const src = if (anchored) try std.fmt.allocPrint(gpa, "^(?:{s})", .{body}) else try gpa.dupe(u8, body);
+    const prefix = if (opts.dot_newline) "(?s)" else "";
+    const src = if (anchored) try std.fmt.allocPrint(gpa, "{s}^(?:{s})", .{ prefix, body }) else try std.fmt.allocPrint(gpa, "{s}{s}", .{ prefix, body });
     defer gpa.free(src);
     var re = regex.Regex.compile(gpa, src, .{ .dialect = .perl, .ignore_case = ignore_case, .limits = big_limits }, null) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.BadPattern,
     };
     errdefer re.deinit(gpa);
-    var longest: ?regex.Regex = null;
-    if (try longestSource(gpa, body, "", flags)) |ls| {
-        defer gpa.free(ls);
-        longest = regex.Regex.compile(gpa, ls, .{ .dialect = .perl, .ignore_case = ignore_case, .limits = big_limits }, null) catch null;
-    }
+    // An anchored match starts at the start, so the oracle needs no anchor.
+    const longest = try Longest.compile(gpa, .{ .pattern = pat, .ere = ere, .body = body, .prefix = prefix, .flags = flags, .ignore_case = ignore_case, .utf8 = opts.utf8 });
     return .{ .re = re, .groups = re.groupCount(), .longest = longest };
+}
+
+test "a digit after a back-reference is a literal" {
+    const gpa = std.testing.allocator;
+    for ([_]bool{ false, true }) |ere| {
+        var c = try compile(gpa, if (ere) "(a)\\10" else "\\(a\\)\\10", ere, false);
+        defer c.deinit(gpa);
+        var sr = try rx.searcher(&c.re, gpa);
+        defer sr.deinit();
+        try std.testing.expect(try sr.find("aa0", 0) != null);
+        try std.testing.expect(try sr.find("a\x08", 0) == null);
+    }
 }
 
 test "translate basic forms" {
@@ -1131,3 +1324,56 @@ pub fn minimalBasic(gpa: std.mem.Allocator, pat: []const u8) []const u8 {
     return out.items;
 }
 
+
+test "leftmost-longest agrees with trying every end" {
+    const gpa = std.testing.allocator;
+    const Case = struct { pattern: []const u8, ere: bool = true, utf8: bool = false };
+    const cases = [_]Case{
+        .{ .pattern = "a|ab|abc" },
+        .{ .pattern = "(a|ab)(c|bcd)?" },
+        .{ .pattern = "a|a.*c" },
+        .{ .pattern = "(a|b)*c|ab{,2}" },
+        .{ .pattern = "[]a{,]|x{,2}b" },
+        .{ .pattern = "[[:alpha:]]+|a[^b]*b" },
+        .{ .pattern = "^a|^ab|b\\w+" },
+        .{ .pattern = "a\\|ab\\{,3\\}\\|\\(c\\|cc\\)", .ere = false },
+        .{ .pattern = "(a)\\1|a+b" },
+        .{ .pattern = "a|a.c", .utf8 = true },
+        // Rejected by the native parser: every end is tried.
+        .{ .pattern = "*a|abc" },
+    };
+    var prng = std.Random.DefaultPrng.init(7);
+    const random = prng.random();
+    for (cases) |case| {
+        var c = try compileFull(gpa, case.pattern, case.ere, false, false, .{ .utf8 = case.utf8, .lenient_brace = true });
+        defer c.deinit(gpa);
+        var finder = try Finder.init(gpa, &c);
+        defer finder.deinit();
+        var first = try rx.searcher(&c.re, gpa);
+        defer first.deinit();
+        var ends_here = try rx.searcher(&c.longest.?.ends_here, gpa);
+        defer ends_here.deinit();
+        for (0..60) |_| {
+            var buf: [14]u8 = undefined;
+            const hay = buf[0..random.uintLessThan(usize, buf.len)];
+            for (hay) |*h| h.* = "aaabbcccd x{,"[random.uintLessThan(usize, 13)];
+            var want: ?[2]usize = null;
+            if (try first.find(hay, 0)) |m| {
+                const start = m.start();
+                want = .{ start, m.end() };
+                var end = hay.len;
+                while (end > want.?[1]) : (end -= 1) {
+                    const longer = try Finder.endingAt(&ends_here, hay, start, end) orelse continue;
+                    want = .{ start, longer.end() };
+                    break;
+                }
+            }
+            const got = try finder.find(hay, 0);
+            const span: ?[2]usize = if (got) |m| .{ m.start(), m.end() } else null;
+            std.testing.expectEqual(want, span) catch |e| {
+                std.debug.print("pattern {s} on '{s}'\n", .{ case.pattern, hay });
+                return e;
+            };
+        }
+    }
+}

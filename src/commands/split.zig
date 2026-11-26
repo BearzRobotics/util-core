@@ -8,6 +8,7 @@ const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const count_arg = @import("../count_arg.zig");
 const split = @import("../lib/split.zig");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 const help_text = @embedFile("../help/split.txt");
@@ -249,11 +250,14 @@ fn report(context: ?*anyopaque, ev: split.Event) void {
         },
         .spawn_failed => |e| cli.warn(ctx.*, "failed to run command: \"{s} -c {s}\": {s}", .{ e.shell, e.command, cli.errText(e.err) }),
         .create_failed => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
-        .would_overwrite => |name| cli.warn(ctx.*, "{f} would overwrite input; aborting", .{cli.quote(name)}),
+        .reopen_failed => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), sys.errnoText(e.errno) }),
+        .would_overwrite => |name| cli.warn(ctx.*, "{f} would overwrite input; aborting", .{cli.quoteA(name)}),
         .filter_exit => |e| cli.warn(ctx.*, "with FILE={s}, exit {d} from command: {s}", .{ e.file, e.code, e.command }),
         .filter_signal => |e| cli.warn(ctx.*, "with FILE={s}, signal {d} from command: {s}", .{ e.file, e.signal, e.command }),
-        .write_error => |name| cli.warn(ctx.*, "{f}: write error", .{cli.quote(name)}),
+        .write_error => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
+        .close_error => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), sys.errnoText(e.errno) }),
+        .out_of_memory => cli.warn(ctx.*, "memory exhausted", .{}),
         .read_error => |e| cli.warn(ctx.*, "read error: {s}", .{cli.errText(e)}),
-        .cannot_determine_size => cli.warn(ctx.*, "{f}: cannot determine file size", .{cli.quote("-")}),
+        .cannot_determine_size => |e| cli.warn(ctx.*, "{f}: cannot determine file size: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
     }
 }

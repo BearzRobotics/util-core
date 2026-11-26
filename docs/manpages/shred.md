@@ -34,6 +34,12 @@ Overwrite a file to hide its contents, and optionally delete it.
 --help, --version
 : Print help or version and exit.
 
+# DIFFERENCES FROM GNU
+
+- When `-u` cannot rename a file in order to wipe its name, shred prints a
+  warning on standard error before removing it. GNU says nothing. The exit
+  status is GNU's.
+
 # EXIT STATUS
 
 | Status | Meaning |
@@ -58,7 +64,7 @@ See docs/compatibility/shred.md for details.
 
 # LIMITATIONS
 
-- Random data and the order of the fixed patterns come from the operating system's generator, not GNU's ISAAC stream: `--random-source` supplies the bytes but the resulting passes differ from GNU's for the same file.
+- Random data and the order of the fixed patterns come from a ChaCha8 stream (a cryptographically secure generator) seeded with 32 bytes from the operating system, not from GNU's ISAAC. With `--random-source` they are the file's own bytes, so the resulting passes differ from GNU's for the same file.
 - Direct I/O is not requested.
 
 # SEE ALSO

@@ -8,6 +8,7 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const rm = @import("../lib/rm.zig");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "force", "interactive", "one-file-system", "no-preserve-root", "preserve-root", "recursive", "dir", "verbose", "help", "version" };
@@ -46,6 +47,11 @@ pub fn main(ctx: cli.Context) u8 {
                 },
             };
             const value: ?[]const u8 = if (eq) |e| a[e + 1 ..] else null;
+            // Switching the failsafe off takes the whole name.
+            if (k == 3 and !std.mem.eql(u8, a[2 .. eq orelse a.len], long_names[k])) {
+                cli.warn(ctx, "you may not abbreviate the --no-preserve-root option", .{});
+                return 1;
+            }
             if (value != null and k != 1 and k != 4) {
                 cli.warn(ctx, "option '--{s}' doesn't allow an argument\nTry '{s} --help' for more information.", .{ long_names[k], ctx.name });
                 return 1;
@@ -144,12 +150,14 @@ fn report(context: ?*anyopaque, ev: rm.Event) void {
     const ctx = st.ctx;
     switch (ev) {
         .removed => |r| st.out.print("{s} {f}\n", .{ if (r.dir) "removed directory" else "removed", cli.quoteA(r.path) }),
-        .failed => |f| cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(f.path), cli.errText(f.err) }),
+        .failed => |f| cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(f.path), sys.errnoText(f.errno) }),
+        .unreadable => |u| cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(u.path), sys.errnoText(u.errno) }),
         .refuse_dot => |p| cli.warn(ctx, "refusing to remove '.' or '..' directory: skipping {f}", .{cli.quoteA(p)}),
         .refuse_root => |r| {
             cli.warn(ctx, "it is dangerous to operate recursively on {f}{s}", .{ cli.quoteA(r.path), if (r.literal) "" else " (same as '/')" });
             cli.warn(ctx, "use --no-preserve-root to override this failsafe", .{});
         },
+        .unknown_root => |e| cli.warn(ctx, "failed to get attributes of '/': {s}", .{sys.errnoText(e)}),
         .other_device => |p| cli.warn(ctx, "skipping {f}, since it's on a different device", .{cli.quoteA(p)}),
     }
 }

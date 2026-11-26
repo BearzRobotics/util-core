@@ -45,6 +45,18 @@ Copy files and directories.
 --help, --version
 : Print help or version and exit.
 
+# DIFFERENCES FROM GNU
+
+- When the destination cannot store a source's POSIX ACL, the failure is
+  reported as GNU reports it, but the group and other permissions are narrowed
+  so that nobody gains access. GNU 9.7 leaves the owning group with the ACL's
+  mask.
+- A recursive copy creates and changes everything below the destination operand
+  by name in the directory it made or examined, so replacing a directory of the
+  destination with a symbolic link while cp runs does not redirect the copy. A
+  symbolic link that appears at a destination file after cp examined it is not
+  written through, and is reported as such.
+
 # EXIT STATUS
 
 | Status | Meaning |
@@ -70,8 +82,8 @@ See docs/compatibility/cp.md for details.
 # LIMITATIONS
 
 - Only the C locale: names, quotes and messages are the English/ASCII ones.
-- SELinux contexts, ACLs and extended attributes are not copied (`--preserve=context` fails as on a kernel without SELinux; `-Z` and `--context` are accepted and ignored).
-- Reflink (`--reflink=always`) reports `failed to clone ... Operation not supported`; `auto` falls back to a normal copy. File data is copied with read/write rather than `copy_file_range`, so `--debug` states what GNU would report.
+- POSIX ACLs travel with the mode (`-p`, `-a`, `--preserve=mode`, and mv between file systems): the source's access ACL and a directory's default ACL are copied, as in GNU. If the destination cannot store them the copy is reported (`preserving permissions for ...`) and, unlike GNU 9.7, which leaves the ACL mask as the owning group's permission, the group and other bits are narrowed so that nobody gains access. SELinux contexts and other extended attributes are not copied (`--preserve=context` fails as on a kernel without SELinux; `-Z` and `--context` are accepted and ignored). ACLs are handled on Linux only.
+- Reflink (`--reflink=always`) is not implemented: it reports `failed to clone ... Operation not supported` and leaves an existing destination unchanged, even on file systems where GNU can clone; `auto` falls back to a normal copy. File data is copied with read/write rather than `copy_file_range`, so `--debug` states what GNU would report.
 - Sparse files: holes are detected with SEEK_DATA/SEEK_HOLE and recreated; `--sparse=always` turns blocks of zeros into holes.
 - Reading a FIFO source blocks until a writer appears, exactly like GNU.
 

@@ -25,11 +25,34 @@ Create or update a locate database.
 --findoptions=OPTS
 : Extra options for the file walk (-xdev, -depth, -maxdepth, -mindepth, -noleaf, ...).
 
---netuser=USER, --localuser=USER
-: Accepted and ignored.
+--localuser=USER
+: Search the local paths as USER, so that the database holds only the names USER
+can find. Without it they are searched as the caller; a database built by root
+then lists every file, and anyone can read it.
+
+--netuser=USER
+: When run by root, search the network paths as USER (default `daemon`).
 
 --help, --version
 : Print help or version and exit.
+
+# DIFFERENCES FROM GNU
+
+- GNU runs the search through `su`. Here updatedb itself takes the user's
+  effective user id, group id and supplementary groups (from /etc/passwd and
+  /etc/group; users known only through NSS, such as LDAP, are not found) while
+  it searches, then takes its own back to write the database. No login shell is
+  involved.
+- If the search cannot be done as the named user (unknown user, or the caller
+  is neither root nor that user) updatedb says so, writes nothing and exits 1.
+  GNU's `su` asks for a password, also when USER is the caller. Naming
+  yourself here changes nothing.
+- GNU writes the new database through the fixed name FILE.n. Here each run
+  creates its own file, FILE.n.XXXXXXXX, which must not exist yet, and renames
+  it to FILE. A symbolic link put in that directory by someone else is never
+  written through, and two runs cannot damage each other's file. A run that is
+  killed while writing leaves its temporary file behind. Messages say FILE.n,
+  as GNU's do.
 
 # EXIT STATUS
 
@@ -41,7 +64,7 @@ Create or update a locate database.
 
 # ENVIRONMENT
 
-LOCATE_PATH (locate); FINDOPTIONS, SEARCHPATHS, NETPATHS, PRUNEPATHS, PRUNEFS, LOCATE_DB (updatedb). Locale variables are ignored.
+LOCATE_PATH (locate); FINDOPTIONS, SEARCHPATHS, NETPATHS, PRUNEPATHS, PRUNEFS, LOCALUSER, NETUSER, LOCATE_DB (updatedb). Locale variables are ignored.
 
 # STANDARD STREAMS
 
@@ -55,7 +78,7 @@ See docs/compatibility/updatedb.md for details.
 
 # LIMITATIONS
 
-- --localuser/--netuser (su) are ignored.
+- --localuser/--netuser work on Linux only; elsewhere a request to change user fails.
 - Databases are byte-identical to GNU's in all tested cases.
 
 # SEE ALSO

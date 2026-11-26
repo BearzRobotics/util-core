@@ -18,14 +18,32 @@ const std = @import("std");
 
 const all_bits: u16 = 0o7777;
 
+/// The set-user-ID and set-group-ID bits.
+pub const set_id_bits: u16 = 0o6000;
+
 /// Apply `text` to `old` and return the new mode, or null when the text is
-/// not a valid mode. `is_dir` matters for `X`. `umask` is used only for
-/// clauses without a `who`.
+/// not a valid mode. `is_dir` matters for `X` and for the set-ID bits (see
+/// `applyTracked`). `umask` is used only for clauses without a `who`.
 pub fn apply(text: []const u8, old: u16, is_dir: bool, umask: u16) ?u16 {
+    var decided: u16 = 0;
+    return applyTracked(text, old, is_dir, umask, &decided);
+}
+
+/// `apply` that also stores in `decided` the bits the text determines. As in
+/// GNU, a directory keeps its set-ID bits unless the text mentions them: by
+/// "s", or in a number by setting them or by having five digits or more. A
+/// directory that inherited a set-group-ID bit therefore keeps it where
+/// `decided` lacks it.
+pub fn applyTracked(text: []const u8, old: u16, is_dir: bool, umask: u16, decided: *u16) ?u16 {
+    decided.* = 0;
     if (text.len == 0) return null;
     if (std.ascii.isDigit(text[0])) {
         const v = std.fmt.parseInt(u16, text, 8) catch return null;
-        return if (v > all_bits) null else v;
+        if (v > all_bits) return null;
+        const mentioned: u16 = if (text.len < 5) (v & set_id_bits) | 0o1777 else all_bits;
+        const omit: u16 = if (is_dir) set_id_bits & ~mentioned else 0;
+        decided.* = all_bits & ~omit;
+        return v | (old & omit);
     }
     var mode = old;
     var i: usize = 0;
@@ -72,12 +90,23 @@ pub fn apply(text: []const u8, old: u16, is_dir: bool, umask: u16) ?u16 {
                 }
             }
             const affected = who;
-            value &= affected;
+            // Copied permissions never include the set-ID bits.
+            const omit: u16 = if (is_dir) set_id_bits & ~(if (mentioned) affected & value else value) else 0;
+            value &= affected & ~omit;
             if (!mentioned) value &= ~umask;
             switch (op) {
-                '+' => mode |= value,
-                '-' => mode &= ~value,
-                else => mode = (mode & ~affected) | value,
+                '+' => {
+                    mode |= value;
+                    decided.* |= value;
+                },
+                '-' => {
+                    mode &= ~value;
+                    decided.* |= value;
+                },
+                else => {
+                    mode = (mode & (~affected | omit)) | value;
+                    decided.* |= affected & ~omit;
+                },
             }
         }
         if (i >= text.len) return mode;
@@ -114,6 +143,22 @@ test "symbolic with umask 022 from 0777 (values measured with GNU mkdir -m)" {
     try t.expectEqual(@as(?u16, 0o7777), apply("u+s,g+s,o+t", 0o777, true, u));
     try t.expectEqual(@as(?u16, 0o1000), apply("=t", 0o777, true, u));
     try t.expectEqual(@as(?u16, 0o646), apply("g-w,-x", 0o777, true, u));
+}
+
+test "a directory keeps the set-ID bits a mode does not mention" {
+    const t = std.testing;
+    var decided: u16 = 0;
+    for ([_][]const u8{ "755", "0755", "u=rwx", "g=rx", "=rwx", "a=", "0", "g=u" }) |text| {
+        _ = applyTracked(text, 0o777, true, 0o022, &decided).?;
+        try t.expectEqual(@as(u16, 0), decided & 0o2000);
+    }
+    for ([_][]const u8{ "00755", "2755", "g-s", "g+s", "a-s", "ug=rwx,g-s" }) |text| {
+        _ = applyTracked(text, 0o777, true, 0o022, &decided).?;
+        try t.expectEqual(@as(u16, 0o2000), decided & 0o2000);
+    }
+    // A later clause that does not mention the bit leaves it.
+    try t.expectEqual(@as(?u16, 0o2757), apply("g+s,g=rx", 0o777, true, 0));
+    try t.expectEqual(@as(?u16, 0o757), apply("g+s,g=rx", 0o777, false, 0));
 }
 
 test "invalid" {

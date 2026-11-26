@@ -61,6 +61,9 @@ ud 'prunepaths start itself' --localpaths="$W/tree/skip" --prunepaths="$W/tree/s
 ud 'prunepaths file' --localpaths="$W/tree" --prunepaths="$W/tree/top.md"
 ud 'prunepaths star' --localpaths="$W/tree" --prunepaths="$W/tree/*"
 ud 'prunepaths bracket' --localpaths="$W/tree" --prunepaths="$W/tree/[ab]"
+# An expression that cannot be used must not turn pruning off.
+ud 'prunepaths unmatched \(' --localpaths="$W/tree" --prunepaths="$W/tree/skip $W/tree/x\\("
+ud 'prunepaths unmatched \)' --localpaths="$W/tree" --prunepaths="$W/tree/skip $W/tree/x\\)"
 ud 'prunefs ext4' --localpaths="$W/tree" $P --prunefs="ext4"
 ud 'prunefs bogus' --localpaths="$W/tree" $P --prunefs="nosuchfs"
 ud 'prunefs empty' --localpaths="$W/tree" $P --prunefs=""
@@ -99,5 +102,192 @@ export PRUNEFS='ext4'; ud 'env PRUNEFS' --localpaths="$W/tree" $P; unset PRUNEFS
 ud 'order of options' $P --localpaths="$W/tree/c" --prunepaths="$W/tree/c/four.sh"
 ud 'option twice' --localpaths="$W/tree/a" --localpaths="$W/tree/c" $P
 ud 'option with space value' "--localpaths=$W/tree/sp ace" $P
-ud 'output dir missing' --localpaths="$W/tree/c" $P --output="$W/nodir/db"
+
+# A database that cannot be created: status 1 and the script's message, which
+# is compared with GNU's last line (the first line, and the status, come from
+# the shell that runs the script). Not through ud, whose own --output would
+# replace the one under test.
+# cannot_create DESC OUTPUT REASON
+cannot_create() {
+    d="$1"; out="$2"; reason="$3"
+    "$FU/updatedb" --localpaths="$W/tree/c" $P --output="$out" > "$W/g.out" 2> "$W/g.err"; gx=$?
+    "$BIN_DIR/updatedb" --localpaths="$W/tree/c" $P --output="$out" > "$W/o.out" 2> "$W/o.err"; ox=$?
+    if [ "$gx" != 0 ] && [ "$ox" = 1 ] && [ ! -s "$W/o.out" ] &&
+       [ "$(head -n 1 "$W/o.err" | sed 's/^[^:]*: //')" = "$out.n: $reason" ] &&
+       [ "$(sed 1d "$W/o.err")" = "$(tail -n 1 "$W/g.err")" ]; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$d"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s (rc=%s, GNU %s) %s\n" "$d" "$ox" "$gx" "$(cat "$W/o.err")"
+    fi
+}
+cannot_create 'output dir missing' "$W/nodir/db" "No such file or directory"
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$W/rodir"; echo old > "$W/rodir/db"; chmod 555 "$W/rodir"
+    cannot_create 'output dir not writable' "$W/rodir/db" "Permission denied"
+    if [ "$(cat "$W/rodir/db")" = old ] && [ "$(ls -A "$W/rodir")" = db ]; then
+        PASS=$((PASS + 1)); echo "PASS the old database survives a run that cannot create the new one"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL the old database survives a run that cannot create the new one"; ls -lA "$W/rodir"
+    fi
+    chmod 755 "$W/rodir"
+else
+    skip_test "unwritable output directory (running as root)"
+fi
+
+# no_leftover DB: no temporary file of DB (`DB.n`, `DB.n.XXXXXXXX`) is left.
+no_leftover() {
+    for f in "$1".n*; do
+        [ ! -e "$f" ] && [ ! -L "$f" ] || return 1
+    done
+}
+
+# A database that cannot be written completely must not replace the old one.
+# keeps_old DESC TEXT PREFIX...: run updatedb behind PREFIX over a database.
+keeps_old() {
+    d="$1"; text="$2"; shift 2
+    echo old > "$W/keep.db"
+    "$@" "$BIN_DIR/updatedb" --localpaths="$W/tree" $P --output="$W/keep.db" > "$W/o.out" 2> "$W/o.err"; ox=$?
+    if [ "$ox" = 1 ] && [ "$(cat "$W/keep.db")" = old ] && no_leftover "$W/keep.db" && grep -q "$text" "$W/o.err"; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$d"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s (rc=%s, %s bytes) %s\n" "$d" "$ox" "$(wc -c < "$W/keep.db")" "$(cat "$W/o.err")"
+    fi
+}
+keeps_old "write fails (file size limit)" "File too large" sh -c 'trap "" XFSZ; ulimit -f 1; exec "$@"' sh
+if can_inject; then
+    keeps_old "write fails (no space)" "No space left on device" strace -o /dev/null -e trace=write -e inject=write:error=ENOSPC:when=1
+    # The last close of a run is the database's.
+    echo old > "$W/keep.db"
+    strace -o "$W/trace" -e trace=close "$BIN_DIR/updatedb" --localpaths="$W/tree" $P --output="$W/keep.db" > /dev/null 2>&1
+    last=$(grep -c '^close' "$W/trace")
+    keeps_old "close fails" "Input/output error" strace -o /dev/null -e trace=close -e inject=close:error=EIO:when="$last"
+else
+    skip_test "write and close failures (no strace)"
+fi
+# Names past PATH_MAX (4096) are recorded.
+( mkdir "$W/long" && cd "$W/long" || exit 1
+  name=$(printf 'd%.0s' $(seq 199)); i=0
+  while [ $i -lt 30 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done
+  : > leaf )
+ud 'paths longer than PATH_MAX' --localpaths="$W/long" $P
+"${GNU_BIN_RM:-/usr/bin}/rm" -rf "$W/long"
+
+# The temporary database is a new file of this run's own: a link put at
+# <output>.n while the search runs is neither written through nor installed.
+# strace holds the first directory listing; the link is planted once the stale
+# file of that name has been removed, which happens just before the search.
+if can_inject; then
+    mkdir -p "$W/plant/t" "$W/plant/shared"; : > "$W/plant/t/f"; : > "$W/plant/shared/db.n"
+    echo precious > "$W/plant/victim"; chmod 600 "$W/plant/victim"
+    timeout 30 strace -f -o /dev/null -e trace=getdents64 -e inject=getdents64:delay_enter=3000000:when=1 \
+        "$BIN_DIR/updatedb" --localpaths="$W/plant/t" --prunepaths=/nonexistent --prunefs=nofs --output="$W/plant/shared/db" > "$W/o.out" 2>&1 &
+    plant_pid=$!
+    tries=0
+    while [ -e "$W/plant/shared/db.n" ] && [ "$tries" -lt 100 ]; do sleep 0.1; tries=$((tries + 1)); done
+    ln -s "$W/plant/victim" "$W/plant/shared/db.n"
+    wait "$plant_pid"; ox=$?
+    if [ "$ox" = 0 ] && [ "$(cat "$W/plant/victim")" = precious ] && [ "$(stat -c %a "$W/plant/victim")" = 600 ] &&
+       [ ! -L "$W/plant/shared/db" ] && [ "$(stat -c %a "$W/plant/shared/db")" = 644 ]; then
+        PASS=$((PASS + 1)); echo "PASS a link planted at <output>.n is left alone"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL a link planted at <output>.n is left alone (rc=$ox) $(cat "$W/o.out")"
+        ls -l "$W/plant/shared" "$W/plant/victim"
+    fi
+    rm -f "$W/plant/shared/db.n"
+    ( umask 077; "$BIN_DIR/updatedb" --localpaths="$W/plant/t" --prunepaths=/nonexistent --prunefs=nofs --output="$W/plant/shared/db" ) > "$W/o.out" 2>&1
+    if [ "$(stat -c %a "$W/plant/shared/db")" = 644 ] && [ "$(ls -A "$W/plant/shared")" = db ]; then
+        PASS=$((PASS + 1)); echo "PASS the database is mode 644 and no temporary file is left"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL the database is mode 644 and no temporary file is left"; ls -lA "$W/plant/shared"
+    fi
+else
+    skip_test "planted temporary file (no strace)"
+fi
+
+# A directory that becomes a symbolic link between being examined and being
+# opened is not followed: its target's names must not enter the database.
+mkdir -p "$W/race/t/user" "$W/race/secret"; : > "$W/race/t/user/mine"; : > "$W/race/secret/topsecret-name"
+walk_cmd() { "$@" "$BIN_DIR/updatedb" --localpaths="$W/race/t" --prunepaths=/nonexistent --prunefs=nofs --output="$W/race/db"; }
+if can_inject; then
+    # Which openat is the one that opens "user"?
+    walk_cmd strace -o "$W/race/trace" -e trace=openat > /dev/null 2>&1
+    nth=$(grep '^openat' "$W/race/trace" | grep -n 'user", .*O_DIRECTORY' | head -n 1 | cut -d: -f1)
+    walk_cmd exec timeout 30 strace -o /dev/null -e trace=openat -e inject=openat:delay_enter=3000000:when="${nth:-1}" > "$W/race/out" 2>&1 &
+    race_pid=$!
+    sleep 1.5
+    mv "$W/race/t/user" "$W/race/moved" && ln -s "$W/race/secret" "$W/race/t/user"
+    wait "$race_pid"
+    if [ -n "$nth" ] && [ -f "$W/race/db" ] && ! grep -a -q topsecret "$W/race/db"; then
+        PASS=$((PASS + 1)); echo "PASS a swapped-in link is not walked"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL a swapped-in link is not walked (openat $nth)"; cat "$W/race/out"
+    fi
+else
+    skip_test "updatedb link race (needs strace)"
+fi
+rm -rf "$W/race"
+
+# --localuser and --netuser decide who looks. They must never be ignored: the
+# database can be read by everyone.
+mkdir -p "$W/who/pub" "$W/who/priv/dir" "$W/who/net/priv"; : > "$W/who/pub/seen"; : > "$W/who/priv/dir/secret-name"; : > "$W/who/net/priv/secret-net"
+# (GNU asks for a password here, so this is compared with a run without it.)
+"$BIN_DIR/updatedb" --localpaths="$W/who/pub" $P --output="$W/self.a" > /dev/null 2>&1
+if "$BIN_DIR/updatedb" --localpaths="$W/who/pub" $P --localuser="$(id -un)" --output="$W/self.b" > "$W/o.err" 2>&1 && cmp -s "$W/self.a" "$W/self.b"; then
+    PASS=$((PASS + 1)); echo "PASS localuser naming ourselves"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL localuser naming ourselves $(cat "$W/o.err")"
+fi
+# user_fails DESC TEXT ARGS...: status 1, the message, the old database kept.
+user_fails() {
+    d="$1"; text="$2"; shift 2
+    echo old > "$W/keep.db"
+    "$BIN_DIR/updatedb" --localpaths="$W/who" $P --output="$W/keep.db" "$@" > "$W/o.out" 2> "$W/o.err"; ox=$?
+    if [ "$ox" = 1 ] && [ "$(cat "$W/keep.db")" = old ] && no_leftover "$W/keep.db" && [ "$(sed 's/^[^:]*: //' "$W/o.err")" = "$text" ]; then
+        PASS=$((PASS + 1)); echo "PASS $d"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $d (rc=$ox) $(cat "$W/o.err")"
+    fi
+}
+user_fails "unknown localuser" "cannot search as user 'no-such-user': no such user" --localuser=no-such-user
+if [ "$(id -u)" != 0 ]; then
+    user_fails "another localuser without root" "cannot search as user 'root': only root can search as another user" --localuser=root
+fi
+# Root dropping to another user, tried as root of a user namespace that has a
+# range of ids (no real privileges are involved).
+userns() { unshare --map-root-user --map-auto "$@"; }
+if userns setpriv --reuid=65534 --regid=65534 --clear-groups true 2>/dev/null && id -u nobody > /dev/null 2>&1 && id -u daemon > /dev/null 2>&1; then
+    chmod 755 "$TEST_TMP" "$W" "$W/who" "$W/who/pub" "$W/who/net"; chmod 700 "$W/who/priv" "$W/who/net/priv"
+    # who_sees DESC WANTED UNWANTED ENV... -- ARGS...
+    who_sees() {
+        d="$1"; wanted="$2"; unwanted="$3"; shift 3
+        rm -f "$W/who.db"
+        userns env "$@" "$BIN_DIR/updatedb" --output="$W/who.db" --prunepaths=/nonexistent --prunefs=nofs > "$W/o.out" 2> "$W/o.err"; ox=$?
+        ok=1; [ "$ox" = 0 ] || ok=0
+        "$FU/locate" -d "$W/who.db" / > "$W/who.names" 2>/dev/null || ok=0
+        for n in $wanted; do grep -q "$n" "$W/who.names" || ok=0; done
+        for n in $unwanted; do ! grep -q "$n" "$W/who.names" || ok=0; done
+        # Written by root, not by the user who searched.
+        [ "$(stat -c '%u %a' "$W/who.db" 2>/dev/null)" = "$(id -u) 644" ] || ok=0
+        if [ "$ok" = 1 ]; then PASS=$((PASS + 1)); echo "PASS $d"
+        else FAIL=$((FAIL + 1)); echo "FAIL $d (rc=$ox) $(cat "$W/o.err")"; fi
+    }
+    who_sees "root sees everything by itself" "seen secret-name" "" SEARCHPATHS="$W/who/pub $W/who/priv"
+    who_sees "localuser sees only what the user can" "seen /who/priv" "secret-name" SEARCHPATHS="$W/who/pub $W/who/priv" LOCALUSER=nobody
+    who_sees "localuser also for shell patterns" "seen" "secret-name" SEARCHPATHS="$W/who/p* $W/who/pr*v/*" LOCALUSER=nobody
+    who_sees "as root, netpaths are searched as daemon" "/who/net/priv" "secret-net" SEARCHPATHS= NETPATHS="$W/who/net"
+    who_sees "netuser root sees them" "secret-net" "" SEARCHPATHS= NETPATHS="$W/who/net" NETUSER=root
+    who_sees "localuser then netuser, back in between" "seen secret-net" "secret-name" SEARCHPATHS="$W/who/pub $W/who/priv" LOCALUSER=nobody NETPATHS="$W/who/net" NETUSER=root
+    # The option, as in a cron entry.
+    rm -f "$W/who.db"
+    userns "$BIN_DIR/updatedb" --localuser=nobody --localpaths="$W/who/pub $W/who/priv" $P --prunefs=nofs --output="$W/who.db" > "$W/o.out" 2> "$W/o.err"; ox=$?
+    "$FU/locate" -d "$W/who.db" / > "$W/who.names" 2>/dev/null
+    if [ "$ox" = 0 ] && grep -q seen "$W/who.names" && ! grep -q secret-name "$W/who.names"; then
+        PASS=$((PASS + 1)); echo "PASS --localuser=nobody as root"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL --localuser=nobody as root (rc=$ox) $(cat "$W/o.err")"
+    fi
+    chmod 700 "$TEST_TMP"
+else
+    skip_test "searching as another user (needs unshare with a subordinate id range)"
+fi
 cd /; print_summary

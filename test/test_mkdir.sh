@@ -64,4 +64,87 @@ run_tree "-pm on existing dir"       'mkdir -m 755 d' -p -m 700 d
 printf "\n[ -Z accepted ]\n"
 run_tree "-Z"                        : -Z d
 
+# The new file is replaced by a link to "victim" before mkdir sets its mode;
+# strace holds mkdir after the call that creates it.
+d=$(mktemp -d)
+if can_inject; then
+    mkdir "$d/victim"
+    chmod 700 "$d/victim"
+    (cd "$d" && exec timeout 30 strace -o /dev/null -e trace=mkdirat -e inject=mkdirat:delay_exit=1500000:when=1 "$BIN_DIR/mkdir" -m 777 node > out 2>&1) & race_pid=$!
+    tries=0
+    while [ ! -e "$d/node" ] && [ "$tries" -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    mv "$d/node" "$d/moved" && ln -s victim "$d/node"
+    wait "$race_pid"; rc=$?
+    mode=$(stat -c %a "$d/victim")
+    if [ "$rc" -eq 1 ] && [ "$mode" = 700 ]; then
+        PASS=$((PASS + 1)); echo "PASS mkdir -m 777 node does not change the target of a swapped-in link"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL mkdir -m 777 node does not change the target of a swapped-in link (rc=$rc, victim $mode)"; cat "$d/out"
+    fi
+else
+    skip_test "mkdir -m 777 node link race (needs strace)"
+fi
+chmod -R u+rwx "$d"; rm -rf "$d"
+# The same for a parent made by -p, which is given u+wx under a strict umask.
+d=$(mktemp -d)
+if can_inject; then
+    mkdir "$d/victim"; chmod 500 "$d/victim"
+    (cd "$d" && umask 277 && exec timeout 30 strace -o /dev/null -e trace=mkdirat -e inject=mkdirat:delay_exit=1500000:when=1 "$BIN_DIR/mkdir" -p node/child > out 2>&1) & race_pid=$!
+    tries=0
+    while [ ! -e "$d/node" ] && [ "$tries" -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    mv "$d/node" "$d/moved" && ln -s victim "$d/node"
+    wait "$race_pid"
+    mode=$(stat -c %a "$d/victim")
+    if [ "$mode" = 500 ]; then
+        PASS=$((PASS + 1)); echo "PASS mkdir -p does not change the target of a swapped-in parent link"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL mkdir -p does not change the target of a swapped-in parent link (victim $mode)"; cat "$d/out"
+    fi
+else
+    skip_test "mkdir -p link race (needs strace)"
+fi
+chmod -R u+rwx "$d"; rm -rf "$d"
+
+# In a set-group-ID directory a new directory inherits the bit, and it stays
+# unless the mode mentions it.
+SG='mkdir g; chmod 2775 g'
+for m in 755 0755 00755 700 0 2755 4755 1777 6000 u=rwx u=rwx,g=rx,o= g=rx g=s g-s g+s u+s +s a-s ug=rwx,g-s g+s,g=rx a= = =rwx -w g=u o=g go=; do
+    run_tree "setgid parent -m $m"      "$SG" -m "$m" g/new
+    run_tree "setgid parent -p -m $m"   "$SG" -p -m "$m" g/p/new
+    run_tree "plain parent -m $m"       'mkdir g' -m "$m" g/new
+done
+# (0777 would also make run_tree's own capture files unreadable.)
+for u in 022 077 0277 0377; do
+    TREE_UMASK=$u run_tree "setgid parent umask $u"    "$SG" g/new
+    TREE_UMASK=$u run_tree "setgid parent -p umask $u" "$SG" -p g/p1/p2/p3
+    TREE_UMASK=$u run_tree "setgid parent -p -m 750 umask $u" "$SG" -p -m 750 g/p1/p2
+done
+
+# Another process may make the directory between the look and the mkdir (make -j
+# does this all the time). strace holds mkdir -p there while the test makes it.
+if can_inject; then
+    # race_mkdir NAME DIR: run `ours ...` and create DIR just before its mkdir.
+    for case in "a a" "p/q/r p/q/r" "p/q/r p/q" "-m700 a"; do
+        d="$TEST_TMP/race"; rm -rf "$d"; mkdir -p "$d/w"
+        case $case in
+            "-m700 a") args="-m 700 a"; made=a; n=1 ;;
+            "p/q/r p/q") args=p/q/r; made=p/q; n=2 ;;
+            "p/q/r p/q/r") args=p/q/r; made=p/q/r; n=3 ;;
+            *) args=a; made=a; n=1 ;;
+        esac
+        (cd "$d/w" && exec timeout 30 strace -o ../trace -e trace=mkdirat -e inject=mkdirat:delay_enter=2000000:when=$n "$BIN_DIR/mkdir" -p $args > ../out 2>&1) & pid=$!
+        tries=0
+        while [ "$(cat "$d/trace" 2>/dev/null | grep -c '^mkdirat')" -lt $((n - 1)) ] && [ $tries -lt 100 ]; do sleep 0.05; tries=$((tries + 1)); done
+        sleep 1
+        (umask 022; mkdir -p "$d/w/$made")
+        wait $pid; rc=$?
+        if [ "$rc" = 0 ] && [ ! -s "$d/out" ] && [ -d "$d/w/${args##* }" ] && grep -q EEXIST "$d/trace" && [ "$(stat -c %a "$d/w/$made")" = 755 ]; then
+            PASS=$((PASS + 1)); echo "PASS mkdir -p $args while $made appears"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL mkdir -p $args while $made appears (rc=$rc)"; cat "$d/out"
+        fi
+    done
+else
+    skip_test "concurrent mkdir -p (no usable strace)"
+fi
 print_summary

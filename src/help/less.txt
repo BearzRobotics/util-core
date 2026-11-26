@@ -26,7 +26,8 @@ Keys:
   G, >, End                   bottom
   /PATTERN, ?PATTERN          search forward / backward (plain text)
   n, N                        repeat the search in the same / other direction
-  F                           follow: keep reading and show new data until a key
+  F                           follow: show new data as it arrives
+  ^X, ^C (while following)    stop following
   =                           show the position
   r, R, ^L                    redraw
   h                           one-line help

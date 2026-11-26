@@ -58,14 +58,6 @@ pub const Pattern = struct {
     }
 };
 
-/// Match `pat` against `path`, both split at '/', with `**` matching any
-/// number of path components.
-pub fn matchPath(pat: []const u8, path: []const u8) bool {
-    var ppos: usize = 0;
-    var tpos: usize = 0;
-    return matchSegs(pat, &ppos, path, &tpos);
-}
-
 fn nextSeg(s: []const u8, pos: *usize) ?[]const u8 {
     if (pos.* > s.len) return null;
     const start = pos.*;
@@ -74,27 +66,39 @@ fn nextSeg(s: []const u8, pos: *usize) ?[]const u8 {
     return s[start..end];
 }
 
-fn matchSegs(pat: []const u8, pp: *usize, path: []const u8, tp: *usize) bool {
-    var pi = pp.*;
-    var ti = tp.*;
+/// Match `pat` against `path`, both split at '/', with `**` matching any
+/// number of path components. As in fnmatch.zig only the last `**` is ever
+/// gone back to: what an earlier one could take in addition, the last one can
+/// take too. So the time is at most the product of the two lengths, however
+/// many `**` an ignore file of the searched tree holds.
+pub fn matchPath(pat: []const u8, path: []const u8) bool {
+    var pi: usize = 0;
+    var ti: usize = 0;
+    // The pattern after the last `**`, and where in the path it was last tried.
+    var star: ?struct { pi: usize, ti: usize } = null;
     while (true) {
-        const save_p = pi;
-        const seg = nextSeg(pat, &pi) orelse return ti > path.len;
-        if (std.mem.eql(u8, seg, "**")) {
-            if (pi > pat.len) return true; // trailing "/**" matches everything below
-            // try every possible number of consumed components
-            var t = ti;
-            while (true) {
-                var p2 = pi;
-                var t2 = t;
-                if (matchSegs(pat, &p2, path, &t2)) return true;
-                _ = nextSeg(path, &t) orelse return false;
+        var next_p = pi;
+        if (nextSeg(pat, &next_p)) |seg| {
+            if (std.mem.eql(u8, seg, "**")) {
+                if (next_p > pat.len) return true; // trailing "/**" matches everything below
+                pi = next_p;
+                star = .{ .pi = next_p, .ti = ti };
+                continue;
             }
-        }
-        _ = save_p;
-        const tseg = nextSeg(path, &ti) orelse return false;
-        if (!fnmatch.match(seg, tseg, .{})) return false;
-        if (pi > pat.len) return ti > path.len;
+            var next_t = ti;
+            if (nextSeg(path, &next_t)) |tseg| {
+                if (fnmatch.match(seg, tseg, .{})) {
+                    pi = next_p;
+                    ti = next_t;
+                    continue;
+                }
+            }
+        } else if (ti > path.len) return true;
+        // Let the last `**` take one more component.
+        const back = if (star) |*s| s else return false;
+        if (nextSeg(path, &back.ti) == null) return false;
+        pi = back.pi;
+        ti = back.ti;
     }
 }
 
@@ -208,4 +212,28 @@ test "gitignore patterns" {
     const d = Pattern.parse("a/**/b", true).?;
     try std.testing.expect(d.matches("a/b", false));
     try std.testing.expect(d.matches("a/x/y/b", false));
+}
+
+test "gitignore patterns with several double stars" {
+    const t = std.testing;
+    try t.expect(matchPath("**/a/**/b", "a/b"));
+    try t.expect(matchPath("**/a/**/b", "x/a/y/a/z/b"));
+    try t.expect(matchPath("a/**/**/b", "a/b"));
+    try t.expect(matchPath("**/x/y", "x/x/y"));
+    try t.expect(matchPath("a/**", "a/b/c"));
+    try t.expect(matchPath("**/b/**", "a/b/c"));
+    try t.expect(!matchPath("**/a/**/b", "b/a"));
+    try t.expect(!matchPath("**/x/y", "x/y/z"));
+    try t.expect(!matchPath("a/b", "a"));
+    try t.expect(!matchPath("a", "a/b"));
+    // Trying every position for every "**" would never end here.
+    const deep = comptime repeated("x/", 200) ++ "f";
+    try t.expect(!matchPath(comptime repeated("**/x/", 20) ++ "nomatch", deep));
+    try t.expect(matchPath(comptime repeated("**/x/", 20) ++ "f", deep));
+}
+
+fn repeated(comptime text: []const u8, comptime times: usize) []const u8 {
+    comptime var out: []const u8 = "";
+    inline for (0..times) |_| out = out ++ text;
+    return out;
 }

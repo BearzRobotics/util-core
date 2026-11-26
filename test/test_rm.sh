@@ -46,20 +46,68 @@ run_tree "empty dir -r"            "$S" -r e
 run_tree "many files"              'mkdir t; i=0; while [ $i -lt 50 ]; do : > t/f$i; i=$((i+1)); done' -rv t
 
 printf "\n[ Protected names and root ]\n"
-for f in . .. ./ ../ d/. d/.. ./. d/./ /; do
-    run_tree "rm -r $f"            "$S" -r "$f"
-    run_tree "rm -rf $f"           "$S" -rf "$f"
-    run_tree "rm -d $f"            "$S" -d "$f"
-done
-run_tree "rm -r /."                "$S" -r /.
-run_tree "rm -r //"                "$S" -r //
-run_tree "rm -r /../"              "$S" -r /../
-run_tree "--no-preserve-root dot"  "$S" -r --no-preserve-root .
-run_tree "--preserve-root /"       "$S" -r --preserve-root /
-run_tree "--preserve-root=all /"   "$S" -r --preserve-root=all /
-run_tree "--preserve-root=bad"     "$S" -r --preserve-root=bad /
-run_tree "preserve-root, no -r"    "$S" /
-run_tree "rm /etc (no -r)"         "$S" /etc
+# These operands name "/" and parent directories, so the only thing between a
+# broken guard and the user's files must not be the guard under test. Both
+# programs run in a bwrap namespace where everything is read-only except the
+# case's own directory. Without a working bwrap the cases are skipped, never run
+# unprotected.
+BOX="bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all --die-with-parent"
+if $BOX true 2>/dev/null; then
+    gnu()  { $BOX --bind "$PWD" "$PWD" --chdir "$PWD" "${GNU_BIN:-/usr/bin}/$UTIL" "$@"; }
+    ours() { $BOX --bind "$PWD" "$PWD" --chdir "$PWD" "$BIN_DIR/$UTIL" "$@"; }
+    for f in . .. ./ ../ d/. d/.. ./. d/./ /; do
+        run_tree "rm -r $f"            "$S" -r "$f"
+        run_tree "rm -rf $f"           "$S" -rf "$f"
+        run_tree "rm -d $f"            "$S" -d "$f"
+    done
+    run_tree "rm -r /."                "$S" -r /.
+    run_tree "rm -r //"                "$S" -r //
+    run_tree "rm -r /../"              "$S" -r /../
+    run_tree "--no-preserve-root dot"  "$S" -r --no-preserve-root .
+    run_tree "--preserve-root /"       "$S" -r --preserve-root /
+    run_tree "--preserve-root=all /"   "$S" -r --preserve-root=all /
+    run_tree "--preserve-root=bad"     "$S" -r --preserve-root=bad /
+    run_tree "preserve-root, no -r"    "$S" /
+    run_tree "rm /etc (no -r)"         "$S" /etc
+    gnu()  { "${GNU_BIN:-/usr/bin}/$UTIL" "$@"; }
+    ours() { "$BIN_DIR/$UTIL" "$@"; }
+    for o in --no-preserve-roo --no-preserve --no-p --n; do
+        run_tree "$o is refused"        "$S" $o a
+    done
+    run_tree "-r link to dir/"         "$S" -r sd/
+else
+    skip_test "protected names and root (needs a working bwrap)"
+fi
+
+# "/" must be recognised by what it is, not by its name, also without /proc.
+# The sandbox's root is an empty tmpfs holding only rm and the case directory,
+# so a broken guard can delete nothing else.
+box="$TEST_TMP/minroot"; mkdir -p "$box"; echo keep > "$box/file"; ln -s / "$box/link"
+minroot() { timeout 30 bwrap --unshare-all --die-with-parent --ro-bind "$BIN_DIR/rm" /rm --bind "$box" /work --chdir /work /rm "$@"; }
+if minroot --help > /dev/null 2>&1; then
+    for o in "-rf link/" "-rf /" "-rf //" "-rf /work/link/"; do
+        err=$(minroot $o 2>&1); rc=$?
+        want="rm: it is dangerous to operate recursively on '${o#-rf }' (same as '/')
+rm: use --no-preserve-root to override this failsafe"
+        [ "$o" != "-rf /" ] || want="rm: it is dangerous to operate recursively on '/'
+rm: use --no-preserve-root to override this failsafe"
+        if [ "$rc" = 1 ] && [ "$err" = "$want" ] && [ -f "$box/file" ] && [ -L "$box/link" ]; then
+            PASS=$((PASS + 1)); echo "PASS without /proc: rm $o is refused"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL without /proc: rm $o is refused (rc=$rc)"; printf '%s\n' "$err" | head -5
+            [ -f "$box/file" ] || echo keep > "$box/file"; [ -L "$box/link" ] || ln -s / "$box/link"
+        fi
+    done
+    # The link itself is not "/".
+    err=$(minroot -r link 2>&1); rc=$?
+    if [ "$rc" = 0 ] && [ -z "$err" ] && [ ! -L "$box/link" ] && [ -f "$box/file" ]; then
+        PASS=$((PASS + 1)); echo "PASS rm -r removes a link to /"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL rm -r removes a link to / (rc=$rc $err)"
+    fi
+else
+    skip_test "/ under other names (needs a working bwrap)"
+fi
 
 printf "\n[ Interactive ]\n"
 for f in a empty sl ff ro d dang; do
@@ -137,7 +185,7 @@ if unshare -rm true 2>/dev/null; then
         for t in gnu ours; do
             if [ $t = gnu ]; then bin=/usr/bin/rm; else bin="$BIN_DIR/rm"; fi
             rm -rf "$OW/$t"; mkdir -p "$OW/$t/d/m/deep" "$OW/$t/d/n" "$OW/$t/e"; : > "$OW/$t/d/f"; : > "$OW/$t/d/n/g"; : > "$OW/$t/e/h"
-            ( cd "$OW/$t" && unshare -rm sh -c "mount -t tmpfs t d/m && mkdir d/m/deep && : > d/m/x && : > d/m/deep/y && LC_ALL=C $bin \"\$@\" > out 2> err </dev/null; echo \$? > rc; find . -not -path ./out -not -path ./err -not -path ./rc | sort > left" sh "$@" )
+            ( cd "$OW/$t" && unshare -rm sh -c "mount -t tmpfs t d/m && mkdir d/m/deep && : > d/m/x && : > d/m/deep/y && LC_ALL=C $bin \"\$@\" > out 2> err </dev/null; echo \$? > rc; find . -not -path ./out -not -path ./err -not -path ./rc -not -path ./left | sort > left" sh "$@" )
             sed "s#$bin#rm#g" "$OW/$t/err" > "$OW/$t/err2"
         done
         for f in rc err2 left out; do cmp -s "$OW/gnu/$f" "$OW/ours/$f" || { FAIL=$((FAIL + 1)); echo "FAIL $d ($f)"; diff "$OW/gnu/$f" "$OW/ours/$f" | head -5; return; }; done
@@ -155,4 +203,57 @@ else
     echo "SKIP: unshare -rm is not available"
 fi
 rm -f "$yes_all" "$no_all" "$mixed"
+# A directory that cannot be listed is reported with the read error, and rm
+# fails. The case only ever names its own temporary directory.
+d=$(mktemp -d); mkdir "$d/src"; : > "$d/src/a"
+if can_inject; then
+    (cd "$d" && strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=1 "$BIN_DIR/rm" -r src > out 2>&1); rc=$?
+    if [ "$rc" -eq 1 ] && [ -f "$d/src/a" ] && [ "$(cat "$d/out")" = "rm: cannot remove 'src': Input/output error" ]; then
+        PASS=$((PASS + 1)); echo "PASS rm -r reports a read error"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL rm -r reports a read error (rc=$rc: $(head -n 3 "$d/out"))"
+    fi
+else
+    skip_test "rm -r reports a read error (no strace)"
+fi
+# Trees whose paths are longer than PATH_MAX (4096) can be removed.
+d=$(mktemp -d)
+(
+    cd "$d" && mkdir deep && cd deep || exit 1
+    name=$(printf 'd%.0s' $(seq 200)); i=0
+    while [ $i -lt 30 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done
+    : > leaf
+)
+out=$(cd "$d" && "$BIN_DIR/rm" -rf deep 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -e "$d/deep" ]; then
+    PASS=$((PASS + 1)); echo "PASS rm -rf of a tree deeper than PATH_MAX"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL rm -rf of a tree deeper than PATH_MAX (rc=$rc: $(printf %.200s "$out"))"
+fi
+"${GNU_BIN:-/usr/bin}/rm" -rf "$d"
+
+# A directory replaced by a symbolic link while rm is working must not lead it
+# outside the tree. The -i prompts hold rm still between examining 'tree/sub'
+# and opening it. Everything, the "victim" included, is in a new directory.
+d=$(mktemp -d); mkdir -p "$d/tree/sub" "$d/victim"; echo keep > "$d/victim/precious"; echo y > "$d/tree/sub/inner"
+mkfifo "$d/answers"
+(cd "$d" && exec timeout 30 "$BIN_DIR/rm" -ri tree < answers > out 2> err) & rm_pid=$!
+exec 7> "$d/answers"
+wait_for_prompt() {
+    tries=0
+    while ! grep -qF "$1" "$d/err" 2>/dev/null && [ "$tries" -lt 100 ]; do sleep 0.1; tries=$((tries + 1)); done
+}
+wait_for_prompt "descend into directory 'tree'?"
+echo y >&7
+wait_for_prompt "descend into directory 'tree/sub'?"
+mv "$d/tree/sub" "$d/sub.orig"; ln -s ../victim "$d/tree/sub"
+printf 'y\ny\ny\ny\ny\ny\n' >&7
+exec 7>&-
+wait "$rm_pid"; rc=$?
+if [ -f "$d/victim/precious" ] && [ "$rc" -eq 1 ] && ! grep -qF "tree/sub/precious" "$d/err"; then
+    PASS=$((PASS + 1)); echo "PASS rm -r does not follow a link that replaced a directory"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL rm -r does not follow a link that replaced a directory (rc=$rc)"; cat "$d/err"; echo
+fi
+rm -rf "$d"
 print_summary

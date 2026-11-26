@@ -26,7 +26,7 @@ Create a temporary file or directory, safely, and print its name.
 : Append SUFF (no slash); the template must then end in X.
 
 -p DIR, --tmpdir[=DIR]
-: Put the file in DIR ($TMPDIR or /tmp without DIR).
+: Put the file in DIR ($TMPDIR or /tmp without DIR). An empty DIR, like an empty `TMPDIR`, counts as not given.
 
 -t
 : Interpret TEMPLATE relative to $TMPDIR, else the -p directory, else /tmp.
@@ -44,7 +44,7 @@ Create a temporary file or directory, safely, and print its name.
 
 # ENVIRONMENT
 
-none (locale variables are ignored; behaviour is that of the C locale)
+`TMPDIR`: the directory for -t, --tmpdir and the default template; ignored when empty. Locale variables are ignored; behaviour is that of the C locale.
 
 # STANDARD STREAMS
 

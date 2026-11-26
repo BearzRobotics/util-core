@@ -394,7 +394,11 @@ fd '-exec plus -o' a -type f -exec echo {} + -o -print
 fd '-exec plus depth' a -depth -type f -exec echo {} +
 fd '-exec plus two' a -type f -name '*.txt' -exec echo A {} + -exec echo B {} +
 fd '-exec output order' a -maxdepth 1 -print -exec echo X ';'
-fd '-exec stdin' a -maxdepth 1 -type f -exec cat {} ';'
+# The command of -exec reads find's standard input (it must not be empty here,
+# or a closed or replaced one would look the same).
+printf 'from standard input\n' > stdin.txt
+CMP_STDIN="$PWD/stdin.txt" run_cmp '-exec stdin' a -maxdepth 1 -type f -exec sh -c 'cat; echo "after $1"' x {} ';'
+rm -f stdin.txt
 fd '-exec in subdir' a -execdir pwd ';'
 fd '-execdir' a -type f -execdir echo {} ';'
 fd '-execdir +' a -type f -execdir echo {} +
@@ -419,6 +423,38 @@ run_ok '-okdir yes' yes.txt a -type f -okdir echo {} ';'
 run_ok '-ok eof' /dev/null a -type f -ok echo {} ';'
 run_ok '-ok print' answers.txt a -maxdepth 1 -type f -ok echo {} ';' -print
 run_ok '-ok multi args' yes.txt a -maxdepth 1 -name f1.txt -ok echo a b {} c ';'
+# One line answers one question, however long the line is.
+{ printf 'n%.0s' $(seq 256); printf 'yes, still the first answer\n'; printf 'n\nn\nn\nn\nn\nn\nn\nn\n'; } > longno.txt
+{ printf 'y'; printf 'n%.0s' $(seq 255); printf 'y\nn\nn\nn\nn\nn\nn\nn\nn\n'; } > longyes.txt
+run_ok '-ok long refusal' longno.txt a -type f -ok echo RAN {} ';'
+run_ok '-ok long consent' longyes.txt a -type f -ok echo RAN {} ';'
+# The command must not read the answers meant for find. (Only standard output
+# and status are compared: GNU's command may complain about its input.)
+for action in -ok -okdir; do
+    exp=$(printf 'y\ny\ny\ny\ny\ny\ny\ny\n' | gnu a -type f $action sh -c 'cat 2>/dev/null; echo ran' ';' 2>/dev/null; echo "status $?")
+    act=$(printf 'y\ny\ny\ny\ny\ny\ny\ny\n' | ours a -type f $action sh -c 'cat 2>/dev/null; echo ran' ';' 2>/dev/null; echo "status $?")
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $action commands cannot read the answers"
+    else FAIL=$((FAIL + 1)); echo "FAIL $action commands cannot read the answers"; printf '  GNU: %s\n  ours: %s\n' "$exp" "$act"; fi
+done
+
+# A list that could not be written is an error, whichever action writes it.
+if [ -e /dev/full ]; then
+    run_cmp '-fprint write error' a -fprint /dev/full
+    run_cmp '-fprint0 write error' a -fprint0 /dev/full
+    run_cmp '-fprintf write error' a -fprintf /dev/full '%p\n'
+    run_cmp '-fls write error' a -maxdepth 0 -fls /dev/full
+    run_cmp 'write error, the walk goes on' a -maxdepth 1 -fprint /dev/full -print
+    run_cmp 'write error reported once' a -fprint /dev/full -fprint0 /dev/full
+    exp=$(gnu a -fprint /dev/stderr 2>/dev/full; echo "status $?")
+    act=$(ours a -fprint /dev/stderr 2>/dev/full; echo "status $?")
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS -fprint /dev/stderr write error"
+    else FAIL=$((FAIL + 1)); echo "FAIL -fprint /dev/stderr write error ($act, GNU $exp)"; fi
+    # Enough output to be written in several pieces, cut short by a size limit.
+    out=$( (trap '' XFSZ; ulimit -f 4; awk 'BEGIN { for (i = 0; i < 3000; i++) print "/dev/null" }' | xargs sh -c '"$0" "$@" -fprint cut.txt' "$BIN_DIR/find" 2>&1; ) ); rc=$?
+    if [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q "cut.txt.*: File too large"; then PASS=$((PASS + 1)); echo "PASS -fprint cut short is reported"
+    else FAIL=$((FAIL + 1)); echo "FAIL -fprint cut short is reported (rc=$rc $out)" | head -3; fi
+    rm -f cut.txt
+fi
 
 # ---- file system changes
 SET='mkdir -p a/b/c a/d e; printf x > a/f1; printf y > a/b/f2; : > a/b/c/f3; printf z > e/f4; ln -s a/f1 lnk; mkdir empty; ln -s ../e a/d/up; chmod 400 e/f4'
@@ -490,6 +526,199 @@ run_tree_t 'path named -x' "$SET; mkdir ./-x; : > ./-x/f" ./-x
 run_tree_t 'long path' "$SET; mkdir -p $(printf 'dddddddddd/%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)" . -type d -name 'd*' -newer a
 run_tree_t 'many files' "$SET; mkdir many; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do : > many/f\$i; done" many -type f
 run_tree_t 'sorted many' "$SET; mkdir many; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do : > many/f\$i; done" many -type f -name 'f1*'
+
+# -execdir and -okdir refuse a PATH that would be searched inside the tree.
+# The planted "cat" must not run; stdout, status and the message are GNU's.
+mkdir -p "$W/planted/sub/bin"
+printf '#!/bin/sh\necho PLANTED\n' > "$W/planted/sub/cat"
+cp "$W/planted/sub/cat" "$W/planted/sub/bin/cat"; chmod +x "$W/planted/sub/cat" "$W/planted/sub/bin/cat"
+echo data > "$W/planted/sub/data"
+execdir_path_cmp() { # NAME PATH ACTION
+    exp=$(cd "$W/planted" && env PATH="$2" LC_ALL=C /usr/bin/find . -name data "$3" cat {} ';' </dev/null 2>"$W/gerr"; echo "status $?")
+    act=$(cd "$W/planted" && env PATH="$2" LC_ALL=C "$BIN_DIR/find" . -name data "$3" cat {} ';' </dev/null 2>"$W/oerr"; echo "status $?")
+    gerr=$(sed 's#^/usr/bin/find:#find:#' "$W/gerr"); oerr=$(sed 's#^[^ ]*find:#find:#' "$W/oerr")
+    if [ "$exp" = "$act" ] && [ "$gerr" = "$oerr" ]; then PASS=$((PASS + 1)); printf "PASS %s\n" "$1"
+    else FAIL=$((FAIL + 1)); printf "FAIL %s\n  GNU: %s %s\n  ours: %s %s\n" "$1" "$exp" "$gerr" "$act" "$oerr"; fi
+}
+for action in -execdir -okdir; do
+    execdir_path_cmp "$action with . in PATH" ".:/usr/bin:/bin" $action
+    execdir_path_cmp "$action with a relative PATH entry" "bin:/usr/bin:/bin" $action
+    execdir_path_cmp "$action with a leading colon" ":/usr/bin:/bin" $action
+    execdir_path_cmp "$action with a trailing colon" "/usr/bin:/bin:" $action
+    execdir_path_cmp "$action with a doubled colon" "/usr/bin::/bin" $action
+    execdir_path_cmp "$action with an empty PATH" "" $action
+done
+execdir_path_cmp "-execdir with an absolute PATH" "/usr/bin:/bin" -execdir
+execdir_path_cmp "-exec is not restricted" ".:/usr/bin:/bin" -exec
+
+# A directory that is replaced by a symbolic link during the walk must not
+# lead find outside the tree. -exec makes each swap happen at a fixed point.
+# Everything, the "victim" included, is inside $R.
+race_setup() {
+    R="$W/race"; rm -rf "$R"; mkdir -p "$R/tree/a/sub" "$R/victim"
+    echo keep > "$R/victim/precious"; echo x > "$R/tree/a/sub/precious"
+}
+race_check() { # NAME CONDITION...
+    race_name=$1; shift
+    if "$@"; then PASS=$((PASS + 1)); printf "PASS %s\n" "$race_name"
+    else FAIL=$((FAIL + 1)); printf "FAIL %s\n" "$race_name"; sed 's/^/  /' "$W/race.out"; fi
+}
+race_setup
+printf '#!/bin/sh\ncd "%s" && mv tree/a/sub moved && ln -s "%s/victim" tree/a/sub\n' "$R" "$R" > "$R/swap"; chmod +x "$R/swap"
+"$BIN_DIR/find" "$R/tree" -depth \( -name precious -exec "$R/swap" ';' \) -delete > "$W/race.out" 2>&1
+race_check "-delete stays in the directory it listed" test -f "$R/victim/precious"
+race_check "-delete removed the file it examined" test ! -e "$R/moved/precious"
+
+rm -rf "$W/race"; mkdir -p "$W/race/tree/a/z1" "$W/race/tree/a/z2" "$W/race/victim"; echo keep > "$W/race/victim/precious"
+# Replace every z directory but the one being visited with a link.
+printf '#!/bin/sh\ncd "%s/race/tree/a" || exit 1\nfor z in z*; do [ "$W_KEEP/$z" = "$1" ] && continue; [ -d "$z" ] && [ ! -L "$z" ] && rmdir "$z" && ln -s "%s/race/victim" "$z"; done\n' "$W" "$W" > "$W/race/swap"; chmod +x "$W/race/swap"
+W_KEEP="$W/race/tree/a" LC_ALL=C "$BIN_DIR/find" "$W/race/tree" -name 'z*' -type d -exec "$W/race/swap" {} ';' -o -print > "$W/race.out" 2>&1
+st=$?
+race_check "a link that replaced a directory is not followed" sh -c '! grep -q "^[^ ]*/precious$" "$1"' _ "$W/race.out"
+race_check "the replaced directory is reported" sh -c '[ "$2" = 1 ] && grep -q "Not a directory" "$1"' _ "$W/race.out" "$st"
+rm -rf "$W/race"
+
+# Trees whose paths are longer than PATH_MAX (4096): find, test, list and
+# delete everything in them.
+make_long() { # DIR
+    ( mkdir "$1" && cd "$1" || exit 1
+      name=$(printf 'd%.0s' $(seq 199)); i=0
+      while [ $i -lt 30 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done
+      echo x > leaf; ln -s leaf link )
+}
+make_long "$W/long"
+for expr in '-printf %d_%y_%Y_%s_%l\n' '-name leaf -print' '-type f -newer /dev/null' '-empty -print' '-lname leaf -printf %f\n' '-readable -name l*'; do
+    exp=$(cd "$W" && /usr/bin/find long $expr 2>&1 | sort | cksum; )
+    act=$(cd "$W" && "$BIN_DIR/find" long $expr 2>&1 | sort | cksum)
+    race_check "past PATH_MAX: $expr" test "$exp" = "$act"
+done
+out=$(cd "$W" && "$BIN_DIR/find" long -name leaf -execdir cat {} ';' 2>&1)
+race_check "past PATH_MAX: -execdir" test "$out" = x
+out=$(cd "$W" && "$BIN_DIR/find" long -delete 2>&1)
+race_check "past PATH_MAX: -delete" sh -c '[ -z "$1" ] && [ ! -e "$2" ]' _ "$out" "$W/long"
+/usr/bin/rm -rf "$W/long"
+
+# -execdir runs in the directory that was searched, not in whatever the path
+# leads to by the time the command starts.
+for terminator in ';' '+'; do
+    race_setup
+    echo mine > "$R/tree/a/sub/data"; echo VICTIM > "$R/victim/data"
+    printf '#!/bin/sh\ncd "%s" && mv tree/a/sub moved && ln -s "%s/victim" tree/a/sub\n' "$R" "$R" > "$R/swap"; chmod +x "$R/swap"
+    "$BIN_DIR/find" "$R/tree" -name data -exec "$R/swap" ';' -execdir cat {} "$terminator" > "$W/race.out" 2>&1
+    race_check "-execdir $terminator runs in the searched directory" sh -c '[ "$(cat "$1")" = mine ]' _ "$W/race.out"
+done
+rm -rf "$W/race"
+# The batches of -execdir + run when the walk moves to another directory.
+mkdir -p "$W/batch/t/a" "$W/batch/t/b"; : > "$W/batch/t/f1"; : > "$W/batch/t/a/g"; : > "$W/batch/t/a/h"; : > "$W/batch/t/b/i"; : > "$W/batch/t/z"
+for depth in -follow -depth; do
+    exp=$(cd "$W/batch" && /usr/bin/find t $depth -print -execdir echo run {} + 2>&1)
+    act=$(cd "$W/batch" && "$BIN_DIR/find" t $depth -print -execdir echo run {} + 2>&1)
+    race_check "-execdir + order $depth" test "$exp" = "$act"
+done
+rm -rf "$W/batch"
+
+# Deeper than the walker keeps directories open, with few descriptors.
+mkdir "$W/deepfd"
+( cd "$W/deepfd" && mkdir -p "$(awk 'BEGIN { for (i = 0; i < 120; i++) printf "n/"; print "n" }')" &&
+  : > "$(awk 'BEGIN { for (i = 0; i < 120; i++) printf "n/"; print "n/leaf" }')" )
+exp=$(cd "$W" && /usr/bin/find deepfd -printf '%d %f\n' | cksum)
+act=$(cd "$W" && ulimit -n 48 && "$BIN_DIR/find" deepfd -printf '%d %f\n' 2>&1 | cksum)
+race_check "deep tree with 48 descriptors" test "$exp" = "$act"
+(cd "$W" && ulimit -n 48 && "$BIN_DIR/find" deepfd -delete > "$W/race.out" 2>&1)
+race_check "-delete of a deep tree with 48 descriptors" test ! -e "$W/deepfd"
+
+# A directory that cannot be read to its end is an error, and the names read
+# before it are still visited. strace makes the second getdents64 call fail.
+mkdir "$W/readerr"; cd "$W/readerr"; mkdir d; : > d/a; : > d/b
+if strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=2 true 2>/dev/null; then
+    for when in 1 2; do
+        inject() { strace -f -o /dev/null -e trace=getdents64 -e "inject=getdents64:error=EIO:when=$when" "$@" 2>"$W/rerr"; echo "status $?"; }
+        exp=$(inject /usr/bin/find d | sort); gerr=$(sed 's#^[^ ]*find:#find:#' "$W/rerr")
+        act=$(inject "$BIN_DIR/find" d | sort); oerr=$(sed 's#^[^ ]*find:#find:#' "$W/rerr")
+        if [ "$exp" = "$act" ] && [ "$gerr" = "$oerr" ]; then PASS=$((PASS + 1)); echo "PASS directory read error, call $when"
+        else FAIL=$((FAIL + 1)); echo "FAIL directory read error, call $when"; printf '  GNU: %s %s\n  ours: %s %s\n' "$exp" "$gerr" "$act" "$oerr"; fi
+    done
+else
+    SKIP=$((SKIP + 1)); echo "SKIP directory read errors (needs strace fault injection)"
+fi
+cd "$W/t"
+
+# On a terminal, unprintable characters in names are shown as '?', as GNU does.
+# Pipes and files get every byte. script(1) provides the terminal.
+mkdir "$W/term"; cd "$W/term"; mkdir d
+: > "d/$(printf 'e\033]0;x\007\033[2J\nz\177')"; : > "d/$(printf 'u\303\251\302\233q')"; : > "d/$(printf 'i\351z')"; : > "d/$(printf 'cut\342\200')"
+ln -s "$(printf 't\033[2J')" d/link
+if script -qec true /dev/null </dev/null >/dev/null 2>&1; then
+    on_tty() { # LOCALE FIND ARGS
+        LC_ALL="$1" SHELL=/bin/sh script -qec "'$2' d $3" /dev/null </dev/null | od -An -c
+    }
+    for loc in C C.UTF-8; do
+        for args in "-print" "-fprint /dev/stdout" "-fprint /dev/stderr" "-printf '[%-12p|%.3f|%h|%H|%P|%l]\\n'" \
+                    "-fprintf /dev/stdout '\\033lit %p\\n'" "-print0"; do
+            exp=$(on_tty $loc /usr/bin/find "$args"); act=$(on_tty $loc "$BIN_DIR/find" "$args")
+            if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); printf 'PASS terminal %s %s\n' $loc "$args"
+            else FAIL=$((FAIL + 1)); printf 'FAIL terminal %s %s\n  GNU : %s\n  ours: %s\n' $loc "$args" "$exp" "$act"; fi
+        done
+    done
+    # A file named to -fprint is no terminal, whatever standard output is.
+    on_tty C /usr/bin/find "-fprint gnu.txt" > /dev/null; on_tty C "$BIN_DIR/find" "-fprint ours.txt" > /dev/null
+    if cmp -s gnu.txt ours.txt; then PASS=$((PASS + 1)); echo "PASS -fprint to a file keeps every byte"
+    else FAIL=$((FAIL + 1)); echo "FAIL -fprint to a file keeps every byte"; fi
+else
+    SKIP=$((SKIP + 1)); echo "SKIP terminal output (needs script(1))"
+fi
+for args in "-print" "-printf %p|%f|%l\n"; do
+    CMP_LOCALE=C.UTF-8 fd "not a terminal: $args" d $args
+done
+cd "$W/t"
+
+# Several '*' in a pattern take no longer than one. (With a time limit: trying
+# every position for every '*' would run for hours.)
+mkdir "$W/stars"; cd "$W/stars"; mkdir d; : > "d/$(printf 'a%.0s' $(seq 200))"; : > d/aaab
+for o in "-name" "-iname" "-path" "-ipath"; do
+    exp=$(timeout 20 /usr/bin/find d $o '*a*a*a*a*a*a*a*a*a*a*b'; echo "status $?")
+    act=$(timeout 20 "$BIN_DIR/find" d $o '*a*a*a*a*a*a*a*a*a*a*b'; echo "status $?")
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $o with many stars"
+    else FAIL=$((FAIL + 1)); echo "FAIL $o with many stars ($act)"; fi
+done
+cd "$W/t"
+
+# As execvp, a script without a "#!" line is run by /bin/sh: the file PATH
+# leads to, not a file of that name in the directory it runs in.
+mkdir "$W/shbang"; cd "$W/shbang"; mkdir bin d d/sub
+printf 'echo script-ran "$0" "$@"\n' > bin/noshebang; chmod +x bin/noshebang
+cp bin/noshebang d/sub/s; chmod +x d/sub/s
+printf 'echo PLANTED\n' > d/sub/noshebang
+sb() {
+    d="$1"; shift
+    exp=$(PATH="$W/shbang/bin:/usr/bin:/bin" /usr/bin/find d -name s "$@" 2>&1; echo "status $?")
+    act=$(PATH="$W/shbang/bin:/usr/bin:/bin" "$BIN_DIR/find" d -name s "$@" 2>&1; echo "status $?")
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $d"
+    else FAIL=$((FAIL + 1)); echo "FAIL $d"; printf '  GNU : %s\n  ours: %s\n' "$exp" "$act"; fi
+}
+sb 'no "#!": -exec path' -exec d/sub/s {} ';'
+sb 'no "#!": -exec from PATH' -exec noshebang {} ';'
+sb 'no "#!": -exec +' -exec noshebang {} +
+sb 'no "#!": -execdir from PATH' -execdir noshebang {} ';'
+sb 'no "#!": -execdir path' -execdir ./s {} ';'
+printf 'exit 3\n' > bin/fails; chmod +x bin/fails
+sb 'no "#!": a failing script is false' -exec fails ';' -print
+cd "$W/t"
+
+# Any time the file system can hold: no crash, and where the year does not fit
+# a struct tm the seconds are printed, as GNU does. (Skipped where the file
+# system clamps such times.)
+mkdir "$W/times"; cd "$W/times"
+for secs in -9223372036854775808 -100000000000000000 100000000000000000 9223372036854775807; do
+    : > f; touch -m -d "@$secs" f
+    if [ "$(stat -c %Y f)" != "$secs" ]; then SKIP=$((SKIP + 1)); echo "SKIP mtime $secs not stored here"; continue; fi
+    for expr in '-mtime +1' '-mtime -1' '-mtime 1' '-mmin +1' '-mmin -1' '-mmin 1' '-daystart -mtime +1' '-newer /dev/null' '-ls' \
+                '-printf %T+|%t|%TY|%Ts|%T@|%Tc|%TH|%TS|%TT|%TX|%Ta\n'; do
+        fd "mtime $secs: $expr" f $expr
+    done
+    TZ=EST5EDT,M3.2.0,M11.1.0 fd "mtime $secs: -ls with a rule zone" f -ls
+done
+cd "$W/t"
 
 help_cmp_find() {
     exp=$(LC_ALL=C /usr/bin/find --help | sed 's#/usr/bin/find#find#')

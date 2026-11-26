@@ -60,6 +60,7 @@ See docs/compatibility/stat.md for details.
 
 - `%C` reads the `security.selinux` attribute; without it GNU's `failed to get security context` diagnostic is reproduced.
 - `%m` walks up the directory tree looking for a device change; bind mounts are not resolved through the mount table.
+- With `-L`, `%m` of a link to a file is the mount point of the target. GNU 9.7 gives the mount point of the directory holding the link.
 - `--help` omits the "GNU coreutils online help" footer.
 
 # SEE ALSO

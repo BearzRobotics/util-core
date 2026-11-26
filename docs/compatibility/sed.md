@@ -32,7 +32,7 @@ GNU sed 4.9 (`/usr/bin/sed --version` on the development machine). Consulted 202
 - `s` flags `g p N i I m M e w FILE`; replacement escapes `\1`..`\9`, `&`, `\n`, `\t`, `\L \U \l \u \E`, `\cX \dNNN \oNNN \xHH`.
 - A missing newline at the end of the last line is preserved; `w /dev/stdout` and `/dev/stderr` are special.
 - `#n` on the first line of the script acts as `-n`.
-- Input files are read whole into memory before processing.
+- Input is read as it is processed, with one byte of look-ahead where `$` needs it (so `yes | sed 5q` ends and `tail -f log | sed ...` runs); only the unused part of a read is held. What has been written is flushed before sed waits for more input from a pipe or terminal. `-u` takes no more from a pipe than it uses, and after `q` or `Q` a seekable standard input is left just after the last line used, as in GNU.
 
 ## Extensions
 
@@ -40,9 +40,12 @@ None. Every option and command is GNU sed 4.9's (including `--debug`, `--sandbox
 
 ## Known deviations and gaps
 
-- Leftmost-longest alternation is emulated on top of the leftmost-first engine (src/posixre.zig `Finder`): after the engine finds the leftmost match, longer matches ending at later offsets are tried. This is skipped for patterns containing `$`, `\b`, `\B` or lines with more than 4096 bytes after the match, where the leftmost-first match is used. Submatch positions follow the Perl rule, not POSIX's.
+- Leftmost-longest alternation is added on top of the leftmost-first engine (src/posixre.zig `Finder`): the pattern is also compiled with regex-zig's native POSIX dialect, which finds in one pass how far the longest match from the same start reaches, and the translated pattern then gives that match and its groups. Submatch positions follow the Perl rule, not POSIX's. This is skipped for patterns containing `$` or a word anchor (`\b \B \< \>`), where the leftmost-first match is used. A pattern the native parser rejects is searched by trying each end up to 512 bytes from the start of the match. The extra pass runs on regex-zig's Pike VM: a pattern whose longer branch can run on to the end of the line (`a\|a.*z`) costs time quadratic in the line length when there are very many matches (as in GNU, but slower).
 - UTF-8 locales (LC_ALL, LC_CTYPE or LANG naming UTF-8): `.`, bracket expressions, `\w \W \s \S`, `\b \B \< \>`, `y`, `\U \L \u \l` and `I` work on characters, using tables derived from Unicode 16 (src/unicode_tables.zig). Class membership approximates glibc's C.UTF-8 and may differ for rare code points; `\b` handling and case-insensitive matching of non-ASCII letters inside bracket expressions are approximations; invalid byte sequences behave differently from glibc in `y`, `\w` and `\b`. Other locales are treated as C.
-- `e` and `s///e` run the command through `/bin/sh` and a temporary file in /tmp.
+- `\<` and `\>` in the C locale: the pattern is translated for regex-zig's Perl dialect, which has only `\b`. Where a literal word character or `\w` is next to the anchor on the word's side (`\<foo`, `bar\>`), `\b` means the same and is used. Elsewhere (`s/\>//`, `\<[a-z]*`) a lookahead is added, which, as in UTF-8 locales, needs the backtracking engine: it is slower, and on very long lines the search can reach its limit. Removing that needs word-start and word-end assertions in the Perl dialect of regex-zig.
+- `e` and `s///e` run the command with `/bin/sh -c` and read its output through a pipe; no temporary file is used.
+- `-i` takes the owner, group, mode and POSIX access ACL from the file as it was opened (an ACL the new file inherited from its directory is removed, as in GNU). Other extended attributes are not copied (nor by GNU); an SELinux context is not copied either, unlike GNU. When the group cannot be kept, the new file's group gets no more than others had (with a warning), and a set-ID bit is kept only along with its owner or group; GNU copies the mode unchanged.
+- Numbers in scripts wrap at 2^64 as GNU's do; a `+N` or `~N` range end that does not fit is the end of the input (GNU's sum wraps).
 - `--version` prints an abbreviated banner.
 
 ## Tests

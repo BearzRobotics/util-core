@@ -16,7 +16,7 @@ GNU coreutils 9.7 (`/usr/bin/readlink --version` on the development machine, ins
 
 ## Supported behaviour
 
-- Resolution is done component by component in src/paths.zig; `-m` tolerates symlink loops and keeps them unresolved, `-f`/`-e` report `Too many levels of symbolic links`, and a trailing slash on a non-directory is `Not a directory` for `-f`/`-e`.
+- Resolution is done component by component in src/paths.zig; `-m` tolerates symlink loops and keeps them unresolved, `-f`/`-e` report `Too many levels of symbolic links`, and a trailing slash on a non-directory is `Not a directory` for `-f`/`-e`. A component that cannot be examined (no search permission, a name too long, an I/O error) is an error except with `-m`, as in GNU.
 
 ## Library
 
@@ -32,7 +32,7 @@ None. Output, diagnostics and exit status follow GNU (decision 0005).
 
 ## Tests
 
-test/test_readlink.sh (450 cases: every option over 29 awkward paths) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
+test/test_readlink.sh (528 cases: every option over 29 awkward paths, and names that cannot be examined) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
 
 ## Not yet done
 

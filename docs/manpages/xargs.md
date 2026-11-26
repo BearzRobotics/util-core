@@ -17,13 +17,13 @@ Build and execute command lines from standard input.
 : Items end with NUL or the given character; no quote or backslash processing.
 
 -a, --arg-file=FILE
-: Read items from FILE instead of standard input.
+: Read items from FILE instead of standard input. The commands then get xargs' standard input (without -a theirs is /dev/null). FILE `-` is standard input.
 
 -E EOF-STR, -e[EOF-STR], --eof[=EOF-STR]
 : Logical end-of-file string.
 
 -I R, -i[R], --replace[=R]
-: Replace R in the initial arguments with each input line (one command per item).
+: Replace R in the initial arguments with each input line (one command per item). With an empty R, as in GNU xargs, an empty argument after the command name becomes the input line, and any other argument ends the run with `command too long`. (GNU xargs does not finish when the input item is empty too; this xargs reports the same error.)
 
 -L N, -l[N], --max-lines[=N]
 : At most N non-blank input lines per command.
@@ -68,7 +68,7 @@ See docs/compatibility/xargs.md for details.
 # LIMITATIONS
 
 - -x combined with an argument that cannot fit differs from GNU in some edge cases (the exact point at which GNU aborts is not reproduced).
-- -P runs commands concurrently but reaps them in start order, so a failing later command is reported after earlier ones finish.
+- With -P, whichever command ends first frees its slot (and its --process-slot-var number, the lowest free one being used next), as in GNU xargs. On systems other than Linux and Windows xargs still waits for the commands in the order they were started, so a slow one holds up the rest; this has not been run on Windows.
 - -p and -o need a controlling terminal, which the test suite does not have; the error path is checked only by hand.
 
 # SEE ALSO

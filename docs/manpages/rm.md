@@ -32,7 +32,7 @@ Remove files or directories.
 : With -r, skip (and report) directories on a different device from the command-line argument; the parent is then kept and the exit status is 1.
 
 --preserve-root[=all], --no-preserve-root
-: Refuse to operate recursively on `/` (default). `=all` is treated as plain --preserve-root.
+: Refuse to operate recursively on `/` (default). As in GNU, `/` is recognised by device and inode, so a bind mount of it, or a link to it with a trailing slash, is refused too, with or without /proc; if `/` cannot be examined nothing is removed. --no-preserve-root must be written in full. `=all` is treated as plain --preserve-root.
 
 --help, --version
 : Print help or version and exit.

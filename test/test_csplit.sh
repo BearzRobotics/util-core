@@ -119,6 +119,28 @@ run_tree "ambiguous"            "$S" --s n20 5
 run_tree "-- operand"           "$S" -- n20 5
 run_tree "pattern like option"  "$S" n20 -5
 
+printf "\n[ Values too large to compute with ]\n"
+for o in +9223372036854775807 +9223372036854775800 +9223372036854775808 -9223372036854775808 --9223372036854775808 +-3 -+3 +1_0; do
+    run_tree "/5/$o"            "$S" n20 "/5/$o"
+    run_tree "-k /5/$o"         "$S" -k n20 "/5/$o"
+    run_tree "%5%$o"            "$S" n20 "%5%$o"
+done
+run_tree "repeat largest"       "$S" n20 5 '{9223372036854775807}'
+for f in '%99999999999999999999d' '%3000000000d' '%.99999999999999999999d' '%.2147483648d'; do
+    run_tree "-b $f"            "$S" -b "$f" n20 3
+done
+# From about here GNU's answer depends on how much memory there is (given
+# enough, it builds the whole name), so only ours is checked.
+seq 20 > "$TEST_TMP/n20"
+for how in "-b %2147483647d" "-b %-2000000d" "-b %.2000000d" "-n 2147483647"; do
+    out=$(cd "$TEST_TMP" && ulimit -v 262144 && "$BIN_DIR/csplit" $how n20 3 2>&1); rc=$?
+    if [ "$rc" = 1 ] && [ "$out" = "csplit: memory exhausted" ]; then
+        PASS=$((PASS + 1)); echo "PASS $how is too large"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $how is too large (rc=$rc) $(printf %.200s "$out")"
+    fi
+done
+
 printf "\n[ Large inputs ]\n"
 LC_ALL=C awk 'BEGIN{for(i=1;i<=50000;i++) printf "line %d some text to make the file larger\n", i}' > /dev/null
 BIG='LC_ALL=C awk "BEGIN{for(i=1;i<=20000;i++) printf \"line %d some text to make the file larger\\n\", i}" > big'

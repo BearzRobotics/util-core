@@ -89,8 +89,9 @@ pub fn main(ctx: cli.Context) u8 {
 
     const umask = sys.umask();
     var final_mode: ?u16 = null;
+    var decided: u16 = 0;
     if (mode_text) |t| {
-        final_mode = mode_mod.apply(t, 0o777, true, umask) orelse {
+        final_mode = mode_mod.applyTracked(t, 0o777, true, umask, &decided) orelse {
             cli.warn(ctx, "invalid mode '{s}'", .{t});
             return 1;
         };
@@ -101,7 +102,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     const env: mkdir.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
-    const ok = mkdir.run(env, .{ .parents = parents, .mode = final_mode, .verbose = verbose, .umask = umask }, dirs.items, .{
+    const ok = mkdir.run(env, .{ .parents = parents, .mode = final_mode, .mode_decided = if (mode_text != null) decided else null, .verbose = verbose, .umask = umask }, dirs.items, .{
         .context = @constCast(&ctx),
         .func = report,
     });
@@ -115,8 +116,8 @@ fn report(context: ?*anyopaque, ev: mkdir.Event) void {
         .created => |p| cli.say(ctx.*, "created directory '{s}'", .{p}),
         .not_a_directory => |p| cli.warn(ctx.*, "cannot create directory '{s}': Not a directory", .{p}),
         .exists => |p| cli.warn(ctx.*, "cannot create directory '{s}': File exists", .{p}),
-        .create_failed => |f| cli.warn(ctx.*, "cannot create directory '{s}': {s}", .{ f.path, cli.errText(f.err) }),
-        .chmod_failed => |f| cli.warn(ctx.*, "cannot set permissions of '{s}': {s}", .{ f.path, cli.errText(f.err) }),
+        .create_failed => |f| cli.warn(ctx.*, "cannot create directory '{s}': {s}", .{ f.path, sys.errnoText(f.errno) }),
+        .chmod_failed => |f| cli.warn(ctx.*, "cannot set permissions of '{s}': {s}", .{ f.path, sys.errnoText(f.errno) }),
     }
 }
 

@@ -449,6 +449,23 @@ pub fn main(ctx: cli.Context) u8 {
         }
     }
 
+    if (o.json) {
+        // These print text of their own in place of the matching lines.
+        const text_only: ?[]const u8 = if (o.count_matches)
+            "--count-matches"
+        else if (o.count)
+            "-c (--count)"
+        else switch (o.list) {
+            .none => null,
+            .matching => "-l (--files-with-matches)",
+            .nonmatching => "-L (--files-without-match)",
+        };
+        if (text_only) |name| {
+            cli.warn(ctx, "--json cannot be used with {s}; the JSON messages carry the file names and counts", .{name});
+            return 2;
+        }
+    }
+
     var operands = p.operands.items;
     if (!have_keys and have_ops) {
         if (terms.items.len == 0) return usage(ctx);
@@ -555,12 +572,19 @@ fn report(context: ?*anyopaque, ev: grep.Event) void {
         .read_error => |e| if (!st.no_messages) cli.warn(ctx, "{s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
         .is_directory => |n| if (!st.no_messages) cli.warn(ctx, "{s}: Is a directory", .{n}),
         .input_is_output => |n| if (!st.no_messages) cli.warn(ctx, "{s}: input file is also the output", .{n}),
+        .directory_loop => |n| if (!st.no_messages) cli.warn(ctx, "{s}: warning: recursive directory loop", .{n}),
         .binary_matches => |n| cli.warn(ctx, "{s}: binary file matches", .{n}),
         .leading_operator => |ch| switch (ch) {
             '{' => cli.warn(ctx, "warning: {{...}} at start of expression", .{}),
             else => cli.warn(ctx, "warning: {c} at start of expression", .{ch}),
         },
         .unsupported_compression => |u| cli.warn(ctx, "{s}: {s} compression is not supported by --decompress; searching the compressed bytes", .{ u.name, u.format }),
+        .ignore_file_skipped => |s| if (!st.no_messages) cli.warn(ctx, "{s}/{s}: ignore file not used: {s}", .{ std.mem.trimEnd(u8, s.dir, "/"), s.file, switch (s.reason) {
+            .symbolic_link => "it is a symbolic link",
+            .not_regular => "it is not a regular file",
+            .too_large => std.fmt.comptimePrint("it is larger than {d} MiB", .{grep.max_ignore_file >> 20}),
+        } }),
+        .decompress_trailing => |n| cli.warn(ctx, "{s}: --decompress: what follows the compressed data was not searched", .{n}),
         .decompress_failed => |n| cli.warn(ctx, "{s}: cannot decompress: the compressed data is damaged or truncated", .{n}),
         .search_limit => |e| cli.warn(ctx, "{s}: regular expression search exceeded its limits near line {d}; lines it gave up on were treated as not matching", .{ e.name, e.line }),
         .deprecated_grep_color => |gc| cli.warn(ctx, "warning: GREP_COLOR='{s}' is deprecated; use GREP_COLORS='mt={s}'", .{ gc, gc }),

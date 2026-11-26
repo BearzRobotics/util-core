@@ -5,9 +5,10 @@
 //! References, consulted 2026-11-07: GNU coreutils manual "shred invocation"
 //! (9.7) and GNU coreutils 9.6 src/shred.c (pass structure, pattern groups,
 //! file-name wiping). The pseudo-random generator is not GNU's ISAAC: random
-//! passes and the pass order come from the operating system (or, with a
-//! caller-supplied random source file, from the bytes of that file), so a
-//! random source does not reproduce GNU's exact sequence.
+//! passes and the pass order come from a ChaCha8 stream (std.Random.ChaCha, a
+//! cryptographically secure generator) seeded by the operating system or,
+//! with a caller-supplied random source file, from the bytes of that file. A
+//! random source therefore does not reproduce GNU's exact sequence.
 //!
 //! The caller parses the command line, opens the --random-source file and
 //! words the diagnostics (here: `Event.diag` is the GNU message text without
@@ -34,8 +35,8 @@ pub const Options = struct {
     verbose: bool = false,
     exact: bool = false,
     zero_fill: bool = false,
-    /// Random bytes come from this file (not closed here); null: the
-    /// operating system's generator.
+    /// Random bytes come from this file (not closed here); null: a secure
+    /// generator seeded by the operating system.
     random_source: ?Io.File = null,
 };
 
@@ -74,7 +75,9 @@ const patterns = [_]i32{
 const Rng = struct {
     file: ?Io.File = null,
     io: Io,
-    prng: std.Random.DefaultPrng,
+    /// Must be a secure generator: whoever reads part of a random pass must
+    /// not be able to work out the rest, or the passes over other files.
+    csprng: std.Random.ChaCha,
 
     fn bytes(r: *Rng, buf: []u8) error{RandomSourceExhausted}!void {
         if (r.file) |f| {
@@ -84,7 +87,7 @@ const Rng = struct {
                 if (n == 0) return error.RandomSourceExhausted;
                 got += n;
             }
-        } else r.prng.random().bytes(buf);
+        } else r.csprng.fill(buf);
     }
 
     fn choose(r: *Rng, n: u64) error{RandomSourceExhausted}!u64 {
@@ -398,6 +401,7 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
     var first = true;
     if (o.remove != .unlink) {
         var len = cur.len - base_off;
+        var warned = false;
         while (len != 0) : (len -= 1) {
             const next = ctx.gpa.dupe(u8, cur[0 .. base_off + len]) catch return false;
             defer ctx.gpa.free(next);
@@ -406,6 +410,12 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
             while (true) {
                 if (sys.renamePath(cur, next, sys.RENAME_NOREPLACE)) |re| {
                     if (re == .EXIST and incname(next[base_off..])) continue;
+                    // GNU says nothing here, though some or all of the old
+                    // name may then survive in the directory.
+                    if (re != .EXIST and !warned) {
+                        warn(ctx, "{s}: warning: cannot rename, so the name is not fully wiped: {s}", .{ qoldname, sys.errnoText(re) });
+                        warned = true;
+                    }
                     break;
                 }
                 rename_ok = true;
@@ -455,14 +465,14 @@ fn wipeFile(ctx: *Ctx, rng: *Rng, name: []const u8, qname: []const u8, o: Option
     return ok;
 }
 
-
 /// Shred each named file ("-" is standard output). Returns false when any
 /// failed.
 pub fn run(env: Env, options: Options, names: []const []const u8, observer: Observer) Error!bool {
     var ctx: Ctx = .{ .gpa = env.gpa, .io = env.io, .observer = observer };
-    var seed: [8]u8 = undefined;
-    env.io.random(&seed);
-    var rng: Rng = .{ .file = options.random_source, .io = env.io, .prng = std.Random.DefaultPrng.init(std.mem.readInt(u64, &seed, .little)) };
+    var seed: [std.Random.ChaCha.secret_seed_length]u8 = undefined;
+    env.io.randomSecure(&seed) catch env.io.random(&seed);
+    var rng: Rng = .{ .file = options.random_source, .io = env.io, .csprng = .init(seed) };
+    std.crypto.secureZero(u8, &seed);
     var ok = true;
     for (names) |name| {
         const qname = std.fmt.allocPrint(env.gpa, "{f}", .{quote.quote(name)}) catch return error.OutOfMemory;
@@ -481,4 +491,18 @@ pub fn run(env: Env, options: Options, names: []const []const u8, observer: Obse
         } else if (!(wipeFile(&ctx, &rng, name, qname, options) catch return error.RandomSourceExhausted)) ok = false;
     }
     return ok;
+}
+
+test "Rng: every byte of the seed counts" {
+    // A generator seeded from fewer bytes than these would give both the
+    // same stream.
+    var seed: [std.Random.ChaCha.secret_seed_length]u8 = @splat(7);
+    var a: Rng = .{ .io = std.testing.io, .csprng = .init(seed) };
+    seed[seed.len - 1] ^= 1;
+    var b: Rng = .{ .io = std.testing.io, .csprng = .init(seed) };
+    var x: [64]u8 = undefined;
+    var y: [64]u8 = undefined;
+    try a.bytes(&x);
+    try b.bytes(&y);
+    try std.testing.expect(!std.mem.eql(u8, &x, &y));
 }

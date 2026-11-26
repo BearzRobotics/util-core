@@ -195,6 +195,27 @@ pub fn identity() Identity {
     };
 }
 
+/// Set the calling thread's effective user id, effective group id or
+/// supplementary groups. These are the bare Linux system calls: unlike the C
+/// library's functions they change this thread only, so a caller that is
+/// root can read files as another user for a while and then come back.
+pub fn setThreadEffectiveUid(uid: u32) ?LX.E {
+    if (comptime !is_linux) return .NOSYS;
+    const keep = std.math.maxInt(u32);
+    return errOf(LX.setresuid(keep, uid, keep));
+}
+
+pub fn setThreadEffectiveGid(gid: u32) ?LX.E {
+    if (comptime !is_linux) return .NOSYS;
+    const keep = std.math.maxInt(u32);
+    return errOf(LX.setresgid(keep, gid, keep));
+}
+
+pub fn setThreadGroups(groups: []const u32) ?LX.E {
+    if (comptime !is_linux) return .NOSYS;
+    return errOf(LX.setgroups(groups.len, @ptrCast(groups.ptr)));
+}
+
 /// Supplementary group ids of the calling process, in kernel order.
 pub fn supplementaryGroups(buf: []u32) []u32 {
     if (comptime !is_linux) return other.supplementaryGroups(buf);
@@ -285,10 +306,53 @@ pub const FileStat = struct {
     }
 };
 
+/// Whether the two describe one file. An inode number is unique only within
+/// its file system, so the device has to match too. False where the system
+/// gives no device number (Windows): a caller that would skip reading a file
+/// because it is "the same" must then read it.
+pub fn isSameFile(a: FileStat, b: FileStat) bool {
+    if (builtin.os.tag == .windows) return false;
+    return a.ino != 0 and a.ino == b.ino and a.dev_major == b.dev_major and a.dev_minor == b.dev_minor;
+}
+
+test "isSameFile needs the device as well as the inode" {
+    if (builtin.os.tag == .windows) return;
+    var a = std.mem.zeroes(FileStat);
+    a.ino = 2;
+    a.dev_minor = 117;
+    var b = a;
+    try std.testing.expect(isSameFile(a, b));
+    b.dev_minor = 118;
+    try std.testing.expect(!isSameFile(a, b));
+    b.dev_minor = 117;
+    b.dev_major = 8;
+    try std.testing.expect(!isSameFile(a, b));
+    b.dev_major = 0;
+    b.ino = 3;
+    try std.testing.expect(!isSameFile(a, b));
+    a.ino = 0;
+    b.ino = 0;
+    try std.testing.expect(!isSameFile(a, b));
+}
+
 /// stat (follow = true) or lstat of `path`; null if the call fails. `err`
 /// receives the error.
 pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
-    if (comptime !is_linux) return other.fileStat(path, follow, err);
+    return fileStatAt(cwdFd(), path, follow, err);
+}
+
+// The `...At` functions are `noinline`: each puts a PATH_MAX buffer on the
+// stack, which must not become part of a recursive tree walker's frame.
+
+/// The handle that makes the `...At` functions resolve a relative path from
+/// the current directory.
+pub fn cwdFd() Handle {
+    return Io.Dir.cwd().handle;
+}
+
+/// `fileStat` of `path` resolved from the open directory `dir`.
+pub noinline fn fileStatAt(dir: Handle, path: []const u8, follow: bool, err: *E) ?FileStat {
+    if (comptime !is_linux) return other.fileStatAt(dir, path, follow, err);
     var buf: [4097]u8 = undefined;
     if (path.len >= 4096) {
         err.* = .NAMETOOLONG;
@@ -300,7 +364,7 @@ pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
     var sx: L.Statx = undefined;
     var flags: u32 = L.AT.NO_AUTOMOUNT;
     if (!follow) flags |= L.AT.SYMLINK_NOFOLLOW;
-    const rc = L.statx(L.AT.FDCWD, @ptrCast(&buf), flags, .{ .TYPE = true, .MODE = true, .NLINK = true, .UID = true, .GID = true, .ATIME = true, .MTIME = true, .CTIME = true, .INO = true, .SIZE = true, .BLOCKS = true, .BTIME = true }, &sx);
+    const rc = L.statx(dir, @ptrCast(&buf), flags, .{ .TYPE = true, .MODE = true, .NLINK = true, .UID = true, .GID = true, .ATIME = true, .MTIME = true, .CTIME = true, .INO = true, .SIZE = true, .BLOCKS = true, .BTIME = true }, &sx);
     const e = L.errno(rc);
     if (e != .SUCCESS) {
         err.* = e;
@@ -537,6 +601,18 @@ pub fn dup2(old: Handle, new: i32) ?LX.E {
     return errOf(LX.dup2(old, new));
 }
 
+/// dup(2).
+pub fn dupFd(fd: Handle, err: *LX.E) ?Handle {
+    if (comptime !is_linux) return other.dupFd(fd, err);
+    const rc = LX.dup(fd);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return @intCast(rc);
+}
+
 /// True when descriptor `fd` is open (fcntl F_GETFD succeeds).
 pub fn fdOpen(fd: i32) bool {
     if (comptime !is_linux) return other.fdOpen(fd);
@@ -569,6 +645,31 @@ pub fn setNice(value: i32) ?LX.E {
     return errOf(LX.syscall3(.setpriority, 0, 0, @bitCast(@as(isize, value))));
 }
 
+fn terminalStopHandler(_: LX.SIG) callconv(.c) void {}
+
+/// A process that is not in the terminal's foreground group is stopped, with
+/// its whole group, when one of them reads the terminal (SIGTTIN) or changes
+/// it (SIGTTOU). These two keep a supervisor running through that.
+///
+/// Call this before starting the program to be watched: caught signals do not
+/// stop the caller, and revert to their default action in the new program.
+/// Call `ignoreTerminalStops` once it has started.
+pub fn catchTerminalStops() void {
+    if (comptime !is_linux) return other.catchTerminalStops();
+    const act: LX.Sigaction = .{ .handler = .{ .handler = terminalStopHandler }, .mask = LX.sigemptyset(), .flags = LX.SA.RESTART };
+    _ = LX.sigaction(.TTIN, &act, null);
+    _ = LX.sigaction(.TTOU, &act, null);
+}
+
+/// Ignore SIGTTIN and SIGTTOU. A handler would not do for good: a diagnostic
+/// written under `stty tostop` would be signalled and retried for ever.
+pub fn ignoreTerminalStops() void {
+    if (comptime !is_linux) return other.ignoreTerminalStops();
+    const act: LX.Sigaction = .{ .handler = .{ .handler = LX.SIG.IGN }, .mask = LX.sigemptyset(), .flags = 0 };
+    _ = LX.sigaction(.TTIN, &act, null);
+    _ = LX.sigaction(.TTOU, &act, null);
+}
+
 /// Make this process a process-group leader (setpgid(0, 0)).
 pub fn becomeGroupLeader() void {
     if (comptime !is_linux) return other.becomeGroupLeader();
@@ -599,8 +700,17 @@ pub fn syncFile(fd: Handle, kind: SyncKind) ?LX.E {
 /// mknodat(2) relative to the working directory; `mode` includes the file
 /// type bits (S_IFIFO, S_IFCHR, ...) and `dev` is makedev(major, minor).
 pub fn mknod(path: [:0]const u8, mode: u32, dev: u64) ?LX.E {
-    if (comptime !is_linux) return other.mknodPath(path, mode, dev);
-    return errOf(LX.mknodat(LX.AT.FDCWD, path.ptr, mode, @intCast(dev)));
+    return mknodAt(cwdFd(), path, mode, dev);
+}
+
+/// `mknod` of `path` resolved from the open directory `dir`.
+pub noinline fn mknodAt(dir: Handle, path: []const u8, mode: u32, dev: u64) ?LX.E {
+    if (comptime !is_linux) return other.mknodAt(dir, path, mode, dev);
+    var b: [4097]u8 = undefined;
+    const p = cstr(&b, path) orelse return .NAMETOOLONG;
+    // The system call takes 32 bits; as glibc does, refuse what does not fit.
+    const small = std.math.cast(u32, dev) orelse return .INVAL;
+    return errOf(LX.mknodat(dir, p, mode, small));
 }
 
 /// Result of waiting for a child.
@@ -623,6 +733,48 @@ pub fn waitPid(pid: Pid, block: bool) WaitResult {
         if (LX.W.IFSIGNALED(st)) return .{ .signaled = @intCast(@intFromEnum(LX.W.TERMSIG(st))) };
         return .none;
     }
+}
+
+/// What `peekEnded` found.
+pub const Ended = union(enum) {
+    /// This one of the given children has ended; wait for it to reap it.
+    child: usize,
+    /// None of them has ended yet.
+    none,
+    /// This system offers no way to tell without reaping.
+    unknown,
+};
+
+/// Find one of the caller's children `pids` that has ended, without reaping it
+/// (so `std.process.Child.wait` still works on it) and without touching any
+/// other child of the process. With `block` it waits for a child to end where
+/// the system can wait for any one of them (Linux); it may still answer
+/// `.none` (Windows, or another child of the process has ended), and the
+/// caller then asks again a little later.
+pub fn peekEnded(pids: []const Pid, block: bool) Ended {
+    if (comptime !is_linux) return other.peekEnded(pids);
+    const flags: u32 = LX.W.EXITED | LX.W.NOWAIT;
+    // Any child first: this is the call that can wait, and without waiting it
+    // answers in one step however many children there are.
+    var info = std.mem.zeroes(LX.siginfo_t);
+    while (true) {
+        const rc = LX.waitid(.ALL, 0, &info, flags | if (block) @as(u32, 0) else LX.W.NOHANG, null);
+        switch (LX.errno(rc)) {
+            .SUCCESS => break,
+            .INTR => continue,
+            else => return .unknown,
+        }
+    }
+    const first = info.fields.common.first.piduid.pid;
+    if (first == 0) return .none;
+    if (std.mem.indexOfScalar(Pid, pids, first)) |i| return .{ .child = i };
+    // A child that is not the caller's hides the others from that call.
+    for (pids, 0..) |pid, i| {
+        info = std.mem.zeroes(LX.siginfo_t);
+        const rc = LX.waitid(.PID, pid, &info, flags | LX.W.NOHANG, null);
+        if (LX.errno(rc) == .SUCCESS and info.fields.common.first.piduid.pid != 0) return .{ .child = i };
+    }
+    return .none;
 }
 
 /// Resources a finished child used (the fields of getrusage(2), in common
@@ -845,7 +997,20 @@ pub const TimeSpec = struct {
 /// utimensat(2) on `path` (cwd-relative), or futimens on `fd` when path is
 /// null. `times` null means "now" for both. Returns the errno on failure.
 pub fn setTimes(path: ?[]const u8, fd: Handle, times: ?[2]TimeSpec, nofollow: bool) ?LX.E {
-    if (comptime !is_linux) return other.setTimes(path, fd, times, nofollow);
+    if (path) |p| return setTimesAt(cwdFd(), p, times, nofollow);
+    if (comptime !is_linux) return other.setTimes(null, fd, times, nofollow);
+    var ts: [2]LX.timespec = undefined;
+    var tp: ?*[2]LX.timespec = null;
+    if (times) |t| {
+        for (0..2) |i| ts[i] = .{ .sec = t[i].sec, .nsec = t[i].nsec };
+        tp = &ts;
+    }
+    return errOf(LX.utimensat(fd, null, tp, 0));
+}
+
+/// `setTimes` of `path` resolved from the open directory `dir`.
+pub noinline fn setTimesAt(dir: Handle, path: []const u8, times: ?[2]TimeSpec, nofollow: bool) ?LX.E {
+    if (comptime !is_linux) return other.setTimesAt(dir, path, times, nofollow);
     var ts: [2]LX.timespec = undefined;
     var tp: ?*[2]LX.timespec = null;
     if (times) |t| {
@@ -853,26 +1018,23 @@ pub fn setTimes(path: ?[]const u8, fd: Handle, times: ?[2]TimeSpec, nofollow: bo
         tp = &ts;
     }
     var buf: [4097]u8 = undefined;
-    if (path) |p| {
-        if (p.len >= 4096) return .NAMETOOLONG;
-        @memcpy(buf[0..p.len], p);
-        buf[p.len] = 0;
-        const flags: u32 = if (nofollow) LX.AT.SYMLINK_NOFOLLOW else 0;
-        return errOf(LX.utimensat(LX.AT.FDCWD, @ptrCast(&buf), tp, flags));
-    }
-    return errOf(LX.utimensat(fd, null, tp, 0));
+    const p = cstr(&buf, path) orelse return .NAMETOOLONG;
+    return errOf(LX.utimensat(dir, p, tp, if (nofollow) LX.AT.SYMLINK_NOFOLLOW else 0));
 }
 
 /// fchownat(2) on `path` (cwd-relative); uid or gid == maxInt(u32) leaves
 /// that id unchanged. `nofollow` changes a symbolic link itself.
 pub fn chownAt(path: []const u8, uid: u32, gid: u32, nofollow: bool) ?LX.E {
-    if (comptime !is_linux) return other.chownAt(path, uid, gid, nofollow);
+    return chownAtDir(cwdFd(), path, uid, gid, nofollow);
+}
+
+/// `chownAt` of `path` resolved from the open directory `dir`.
+pub noinline fn chownAtDir(dir: Handle, path: []const u8, uid: u32, gid: u32, nofollow: bool) ?LX.E {
+    if (comptime !is_linux) return other.chownAtDir(dir, path, uid, gid, nofollow);
     var buf: [4097]u8 = undefined;
-    if (path.len >= 4096) return .NAMETOOLONG;
-    @memcpy(buf[0..path.len], path);
-    buf[path.len] = 0;
+    const p = cstr(&buf, path) orelse return .NAMETOOLONG;
     const flags: u32 = if (nofollow) LX.AT.SYMLINK_NOFOLLOW else 0;
-    return errOf(LX.fchownat(LX.AT.FDCWD, @ptrCast(&buf), uid, gid, flags));
+    return errOf(LX.fchownat(dir, p, uid, gid, flags));
 }
 
 // ------------------------------------------------ file systems and xattrs
@@ -917,6 +1079,31 @@ pub fn statfs(path: []const u8, err: *LX.E) ?StatFs {
     };
 }
 
+/// fgetxattr(2) into `buf`; returns the value length.
+pub fn getXattrFd(fd: Handle, name: [:0]const u8, buf: []u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.getXattrFd(fd, name, buf, err);
+    const rc = LX.syscall4(.fgetxattr, @bitCast(@as(isize, fd)), @intFromPtr(name.ptr), @intFromPtr(buf.ptr), buf.len);
+    if (LX.errno(rc) != .SUCCESS) {
+        err.* = LX.errno(rc);
+        return null;
+    }
+    return rc;
+}
+
+/// fsetxattr(2).
+pub fn setXattrFd(fd: Handle, name: [:0]const u8, value: []const u8) ?LX.E {
+    if (comptime !is_linux) return other.setXattrFd(fd, name, value);
+    return errOf(LX.syscall5(.fsetxattr, @bitCast(@as(isize, fd)), @intFromPtr(name.ptr), @intFromPtr(value.ptr), value.len, 0));
+}
+
+/// setxattr(2), following a symbolic link.
+pub fn setXattr(path: []const u8, name: [:0]const u8, value: []const u8) ?LX.E {
+    if (comptime !is_linux) return other.setXattr(path, name, value);
+    var pbuf: [4097]u8 = undefined;
+    const p = cstr(&pbuf, path) orelse return .NAMETOOLONG;
+    return errOf(LX.syscall5(.setxattr, @intFromPtr(p), @intFromPtr(name.ptr), @intFromPtr(value.ptr), value.len, 0));
+}
+
 /// getxattr(2)/lgetxattr(2) into `buf`; returns the value length.
 pub fn getXattr(path: []const u8, name: [:0]const u8, follow: bool, buf: []u8, err: *LX.E) ?usize {
     if (comptime !is_linux) return other.getXattr(path, name, follow, buf, err);
@@ -948,29 +1135,76 @@ fn cstr(buf: *[4097]u8, path: []const u8) ?[*:0]const u8 {
     return @ptrCast(buf);
 }
 
+/// open(2) flags as raw bits for `openFd`. Linux numbers some of them
+/// differently on each architecture (DIRECTORY, NOFOLLOW and DIRECT swap
+/// places on arm), so every value comes from std's per-target layout.
 pub const O = struct {
     pub const RDONLY: u32 = 0;
     pub const WRONLY: u32 = 1;
     pub const RDWR: u32 = 2;
-    pub const CREAT: u32 = 0o100;
-    pub const EXCL: u32 = 0o200;
-    pub const NOCTTY: u32 = 0o400;
-    pub const TRUNC: u32 = 0o1000;
-    pub const NONBLOCK: u32 = 0o4000;
-    pub const DIRECTORY: u32 = 0o200000;
-    pub const NOFOLLOW: u32 = 0o400000;
-    pub const CLOEXEC: u32 = 0o2000000;
+    pub const CREAT = openBits(.{ .CREAT = true });
+    pub const EXCL = openBits(.{ .EXCL = true });
+    pub const NOCTTY = openBits(.{ .NOCTTY = true });
+    pub const TRUNC = openBits(.{ .TRUNC = true });
+    pub const APPEND = openBits(.{ .APPEND = true });
+    pub const NONBLOCK = openBits(.{ .NONBLOCK = true });
+    pub const DSYNC = openBits(.{ .DSYNC = true });
+    pub const DIRECT = openBits(.{ .DIRECT = true });
+    pub const DIRECTORY = openBits(.{ .DIRECTORY = true });
+    pub const NOFOLLOW = openBits(.{ .NOFOLLOW = true });
+    pub const NOATIME = openBits(.{ .NOATIME = true });
+    pub const CLOEXEC = openBits(.{ .CLOEXEC = true });
+    /// A descriptor that only names a file (to run in a directory, say).
+    pub const PATH = openBits(.{ .PATH = true });
+    /// O_SYNC includes O_DSYNC.
+    pub const SYNC = openBits(.{ .SYNC = true, .DSYNC = true });
 };
+
+fn openBits(o: LX.O) u32 {
+    return @bitCast(o);
+}
+
+// The numbers in the kernel's asm/fcntl.h headers, checked when each target
+// is compiled (cross builds cannot run tests).
+comptime {
+    if (is_linux) switch (builtin.cpu.arch) {
+        .x86_64 => std.debug.assert(O.DIRECT == 0o40000 and O.DIRECTORY == 0o200000 and O.NOFOLLOW == 0o400000),
+        .aarch64, .arm => std.debug.assert(O.DIRECTORY == 0o40000 and O.NOFOLLOW == 0o100000 and O.DIRECT == 0o200000),
+        else => {},
+    };
+}
+
+test "open flags do what they are named for" {
+    if (!is_linux) return;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    try tmp.dir.writeFile(io, .{ .sub_path = "file", .data = "x" });
+    try tmp.dir.symLink(io, "file", "link", .{});
+    var buf: [128]u8 = undefined;
+    var err: LX.E = .SUCCESS;
+    const file = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}/file", .{tmp.sub_path});
+    try std.testing.expect(openFd(file, O.RDONLY | O.DIRECTORY, 0, &err) == null);
+    try std.testing.expectEqual(LX.E.NOTDIR, err);
+    const link = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}/link", .{tmp.sub_path});
+    try std.testing.expect(openFd(link, O.RDONLY | O.NOFOLLOW, 0, &err) == null);
+    try std.testing.expectEqual(LX.E.LOOP, err);
+}
 
 /// openat(AT_FDCWD, path, flags | O_CLOEXEC, mode).
 pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
-    if (comptime !is_linux) return other.openFd(path, flags, mode, err);
+    return openFdAt(cwdFd(), path, flags, mode, err);
+}
+
+/// `openFd` of `path` resolved from the open directory `dir`.
+pub noinline fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
+    if (comptime !is_linux) return other.openFdAt(dir, path, flags, mode, err);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse {
         err.* = .NAMETOOLONG;
         return null;
     };
-    const rc = LX.syscall4(.openat, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), flags | O.CLOEXEC, mode);
+    const rc = LX.syscall4(.openat, @bitCast(@as(isize, dir)), @intFromPtr(p), flags | O.CLOEXEC, mode);
     const e = LX.errno(rc);
     if (e != .SUCCESS) {
         err.* = e;
@@ -980,44 +1214,128 @@ pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
 }
 
 /// One directory entry as the kernel returns it.
-pub const RawEntry = struct { name: []u8, dtype: u8 };
+pub const RawEntry = struct { name: []u8, dtype: u8, ino: u64 = 0 };
+
+/// Free a list returned by `readDirRaw` or `readDirNames`.
+pub fn freeDirEntries(gpa: std.mem.Allocator, entries: []RawEntry) void {
+    for (entries) |entry| gpa.free(entry.name);
+    gpa.free(entries);
+}
+
+/// `readDirRaw` without "." and "..". The list is complete or the call fails:
+/// a walk that copies or removes must never mistake a read error for the end
+/// of the directory.
+pub fn readDirNames(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEntry {
+    const all = readDirRaw(gpa, path, err) orelse return null;
+    return dropDots(gpa, all, err);
+}
+
+/// `readDirNames` of a directory that is already open and not yet read.
+pub fn readDirNamesFd(gpa: std.mem.Allocator, fd: Handle, err: *LX.E) ?[]RawEntry {
+    const all = readDirFd(gpa, fd, err) orelse return null;
+    return dropDots(gpa, all, err);
+}
+
+fn dropDots(gpa: std.mem.Allocator, all: []RawEntry, err: *LX.E) ?[]RawEntry {
+    var kept: usize = 0;
+    for (all) |entry| {
+        if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) {
+            gpa.free(entry.name);
+            continue;
+        }
+        all[kept] = entry;
+        kept += 1;
+    }
+    var list: std.ArrayList(RawEntry) = .fromOwnedSlice(all);
+    list.shrinkRetainingCapacity(kept);
+    return list.toOwnedSlice(gpa) catch {
+        for (list.items) |entry| gpa.free(entry.name);
+        list.deinit(gpa);
+        err.* = .NOMEM;
+        return null;
+    };
+}
 
 /// All entries of the directory `path` in readdir order, including "." and
 /// ".." (std.Io hides them). Names are allocated with `gpa`.
 pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEntry {
-    if (comptime !is_linux) return other.readDirRaw(gpa, path, err);
     const fd = openFd(path, O.RDONLY | O.DIRECTORY, 0, err) orelse return null;
     defer _ = closeFd(fd);
+    return readDirFd(gpa, fd, err);
+}
+
+/// `readDirRaw` of a directory that is already open and not yet read.
+pub fn readDirFd(gpa: std.mem.Allocator, fd: Handle, err: *LX.E) ?[]RawEntry {
+    if (comptime !is_linux) return other.readDirFd(gpa, fd, err);
     var list: std.ArrayList(RawEntry) = .empty;
+    // Whatever has not been handed to the caller (every failure path).
+    defer {
+        for (list.items) |x| gpa.free(x.name);
+        list.deinit(gpa);
+    }
+    const e = appendDirEntries(gpa, &list, fd);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return list.toOwnedSlice(gpa) catch {
+        err.* = .NOMEM;
+        return null;
+    };
+}
+
+/// What could be read of a directory: `failure` is set when the listing ended
+/// early, and `entries` (free with `freeDirEntries`) holds what came before.
+pub const DirListing = struct { entries: []RawEntry, failure: ?LX.E = null };
+
+/// `readDirNamesFd` for a walk that only reports (find), which visits the
+/// names it did get before reporting the error, as GNU find does. Null when
+/// there is nothing to give. Other systems give a complete listing or none.
+pub fn readDirNamesPartialFd(gpa: std.mem.Allocator, fd: Handle, err: *LX.E) ?DirListing {
+    if (comptime !is_linux) return .{ .entries = readDirNamesFd(gpa, fd, err) orelse return null };
+    var list: std.ArrayList(RawEntry) = .empty;
+    defer {
+        for (list.items) |x| gpa.free(x.name);
+        list.deinit(gpa);
+    }
+    const e = appendDirEntries(gpa, &list, fd);
+    if (e != .SUCCESS and list.items.len == 0) {
+        err.* = e;
+        return null;
+    }
+    const all = list.toOwnedSlice(gpa) catch {
+        err.* = .NOMEM;
+        return null;
+    };
+    const names = dropDots(gpa, all, err) orelse return null;
+    return .{ .entries = names, .failure = if (e == .SUCCESS) null else e };
+}
+
+/// Append the entries of the open directory `fd` to `list`. On failure the
+/// entries read until then stay in the list.
+fn appendDirEntries(gpa: std.mem.Allocator, list: *std.ArrayList(RawEntry), fd: Handle) LX.E {
     var buf: [32768]u8 align(8) = undefined;
     while (true) {
         const rc = LX.syscall3(.getdents64, @bitCast(@as(isize, fd)), @intFromPtr(&buf), buf.len);
         const e = LX.errno(rc);
         if (e == .INTR) continue;
-        if (e != .SUCCESS) {
-            err.* = e;
-            for (list.items) |x| gpa.free(x.name);
-            list.deinit(gpa);
-            return null;
-        }
+        if (e != .SUCCESS) return e;
         if (rc == 0) break;
         var off: usize = 0;
         while (off < rc) {
             const reclen = std.mem.readInt(u16, buf[off + 16 ..][0..2], .little);
             const dtype = buf[off + 18];
             const nm = std.mem.sliceTo(buf[off + 19 .. off + reclen], 0);
-            const dup = gpa.dupe(u8, nm) catch {
-                err.* = .NOMEM;
-                return null;
-            };
-            list.append(gpa, .{ .name = dup, .dtype = dtype }) catch {
-                err.* = .NOMEM;
-                return null;
+            const dup = gpa.dupe(u8, nm) catch return .NOMEM;
+            const ino = std.mem.readInt(u64, buf[off..][0..8], .little);
+            list.append(gpa, .{ .name = dup, .dtype = dtype, .ino = ino }) catch {
+                gpa.free(dup);
+                return .NOMEM;
             };
             off += reclen;
         }
     }
-    return list.toOwnedSlice(gpa) catch null;
+    return .SUCCESS;
 }
 
 pub fn closeFd(fd: Handle) ?LX.E {
@@ -1040,6 +1358,31 @@ pub fn readFd(fd: Handle, buf: []u8, err: *LX.E) ?usize {
     }
 }
 
+/// `readFd` that also returns when a caught signal interrupts it (.INTR), so
+/// the caller can act on the signal before reading again.
+pub fn readFdInterruptible(fd: Handle, buf: []u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.readFd(fd, buf, err);
+    const rc = LX.read(fd, buf.ptr, buf.len);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return rc;
+}
+
+/// `writeFd` that also returns .INTR, like `readFdInterruptible`.
+pub fn writeFdInterruptible(fd: Handle, bytes: []const u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.writeFd(fd, bytes, err);
+    const rc = LX.write(fd, bytes.ptr, bytes.len);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return rc;
+}
+
 /// One write(2); returns the byte count written.
 pub fn writeFd(fd: Handle, bytes: []const u8, err: *LX.E) ?usize {
     if (comptime !is_linux) return other.writeFd(fd, bytes, err);
@@ -1058,7 +1401,7 @@ pub fn writeFd(fd: Handle, bytes: []const u8, err: *LX.E) ?usize {
 /// fcntl(F_GETFL): the file status flags (O_APPEND, O_DIRECT, ...). Systems
 /// without them report 0.
 pub fn getStatusFlags(fd: Handle, err: *LX.E) ?usize {
-    if (comptime !is_linux) return 0;
+    if (comptime !is_linux) return other.getStatusFlags(fd, err);
     const rc = LX.fcntl(fd, LX.F.GETFL, 0);
     const e = LX.errno(rc);
     if (e != .SUCCESS) {
@@ -1070,7 +1413,7 @@ pub fn getStatusFlags(fd: Handle, err: *LX.E) ?usize {
 
 /// fcntl(F_SETFL).
 pub fn setStatusFlags(fd: Handle, flags: usize) ?LX.E {
-    if (comptime !is_linux) return null;
+    if (comptime !is_linux) return other.setStatusFlags(fd, flags);
     return errOf(LX.fcntl(fd, LX.F.SETFL, flags));
 }
 
@@ -1089,59 +1432,98 @@ pub fn writeAllFd(fd: Handle, bytes: []const u8) ?LX.E {
 }
 
 pub fn mkdirPath(path: []const u8, mode: u32) ?LX.E {
-    if (comptime !is_linux) return other.mkdirPath(path, mode);
+    return mkdirAt(cwdFd(), path, mode);
+}
+
+/// `mkdirPath` of `path` resolved from the open directory `dir`.
+pub noinline fn mkdirAt(dir: Handle, path: []const u8, mode: u32) ?LX.E {
+    if (comptime !is_linux) return other.mkdirAt(dir, path, mode);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
-    return errOf(LX.mkdirat(LX.AT.FDCWD, p, mode));
+    return errOf(LX.mkdirat(dir, p, mode));
 }
 
 /// unlinkat(AT_FDCWD, path, removedir ? AT_REMOVEDIR : 0).
 pub fn unlinkPath(path: []const u8, removedir: bool) ?LX.E {
-    if (comptime !is_linux) return other.unlinkPath(path, removedir);
+    return unlinkAt(cwdFd(), path, removedir);
+}
+
+/// `unlinkPath` of `path` resolved from the open directory `dir`.
+pub noinline fn unlinkAt(dir: Handle, path: []const u8, removedir: bool) ?LX.E {
+    if (comptime !is_linux) return other.unlinkAt(dir, path, removedir);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
-    return errOf(LX.unlinkat(LX.AT.FDCWD, p, if (removedir) LX.AT.REMOVEDIR else 0));
+    return errOf(LX.unlinkat(dir, p, if (removedir) LX.AT.REMOVEDIR else 0));
 }
 
 pub const RENAME_NOREPLACE: u32 = 1;
 pub const RENAME_EXCHANGE: u32 = 2;
 
 pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?LX.E {
-    if (comptime !is_linux) return other.renamePath(old, new, flags);
+    return renameAt(cwdFd(), old, cwdFd(), new, flags);
+}
+
+/// `renamePath` with each name resolved from its own open directory.
+pub noinline fn renameAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const u8, flags: u32) ?LX.E {
+    if (comptime !is_linux) return other.renameAt(old_dir, old, new_dir, new, flags);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
     const p2 = cstr(&b2, new) orelse return .NAMETOOLONG;
-    return errOf(LX.syscall5(.renameat2, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p1), @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p2), flags));
+    if (flags == 0) return errOf(LX.renameat(old_dir, p1, new_dir, p2));
+    const failed = errOf(LX.syscall5(.renameat2, @bitCast(@as(isize, old_dir)), @intFromPtr(p1), @bitCast(@as(isize, new_dir)), @intFromPtr(p2), flags)) orelse return null;
+    // NFS, CIFS and many FUSE file systems reject the flag (and old kernels
+    // the call). As gnulib's renameatu does: check that nothing has the new
+    // name, then rename without the flag. That is not atomic.
+    if (flags != RENAME_NOREPLACE or (failed != .INVAL and failed != .NOSYS and failed != .OPNOTSUPP)) return failed;
+    var e: LX.E = .SUCCESS;
+    if (fileStatAt(new_dir, new, false, &e) != null or e == .OVERFLOW) return .EXIST;
+    if (e != .NOENT) return e;
+    return errOf(LX.renameat(old_dir, p1, new_dir, p2));
 }
 
 /// linkat(2); `follow` makes a hard link to the target of a symlink.
 pub fn linkPath(old: []const u8, new: []const u8, follow: bool) ?LX.E {
-    if (comptime !is_linux) return other.linkPath(old, new, follow);
+    return linkAt(cwdFd(), old, cwdFd(), new, follow);
+}
+
+/// `linkPath` with each name resolved from its own open directory.
+pub noinline fn linkAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const u8, follow: bool) ?LX.E {
+    if (comptime !is_linux) return other.linkAt(old_dir, old, new_dir, new, follow);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
     const p2 = cstr(&b2, new) orelse return .NAMETOOLONG;
-    return errOf(LX.linkat(LX.AT.FDCWD, p1, LX.AT.FDCWD, p2, if (follow) LX.AT.SYMLINK_FOLLOW else 0));
+    return errOf(LX.linkat(old_dir, p1, new_dir, p2, if (follow) LX.AT.SYMLINK_FOLLOW else 0));
 }
 
 pub fn symlinkPath(target: []const u8, path: []const u8) ?LX.E {
-    if (comptime !is_linux) return other.symlinkPath(target, path);
+    return symlinkAt(target, cwdFd(), path);
+}
+
+/// `symlinkPath` with `path` resolved from the open directory `dir`.
+pub noinline fn symlinkAt(target: []const u8, dir: Handle, path: []const u8) ?LX.E {
+    if (comptime !is_linux) return other.symlinkAt(target, dir, path);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, target) orelse return .NAMETOOLONG;
     const p2 = cstr(&b2, path) orelse return .NAMETOOLONG;
-    return errOf(LX.symlinkat(p1, LX.AT.FDCWD, p2));
+    return errOf(LX.symlinkat(p1, dir, p2));
 }
 
 pub fn readlinkPath(path: []const u8, buf: []u8, err: *LX.E) ?usize {
-    if (comptime !is_linux) return other.readlinkPath(path, buf, err);
+    return readlinkAt(cwdFd(), path, buf, err);
+}
+
+/// `readlinkPath` of `path` resolved from the open directory `dir`.
+pub noinline fn readlinkAt(dir: Handle, path: []const u8, buf: []u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.readlinkAt(dir, path, buf, err);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse {
         err.* = .NAMETOOLONG;
         return null;
     };
-    const rc = LX.readlinkat(LX.AT.FDCWD, p, buf.ptr, buf.len);
+    const rc = LX.readlinkat(dir, p, buf.ptr, buf.len);
     const e = LX.errno(rc);
     if (e != .SUCCESS) {
         err.* = e;
@@ -1166,6 +1548,27 @@ pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?LX.E {
     return errOf(LX.syscall4(.fchmodat, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), mode, 0));
 }
 
+/// `chmodAt` for the systems without O_PATH (see sys/other.zig).
+pub fn chmodAtOther(dir: Handle, name: []const u8, mode: u32, follow: bool) ?LX.E {
+    if (comptime is_linux) return .NOSYS;
+    return other.chmodAt(dir, name, mode, follow);
+}
+
+/// Change the mode of the file an `O.PATH` descriptor names: fchmodat2(2)
+/// with AT_EMPTY_PATH, or on kernels before 6.6 a chmod of the descriptor's
+/// /proc/self/fd link, which leads to that file and nowhere else.
+pub fn chmodHeld(fd: Handle, mode: u32) ?LX.E {
+    if (comptime !is_linux) return other.fchmodFd(fd, mode);
+    const AT_EMPTY_PATH = 0x1000;
+    const empty: [*:0]const u8 = "";
+    const e = LX.errno(LX.syscall4(.fchmodat2, @bitCast(@as(isize, fd)), @intFromPtr(empty), mode, AT_EMPTY_PATH));
+    // A sandbox that does not know the call may answer EPERM.
+    if (e != .NOSYS and e != .PERM) return if (e == .SUCCESS) null else e;
+    var buf: [32]u8 = undefined;
+    const link = std.fmt.bufPrint(&buf, "/proc/self/fd/{d}", .{fd}) catch unreachable;
+    return chmodPath(link, mode, false);
+}
+
 pub fn fchmodFd(fd: Handle, mode: u32) ?LX.E {
     if (comptime !is_linux) return other.fchmodFd(fd, mode);
     return errOf(LX.fchmod(fd, mode));
@@ -1182,10 +1585,15 @@ pub fn ftruncateFd(fd: Handle, len: u64) ?LX.E {
 }
 
 pub fn accessPath(path: []const u8, mode: u32) ?LX.E {
-    if (comptime !is_linux) return other.accessPath(path, mode);
+    return accessAt(cwdFd(), path, mode);
+}
+
+/// `accessPath` of `path` resolved from the open directory `dir`.
+pub noinline fn accessAt(dir: Handle, path: []const u8, mode: u32) ?LX.E {
+    if (comptime !is_linux) return other.accessAt(dir, path, mode);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
-    return errOf(LX.syscall4(.faccessat2, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), mode, 0x200));
+    return errOf(LX.syscall4(.faccessat2, @bitCast(@as(isize, dir)), @intFromPtr(p), mode, 0x200));
 }
 
 /// lseek(2): whence 0/1/2 or SEEK_DATA 3 / SEEK_HOLE 4.
@@ -1198,6 +1606,27 @@ pub fn seekFd(fd: Handle, off: i64, whence: u32, err: *LX.E) ?i64 {
         return null;
     }
     return @bitCast(rc);
+}
+
+/// Wait up to `timeout_ms` for the reading end of `fd`, a pipe or socket we
+/// write to, to be closed; true when it has been. Writing is the only other way
+/// to learn that, so a program with nothing to write needs this. Null (without
+/// waiting) when the system cannot be asked. std.Io has no poll.
+pub fn waitReaderGone(fd: Handle, timeout_ms: i32) ?bool {
+    if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return null;
+    // No events requested: only POLLERR (pipe) or POLLHUP (socket) end the wait.
+    var fds = [1]std.posix.pollfd{.{ .fd = fd, .events = 0, .revents = 0 }};
+    const n = std.posix.poll(&fds, timeout_ms) catch return null;
+    return n > 0 and fds[0].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP) != 0;
+}
+
+/// The offset at which the next streaming read or write of `fd` happens, or
+/// null when it has none or the system cannot say. (seekFd's result cannot be
+/// used for this everywhere: on Windows it does not report a position.)
+pub fn filePosition(fd: Handle) ?u64 {
+    if (comptime !is_linux) return other.filePosition(fd);
+    var e: LX.E = .SUCCESS;
+    return if (seekFd(fd, 0, 1, &e)) |p| @intCast(p) else null;
 }
 
 /// statx(2) on an open descriptor.
@@ -1314,4 +1743,60 @@ pub fn deliverCaughtSignal(sig: u8) void {
     _ = L.sigaction(@enumFromInt(sig), &act, null);
     unblockSignal(sig);
     _ = L.kill(self, @enumFromInt(sig));
+}
+
+// ----------------------------------- statistics on request (dd: USR1, INT)
+// The handlers only record the signal; the program prints at its next safe
+// point. They are installed without SA_RESTART, so that a read or write that
+// is waiting returns and that point is reached.
+
+var statistics_requested: std.atomic.Value(bool) = .init(false);
+var interrupt_received: std.atomic.Value(bool) = .init(false);
+
+pub fn recordStatisticsRequest() void {
+    statistics_requested.store(true, .release);
+}
+
+pub fn recordInterrupt() void {
+    interrupt_received.store(true, .release);
+}
+
+fn statisticsHandler(_: std.os.linux.SIG) callconv(.c) void {
+    recordStatisticsRequest();
+}
+
+fn interruptHandler(_: std.os.linux.SIG) callconv(.c) void {
+    recordInterrupt();
+}
+
+/// Catch SIGINT unless it is ignored (once: a second one ends the process even
+/// if the first has not been acted on) and, with `on_user_signal`, SIGUSR1
+/// (SIGINFO too where it exists). Does nothing on Windows.
+pub fn catchStatisticsSignals(on_user_signal: bool) void {
+    if (comptime !is_linux) return other.catchStatisticsSignals(on_user_signal);
+    const L = std.os.linux;
+    if (on_user_signal) {
+        const act: L.Sigaction = .{ .handler = .{ .handler = statisticsHandler }, .mask = L.sigemptyset(), .flags = 0 };
+        _ = L.sigaction(L.SIG.USR1, &act, null);
+    }
+    var old: L.Sigaction = undefined;
+    if (L.errno(L.sigaction(L.SIG.INT, null, &old)) != .SUCCESS or old.handler.handler == L.SIG.IGN) return;
+    const act: L.Sigaction = .{ .handler = .{ .handler = interruptHandler }, .mask = L.sigemptyset(), .flags = L.SA.RESETHAND };
+    _ = L.sigaction(L.SIG.INT, &act, null);
+}
+
+/// Whether statistics were asked for since the last call.
+pub fn takeStatisticsRequest() bool {
+    return statistics_requested.swap(false, .acq_rel);
+}
+
+pub fn interruptReceived() bool {
+    return interrupt_received.load(.acquire);
+}
+
+/// End the process the way the caught SIGINT would have.
+pub fn dieOfInterrupt() noreturn {
+    defaultSignal(.int);
+    _ = raiseSelf(signo.INT);
+    std.process.exit(128 + @as(u8, signo.INT));
 }

@@ -25,6 +25,18 @@ run_tree "char bad minor"     "$S" x c 1 b
 run_tree "char hex"           "$S" x c 0x1 0x3
 run_tree "char devnull"       "$S" x c 1 3
 run_tree "block loop"         "$S" x b 7 0
+# MAJOR and MINOR must fit in 32 bits; 4294967296 once meant 0, and "0 0" is a
+# node that needs no privilege. Forms are those of strtoumax in base 0. Majors
+# of 4096 and more do not fit the system call.
+for n in 4294967296 8589934592 18446744073709551616 4294967295 4294967294 4096 4095 0b1 0B1 0b 0b2 0o7 1_000 ' 1' '1 ' ' +1' '+0x1' '++1' '+' ' ' 010 08 0x10 0X1f 0x 0x_1 0x+1 1k; do
+    run_tree "major '$n'"     "$S" x c "$n" 7
+    run_tree "minor '$n'"     "$S" x c 7 "$n"
+done
+run_tree "major wraps to 0"   "$S" x c 4294967296 0
+run_tree "minor wraps to 0"   "$S" x c 0 4294967296
+run_tree "block major wraps"  "$S" x b 4294967296 0
+run_tree "no such device"     "$S" x c 4294967295 4294967295
+run_tree "char 0 0"           "$S" x c 0 0
 run_tree "bad type"           "$S" x q
 run_tree "long type"          "$S" x pp
 run_tree "empty type"         "$S" x ''
@@ -47,5 +59,26 @@ run_tree "--context=x"        "$S" --context=x x p
 run_tree "bad option"         "$S" -x x p
 run_tree "-- operands"        "$S" -- x p
 run_tree "dash name"          "$S" -- -x p
+# The new file is replaced by a link to "victim" before mknod sets its mode;
+# strace holds mknod after the call that creates it.
+d=$(mktemp -d)
+if can_inject; then
+    : > "$d/victim"
+    chmod 600 "$d/victim"
+    (cd "$d" && exec timeout 30 strace -o /dev/null -e trace=mknodat -e inject=mknodat:delay_exit=1500000:when=1 "$BIN_DIR/mknod" -m 666 node p > out 2>&1) & race_pid=$!
+    tries=0
+    while [ ! -e "$d/node" ] && [ "$tries" -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    mv "$d/node" "$d/moved" && ln -s victim "$d/node"
+    wait "$race_pid"; rc=$?
+    mode=$(stat -c %a "$d/victim")
+    if [ "$rc" -eq 1 ] && [ "$mode" = 600 ]; then
+        PASS=$((PASS + 1)); echo "PASS mknod -m 666 node p does not change the target of a swapped-in link"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL mknod -m 666 node p does not change the target of a swapped-in link (rc=$rc, victim $mode)"; cat "$d/out"
+    fi
+else
+    skip_test "mknod -m 666 node p link race (needs strace)"
+fi
+chmod -R u+rwx "$d"; rm -rf "$d"
 print_summary
 [ "$FAIL" -eq 0 ]

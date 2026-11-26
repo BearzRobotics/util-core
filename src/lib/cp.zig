@@ -16,6 +16,8 @@ const copy = @import("../copy.zig");
 const backup = @import("../backup.zig");
 const quote = @import("../quote.zig");
 const sys = @import("../sys.zig");
+const posixacl = @import("../posixacl.zig");
+const dirat = @import("../dirat.zig");
 const E = std.os.linux.E;
 
 pub const Env = common.Env;
@@ -59,12 +61,14 @@ pub fn run(env: Env, x: Options, sources: []const []const u8, params: Params, si
                 const arg = if (params.strip_trailing_slashes) stripTrailingSlashes(arg_in) else arg_in;
                 var dst_name: []u8 = undefined;
                 var parent_exists = true;
+                // --parents: the directory made or found to copy into.
+                var parent_dir: ?sys.FileStat = null;
                 var attr_list: std.ArrayList(DirAttr) = .empty;
                 defer attr_list.deinit(env.gpa);
                 if (params.parents) {
                     const a2 = stripTrailingSlashes(arg);
                     dst_name = try copy.joinName(env.gpa, target, a2);
-                    parent_exists = makeDirParents(&c, dst_name, a2, &attr_list, &new_dst, x);
+                    parent_exists = makeDirParents(&c, dst_name, a2, &attr_list, &parent_dir, &new_dst, x);
                 } else {
                     var base = lastComponent(arg);
                     base = stripTrailingSlashes(base);
@@ -77,9 +81,11 @@ pub fn run(env: Env, x: Options, sources: []const []const u8, params: Params, si
                 } else {
                     var into_self = false;
                     var rs: ?bool = null;
-                    if (!c.copy(arg, dst_name, @intFromBool(new_dst), &into_self, &rs)) ok = false;
+                    if (parent_dir) |seen| {
+                        if (!copyBelow(&c, arg, dst_name, seen, new_dst, &into_self, &rs)) ok = false;
+                    } else if (!c.copy(arg, dst_name, @intFromBool(new_dst), &into_self, &rs)) ok = false;
                     if (params.parents) {
-                        if (!reProtect(&c, dst_name, attr_list.items, x)) ok = false;
+                        if (!reProtect(&c, dst_name, stripTrailingSlashes(arg), attr_list.items, x)) ok = false;
                     }
                 }
             }
@@ -119,8 +125,26 @@ fn lastComponent(path: []const u8) []const u8 {
     return if (slash) |s| t[s + 1 ..] else t;
 }
 
+/// Copy `source` to `dst_name`, whose leading directories lead to `seen`.
+/// That directory is held open, so that replacing one of those below the target
+/// while the copy runs does not move the copy elsewhere.
+fn copyBelow(c: *copy.Copier, source: []const u8, dst_name: []const u8, seen: sys.FileStat, new_dst: bool, into_self: *bool, rename_succeeded: *?bool) bool {
+    const dir_name = dst_name[0..dirLen(dst_name)];
+    var level: dirat.Level = undefined;
+    if (dirat.enter(&level, null, dir_name, .{ .follow = true, .expect = seen, .same_device = true, .path_only = true })) |e| {
+        warn(c, "cannot access {f}: {s}", .{ quote.quoteA(dir_name), sys.errnoText(e) });
+        return false;
+    }
+    defer _ = dirat.leave(&level);
+    var name = dst_name[dir_name.len..];
+    while (name.len > 0 and name[0] == '/') name = name[1..];
+    return c.copyAt(source, .{ .dir = &level, .name = name }, dst_name, @intFromBool(new_dst), into_self, rename_succeeded);
+}
+
 const DirAttr = struct {
     st: sys.FileStat,
+    /// The directory below the target that `st` is for.
+    made: sys.FileStat = undefined,
     slash_offset: usize,
     restore_mode: bool,
 };
@@ -134,8 +158,10 @@ fn warn(c: *copy.Copier, comptime fmt: []const u8, args: anytype) void {
 }
 
 /// make_dir_parents_private: create the leading directories of `dst_name`
-/// below the target; `src` is the source name appended to the target.
-fn makeDirParents(c: *copy.Copier, dst_name: []const u8, src: []const u8, attr_list: *std.ArrayList(DirAttr), new_dst: *bool, x: copy.Opts) bool {
+/// below the target; `src` is the source name appended to the target. Each
+/// is made, changed and entered by name in the one above it. `parent_dir` is
+/// set to the last of them, when there is any.
+fn makeDirParents(c: *copy.Copier, dst_name: []const u8, src: []const u8, attr_list: *std.ArrayList(DirAttr), parent_dir: *?sys.FileStat, new_dst: *bool, x: copy.Opts) bool {
     var e: E = .SUCCESS;
     // Offset of the source name inside dst_name.
     const src_offset = dst_name.len - src.len;
@@ -147,11 +173,18 @@ fn makeDirParents(c: *copy.Copier, dst_name: []const u8, src: []const u8, attr_l
     const have = sys.fileStat(dst_dir, true, &e);
     if (have == null) {
         var slash = rel_start;
+        var above = sys.openFd(dst_name[0..src_offset], sys.O.PATH | sys.O.DIRECTORY, 0, &e) orelse {
+            warn(c, "failed to get attributes of {f}: {s}", .{ quote.quoteA(dst_name[0..src_offset]), sys.errnoText(e) });
+            return false;
+        };
+        defer _ = sys.closeFd(above);
         while (std.mem.indexOfScalarPos(u8, dst_name, slash, '/')) |sl| {
             const dir_part = dst_name[0..sl];
+            const name = dst_name[slash..sl];
             const src_part = dst_name[src_offset..sl];
-            const dstat = sys.fileStat(dir_part, true, &e);
+            const dstat = sys.fileStatAt(above, name, true, &e);
             const missing = dstat == null;
+            var wanted_here = false;
             if (missing or x.preserve_ownership or x.preserve_mode or x.preserve_timestamps) {
                 var se: E = .SUCCESS;
                 const sst = sys.fileStat(src_part, true, &se);
@@ -160,7 +193,11 @@ fn makeDirParents(c: *copy.Copier, dst_name: []const u8, src: []const u8, attr_l
                     warn(c, "failed to get attributes of {f}: {s}", .{ quote.quoteA(src_part), sys.errnoText(src_errno) });
                     return false;
                 }
-                attr_list.insert(c.gpa, 0, .{ .st = sst.?, .slash_offset = sl, .restore_mode = false }) catch {};
+                attr_list.insert(c.gpa, 0, .{ .st = sst.?, .slash_offset = sl, .restore_mode = false }) catch {
+                    warn(c, "memory exhausted", .{});
+                    return false;
+                };
+                wanted_here = true;
             }
             if (missing) {
                 new_dst.* = true;
@@ -168,7 +205,7 @@ fn makeDirParents(c: *copy.Copier, dst_name: []const u8, src: []const u8, attr_l
                 const omitted: u32 = src_mode & (if (x.preserve_ownership) @as(u32, 0o077) else if (x.preserve_mode) @as(u32, 0o022) else 0);
                 var mkdir_mode: u32 = if (x.explicit_no_preserve_mode) 0o777 else src_mode;
                 mkdir_mode &= 0o7777 & ~omitted;
-                if (sys.mkdirPath(dir_part, mkdir_mode)) |me| {
+                if (sys.mkdirAt(above, name, mkdir_mode)) |me| {
                     warn(c, "cannot make directory {f}: {s}", .{ quote.quoteA(dir_part), sys.errnoText(me) });
                     return false;
                 }
@@ -177,7 +214,7 @@ fn makeDirParents(c: *copy.Copier, dst_name: []const u8, src: []const u8, attr_l
                     const t = std.fmt.bufPrint(&buf, "{s} -> {s}\n", .{ src_part, dir_part }) catch "";
                     c.sink.observer.emit(.{ .out = t });
                 }
-                const stats = sys.fileStat(dir_part, false, &e) orelse {
+                const stats = sys.fileStatAt(above, name, false, &e) orelse {
                     warn(c, "failed to get attributes of {f}: {s}", .{ quote.quoteA(dir_part), sys.errnoText(e) });
                     return false;
                 };
@@ -191,7 +228,8 @@ fn makeDirParents(c: *copy.Copier, dst_name: []const u8, src: []const u8, attr_l
                 }
                 const accessible = stats.mode | 0o700;
                 if (stats.mode != accessible) {
-                    if (sys.chmodPath(dir_part, accessible, false)) |ce| {
+                    const made: dirat.Spot = .{ .dir = above, .name = name };
+                    if (made.setMode(0o040000, accessible)) |ce| {
                         warn(c, "setting permissions for {f}: {s}", .{ quote.quoteA(dir_part), sys.errnoText(ce) });
                         return false;
                     }
@@ -200,13 +238,34 @@ fn makeDirParents(c: *copy.Copier, dst_name: []const u8, src: []const u8, attr_l
                 warn(c, "{f} exists but is not a directory", .{quote.quoteA(dir_part)});
                 return false;
             } else new_dst.* = false;
+            // Into it: through a link only where one was already there.
+            var is_link = false;
+            if (!missing) {
+                const own = sys.fileStatAt(above, name, false, &e);
+                is_link = own != null and own.?.isLink();
+            }
+            const next = sys.openFdAt(above, name, sys.O.PATH | sys.O.DIRECTORY | (if (is_link) 0 else sys.O.NOFOLLOW), 0, &e) orelse {
+                warn(c, "cannot access {f}: {s}", .{ quote.quoteA(dir_part), sys.errnoText(e) });
+                return false;
+            };
+            _ = sys.closeFd(above);
+            above = next;
+            const entered = sys.fstatFd(above, &e) orelse {
+                warn(c, "failed to get attributes of {f}: {s}", .{ quote.quoteA(dir_part), sys.errnoText(e) });
+                return false;
+            };
+            if (wanted_here) attr_list.items[0].made = entered;
+            parent_dir.* = entered;
             slash = sl + 1;
             while (slash < dst_name.len and dst_name[slash] == '/') slash += 1;
         }
     } else if (!have.?.isDir()) {
         warn(c, "{f} exists but is not a directory", .{quote.quoteA(dst_dir)});
         return false;
-    } else new_dst.* = false;
+    } else {
+        new_dst.* = false;
+        parent_dir.* = have;
+    }
     return true;
 }
 
@@ -219,32 +278,45 @@ fn dirLen(path: []const u8) usize {
     return if (d == 0) 1 else d;
 }
 
-fn reProtect(c: *copy.Copier, dst_name: []const u8, attrs: []const DirAttr, x: copy.Opts) bool {
+/// `src` is the source name that the end of `dst_name` repeats.
+fn reProtect(c: *copy.Copier, dst_name: []const u8, src: []const u8, attrs: []const DirAttr, x: copy.Opts) bool {
     for (attrs) |at| {
         const name = dst_name[0..at.slash_offset];
+        const src_part = dst_name[dst_name.len - src.len .. at.slash_offset];
+        // Changed through a descriptor on the directory that was made or
+        // found, whatever its path leads to by now.
+        var level: dirat.Level = undefined;
+        if (dirat.enter(&level, null, name, .{ .follow = true, .expect = at.made, .same_device = true, .path_only = true })) |e| {
+            warn(c, "failed to preserve attributes of {f}: {s}", .{ quote.quoteA(name), sys.errnoText(e) });
+            return false;
+        }
+        defer _ = dirat.leave(&level);
+        const here: dirat.Spot = .{ .dir = level.fd, .name = "." };
+        // A name that is a link keeps its own owner changed, as in GNU.
+        const owned: dirat.Spot = if (level.through_link) .{ .dir = sys.cwdFd(), .name = name } else here;
         if (x.preserve_timestamps) {
             const ts = [2]sys.TimeSpec{ .{ .sec = at.st.atime_s, .nsec = at.st.atime_ns }, .{ .sec = at.st.mtime_s, .nsec = at.st.mtime_ns } };
-            if (sys.setTimes(name, sys.invalid_handle, ts, false)) |te| {
+            if (sys.setTimesAt(here.dir, here.name, ts, false)) |te| {
                 warn(c, "failed to preserve times for {f}: {s}", .{ quote.quoteA(name), sys.errnoText(te) });
                 return false;
             }
         }
         if (x.preserve_ownership) {
-            if (sys.chownAt(name, at.st.uid, at.st.gid, true)) |ce| {
+            if (sys.chownAtDir(owned.dir, owned.name, at.st.uid, at.st.gid, true)) |ce| {
                 if (!((ce == .PERM or ce == .INVAL or ce == .ACCES) and !x.chown_privileges)) {
                     warn(c, "failed to preserve ownership for {f}: {s}", .{ quote.quoteA(name), sys.errnoText(ce) });
                     return false;
                 }
-                _ = sys.chownAt(name, std.math.maxInt(u32), at.st.gid, true);
+                _ = sys.chownAtDir(owned.dir, owned.name, std.math.maxInt(u32), at.st.gid, true);
             }
         }
         if (x.preserve_mode) {
-            if (sys.chmodPath(name, at.st.mode & 0o7777, false)) |ce| {
-                _ = ce;
+            if (posixacl.preserve(.{ .path = src_part }, .{ .entry = .{ .spot = here, .type_bits = 0o040000 } }, at.st.mode & 0o7777, true)) |ce| {
+                warn(c, "failed to preserve permissions for {f}: {s}", .{ quote.quoteA(name), sys.errnoText(ce) });
                 return false;
             }
         } else if (at.restore_mode) {
-            if (sys.chmodPath(name, at.st.mode & 0o7777, true)) |ce| {
+            if (here.setMode(0o040000, at.st.mode & 0o7777)) |ce| {
                 warn(c, "failed to preserve permissions for {f}: {s}", .{ quote.quoteA(name), sys.errnoText(ce) });
                 return false;
             }

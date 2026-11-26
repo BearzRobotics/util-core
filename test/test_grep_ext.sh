@@ -85,6 +85,32 @@ rgcmp 'json escapes' "--json 'uo' esc.txt" "--json uo esc.txt" "$JNORM"
 printf 'no newline two' > nonl.txt
 rgcmp 'json no trailing newline' "--json two nonl.txt" "--json two nonl.txt" "$JNORM"
 
+# Nothing but JSON may reach standard output.
+all_json() { # DESC ARGS...
+    desc=$1; shift
+    out=$("$OURS" "$@" 2>&1); rc=$?
+    if [ "$rc" -le 1 ] && [ -n "$out" ] && printf '%s\n' "$out" |
+        python3 -I -c 'import json, sys; [json.loads(l)["type"] for l in sys.stdin]' 2>/dev/null; then pass "$desc"
+    else fail "$desc" "only JSON lines" "rc=$rc $out"; fi
+}
+if command -v python3 > /dev/null; then
+    printf 'two\nx\ny\nz\ntwo\n' > apart.txt
+    all_json 'json: no separator between context groups' --json -A1 two apart.txt
+    all_json 'json: no separator between files' --json -C1 two a.txt b.c
+    all_json 'json with --stats' --json --stats two a.txt
+    all_json 'json with --group-separator' --json -C1 --group-separator=== two apart.txt
+    all_json 'json with context after -m' --json -m1 -A2 two a.txt apart.txt
+    all_json 'json with non-UTF-8 and control bytes' --json -C1 two bad.txt a.txt
+    all_json 'json with no match' --json zzz a.txt
+    all_json 'json with -q' --json -q two a.txt
+else
+    skip_test 'json: every line is JSON (no python3)'
+fi
+for opt in -c -l -L --count-matches; do
+    cmp "json refuses $opt" "echo 1; echo 2" "\$G --json $opt two a.txt 2>&1 >/dev/null | /usr/bin/grep -c -e '--json cannot be used with'; \$G --json $opt two a.txt >/dev/null 2>&1; echo \$?" ""
+    cmp "json refuses $opt: nothing on stdout" "exit 2" "\$G $opt --json two a.txt 2>/dev/null" ""
+done
+
 # ------------------------------------------------- ripgrep: counts and stats
 rgcmp 'count-matches one file' "--count-matches two a.txt" "--count-matches two a.txt"
 rgcmp 'count-matches two files' "--count-matches two a.txt b.c" "--count-matches two a.txt b.c" "$SORT"
@@ -94,6 +120,50 @@ rgcmp 'count-matches -i' "--count-matches -i two a.txt" "--count-matches -i two 
 rgcmp 'stats' "--stats two a.txt" "--stats two a.txt" "$SNORM"
 rgcmp 'stats two files' "--stats --sort path two a.txt b.c" "--stats two a.txt b.c" "$SNORM"
 rgcmp 'stats no match' "--stats zzz a.txt" "--stats zzz a.txt" "$SNORM"
+
+# Ignore files come with the tree: only regular files of a sane size are read,
+# and a .gitignore may not be a link. Nothing here may hang or use up memory.
+# The trees are kept out of $W: later cases run other programs over all of it.
+IG=$(mktemp -d)
+# ig DESC DIR WANT-STDOUT+STDERR
+ig() {
+    got=$( (cd "$IG" && ulimit -v 400000 && timeout 20 "$OURS" -r --sort=path --ignore-vcs foo "$2") 2>&1 </dev/null; echo "rc=$?")
+    if [ "$got" = "$3" ]; then pass "$1"; else fail "$1" "$3" "$got"; fi
+}
+(
+    cd "$IG" || exit 1
+    mkdir ig_zero ig_fifo ig_big ig_link ig_dot
+    for d in ig_zero ig_fifo ig_big ig_link ig_dot; do echo foo > $d/a; done
+    ln -s /dev/zero ig_zero/.gitignore
+    mkfifo ig_fifo/.gitignore
+    { echo a; head -c 5000000 /dev/zero | tr '\0' '\n'; } > ig_big/.gitignore
+    echo a > rules; ln -s ../rules ig_link/.gitignore; ln -s ../rules ig_dot/.ignore
+)
+ig 'ignore-vcs: .gitignore link to /dev/zero' ig_zero "grep: ig_zero/.gitignore: ignore file not used: it is a symbolic link
+ig_zero/a:foo
+rc=0"
+ig 'ignore-vcs: .gitignore that is a FIFO' ig_fifo "grep: ig_fifo/.gitignore: ignore file not used: it is not a regular file
+ig_fifo/a:foo
+rc=0"
+ig 'ignore-vcs: a huge .gitignore' ig_big "grep: ig_big/.gitignore: ignore file not used: it is larger than 4 MiB
+ig_big/a:foo
+rc=0"
+ig 'ignore-vcs: .gitignore symlink is not followed' ig_link "grep: ig_link/.gitignore: ignore file not used: it is a symbolic link
+ig_link/a:foo
+rc=0"
+ig 'ignore-vcs: .ignore symlink to a file is followed' ig_dot "rc=1"
+
+# Many "**" in a pattern take no longer than one (the limit stops a matcher
+# that tries every position for every one of them).
+deep=$IG/stars/t; for i in $(seq 40); do deep=$deep/x; done; mkdir -p "$deep"; echo foo > "$deep/f"
+printf '**/x/**/x/**/x/**/x/**/x/**/x/**/x/**/x/**/nomatch\n' > "$IG/stars/t/.gitignore"
+ig 'ignore-vcs: many ** segments' stars/t "stars/t/$(printf 'x/%.0s' $(seq 40))f:foo
+rc=0"
+printf 'a/**/b/**/c\n**/y/**\n!keep\n' > rules2
+mkdir -p dstar/a/q/b/r dstar/a/b dstar/m/y/n
+for f in dstar/a/q/b/r/c dstar/a/b/c dstar/a/b/d dstar/m/y/n/f dstar/m/f; do echo two > $f; done
+cp rules2 dstar/.gitignore
+rgcmp 'ignore-vcs with several **' "--no-require-git --hidden --sort path two dstar" "-r --sort=path --ignore-vcs two dstar" ""
 
 # --------------------------------------------------- ripgrep: smart case
 for pat in two Two tWo 'o' 'T' '\\Sw' 'w\\w'; do
@@ -222,6 +292,24 @@ bzip2 -k -c plain.txt > p.bz2
 for f in p.gz p.xz p.zst; do
     if [ $HAVE_UG = 1 ]; then cmp "ugrep: --decompress $f" "$UGREP -F -z needle $f" "\$G -F --decompress needle $f"; else skip_test "ugrep: --decompress $f"; fi
     cmp "decompress $f -c" "echo 2" "\$G --decompress -c needle $f"
+done
+# Every gzip member and xz stream is searched, and anything else is reported.
+(gzip -c plain.txt; gzip -c plain.txt) > two.gz
+(xz -c plain.txt; xz -c plain.txt) > two.xz
+(xz -c plain.txt; head -c 8 /dev/zero; xz -c plain.txt; head -c 4 /dev/zero) > pad.xz
+(zstd -q -c plain.txt; zstd -q -c plain.txt) > two.zst
+(gzip -c plain.txt; head -c 512 /dev/zero) > zeros.gz
+for f in two.gz two.xz pad.xz two.zst; do
+    cmp "decompress all of $f" "echo 4" "\$G --decompress -c needle $f"
+done
+cmp 'decompress gzip padded with zeros' "echo 2" "\$G --decompress -c needle zeros.gz"
+(gzip -c plain.txt; echo junk) > junk.gz
+(xz -c plain.txt; echo junk) > junk.xz
+(xz -c plain.txt; head -c 3 /dev/zero) > badpad.xz
+(zlib plain.txt; echo junk) > junk.zlib 2>/dev/null
+for f in junk.gz junk.xz badpad.xz junk.zlib; do
+    if [ $f = junk.zlib ] && ! command -v python3 > /dev/null; then skip_test "decompress $f (no python3)"; continue; fi
+    cmp "decompress reports what follows the data: $f" "echo 'grep: $f: --decompress: what follows the compressed data was not searched'; echo 2; exit 2" "\$G --decompress -c needle $f 2>err >out; rc=\$?; cat err; \$G --decompress -c needle $f 2>/dev/null; exit \$rc"
 done
 cmp 'decompress plain file untouched' "/usr/bin/grep needle plain.txt" "\$G --decompress needle plain.txt"
 cmp 'without --decompress gzip is binary (GNU)' "/usr/bin/grep needle p.gz" "\$G needle p.gz"

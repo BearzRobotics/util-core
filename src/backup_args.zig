@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Command-line side of backups (gnulib backupfile.c, xget_version and
 //! set_simple_backup_suffix): resolving --backup=CONTROL / VERSION_CONTROL and
-//! the suffix. Used by the cp, mv and install wrappers; the naming and
+//! the suffix. Used by the cp, mv, install and ln wrappers; the naming and
 //! renaming is in backup.zig.
 
 const std = @import("std");
@@ -26,7 +26,11 @@ pub fn simpleSuffix(ctx: cli.Context, s_in: ?[]const u8) []const u8 {
 /// xget_version: null (after printing the diagnostic) for a bad name.
 pub fn parseVersion(ctx: cli.Context, context: []const u8, arg: ?[]const u8) ?backup.Type {
     var v = arg;
-    if (v == null or v.?.len == 0) v = cli.getenv(ctx, "VERSION_CONTROL");
+    var source = context; // what the diagnostic says the bad value was for
+    if (v == null or v.?.len == 0) {
+        v = cli.getenv(ctx, "VERSION_CONTROL");
+        source = "$VERSION_CONTROL";
+    }
     if (v == null or v.?.len == 0) return .numbered_existing;
     const r = argmatch.match(v.?, &version_table);
     switch (r) {
@@ -37,7 +41,7 @@ pub fn parseVersion(ctx: cli.Context, context: []const u8, arg: ?[]const u8) ?ba
             else => .numbered,
         },
         else => {
-            argmatch.die(ctx, v.?, context, &version_table, r);
+            argmatch.die(ctx, v.?, source, &version_table, r);
             return null;
         },
     }

@@ -7,6 +7,18 @@ UTIL="split"
 TREE_CONTENT=1
 help_cmp
 S='seq 1 25 > in; seq 1 105 > in105; printf "no newline at end" > nonl; : > empty; printf "aaaa\nbb\ncccccc\nd\neeeeeeeeee\nf\n" > words; printf "a\0b\0cc\0ddd\0" > nul; printf "one\ntwo\nthree\nfour\nfive\nsix\nseven\n" > seven; awk "BEGIN{srand(7); for(i=0;i<300;i++){n=int(rand()*30); s=\"\"; for(j=0;j<n;j++) s=s sprintf(\"%c\",97+int(rand()*26)); print s}}" > rnd; awk "BEGIN{srand(3); for(i=0;i<5000;i++) printf \"%c\", 1+int(rand()*254)}" | tr "\n" "x" > bin; echo >> bin'
+# piped_cmp DESC PRODUCER ARGS...: like run_tree, with standard input a pipe.
+piped_cmp() {
+    description="$1"; producer="$2"; shift 2
+    d="$TEST_TMP/piped"; rm -rf "$d"; mkdir -p "$d/g" "$d/o"
+    (cd "$d/g" && eval "$producer" | LC_ALL=C gnu "$@" > ../g.out 2> ../g.err; echo $? > ../g.rc)
+    (cd "$d/o" && eval "$producer" | LC_ALL=C ours "$@" > ../o.out 2> ../o.err; echo $? > ../o.rc)
+    if diff -r "$d/g" "$d/o" > /dev/null && cmp -s "$d/g.out" "$d/o.out" && cmp -s "$d/g.rc" "$d/o.rc" && [ ! -s "$d/o.err" ]; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s (rc %s/%s) %s\n" "$description" "$(cat "$d/g.rc")" "$(cat "$d/o.rc")" "$(cat "$d/o.err")"
+    fi
+}
 run_tree "default"              "$S" in
 run_tree "stdin"                "$S" < /dev/null
 TREE_STDIN=/dev/null run_tree "stdin dash empty" "$S" -
@@ -75,6 +87,35 @@ run_tree "extra operand"        "$S" in p extra
 run_tree "bad option"           "$S" -z in
 run_tree "long abbrev"          "$S" --line=5 in
 run_tree "overwrite input"      "$S" -l 5 xaa xa
+# An output name that is the input: refuse and leave the input as it was.
+run_tree "input is first output" 'seq 1 9 > xaa' -l 1 xaa
+run_tree "input is later output" 'seq 1 9 > xac' -l 1 xac
+run_tree "output links to input" 'seq 1 9 > in; ln in xaa' -l 1 in
+run_tree "output symlink to input" 'seq 1 9 > in; ln -s in xab' -b 4 in
+run_tree "-n input is output"   'seq 1 9 > xab' -n 3 xab
+run_tree "-n l/ input is output" 'seq 1 9 > xab' -n l/3 xab
+run_tree "existing outputs are replaced" 'seq 1 9 > in; seq 1 99 > xaa' -l 3 in
+TREE_STDIN=xab run_tree "stdin is an output" 'seq 1 9 > xab' -b 6
+run_tree "-n r/ input is first output" 'seq 1 9 > xaa' -n r/2 xaa
+run_tree "-n r/ empty input is output" ': > xab' -n r/3 xab
+# Here GNU has written part of the earlier pieces when it stops and we have
+# not, so only the status, the diagnostic and the input are compared.
+# keeps_input DESC REDIRECT ARGS...: xab is the input and the second output.
+keeps_input() {
+    description="$1"; redirect="$2"; shift 2
+    d="$TEST_TMP/keep"; rm -rf "$d"; mkdir "$d"
+    seq 1 9 > "$d/xab"; seq 1 9 > "$TEST_TMP/keep.want"
+    (cd "$d" && ours "$@" < "$redirect" > /dev/null 2> "$TEST_TMP/keep.err"); rc=$?
+    if [ "$rc" -eq 1 ] && grep -q "'xab' would overwrite input; aborting" "$TEST_TMP/keep.err" && cmp -s "$d/xab" "$TEST_TMP/keep.want"; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s (rc=%s)\n" "$description" "$rc"
+    fi
+}
+keeps_input "-n r/ stdin is an output"    xab       -n r/3
+keeps_input "-n r/ input is later output" /dev/null -n r/3 xab
+keeps_input "-n r/ -e input is output"    /dev/null -e -n r/3 xab
+run_tree "output is /dev/null"  'seq 1 9 > in; ln -s /dev/null xaa' -l 3 in
 run_tree "verbose"              "$S" --verbose -l 10 in
 run_tree "verbose -b"           "$S" --verbose -b 20 in
 run_tree "-e"                   "$S" -e -l 10 in
@@ -116,5 +157,167 @@ run_tree "filter gzip-less"     "$S" --filter='tr a-z A-Z > $FILE' -l 10 words
 run_tree "filter fails"         "$S" --filter='exit 3' -l 10 in
 run_tree "filter and stdout chunk" "$S" --filter=cat -n 1/3 in
 run_tree "-u"                   "$S" -u -n r/3 words
+# Round robin runs one filter per chunk too, all open at once.
+for nn in 1 2 3 10; do
+    run_tree "filter r/$nn"     "$S" --filter='tr a-z A-Z > $FILE.up' -n r/$nn words
+done
+# (only output made after end of input has a defined order)
+run_tree "filter r/ output order" "$S" --filter='x=$(cat); echo "$FILE: $x"' -n r/3 seven
+run_tree "filter r/ -u"         "$S" -u --filter='cat > $FILE.out' -n r/3 words
+run_tree "filter r/ empty input" "$S" --filter='cat > $FILE.out' -n r/3 empty
+run_tree "filter r/ empty input -e" "$S" -e --filter='cat > $FILE.out' -n r/3 empty
+run_tree "filter r/ -e few lines" "$S" -e --filter='cat > $FILE.out' -n r/30 words
+run_tree "filter r/ fails"      "$S" --filter='cat >/dev/null; [ $FILE != xab ] || exit 4; [ $FILE != xac ] || exit 5' -n r/3 words
+# -n r/N with more outputs than descriptors: files are closed and reopened to
+# append. The result must be what GNU writes (it runs without the limit).
+for how in "-n r/60" "-e -n r/60" "-u -n r/60" "--verbose -n r/60"; do
+    description="more outputs than descriptors $how"
+    d="$TEST_TMP/nofile"; rm -rf "$d"; mkdir -p "$d/g" "$d/o"
+    (cd "$d/g" && seq 1 500 > ../in && LC_ALL=C gnu $how ../in > ../g.out; echo $? > ../g.rc)
+    (cd "$d/o" && ulimit -n 16 && LC_ALL=C ours $how ../in > ../o.out 2> ../o.err; echo $? > ../o.rc)
+    if diff -r "$d/g" "$d/o" > /dev/null && cmp -s "$d/g.out" "$d/o.out" && cmp -s "$d/g.rc" "$d/o.rc" && [ ! -s "$d/o.err" ]; then
+        PASS=$((PASS + 1)); echo "PASS $description"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $description (rc $(cat "$d/g.rc")/$(cat "$d/o.rc")) $(head -3 "$d/o.err")"
+    fi
+done
+# Filters cannot be closed and reopened; the error is the system's words.
+d="$TEST_TMP/nofile"; rm -rf "$d"; mkdir -p "$d"
+(cd "$d" && seq 1 99 | (ulimit -n 16 && "$BIN_DIR/split" -n r/60 --filter='cat >/dev/null' 2> err; echo $? > rc))
+if [ "$(cat "$d/rc")" = 1 ] && grep -q 'Too many open files' "$d/err"; then
+    PASS=$((PASS + 1)); echo "PASS more filters than descriptors is diagnosed"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL more filters than descriptors is diagnosed ($(cat "$d/rc") $(cat "$d/err"))"
+fi
+# A record is not gathered in memory however long it is: 64 MiB without a
+# separator under a 32 MiB address-space limit.
+long_rec() {
+    description="a long record needs little memory $*"
+    d="$TEST_TMP/longrec"; rm -rf "$d"; mkdir -p "$d/g" "$d/o"
+    [ -f "$TEST_TMP/zeros64" ] || head -c 67108864 /dev/zero > "$TEST_TMP/zeros64"
+    (cd "$d/g" && LC_ALL=C gnu "$@" "$TEST_TMP/zeros64" > ../g.out; echo $? > ../g.rc)
+    (cd "$d/o" && ulimit -v 32768 && LC_ALL=C ours "$@" "$TEST_TMP/zeros64" > ../o.out 2> ../o.err; echo $? > ../o.rc)
+    if diff -r "$d/g" "$d/o" > /dev/null && cmp -s "$d/g.out" "$d/o.out" && cmp -s "$d/g.rc" "$d/o.rc"; then
+        PASS=$((PASS + 1)); echo "PASS $description"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $description (rc $(cat "$d/g.rc")/$(cat "$d/o.rc")) $(head -3 "$d/o.err")"
+    fi
+    rm -rf "$d"
+}
+long_rec -C 1M
+long_rec -C 7000000
+long_rec -n l/3
+long_rec -n r/3
+long_rec -n l/1/3
+long_rec -n r/1/3
+rm -f "$TEST_TMP/zeros64"
+# Records around the size of the reads (128 KiB) and of -C.
+LONG='for n in 5 131071 1 131072 200000 3 70000 61000 400000 2; do head -c $n /dev/zero | tr "\0" a; echo; done > long; printf tail >> long'
+for how in "-C 1000" "-C 70001" "-C 131072" "-C 131073" "-C 200001" "-C 1M" "-n l/3" "-n l/7" "-n r/3" "-n l/2/3" "-n r/2/3" "-e -n l/30" "-u -n r/3"; do
+    run_tree "long records $how" "$LONG" $how long
+done
+
+# A filter that stops reading early: the rest of its chunk is dropped and the
+# other chunks are still processed. The input is far larger than a pipe holds,
+# so split is sure to still be writing when the filter has gone.
+BIG='head -c 3000000 /dev/zero | tr "\0" "\n" > big'
+for how in "-b 2000000" "-l 2000000" "-C 2000000" "-n 2" "-n l/2" "-n r/2" "-u -b 2000000"; do
+    run_tree "filter exits early $how" "$BIG" --filter='x=$(head -c1); echo $FILE > $FILE.ran' $how big
+    run_tree "filter reads nothing, fails $how" "$BIG" --filter='exit 3' $how big
+done
+run_tree "filter gets SIGPIPE's default action" 'seq 4 > in' --filter='grep SigIgn /proc/self/status; cat > /dev/null' -l 2 in
+# Round robin stops once no filter reads any more, even on endless input.
+d="$TEST_TMP/endless"; mkdir -p "$d"
+out=$( (cd "$d" && yes | timeout 30 "$BIN_DIR/split" -n r/3 --filter='head -n 1') 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ "$out" = "$(printf 'y\ny\ny')" ]; then
+    PASS=$((PASS + 1)); echo "PASS filter r/ on endless input ends when the filters do"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL filter r/ on endless input ends when the filters do (rc=$rc: $out)"
+fi
+# -n needs the input size first. Pipes, files that say they are empty and
+# standard input that is not at its start must still be split completely.
+for how in "-n 2" "-n 4" "-n 2/3" "-n l/3" "-n l/2/3" "-e -n 30"; do
+    piped_cmp "$how from a pipe" 'seq 1 99' $how
+    # More than one read block, so the pipe has to be spooled.
+    piped_cmp "$how from a long pipe" 'seq 1 60000' $how
+done
+run_tree "-n fifo"              'mkfifo f; (seq 1 99 > f &)' -n 3 f
+run_tree "-n /proc file"        "$S" -n 2 /proc/version
+run_tree "-n l/ /proc file"     "$S" -n l/2 /proc/version
+run_tree "-n /dev/null"         "$S" -n 3 /dev/null
+run_tree "-n sysfs file"        "$S" -n 2 /sys/kernel/uevent_seqnum
+for lines in 9 60000; do
+    d="$TEST_TMP/offset"; rm -rf "$d"; mkdir -p "$d/g" "$d/o"; seq 1 $lines > "$d/in"
+    (cd "$d/g" && { read -r skip; gnu -n 3; } < ../in)
+    (cd "$d/o" && { read -r skip; ours -n 3; } < ../in)
+    if diff -r "$d/g" "$d/o" > /dev/null; then
+        PASS=$((PASS + 1)); echo "PASS -n splits what is left of stdin ($lines lines)"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL -n splits what is left of stdin ($lines lines)"
+    fi
+done
+seq 1 60000 > "$TEST_TMP/spool.in"
+mkdir -p "$TEST_TMP/spool/tmp" "$TEST_TMP/spool/out"
+(cd "$TEST_TMP/spool/out" && cat ../../spool.in | TMPDIR="$TEST_TMP/spool/tmp" ours -n 2)
+if [ -z "$(ls -A "$TEST_TMP/spool/tmp")" ] && cat "$TEST_TMP/spool/out"/x* | cmp -s - "$TEST_TMP/spool.in"; then
+    PASS=$((PASS + 1)); echo "PASS the spool file is removed"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL the spool file is removed"
+fi
+err=$(cd "$TEST_TMP/spool/out" && rm -f x* && cat ../../spool.in | TMPDIR="$TEST_TMP/nosuch" ours -n 2 2>&1); rc=$?
+if [ "$rc" = 1 ] && [ "$err" = "split: -: cannot determine file size: No such file or directory" ] && [ -z "$(ls -A "$TEST_TMP/spool/out")" ]; then
+    PASS=$((PASS + 1)); echo "PASS no temporary file, no pieces"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL no temporary file, no pieces (rc=$rc: $err)"
+fi
+# A write that fails, at the end or on the way, is reported with status 1.
+if [ -e /dev/full ]; then
+    for c in "-n 1/2" "-n l/1/2" "-n r/1/2"; do
+        (cd "$TEST_TMP" && seq 100 > kn && ours $c kn > /dev/full 2> kn.err); rc=$?
+        if [ "$rc" = 1 ] && [ "$(cat "$TEST_TMP/kn.err")" = "split: write error: No space left on device" ]; then
+            PASS=$((PASS + 1)); echo "PASS $c to a full device"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL $c to a full device (rc=$rc $(cat "$TEST_TMP/kn.err"))"
+        fi
+    done
+    run_tree "-l write error"       'seq 1 100 > in; ln -s /dev/full xab' -l 60 in
+    run_tree "-n write error"       'seq 1 100 > in; ln -s /dev/full xab' -n 2 in
+    run_tree "-n r/ write error at the end" 'seq 1 100 > in; ln -s /dev/full xab' -n r/2 in
+    # (mid-way, GNU has created fewer of the other files than we have)
+    for how in "-n r/2" "-u -n r/2"; do
+        m="$TEST_TMP/midway"; rm -rf "$m"; mkdir "$m"; seq 1 20000 > "$m/in"; ln -s /dev/full "$m/xaa"
+        (cd "$m" && ours $how in 2> "$TEST_TMP/midway.err"); rc=$?
+        if [ "$rc" = 1 ] && [ "$(cat "$TEST_TMP/midway.err")" = "split: xaa: No space left on device" ]; then
+            PASS=$((PASS + 1)); echo "PASS write error mid-way $how"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL write error mid-way $how (rc=$rc $(cat "$TEST_TMP/midway.err"))"
+        fi
+    done
+fi
+# Pieces cut short by a file size limit: ours must say so (how much of the
+# other pieces GNU has written by then differs, so the trees are not compared).
+d="$TEST_TMP/limit"; mkdir -p "$d"; seq 3000 > "$d/in"
+for how in "-n r/2" "-n 2" "-b 8000"; do
+    (cd "$d" && rm -f x?? && trap '' XFSZ && ulimit -f 4 && ours $how in 2> "$TEST_TMP/limit.err"); rc=$?
+    if [ "$rc" = 1 ] && [ "$(cat "$TEST_TMP/limit.err")" = "split: xaa: File too large" ]; then
+        PASS=$((PASS + 1)); echo "PASS file size limit $how"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL file size limit $how (rc=$rc $(cat "$TEST_TMP/limit.err"))"
+    fi
+done
+if can_inject; then
+    for how in "-n r/1" "-l 5000"; do
+        (cd "$d" && rm -f x?? && strace -y -o "$TEST_TMP/trace" -e trace=close "$BIN_DIR/split" $how in)
+        n=$(grep '^close' "$TEST_TMP/trace" | grep -n '/xaa>' | cut -d: -f1)
+        (cd "$d" && rm -f x?? && strace -o /dev/null -e trace=close -e inject=close:error=EIO:when="$n" "$BIN_DIR/split" $how in 2> "$TEST_TMP/limit.err"); rc=$?
+        if [ "$rc" = 1 ] && [ "$(cat "$TEST_TMP/limit.err")" = "split: xaa: Input/output error" ]; then
+            PASS=$((PASS + 1)); echo "PASS close error $how"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL close error $how (n=$n rc=$rc $(cat "$TEST_TMP/limit.err"))"
+        fi
+    done
+else
+    skip_test "close errors (no strace)"
+fi
 print_summary
 [ "$FAIL" -eq 0 ]

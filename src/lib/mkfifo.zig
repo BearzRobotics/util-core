@@ -10,6 +10,7 @@ const Io = std.Io;
 const common = @import("common.zig");
 const mode_mod = @import("../mode.zig");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 
 pub const Env = common.Env;
 
@@ -27,7 +28,7 @@ pub const Failure = union(enum) {
     /// mknod(2) failed.
     create: std.os.linux.E,
     /// The follow-up chmod for -m failed.
-    permissions: anyerror,
+    permissions: std.os.linux.E,
 };
 
 pub const Event = struct { name: []const u8, failure: Failure };
@@ -37,17 +38,23 @@ pub const Observer = common.Observer(Event);
 /// is reported to `obs` and the rest are still made. Returns whether all
 /// succeeded.
 pub fn run(env: Env, final: ?u16, names: []const []const u8, obs: Observer) error{OutOfMemory}!bool {
+    _ = env; // every command library takes it
     var ok = true;
     for (names) |name| {
-        const z = try env.gpa.dupeSentinel(u8, name, 0);
-        defer env.gpa.free(z);
+        var pe: sys.E = .SUCCESS;
+        const spot = dirat.Spot.open(name, &pe) orelse {
+            obs.emit(.{ .name = name, .failure = .{ .create = pe } });
+            ok = false;
+            continue;
+        };
+        defer spot.close();
         // With -m the exact mode is set afterwards, so the umask cannot take bits away.
-        if (sys.mknod(z, 0o010000 | (final orelse 0o666), 0)) |e| {
+        if (sys.mknodAt(spot.dir, spot.name, 0o010000 | (final orelse 0o666), 0)) |e| {
             obs.emit(.{ .name = name, .failure = .{ .create = e } });
             ok = false;
             continue;
         }
-        if (final) |m| Io.Dir.cwd().setFilePermissions(env.io, name, sys.permissionsFromMode(m), .{}) catch |e| {
+        if (final) |m| if (spot.setMode(0o010000, m)) |e| {
             obs.emit(.{ .name = name, .failure = .{ .permissions = e } });
             ok = false;
         };

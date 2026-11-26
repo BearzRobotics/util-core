@@ -182,7 +182,9 @@ fn run(ctx: cli.Context, out: *cli.Out) u8 {
             return 1;
         };
         s.mode = mm;
-        s.dir_mode = mode_mod.apply(m, 0, true, 0).?;
+        var decided: u16 = 0;
+        s.dir_mode = mode_mod.applyTracked(m, 0, true, 0, &decided).?;
+        s.dir_mode_decided = decided;
     }
     if (strip_program_specified and !s.strip_files) {
         cli.warn(ctx, "WARNING: ignoring --strip-program option as -s option was not specified", .{});

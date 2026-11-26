@@ -244,6 +244,7 @@ pub fn main(ctx: cli.Context) u8 {
         for (p.operands.items) |o| list.append(ctx.gpa, o) catch {};
     }
     scanArgs(ctx, &d, list.items);
+    dd.catchSignals(cli.getenv(ctx, "POSIXLY_CORRECT") != null);
 
     return dd.run(&d);
 }

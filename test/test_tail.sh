@@ -122,6 +122,26 @@ follow_case "-n +1 -f"               -n +1 -s 0.1 -f
 seq 1 5 > ff; (sleep 0.3; : > ff; sleep 0.3; echo new >> ff) &
 timeout 2 "$BIN_DIR/tail" -n 0 -s 0.1 -f ff > ours.trunc 2>&1; wait
 grep -q "ff: file truncated" ours.trunc && grep -q "^new$" ours.trunc && { PASS=$((PASS + 1)); echo "PASS truncation is reported and followed"; } || { FAIL=$((FAIL + 1)); echo "FAIL truncation: $(cat ours.trunc)"; }
+# Standard input redirected from a file, possibly not at its start: only what
+# is appended afterwards may follow the initial output.
+for a in "-n0" "-c0" "-n1" "" "-n +2" "-c +2" "-c3"; do
+    for skip in 0 1; do
+        for t in gnu ours; do
+            if [ $t = gnu ]; then bin=/usr/bin/tail; else bin="$BIN_DIR/tail"; fi
+            printf 'a\nb\nc\nd\n' > sf
+            { [ $skip = 0 ] || read -r _; timeout 1.2 $bin $a -s 0.1 -f > $t.out 2>&1; } < sf &
+            sleep 0.5; echo e >> sf; wait
+        done
+        cmp -s gnu.out ours.out && { PASS=$((PASS + 1)); echo "PASS -f on redirected stdin: '$a', $skip line(s) already read"; } || { FAIL=$((FAIL + 1)); printf "FAIL -f on redirected stdin: '%s' skip %s\n     GNU : %s\n     OURS: %s\n" "$a" $skip "$(cat gnu.out)" "$(cat ours.out)"; }
+    done
+done
+# The reader of the output pipe leaves while the followed file stays quiet.
+echo first > qf; rm -f qf.status
+( "$BIN_DIR/tail" -s 0.1 -f qf 2> qf.err & echo $! > qf.pid; wait $!; echo $? > qf.status ) | head -n 1 > /dev/null &
+i=0; while [ ! -s qf.status ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+if [ -s qf.status ] && [ ! -s qf.err ]; then PASS=$((PASS + 1)); echo "PASS -f ends when the output pipe loses its reader"
+else FAIL=$((FAIL + 1)); echo "FAIL -f ends when the output pipe loses its reader: $(cat qf.err)"; kill "$(cat qf.pid)" 2>/dev/null; fi
+wait 2>/dev/null
 sleep 30 & spid=$!
 echo x > pf; timeout 5 "$BIN_DIR/tail" --pid=$spid -s 0.1 -f pf > /dev/null & tpid=$!
 sleep 0.5; kill $spid; wait $spid 2>/dev/null; sleep 0.5
@@ -157,10 +177,31 @@ scen "--pid and --retry without -f" "--pid=1 --retry f" "sleep 0.1"
 scen "-F existing and missing" "-F -s 0.2 f nofile" "sleep 0.5; echo z > nofile"
 scen "-F -n0" "-F -n0 -s 0.2 f" "sleep 0.4; echo q >> f"
 scen "-f then removal keeps following" "-f -s 0.2 f" "sleep 0.5; echo q >> f; sleep 0.4; rm f; sleep 0.3"
+# Lines appended just before a rename or removal, with no poll in between, can
+# only be read from the old descriptor. The expected text is what GNU prints;
+# it is not run, because when its checks fall depends on inotify.
+# rotated DESC "tail args" "driver commands" STDOUT STDERR
+rotated() {
+    D="$W/rot"; rm -rf "$D"; mkdir "$D"; (cd "$D" && printf 'a1\na2\na3\n' > f && printf 'b1\n' > g)
+    ( cd "$D" && { ( eval "$3" ) & LC_ALL=C timeout 2.5 "$BIN_DIR/tail" $2 > out 2> err; wait; } )
+    printf "$4" > "$W/rot.out"; printf "$5" > "$W/rot.err"
+    sed "s#$BIN_DIR/tail#tail#g" "$D/err" > "$D/err2"
+    if cmp -s "$D/out" "$W/rot.out" && cmp -s "$D/err2" "$W/rot.err"; then PASS=$((PASS + 1)); echo "PASS $1"
+    else FAIL=$((FAIL + 1)); echo "FAIL $1"; diff "$W/rot.out" "$D/out"; diff "$W/rot.err" "$D/err2"; fi
+}
+rotated "-F lines written just before a rotation" "-F -s 1 f" "sleep 0.5; echo last >> f; mv f f.1; echo new > f" \
+    'a1\na2\na3\nlast\nnew\n' "tail: 'f' has been replaced;  following new file\n"
+rotated "-F lines written just before removal" "-F -s 1 f" "sleep 0.5; echo last >> f; rm f" \
+    'a1\na2\na3\nlast\n' "tail: 'f' has become inaccessible: No such file or directory\n"
+rotated "--follow=name lines before removal" "--follow=name -s 1 f" "sleep 0.5; echo last >> f; rm f" \
+    'a1\na2\na3\nlast\n' "tail: f: No such file or directory\ntail: no files remaining\n"
+rotated "-F two files, rotation with pending lines" "-F -s 1 f g" "sleep 0.5; echo last >> f; mv f f.1; echo new > f; echo b2 >> g" \
+    '==> f <==\na1\na2\na3\n\n==> g <==\nb1\n\n==> f <==\nlast\nnew\n\n==> g <==\nb2\n' "tail: 'f' has been replaced;  following new file\n"
 
 cd /
 rm -rf "$W"
 printf "\n[ Backward scan across read windows ]\n"
+CMP_STDIN=/dev/null # the earlier default input was removed with its directory
 W="$(mktemp -d)"
 awk 'BEGIN { srand(21); for (i = 0; i < 60000; i++) { n = int(rand() * 25); s = ""; for (j = 0; j < n; j++) s = s "z"; print i s } }' > "$W/lines"
 head -c 65536 "$W/lines" > "$W/w1"
@@ -183,5 +224,23 @@ done
 CMP_STDIN="$W/lines" run_cmp "stdin -n 50"     -n 50
 CMP_STDIN="$W/lines" run_cmp "stdin -c 5000"   -c 5000
 rm -rf "$W"
+
+CMP_STDIN=/dev/null
+# Files whose size says nothing: procfs reports 0 and sysfs 4096 for a few
+# bytes. (Only files that do not change while the test runs.)
+for f in /proc/version /proc/filesystems /sys/kernel/mm/transparent_hugepage/enabled /sys/devices/system/cpu/online /sys/class/net/lo/mtu; do
+    if [ ! -r "$f" ]; then skip_test "$f not readable"; continue; fi
+    for o in "-n 1" "-n 3" "-n 0" "-c 1" "-c 5" "-c 100000" "-n +2" "-c +3"; do
+        run_cmp "$o $f" $o "$f"
+    done
+done
+# Real files around the size from which the end is sought.
+S="$TEST_TMP/sizes"; mkdir -p "$S"
+for size in 4095 4096 4097 8192 8193; do
+    seq 3000 | head -c $size > "$S/$size"
+    for o in "-n 3" "-n 100000" "-c 7" "-c 4096"; do
+        run_cmp "$o of $size bytes" $o "$S/$size"
+    done
+done
 
 print_summary

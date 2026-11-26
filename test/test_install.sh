@@ -81,6 +81,7 @@ run_tree "install unwritable dst" "$SETUP; chmod 444 b" a b
 run_tree "install unreadable src" "$SETUP; chmod 000 a" a z
 run_tree "install onto itself" "$SETUP" a ./a
 run_tree "install hard onto itself" "$SETUP" a hard
+run_tree "install backup after a huge number" ": > a; echo x > b; : > 'b.~18446744073709551615~'" --backup=numbered a b
 for o in -c -C -b "-b -S .bak" "--backup" "--backup=numbered" "--backup=bogus" "-bv" "-Cv" "-C -m 600" "-C -m 4755" "-C -p" "-C -s" "-Z" "--preserve-context" "--debug" "--strip-program=true" "-s" "-s --strip-program=nosuchprog" "-s --strip-program=false" "--strip-program=true" "-S .x" "-p -C"; do
     run_tree "install $o" "$SETUP" $o a b
     run_tree "install $o new" "$SETUP" $o a z
@@ -115,4 +116,52 @@ run_tree "install -d -t" "$SETUP" -d -t e x
 run_tree "install empty name" "$SETUP" "" z
 run_tree "install to empty name" "$SETUP" a ""
 run_tree "install long name" "$SETUP" a "$(printf 'n%.0s' $(seq 300))"
+# -d keeps an inherited set-group-ID bit unless -m mentions it (without -m
+# the mode, 0755, decides every bit).
+SG='mkdir g; chmod 2775 g; mkdir g/old; echo x > f'
+for m in 700 755 0755 00755 2755 u=rwx g-s g=rx a=; do
+    run_tree "setgid parent -d -m $m"          "$SG" -d -m "$m" g/new
+    run_tree "setgid parent -d -m $m existing" "$SG" -d -m "$m" g/old
+done
+run_tree "setgid parent -d"                    "$SG" -d g/new
+run_tree "setgid parent -d existing"           "$SG" -d g/old
+run_tree "setgid parent -D"                    "$SG" -D -m 700 f g/a/b/f
+# Another process may make a shared directory between the look and the mkdir
+# (a parallel "make install"). strace holds install there while the test makes it.
+if can_inject; then
+    for case in "-D:q/r/z:q" "-D:q/r/z:q/r" "-d:p/q:p" "-d:p/q:p/q" "-d -m 700:p/q:p/q"; do
+        opts=${case%%:*}; rest=${case#*:}; dst=${rest%:*}; made=${rest#*:}
+        d="$TEST_TMP/race"; rm -rf "$d"; mkdir -p "$d/w"; echo data > "$d/w/f"
+        n=1; case $made in */*) n=2 ;; esac
+        src=; [ "$opts" != -D ] || src=f
+        (cd "$d/w" && exec timeout 30 strace -o ../trace -e trace=mkdirat,mkdir -e inject=mkdirat,mkdir:delay_enter=2000000:when=$n "$BIN_DIR/install" $opts $src "$dst" > ../out 2>&1) & pid=$!
+        tries=0
+        while [ "$(cat "$d/trace" 2>/dev/null | grep -c '^mkdir')" -lt $((n - 1)) ] && [ $tries -lt 100 ]; do sleep 0.05; tries=$((tries + 1)); done
+        sleep 1
+        mkdir -p "$d/w/$made"
+        wait $pid; rc=$?
+        ok=1; [ "$rc" = 0 ] && [ ! -s "$d/out" ] && grep -q EEXIST "$d/trace" || ok=0
+        case $opts in -D) cmp -s "$d/w/f" "$d/w/$dst" || ok=0 ;; "-d -m 700") [ "$(stat -c %a "$d/w/$dst")" = 700 ] || ok=0 ;; *) [ "$(stat -c %a "$d/w/$dst")" = 755 ] || ok=0 ;; esac
+        if [ $ok = 1 ]; then
+            PASS=$((PASS + 1)); echo "PASS install $opts $dst while $made appears"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL install $opts $dst while $made appears (rc=$rc)"; cat "$d/out"
+        fi
+    done
+else
+    skip_test "concurrent install (no usable strace)"
+fi
+# A link put in place of the installed file is not followed by what install
+# does to the file afterwards. The "strip" program makes the swap.
+d="$TEST_TMP/swapped"; mkdir -p "$d"
+(cd "$d" && echo data > f && echo VICTIM > victim && chmod 600 victim && touch -d '2001-01-01 00:00:00' victim &&
+    printf '#!/bin/sh\nrm -- "$1" && ln -s victim "$1"\n' > swap && chmod 755 swap)
+before=$(stat -c '%a %Y' "$d/victim")
+(cd "$d" && ours -p -s --strip-program=./swap -m 4755 f dest > out 2>&1); rc=$?
+if [ "$rc" = 1 ] && [ -L "$d/dest" ] && [ "$(stat -c '%a %Y' "$d/victim")" = "$before" ]; then
+    PASS=$((PASS + 1)); echo "PASS install does not change a file through a swapped-in link"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL install does not change a file through a swapped-in link (rc=$rc, victim $(stat -c '%a %Y' "$d/victim"), was $before)"; cat "$d/out"
+fi
+run_tree "install -d on a link to a directory" "$SETUP; mkdir real; ln -s real lk" -d -m 700 lk
 cd /; print_summary

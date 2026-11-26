@@ -24,11 +24,12 @@ GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from t
 ## Supported behaviour
 
 - Reads LOCATE02 and slocate databases (front-coded names) and prints matching entries; glob patterns use fnmatch, other patterns are substring matches.
+- On a terminal, unprintable characters of names are shown as `?` (not with `-0`), as GNU locate does. The set of printable characters in UTF-8 locales comes from util-core's Unicode tables, which can be older than the system's. The library does this only when `Options.terminal` is set.
 - Exit status 0 when something matched (or with -c/-S/--limit=0), 1 otherwise.
 
 ## Extensions
 
-None. The executable is GNU locate 4.10 behaviour. In the library (`util_core.locate`) database problems are Observer events, `-` (standard input) is a caller-supplied `Options.stdin`, and a failed write to the output writer is dropped (`Result.write_failed` reports it), as the executable always did.
+None. The executable is GNU locate 4.10 behaviour. In the library (`util_core.locate`) database problems are Observer events, `-` (standard input) is a caller-supplied `Options.stdin`, and a failed write to the output writer is reported by `Result.write_failed` (the executable then prints `write error` and exits 1, as GNU does).
 
 ## Known deviations and gaps
 

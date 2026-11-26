@@ -10,6 +10,7 @@
 const std = @import("std");
 const Io = std.Io;
 const common = @import("common.zig");
+const sys = @import("../sys.zig");
 const json = @import("../json.zig");
 
 pub const Env = common.Env;
@@ -88,8 +89,6 @@ const Side = struct {
     owned: bool,
     is_reg: bool,
     size: u64,
-    inode: u64,
-    dev_known: bool,
     is_dir: bool,
     buf: []u8,
     len: usize = 0,
@@ -149,28 +148,21 @@ pub fn compare(env: Env, options: Options, inputs: [2]Input, sink: Sink) !Summar
             sum.trouble = true;
             return sum;
         };
-        var side: Side = .{ .file = o.file, .owned = o.owned, .is_reg = false, .size = 0, .inode = 0, .dev_known = false, .is_dir = false, .buf = &.{} };
+        var side: Side = .{ .file = o.file, .owned = o.owned, .is_reg = false, .size = 0, .is_dir = false, .buf = &.{} };
         if (o.file.stat(env.io)) |st| {
             side.is_reg = st.kind == .file;
             side.is_dir = st.kind == .directory;
             side.size = st.size;
-            side.inode = @intCast(st.inode);
-            side.dev_known = true;
         } else |_| {}
         sides[f] = side;
         opened += 1;
     }
 
-    // The same file (same inode, same offsets) is equal without reading; two
-    // standard inputs likewise.
+    // The same file (same device and inode, same offsets) is equal without
+    // reading; two standard inputs likewise.
     if (inputs[0].source == .file and inputs[1].source == .file and
         inputs[0].source.file.handle == inputs[1].source.file.handle and options.skip[0] == options.skip[1]) return sum;
-    if (sides[0].dev_known and sides[1].dev_known and sides[0].inode == sides[1].inode and sides[0].inode != 0 and
-        options.skip[0] == options.skip[1] and
-        (sides[0].is_reg or sides[0].is_dir) and sides[0].size == sides[1].size)
-    {
-        if (sameDevice(env, sides[0].file, sides[1].file)) return sum;
-    }
+    if (options.skip[0] == options.skip[1] and (sides[0].is_reg or sides[0].is_dir) and sameFile(sides[0].file, sides[1].file)) return sum;
     if (options.limit == 0) return sum;
 
     for (&sides, 0..) |*s, f| {
@@ -282,12 +274,11 @@ fn openAllowDir(io: Io, in: Input) !Input.Opened {
     };
 }
 
-fn sameDevice(env: Env, a: Io.File, b: Io.File) bool {
-    // Two files with equal inode numbers on different devices are rare; the
-    // modification time is the cheapest extra check available through std.Io.
-    const sa = a.stat(env.io) catch return false;
-    const sb = b.stat(env.io) catch return false;
-    return sa.mtime.nanoseconds == sb.mtime.nanoseconds;
+fn sameFile(a: Io.File, b: Io.File) bool {
+    var e: std.os.linux.E = .SUCCESS;
+    const sa = sys.fstatFd(a.handle, &e) orelse return false;
+    const sb = sys.fstatFd(b.handle, &e) orelse return false;
+    return sys.isSameFile(sa, sb);
 }
 
 fn sprintc(buf: *[4]u8, c0: u8) []const u8 {

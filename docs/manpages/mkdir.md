@@ -10,7 +10,7 @@ mkdir - make directories
 # OPTIONS
 
 -m, --mode=MODE
-: Set the mode of each created directory (chmod syntax, relative to a=rwx; the umask applies only to clauses without who). Does not affect parents made by -p.
+: Set the mode of each created directory (chmod syntax, relative to a=rwx; the umask applies only to clauses without who). Does not affect parents made by -p. In a directory, set-ID bits the mode does not mention are kept as inherited (a numeric mode of fewer than five digits mentions only those it sets), so a set-group-ID parent keeps passing its group on; as in GNU, the umask shows in write bits a mode such as `g-s` leaves open. Parents made by -p keep an inherited set-group-ID bit.
 
 -p, --parents
 : Create missing parents (mode: umask-modified rwx plus u+wx); existing directories are not an error.

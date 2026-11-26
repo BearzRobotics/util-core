@@ -109,5 +109,36 @@ for tzv in America/New_York Asia/Kolkata; do
     TZ=$tzv run_cmp "default $tzv"   file empty big
     TZ=$tzv run_cmp "%x %y %z %w $tzv" -c '%x|%y|%z|%w' file empty
 done
+
+printf "\n[ Mount points of links ]\n"
+# Without -L it is the link that is asked about, not what it points to.
+ln -s /proc/version proclink; ln -s /proc procdir; mkdir -p sub2; ln -s /proc/version sub2/deep; ln -s sub2 sub2link
+for f in proclink procdir dangling sub2/deep sub2link/deep "$PWD/proclink" dlnk; do
+    run_cmp "%m $f"          -c '%m %n' "$f"
+done
+for f in procdir dangling dlnk; do
+    run_cmp "-L %m $f"       -L -c '%m %n' "$f"
+done
+# With -L we answer for the target. GNU, for a target that is not a
+# directory, answers for the directory of the link, so it is not compared.
+if [ "$("$BIN_DIR/stat" -L -c %m proclink)" = /proc ]; then
+    PASS=$((PASS + 1)); echo "PASS -L %m of a link to a file is the target's"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL -L %m of a link to a file is the target's"
+fi
+run_cmp "%m trailing slash"  -c '%m' procdir/
+rm -f proclink procdir sub2/deep sub2link; rmdir sub2
+
+printf "\n[ Long quoted names ]\n"
+# Quoted, such a name is several times longer than a path may be.
+seg=$(head -c 250 /dev/zero | tr '\0' '\001'); long=long
+mkdir long; i=0
+while [ $i -lt 12 ]; do long="$long/$seg"; mkdir "$long"; i=$((i + 1)); done
+ln -s "$long" longlink
+for style in shell-escape-always c escape shell literal; do
+    QUOTING_STYLE=$style run_cmp "%N long name $style" -c '%N|END' "$long"
+    QUOTING_STYLE=$style run_cmp "%N long link target $style" --printf '%N|END\n' longlink
+done
+/usr/bin/rm -rf long longlink
 print_summary
 [ "$FAIL" -eq 0 ]
