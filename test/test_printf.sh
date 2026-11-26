@@ -196,4 +196,10 @@ pf '%d\n' abc
 pf '%d\n' 12abc
 pf '%f\n' 1.5.5
 pf '%d %d\n' x y
+printf "\n[ %%q with long arguments ]\n"
+long=$(awk 'BEGIN { while (n++ < 6000) printf "a " }')
+pf '%q' "$long"
+pf '%q|\n' "$long" short
+pf '%q' "$(awk 'BEGIN { while (n++ < 3000) printf "x\047 \t" }')"
+pf '%q' "$(awk 'BEGIN { while (n++ < 20000) printf "y" }')"
 print_summary

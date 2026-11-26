@@ -304,10 +304,14 @@ fn conversion(st: *State, f: []const u8, i: usize) ?usize {
         'q' => {
             if (hasModifiers(sp)) return invalidSpec(st, f[i..j]);
             const a = st.nextArg() orelse "";
-            var buf: [8192]u8 = undefined;
-            var w: std.Io.Writer = .fixed(&buf);
-            quoteShell(&w, a) catch {};
-            pad(st, w.buffered(), sp);
+            // The result goes back to a shell: it must never be cut short.
+            var quoted: std.Io.Writer.Allocating = .init(st.env.gpa);
+            defer quoted.deinit();
+            quoteShell(&quoted.writer, a) catch {
+                st.oom = true; // the only way this writer fails
+                return null;
+            };
+            pad(st, quoted.written(), sp);
         },
         'd', 'i' => {
             const v = intArg(st, false);
