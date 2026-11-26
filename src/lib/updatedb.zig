@@ -3,7 +3,14 @@
 //! Reference: GNU findutils 4.10 (locate/updatedb.sh and frcode.c). The shell
 //! pipeline `find | sort -z | frcode` is done in process: the tree is walked
 //! in readdir order, pruned by path and file-system type, sorted bytewise and
-//! front-coded. The -localuser/-netuser options (su) are not supported.
+//! front-coded.
+//!
+//! Where the script runs find through `su` for --localuser and --netuser,
+//! the walk here (shell expansion of the search paths included) is done with
+//! that user's effective ids and groups, so that only names the user could
+//! find enter the database, which anyone may read. The calling thread alone
+//! changes identity, and it changes back before the database is written. If
+//! the identity cannot be assumed, nothing is written.
 //!
 //! The options are the values the script's variables and `--option=value`
 //! flags carry (strings split on white space, with shell pathname expansion
@@ -18,6 +25,7 @@ const LX = std.os.linux;
 const common = @import("common.zig");
 const fu = @import("fu_common.zig");
 const sys = @import("../sys.zig");
+const userdb = @import("../userdb.zig");
 const dirat = @import("../dirat.zig");
 const regex = @import("regex");
 const fnmatch = @import("../fnmatch.zig");
@@ -39,6 +47,11 @@ pub const Options = struct {
     netpaths: []const u8 = "",
     prunepaths: []const u8 = default_prunepaths,
     prunefs: []const u8 = default_prunefs,
+    /// Walk `searchpaths` as this user; empty: as the caller.
+    localuser: []const u8 = "",
+    /// Walk `netpaths` as this user when the caller is root (the script's
+    /// default); it cannot be empty then.
+    netuser: []const u8 = "daemon",
     output: []const u8 = default_output,
     /// The walk runs relative to this directory for relative search paths.
     changecwd: []const u8 = "/",
@@ -54,6 +67,8 @@ pub const Event = union(enum) {
     /// as when GNU's find rejects it, so nothing that should be pruned can
     /// get into the database.
     find_bad_regex: struct { pattern: []const u8, text: []const u8 },
+    /// The walk cannot be done as `user`; fatal (status 1, nothing written).
+    user_failed: struct { user: []const u8, text: []const u8 },
     /// A -findoptions word that is not understood; ends the walk.
     find_unknown_predicate: []const u8,
     /// A pruned path that ends in a slash; fatal (status 1, nothing written).
@@ -267,6 +282,66 @@ fn walkRoot(u: *U, sp: []const u8, changeto: []const u8) Error!void {
     try walk(u, sp, null, fs_path, 0, root_dev);
 }
 
+/// Who a walk runs as, when that is not the caller.
+const Walker = struct { name: []const u8, uid: u32, gid: u32, groups: []const u32 };
+
+/// The identity to walk as for the user `name`; `.walker` is null when that
+/// is who we are. Null on a failure, which has been reported.
+fn lookupWalker(u: *U, name: []const u8) Error!?struct { walker: ?Walker } {
+    var db = userdb.Db.load(u.gpa, u.env.io);
+    defer db.deinit();
+    const user = db.userByName(name) orelse {
+        u.observer.emit(.{ .user_failed = .{ .user = name, .text = "no such user" } });
+        return null;
+    };
+    const me = sys.identity();
+    if (user.uid == me.euid) return .{ .walker = null };
+    if (me.euid != 0) {
+        u.observer.emit(.{ .user_failed = .{ .user = name, .text = "only root can search as another user" } });
+        return null;
+    }
+    const groups = try db.groupsOf(u.gpa, name, user.gid);
+    return .{ .walker = .{ .name = name, .uid = user.uid, .gid = user.gid, .groups = groups } };
+}
+
+/// Expand the shell patterns of the word list `list` and walk each path, as
+/// `walker` if given. False when the identity could not be taken or given
+/// back (reported); the database must then not be written.
+fn walkPaths(u: *U, list: []const u8, changecwd: []const u8, walker: ?Walker) Error!bool {
+    const who = walker orelse {
+        try walkList(u, list, changecwd);
+        return true;
+    };
+    const me = sys.identity();
+    const my_groups = sys.supplementaryGroups(try u.gpa.alloc(u32, 65536));
+    // The groups and group id first: changing them takes root's user id.
+    var failure = sys.setThreadGroups(who.groups) orelse sys.setThreadEffectiveGid(who.gid) orelse sys.setThreadEffectiveUid(who.uid);
+    var walked: Error!void = {};
+    if (failure == null) walked = walkList(u, list, changecwd);
+    // And in the opposite order on the way back, whatever happened.
+    const back_uid = sys.setThreadEffectiveUid(me.euid);
+    const back_gid = sys.setThreadEffectiveGid(me.egid);
+    const back_groups = sys.setThreadGroups(my_groups);
+    if (failure == null) failure = back_uid orelse back_gid orelse back_groups;
+    try walked;
+    if (failure) |e| {
+        u.observer.emit(.{ .user_failed = .{ .user = who.name, .text = sys.errnoText(e) } });
+        return false;
+    }
+    return true;
+}
+
+fn walkList(u: *U, list: []const u8, changecwd: []const u8) Error!void {
+    var paths: std.ArrayList([]const u8) = .empty;
+    var words = std.mem.tokenizeAny(u8, list, " \t\n");
+    while (words.next()) |w| try globExpand(u, w, &paths);
+    for (paths.items) |sp| try walkRoot(u, sp, changecwd);
+}
+
+fn hasWords(list: []const u8) bool {
+    return std.mem.indexOfNone(u8, list, " \t\n") != null;
+}
+
 /// Walk the search paths and front-code the sorted names. Returns the
 /// database bytes (allocated from `env.gpa`; the caller frees), or null when
 /// the options are unusable (an event has been emitted and `status` is set).
@@ -339,17 +414,35 @@ fn build(env: Env, options: Options, observer: Observer, status: *u8, stale_tmp:
         }
     }
 
+    // Both identities are settled before anything is touched.
+    var local: ?Walker = null;
+    if (options.localuser.len > 0 and hasWords(options.searchpaths)) {
+        const found = try lookupWalker(&u, options.localuser) orelse {
+            status.* = 1;
+            return null;
+        };
+        local = found.walker;
+    }
+    var net: ?Walker = null;
+    if (hasWords(options.netpaths) and sys.identity().euid == 0) {
+        const found = try lookupWalker(&u, options.netuser) orelse {
+            status.* = 1;
+            return null;
+        };
+        net = found.walker;
+    }
+
     if (stale_tmp) |t| _ = sys.unlinkPath(t, false);
 
     if (!find_failed) {
-        var sw: std.ArrayList([]const u8) = .empty;
-        var sit = std.mem.tokenizeAny(u8, options.searchpaths, " \t\n");
-        while (sit.next()) |w| try globExpand(&u, w, &sw);
-        for (sw.items) |sp| try walkRoot(&u, sp, options.changecwd);
-        var nw: std.ArrayList([]const u8) = .empty;
-        var nit = std.mem.tokenizeAny(u8, options.netpaths, " \t\n");
-        while (nit.next()) |w| try globExpand(&u, w, &nw);
-        for (nw.items) |sp| try walkRoot(&u, sp, options.changecwd);
+        // Read as ourselves: another user may not be able to.
+        if (u.prune_fs.items.len > 0) u.mounts = try fu.Mounts.load(u.gpa);
+        if (!try walkPaths(&u, options.searchpaths, options.changecwd, local) or
+            !try walkPaths(&u, options.netpaths, options.changecwd, net))
+        {
+            status.* = 1;
+            return null;
+        }
     }
 
     std.mem.sort([]u8, u.paths.items, {}, lessThan);

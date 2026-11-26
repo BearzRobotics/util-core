@@ -195,6 +195,27 @@ pub fn identity() Identity {
     };
 }
 
+/// Set the calling thread's effective user id, effective group id or
+/// supplementary groups. These are the bare Linux system calls: unlike the C
+/// library's functions they change this thread only, so a caller that is
+/// root can read files as another user for a while and then come back.
+pub fn setThreadEffectiveUid(uid: u32) ?LX.E {
+    if (comptime !is_linux) return .NOSYS;
+    const keep = std.math.maxInt(u32);
+    return errOf(LX.setresuid(keep, uid, keep));
+}
+
+pub fn setThreadEffectiveGid(gid: u32) ?LX.E {
+    if (comptime !is_linux) return .NOSYS;
+    const keep = std.math.maxInt(u32);
+    return errOf(LX.setresgid(keep, gid, keep));
+}
+
+pub fn setThreadGroups(groups: []const u32) ?LX.E {
+    if (comptime !is_linux) return .NOSYS;
+    return errOf(LX.setgroups(groups.len, @ptrCast(groups.ptr)));
+}
+
 /// Supplementary group ids of the calling process, in kernel order.
 pub fn supplementaryGroups(buf: []u32) []u32 {
     if (comptime !is_linux) return other.supplementaryGroups(buf);

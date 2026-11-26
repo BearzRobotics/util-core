@@ -14,7 +14,7 @@ GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from t
 - `--prunepaths=DIRS, --prunefs=TYPES`: Paths and file-system types to skip.
 - `--output=FILE, --dbformat=FORMAT`: Output database and format (LOCATE02 or slocate).
 - `--findoptions=OPTS`: Extra options for the file walk (-xdev, -depth, -maxdepth, -mindepth, -noleaf, ...).
-- `--netuser=USER, --localuser=USER`: Accepted and ignored.
+- `--localuser=USER, --netuser=USER` (also LOCALUSER, NETUSER): search the local paths, and as root the network paths (default `daemon`), with that user's effective ids and groups.
 - `--help, --version`: Print help or version and exit.
 
 ## Supported behaviour
@@ -30,7 +30,8 @@ None. The executable follows the GNU updatedb script. The library (`util_core.up
 
 ## Known deviations and gaps
 
-- --localuser/--netuser (su) are ignored.
+- GNU changes user with `su`; here the searching thread takes the user's effective ids and supplementary groups (from /etc/passwd and /etc/group, no NSS) and takes its own back before the database is written. Linux only; elsewhere a change of user fails.
+- When the user cannot be assumed (unknown, or the caller is not root) nothing is written and the status is 1; GNU's `su` asks for a password, even when the user is the caller.
 - Databases are byte-identical to GNU's in all tested cases.
 
 ## Tests

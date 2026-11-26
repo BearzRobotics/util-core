@@ -157,4 +157,68 @@ else
     skip_test "updatedb link race (needs strace)"
 fi
 rm -rf "$W/race"
+
+# --localuser and --netuser decide who looks. They must never be ignored: the
+# database can be read by everyone.
+mkdir -p "$W/who/pub" "$W/who/priv/dir" "$W/who/net/priv"; : > "$W/who/pub/seen"; : > "$W/who/priv/dir/secret-name"; : > "$W/who/net/priv/secret-net"
+# (GNU asks for a password here, so this is compared with a run without it.)
+"$BIN_DIR/updatedb" --localpaths="$W/who/pub" $P --output="$W/self.a" > /dev/null 2>&1
+if "$BIN_DIR/updatedb" --localpaths="$W/who/pub" $P --localuser="$(id -un)" --output="$W/self.b" > "$W/o.err" 2>&1 && cmp -s "$W/self.a" "$W/self.b"; then
+    PASS=$((PASS + 1)); echo "PASS localuser naming ourselves"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL localuser naming ourselves $(cat "$W/o.err")"
+fi
+# user_fails DESC TEXT ARGS...: status 1, the message, the old database kept.
+user_fails() {
+    d="$1"; text="$2"; shift 2
+    echo old > "$W/keep.db"
+    "$BIN_DIR/updatedb" --localpaths="$W/who" $P --output="$W/keep.db" "$@" > "$W/o.out" 2> "$W/o.err"; ox=$?
+    if [ "$ox" = 1 ] && [ "$(cat "$W/keep.db")" = old ] && [ ! -e "$W/keep.db.n" ] && [ "$(sed 's/^[^:]*: //' "$W/o.err")" = "$text" ]; then
+        PASS=$((PASS + 1)); echo "PASS $d"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $d (rc=$ox) $(cat "$W/o.err")"
+    fi
+}
+user_fails "unknown localuser" "cannot search as user 'no-such-user': no such user" --localuser=no-such-user
+if [ "$(id -u)" != 0 ]; then
+    user_fails "another localuser without root" "cannot search as user 'root': only root can search as another user" --localuser=root
+fi
+# Root dropping to another user, tried as root of a user namespace that has a
+# range of ids (no real privileges are involved).
+userns() { unshare --map-root-user --map-auto "$@"; }
+if userns setpriv --reuid=65534 --regid=65534 --clear-groups true 2>/dev/null && id -u nobody > /dev/null 2>&1 && id -u daemon > /dev/null 2>&1; then
+    chmod 755 "$TEST_TMP" "$W" "$W/who" "$W/who/pub" "$W/who/net"; chmod 700 "$W/who/priv" "$W/who/net/priv"
+    # who_sees DESC WANTED UNWANTED ENV... -- ARGS...
+    who_sees() {
+        d="$1"; wanted="$2"; unwanted="$3"; shift 3
+        rm -f "$W/who.db"
+        userns env "$@" "$BIN_DIR/updatedb" --output="$W/who.db" --prunepaths=/nonexistent --prunefs=nofs > "$W/o.out" 2> "$W/o.err"; ox=$?
+        ok=1; [ "$ox" = 0 ] || ok=0
+        "$FU/locate" -d "$W/who.db" / > "$W/who.names" 2>/dev/null || ok=0
+        for n in $wanted; do grep -q "$n" "$W/who.names" || ok=0; done
+        for n in $unwanted; do ! grep -q "$n" "$W/who.names" || ok=0; done
+        # Written by root, not by the user who searched.
+        [ "$(stat -c '%u %a' "$W/who.db" 2>/dev/null)" = "$(id -u) 644" ] || ok=0
+        if [ "$ok" = 1 ]; then PASS=$((PASS + 1)); echo "PASS $d"
+        else FAIL=$((FAIL + 1)); echo "FAIL $d (rc=$ox) $(cat "$W/o.err")"; fi
+    }
+    who_sees "root sees everything by itself" "seen secret-name" "" SEARCHPATHS="$W/who/pub $W/who/priv"
+    who_sees "localuser sees only what the user can" "seen /who/priv" "secret-name" SEARCHPATHS="$W/who/pub $W/who/priv" LOCALUSER=nobody
+    who_sees "localuser also for shell patterns" "seen" "secret-name" SEARCHPATHS="$W/who/p* $W/who/pr*v/*" LOCALUSER=nobody
+    who_sees "as root, netpaths are searched as daemon" "/who/net/priv" "secret-net" SEARCHPATHS= NETPATHS="$W/who/net"
+    who_sees "netuser root sees them" "secret-net" "" SEARCHPATHS= NETPATHS="$W/who/net" NETUSER=root
+    who_sees "localuser then netuser, back in between" "seen secret-net" "secret-name" SEARCHPATHS="$W/who/pub $W/who/priv" LOCALUSER=nobody NETPATHS="$W/who/net" NETUSER=root
+    # The option, as in a cron entry.
+    rm -f "$W/who.db"
+    userns "$BIN_DIR/updatedb" --localuser=nobody --localpaths="$W/who/pub $W/who/priv" $P --prunefs=nofs --output="$W/who.db" > "$W/o.out" 2> "$W/o.err"; ox=$?
+    "$FU/locate" -d "$W/who.db" / > "$W/who.names" 2>/dev/null
+    if [ "$ox" = 0 ] && grep -q seen "$W/who.names" && ! grep -q secret-name "$W/who.names"; then
+        PASS=$((PASS + 1)); echo "PASS --localuser=nobody as root"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL --localuser=nobody as root (rc=$ox) $(cat "$W/o.err")"
+    fi
+    chmod 700 "$TEST_TMP"
+else
+    skip_test "searching as another user (needs unshare with a subordinate id range)"
+fi
 cd /; print_summary
