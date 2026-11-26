@@ -363,7 +363,7 @@ fn printStat(s: *Ctx, spec: []const u8, mod: u8, m: u8, filename: []const u8, st
             const g = s.db.?.groupByGid(st.gid);
             padStr(out, f, if (g) |x| x.name else "UNKNOWN");
         },
-        'm' => fail = outMountPoint(s, f, filename, st, follow),
+        'm' => fail = outMountPoint(s, f, filename, st),
         's' => outNum(out, f, st.size, 10, false),
         'r' => {
             if (mod == 'H') outNum(out, f, st.rdev_major, 10, false) else if (mod == 'L') outNum(out, f, st.rdev_minor, 10, false) else outNum(out, f, (@as(u64, st.rdev_major) << 8) | (st.rdev_minor & 0xff) | ((@as(u64, st.rdev_minor) & ~@as(u64, 0xff)) << 12), 10, false);
@@ -413,14 +413,17 @@ fn printStat(s: *Ctx, spec: []const u8, mod: u8, m: u8, filename: []const u8, st
     return fail;
 }
 
-fn outMountPoint(s: *Ctx, f: Flags, filename: []const u8, st: *const sys.FileStat, follow: bool) bool {
-    _ = follow;
+fn outMountPoint(s: *Ctx, f: Flags, filename: []const u8, st: *const sys.FileStat) bool {
     const gpa = s.env.gpa;
     // Canonicalise, then walk up while the device number stays the same.
     var path: std.ArrayList(u8) = .empty;
     defer path.deinit(gpa);
+    // A link that was not followed is where its directory is; its target
+    // may be on another file system, or missing. (As GNU's find_mount_point.)
+    const is_link = st.isLink();
+    const start = if (is_link) std.fs.path.dirname(filename) orelse "." else filename;
     var real_buf: [4096]u8 = undefined;
-    const real_len = Io.Dir.cwd().realPathFile(s.env.io, filename, &real_buf) catch {
+    const real_len = Io.Dir.cwd().realPathFile(s.env.io, start, &real_buf) catch {
         s.emit(.{ .cannot_canonicalize = filename });
         padStr(&s.out, f, "?");
         return true;
@@ -428,8 +431,15 @@ fn outMountPoint(s: *Ctx, f: Flags, filename: []const u8, st: *const sys.FileSta
     path.appendSlice(gpa, real_buf[0..real_len]) catch return true;
     var dev_major = st.dev_major;
     var dev_minor = st.dev_minor;
-    if (st.isLink()) {
-        // lstat of the link itself: use the device of its directory.
+    if (is_link) {
+        var err: std.os.linux.E = .SUCCESS;
+        const dir = sys.fileStat(path.items, true, &err) orelse {
+            s.emit(.{ .cannot_canonicalize = filename });
+            padStr(&s.out, f, "?");
+            return true;
+        };
+        dev_major = dir.dev_major;
+        dev_minor = dir.dev_minor;
     }
     while (path.items.len > 1) {
         const slash = std.mem.lastIndexOfScalar(u8, path.items, '/') orelse break;
