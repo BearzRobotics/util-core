@@ -144,4 +144,21 @@ a_stdin "-a /dev/stdin" -a /dev/stdin echo
 a_stdin "-a ./- is a file" -a ./- echo
 a_stdin "without -a the commands read nothing" sh -c 'echo "$@"; cat' x
 rm -f ./- aitems
+# An empty replacement string: GNU's "command too long" for any argument that
+# is not empty, at once (a time limit and a memory limit: it must not grow
+# the argument without end).
+printf 'a\nb\n' > two
+empty_repl() {
+    d="$1"; shift
+    e=$(LC_ALL=C timeout 10 /usr/bin/xargs "$@" < two 2>&1; echo "status $?")
+    o=$( (ulimit -v 1000000; LC_ALL=C timeout 10 "$BIN_DIR/xargs" "$@" < two 2>&1; echo "status $?") )
+    e=$(printf '%s\n' "$e" | sed 's#^/usr/bin/xargs:#xargs:#'); o=$(printf '%s\n' "$o" | sed 's#^[^ ]*/xargs:#xargs:#')
+    if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS $d"; else FAIL=$((FAIL+1)); echo "FAIL $d"; printf '  GNU: %s\n  ours: %s\n' "$e" "$(printf '%s' "$o" | head -c 300)"; fi
+}
+empty_repl "-I '' with an argument" -I '' echo xx
+empty_repl "-I '' with the command alone" -I '' echo
+empty_repl "-I '' with an empty argument" -I '' echo ''
+empty_repl "-I '' with empty arguments then another" -I '' echo '' y
+empty_repl "--replace= with -t" -t --replace= echo x
+rm -f two
 cd /; print_summary

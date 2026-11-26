@@ -39,6 +39,10 @@ pub const Event = union(enum) {
     /// The command could not be started; the run aborts with 127 (not found)
     /// or 126.
     spawn_failed: struct { name: []const u8, err: anyerror },
+    /// -I with an empty replacement string and an argument that is not empty:
+    /// the string is found at the same place forever, so the command grows
+    /// without end. GNU's "command too long".
+    command_too_long,
     /// -t: the command line about to run, shell-quoted, without newline.
     trace: []const u8,
 };
@@ -238,6 +242,16 @@ fn runCommand(x: *X) Stop!void {
         // Each initial argument has REPL replaced by the (single) item.
         const item: []const u8 = if (x.items.items.len > 0) x.items.items[0] else "";
         for (x.initial, 0..) |a, ai| {
+            if (ai > 0 and repl.len == 0) {
+                // As in GNU, an empty argument becomes the item.
+                if (a.len != 0) {
+                    x.observer.emit(.command_too_long);
+                    try finishAll(x);
+                    return x.abort(1);
+                }
+                try argv.append(gpa, cutNul(item));
+                continue;
+            }
             if (ai == 0 or std.mem.indexOf(u8, a, repl) == null) {
                 try argv.append(gpa, a);
                 continue;

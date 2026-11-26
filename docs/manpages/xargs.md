@@ -23,7 +23,7 @@ Build and execute command lines from standard input.
 : Logical end-of-file string.
 
 -I R, -i[R], --replace[=R]
-: Replace R in the initial arguments with each input line (one command per item).
+: Replace R in the initial arguments with each input line (one command per item). With an empty R, as in GNU xargs, an empty argument after the command name becomes the input line, and any other argument ends the run with `command too long`. (GNU xargs does not finish when the input item is empty too; this xargs reports the same error.)
 
 -L N, -l[N], --max-lines[=N]
 : At most N non-blank input lines per command.

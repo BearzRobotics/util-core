@@ -42,6 +42,7 @@ fn report(context: ?*anyopaque, ev: xargs.Event) void {
         .argument_line_too_long => cli.warn(ctx.*, "argument line too long", .{}),
         .cannot_fit_single_argument => cli.warn(ctx.*, "cannot fit single argument within argument list size limit", .{}),
         .argument_list_too_long => cli.warn(ctx.*, "argument list too long", .{}),
+        .command_too_long => cli.warn(ctx.*, "command too long", .{}),
         .child_exited_255 => |name| cli.warn(ctx.*, "{s}: exited with status 255; aborting", .{name}),
         .child_signaled => |s| cli.warn(ctx.*, "{s}: terminated by signal {d}", .{ s.name, s.signal }),
         .wait_failed => |name| cli.warn(ctx.*, "{s}: wait failed", .{name}),
