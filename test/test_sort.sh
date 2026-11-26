@@ -434,4 +434,10 @@ for o in "" "-s -k1,1" "-u -k1,1"; do
 done
 rm -rf many
 
+# A hexadecimal zero is zero whatever its exponent.
+printf '1\n0x0p99999\n-1\n0x.0p100000\n-0x0p5000\n0\n0x1p-99999\n' > hexzero
+run_cmp "-g hex zero, large exponent" -g -s hexzero
+printf '0x0p99999\n1\n' > hexzero2
+run_cmp "-g hex zero before one" -g hexzero2
+
 print_summary

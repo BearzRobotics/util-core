@@ -35,7 +35,7 @@ GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, install
 - Sorting holds the whole input in memory; there are no temporary files, so `-S`, `-T`, `--batch-size`, `--compress-program` have no effect and inputs larger than memory fail. `-c`/`-C` and `-m` (to standard output, at most 128 inputs, standard input named at most once) stream one line per input instead.
 - Single-threaded; `--parallel=N` is validated and ignored.
 - Comparison is bytewise (C locale). LC_COLLATE, LC_CTYPE and LC_NUMERIC (thousands separators, multibyte characters) are not consulted; `-f` folds ASCII only.
-- `-g` parses with `double`; GNU uses `long double`, so values that differ only beyond 53 bits compare equal here. NaNs compare equal to each other; GNU orders them by representation.
+- `-g` parses with `double`; GNU uses `long double`, so values that differ only beyond 53 bits compare equal here, and values beyond the range of a double read as zero or infinity (1e-400 equals 0). NaNs compare equal to each other; GNU orders them by representation.
 - The traditional `+POS1 -POS2` key syntax is not recognised (those arguments are file names).
 - An ambiguous long option prints `option '--s' is ambiguous` without GNU's `; possibilities:` list (shared `cli.badLong`).
 - A write failure reports `write failed: 'standard output'` without the strerror text.

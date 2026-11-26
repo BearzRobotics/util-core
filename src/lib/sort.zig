@@ -994,7 +994,9 @@ fn parseGeneral(s: []const u8) General {
             if (m < rest.len and std.ascii.isDigit(rest[m])) {
                 var e: i32 = 0;
                 while (m < rest.len and std.ascii.isDigit(rest[m])) : (m += 1) e = @min(e *| 10 +| @as(i32, rest[m] - '0'), 100000);
-                v *= std.math.pow(f64, 2, @floatFromInt(if (eneg) -e else e));
+                // Zero stays zero at any exponent (Zig's ldexp gives infinity
+                // for a zero and a large one; multiplying by 2^e gave NaN).
+                if (v != 0) v = std.math.ldexp(v, if (eneg) -e else e);
             }
         }
         return .{ .parsed = true, .value = if (neg) -v else v };
