@@ -86,6 +86,24 @@ run_tree "--backup=existing none"  "$S" --backup=existing a b
 run_tree "--backup=none"           "$S" --backup=none a b
 run_tree "--backup=bogus"          "$S" --backup=bogus a b
 run_tree "-S suffix"               "$S" -b -S .bak a b
+# Backup naming is the same as cp's, mv's and install's.
+B='echo A > a; echo cur > b; echo oldsimple > b~'
+run_tree "existing: only .~10~ left"  "$B; echo ten > b.~10~" -f -b -s a b
+run_tree "numbered: after the highest" "$B; echo five > b.~5~" -f --backup=numbered -s a b
+run_tree "numbered: past a gap"      "$B; : > b.~1~; : > b.~9~" --backup=t a b
+run_tree "-S alone makes a backup"   "$S" -S .bak a b
+run_tree "-f -S keeps the old file"  "$B" -f -S .bak a b
+run_tree "--suffix= alone"           "$B" -f --suffix=.orig a b
+run_tree "empty suffix is ~"         "$S" -b -S '' a b
+run_tree "suffix with a slash is ~"  "$S; mkdir sub" -b -S /../sub/x a b
+run_tree "-S .bak --backup=numbered" "$S" -S .bak --backup=numbered a b
+run_tree "--backup= (empty)"         "$S" --backup= a b
+for v in numbered existing simple none bogus ''; do
+    VERSION_CONTROL=$v run_tree "VERSION_CONTROL='$v' -b" "$S" -b a b
+done
+for v in '' /x .env; do
+    SIMPLE_BACKUP_SUFFIX=$v run_tree "SIMPLE_BACKUP_SUFFIX='$v'" "$S" -b a b
+done
 run_tree "--suffix=.orig"          "$S" -b --suffix=.orig a b
 run_tree "-bv"                     "$S" -bv a b
 run_tree "-sbv"                    "$S" -sbv a b

@@ -11,7 +11,7 @@ GNU coreutils 9.7 (`/usr/bin/ln --version` on the development machine, installed
 - `-s, --symbolic`: Symbolic links.
 - `-f, --force`: Replace existing destinations.
 - `-i, --interactive`: Prompt (reads y/n from standard input).
-- `-b, --backup[=CONTROL]`: Back up replaced files (`none`, `simple`, `numbered`, `existing` and their aliases); `-S SUFFIX` and `SIMPLE_BACKUP_SUFFIX` set the simple suffix.
+- `-b, --backup[=CONTROL]`: Back up replaced files (`none`, `simple`, `numbered`, `existing` and their aliases); `-S SUFFIX` (which also turns backups on) and `SIMPLE_BACKUP_SUFFIX` set the simple suffix; one that is empty or contains `/` means `~`. Backups are named as by cp, mv and install: `existing` is numbered when any numbered backup exists, and `numbered` takes the highest number plus one.
 - `-L, -P`: Hard links follow / do not follow symbolic-link sources.
 - `-n, --no-dereference`: Treat a symlink-to-directory destination as a file.
 - `-r, --relative`: With -s, make the link relative to its own directory.
@@ -40,7 +40,7 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Tests
 
-test/test_ln.sh (87 cases: hard, symbolic, relative, backup and interactive forms and their errors) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
+test/test_ln.sh (142 cases: hard, symbolic, relative, backup and interactive forms and their errors) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
 
 ## Not yet done
 

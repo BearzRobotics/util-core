@@ -12,10 +12,12 @@ const common = @import("common.zig");
 const paths = @import("../paths.zig");
 const sys = @import("../sys.zig");
 const replacelink = @import("../replacelink.zig");
+const backup = @import("../backup.zig");
 
 pub const Env = common.Env;
 
-pub const Backup = enum { none, simple, numbered, existing };
+/// How backups are named; the same naming as cp, mv and install.
+pub const Backup = backup.Type;
 
 pub const Options = struct {
     symbolic: bool = false,
@@ -49,7 +51,7 @@ pub const Event = union(enum) {
     /// The destination exists and none of force/interactive/backup was given.
     exists: struct { dest: []const u8, symbolic: bool },
     same_file: struct { src: []const u8, dest: []const u8 },
-    backup_failed: struct { dest: []const u8, err: anyerror },
+    backup_failed: struct { dest: []const u8, errno: sys.E },
     remove_failed: struct { dest: []const u8, err: anyerror },
     link_failed: struct { dest: []const u8, src: []const u8, symbolic: bool, errno: sys.E },
     /// After a failed link, the backup could not be renamed back to `dest`.
@@ -111,9 +113,10 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
         }
     }
 
-    var made_backup: ?[]u8 = null;
+    var arena: std.heap.ArenaAllocator = .init(env.gpa); // holds the backup name
+    defer arena.deinit();
+    var made_backup: ?[]const u8 = null;
     var replacing = false; // -f or -i, without a backup
-    defer if (made_backup) |b| env.gpa.free(b);
     if (exists(env, dest)) |dst| {
         if (!cfg.force and !cfg.interactive and cfg.backup == .none) {
             observer.emit(.{ .exists = .{ .dest = dest, .symbolic = cfg.symbolic } });
@@ -127,13 +130,12 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
             if (!confirm.func(confirm.context, dest)) return false;
         }
         if (cfg.backup != .none) {
-            const bname = backupName(env, cfg, dest) orelse return error.OutOfMemory;
-            cwd.rename(dest, cwd, bname, env.io) catch |e| {
-                observer.emit(.{ .backup_failed = .{ .dest = dest, .err = e } });
-                env.gpa.free(bname);
+            var errno: sys.E = .SUCCESS;
+            made_backup = backup.backupRename(env, cfg.suffix, arena.allocator(), sys.cwdFd(), dest, cfg.backup, &errno) orelse {
+                if (errno == .NOMEM) return error.OutOfMemory;
+                observer.emit(.{ .backup_failed = .{ .dest = dest, .errno = errno } });
                 return false;
             };
-            made_backup = bname;
         } else {
             if (dst.kind == .directory) {
                 observer.emit(.{ .remove_failed = .{ .dest = dest, .err = error.IsDir } });
@@ -201,30 +203,6 @@ fn sameEntry(a: []const u8, b: []const u8) bool {
     const first = sys.fileStat(std.fs.path.dirnamePosix(a) orelse ".", true, &err) orelse return false;
     const second = sys.fileStat(std.fs.path.dirnamePosix(b) orelse ".", true, &err) orelse return false;
     return first.ino == second.ino and first.dev_major == second.dev_major and first.dev_minor == second.dev_minor;
-}
-
-fn backupName(env: Env, cfg: Options, dest: []const u8) ?[]u8 {
-    var kind = cfg.backup;
-    if (kind == .existing) {
-        // Numbered when a numbered backup of this file already exists.
-        var n: usize = 1;
-        kind = .simple;
-        while (n < 10) : (n += 1) {
-            const cand = std.fmt.allocPrint(env.gpa, "{s}.~{d}~", .{ dest, n }) catch return null;
-            defer env.gpa.free(cand);
-            if (exists(env, cand) != null) {
-                kind = .numbered;
-                break;
-            }
-        }
-    }
-    if (kind == .simple) return std.fmt.allocPrint(env.gpa, "{s}{s}", .{ dest, cfg.suffix }) catch null;
-    var n: usize = 1;
-    while (true) : (n += 1) {
-        const cand = std.fmt.allocPrint(env.gpa, "{s}.~{d}~", .{ dest, n }) catch return null;
-        if (exists(env, cand) == null) return cand;
-        env.gpa.free(cand);
-    }
 }
 
 /// Target of a relative symlink named `dest` pointing at `src`.

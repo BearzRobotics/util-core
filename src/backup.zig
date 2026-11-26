@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Backup file naming and renaming (gnulib backupfile.c, coreutils 9.6,
-//! consulted 2026-11-07) shared by cp, mv and install. Library code (decision
+//! consulted 2026-11-07) shared by cp, mv, install and ln. Library code (decision
 //! 0004): no argument handling and no process-wide state; the caller resolves
 //! the version-control argument and the suffix (see backup_args.zig).
 

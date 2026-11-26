@@ -7,6 +7,7 @@ const std = @import("std");
 const cli = @import("../cli.zig");
 const ln = @import("../lib/ln.zig");
 const sys = @import("../sys.zig");
+const backup_args = @import("../backup_args.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "backup", "directory", "force", "interactive", "logical", "no-dereference", "physical", "relative", "symbolic", "suffix", "target-directory", "no-target-directory", "verbose", "help", "version" };
@@ -23,17 +24,16 @@ const Config = struct {
     verbose: bool = false,
     no_target_dir: bool = false,
     backup: Backup = .none,
-    suffix: []const u8 = "~",
     target_dir: ?[]const u8 = null,
 };
 
 pub fn main(ctx: cli.Context) u8 {
     var cfg: Config = .{};
-    if (cli.getenv(ctx, "SIMPLE_BACKUP_SUFFIX")) |sfx| cfg.suffix = sfx;
     var files: std.ArrayList([]const u8) = .empty;
     defer files.deinit(ctx.gpa);
     var backup_requested = false;
     var backup_arg: ?[]const u8 = null;
+    var suffix_arg: ?[]const u8 = null;
 
     var i: usize = 0;
     var only_operands = false;
@@ -83,7 +83,11 @@ pub fn main(ctx: cli.Context) u8 {
                 6 => cfg.logical = false,
                 7 => cfg.relative = true,
                 8 => cfg.symbolic = true,
-                9 => cfg.suffix = value.?,
+                9 => {
+                    // As GNU: giving a suffix asks for backups.
+                    backup_requested = true;
+                    suffix_arg = value;
+                },
                 10 => cfg.target_dir = value,
                 11 => cfg.no_target_dir = true,
                 12 => cfg.verbose = true,
@@ -115,7 +119,10 @@ pub fn main(ctx: cli.Context) u8 {
                     }
                     value = ctx.args[i];
                 }
-                if (a[j] == 'S') cfg.suffix = value else cfg.target_dir = value;
+                if (a[j] == 'S') {
+                    backup_requested = true;
+                    suffix_arg = value;
+                } else cfg.target_dir = value;
                 break;
             },
             else => {
@@ -125,11 +132,7 @@ pub fn main(ctx: cli.Context) u8 {
         };
     }
     if (backup_requested) {
-        const kind: []const u8 = backup_arg orelse (cli.getenv(ctx, "VERSION_CONTROL") orelse "existing");
-        cfg.backup = parseBackup(kind) orelse {
-            cli.warn(ctx, "invalid argument {f} for 'backup type'\nValid arguments are:\n  - 'none', 'off'\n  - 'simple', 'never'\n  - 'existing', 'nil'\n  - 'numbered', 't'\nTry '{s} --help' for more information.", .{ cli.quoteC(kind), ctx.name });
-            return 1;
-        };
+        cfg.backup = backup_args.parseVersion(ctx, "backup type", backup_arg) orelse return 1;
     }
     if (cfg.relative and !cfg.symbolic) {
         cli.warn(ctx, "cannot do --relative without --symbolic", .{});
@@ -188,7 +191,7 @@ pub fn main(ctx: cli.Context) u8 {
         .relative = cfg.relative,
         .verbose = cfg.verbose,
         .backup = cfg.backup,
-        .suffix = cfg.suffix,
+        .suffix = backup_args.simpleSuffix(ctx, suffix_arg),
     };
     const target: ln.Target = if (dest_dir) |d| .{ .dir = d } else .{ .name = files.items[1] };
     const srcs: []const []const u8 = if (dest_dir != null) sources else files.items[0..1];
@@ -213,7 +216,7 @@ fn report(context: ?*anyopaque, ev: ln.Event) void {
         .directory_source => |p| cli.warn(ctx.*, "{f}: hard link not allowed for directory", .{cli.quote(p)}),
         .exists => |f| cli.warn(ctx.*, "failed to create {s} {f}: File exists", .{ kindName(f.symbolic), cli.quoteA(f.dest) }),
         .same_file => |f| cli.warn(ctx.*, "{f} and {f} are the same file", .{ cli.quoteA(f.src), cli.quoteA(f.dest) }),
-        .backup_failed => |f| cli.warn(ctx.*, "cannot backup {f}: {s}", .{ cli.quoteA(f.dest), cli.errText(f.err) }),
+        .backup_failed => |f| cli.warn(ctx.*, "cannot backup {f}: {s}", .{ cli.quoteA(f.dest), sys.errnoText(f.errno) }),
         .remove_failed => |f| cli.warn(ctx.*, "cannot remove {f}: {s}", .{ cli.quoteA(f.dest), cli.errText(f.err) }),
         // GNU names the target of a symbolic link only when it can be at fault.
         .link_failed => |f| if (f.symbolic and (f.errno == .NAMETOOLONG or f.src.len == 0))
@@ -237,21 +240,6 @@ fn confirm(context: ?*anyopaque, dest: []const u8) bool {
     const prompt = std.fmt.bufPrint(&pbuf, "{s}: replace {f}? ", .{ ctx.name, cli.quoteA(dest) }) catch "";
     Io.File.stderr().writeStreamingAll(ctx.io, prompt) catch {};
     return answerYes(ctx.*);
-}
-
-fn parseBackup(s: []const u8) ?Backup {
-    const table = [_]struct { []const u8, Backup }{
-        .{ "none", .none },     .{ "off", .none },      .{ "numbered", .numbered }, .{ "t", .numbered },
-        .{ "existing", .existing }, .{ "nil", .existing }, .{ "simple", .simple },   .{ "never", .simple },
-    };
-    for (table) |e| if (std.mem.eql(u8, e[0], s)) return e[1];
-    // Unambiguous prefixes are accepted too.
-    var found: ?Backup = null;
-    for (table) |e| if (s.len > 0 and std.mem.startsWith(u8, e[0], s)) {
-        if (found != null and found.? != e[1]) return null;
-        found = e[1];
-    };
-    return found;
 }
 
 fn isDir(ctx: cli.Context, path: []const u8, follow: bool) bool {

@@ -23,7 +23,7 @@ Make links between files.
 : Prompt (reads y/n from standard input).
 
 -b, --backup[=CONTROL]
-: Back up replaced files (`none`, `simple`, `numbered`, `existing` and their aliases); `-S SUFFIX` and `SIMPLE_BACKUP_SUFFIX` set the simple suffix.
+: Back up replaced files (`none`, `simple`, `numbered`, `existing` and their aliases); `-S SUFFIX` (which also turns backups on) and `SIMPLE_BACKUP_SUFFIX` set the simple suffix; one that is empty or contains `/` means `~`. Backups are named as by cp, mv and install: `existing` is numbered when any numbered backup exists, and `numbered` takes the highest number plus one.
 
 -L, -P
 : Hard links follow / do not follow symbolic-link sources.
@@ -56,7 +56,7 @@ Make links between files.
 
 # ENVIRONMENT
 
-none (locale variables are ignored; behaviour is that of the C locale)
+`VERSION_CONTROL` chooses the backup type when `--backup` gives none; `SIMPLE_BACKUP_SUFFIX` sets the simple backup suffix. Locale variables are ignored; behaviour is that of the C locale.
 
 # STANDARD STREAMS
 
