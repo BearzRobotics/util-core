@@ -7,6 +7,18 @@ UTIL="split"
 TREE_CONTENT=1
 help_cmp
 S='seq 1 25 > in; seq 1 105 > in105; printf "no newline at end" > nonl; : > empty; printf "aaaa\nbb\ncccccc\nd\neeeeeeeeee\nf\n" > words; printf "a\0b\0cc\0ddd\0" > nul; printf "one\ntwo\nthree\nfour\nfive\nsix\nseven\n" > seven; awk "BEGIN{srand(7); for(i=0;i<300;i++){n=int(rand()*30); s=\"\"; for(j=0;j<n;j++) s=s sprintf(\"%c\",97+int(rand()*26)); print s}}" > rnd; awk "BEGIN{srand(3); for(i=0;i<5000;i++) printf \"%c\", 1+int(rand()*254)}" | tr "\n" "x" > bin; echo >> bin'
+# piped_cmp DESC PRODUCER ARGS...: like run_tree, with standard input a pipe.
+piped_cmp() {
+    description="$1"; producer="$2"; shift 2
+    d="$TEST_TMP/piped"; rm -rf "$d"; mkdir -p "$d/g" "$d/o"
+    (cd "$d/g" && eval "$producer" | LC_ALL=C gnu "$@" > ../g.out 2> ../g.err; echo $? > ../g.rc)
+    (cd "$d/o" && eval "$producer" | LC_ALL=C ours "$@" > ../o.out 2> ../o.err; echo $? > ../o.rc)
+    if diff -r "$d/g" "$d/o" > /dev/null && cmp -s "$d/g.out" "$d/o.out" && cmp -s "$d/g.rc" "$d/o.rc" && [ ! -s "$d/o.err" ]; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s (rc %s/%s) %s\n" "$description" "$(cat "$d/g.rc")" "$(cat "$d/o.rc")" "$(cat "$d/o.err")"
+    fi
+}
 run_tree "default"              "$S" in
 run_tree "stdin"                "$S" < /dev/null
 TREE_STDIN=/dev/null run_tree "stdin dash empty" "$S" -
@@ -172,6 +184,42 @@ if [ "$rc" = 0 ] && [ "$out" = "$(printf 'y\ny\ny')" ]; then
     PASS=$((PASS + 1)); echo "PASS filter r/ on endless input ends when the filters do"
 else
     FAIL=$((FAIL + 1)); echo "FAIL filter r/ on endless input ends when the filters do (rc=$rc: $out)"
+fi
+# -n needs the input size first. Pipes, files that say they are empty and
+# standard input that is not at its start must still be split completely.
+for how in "-n 2" "-n 4" "-n 2/3" "-n l/3" "-n l/2/3" "-e -n 30"; do
+    piped_cmp "$how from a pipe" 'seq 1 99' $how
+    # More than one read block, so the pipe has to be spooled.
+    piped_cmp "$how from a long pipe" 'seq 1 60000' $how
+done
+run_tree "-n fifo"              'mkfifo f; (seq 1 99 > f &)' -n 3 f
+run_tree "-n /proc file"        "$S" -n 2 /proc/version
+run_tree "-n l/ /proc file"     "$S" -n l/2 /proc/version
+run_tree "-n /dev/null"         "$S" -n 3 /dev/null
+run_tree "-n sysfs file"        "$S" -n 2 /sys/kernel/uevent_seqnum
+for lines in 9 60000; do
+    d="$TEST_TMP/offset"; rm -rf "$d"; mkdir -p "$d/g" "$d/o"; seq 1 $lines > "$d/in"
+    (cd "$d/g" && { read -r skip; gnu -n 3; } < ../in)
+    (cd "$d/o" && { read -r skip; ours -n 3; } < ../in)
+    if diff -r "$d/g" "$d/o" > /dev/null; then
+        PASS=$((PASS + 1)); echo "PASS -n splits what is left of stdin ($lines lines)"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL -n splits what is left of stdin ($lines lines)"
+    fi
+done
+seq 1 60000 > "$TEST_TMP/spool.in"
+mkdir -p "$TEST_TMP/spool/tmp" "$TEST_TMP/spool/out"
+(cd "$TEST_TMP/spool/out" && cat ../../spool.in | TMPDIR="$TEST_TMP/spool/tmp" ours -n 2)
+if [ -z "$(ls -A "$TEST_TMP/spool/tmp")" ] && cat "$TEST_TMP/spool/out"/x* | cmp -s - "$TEST_TMP/spool.in"; then
+    PASS=$((PASS + 1)); echo "PASS the spool file is removed"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL the spool file is removed"
+fi
+err=$(cd "$TEST_TMP/spool/out" && rm -f x* && cat ../../spool.in | TMPDIR="$TEST_TMP/nosuch" ours -n 2 2>&1); rc=$?
+if [ "$rc" = 1 ] && [ "$err" = "split: -: cannot determine file size: No such file or directory" ] && [ -z "$(ls -A "$TEST_TMP/spool/out")" ]; then
+    PASS=$((PASS + 1)); echo "PASS no temporary file, no pieces"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL no temporary file, no pieces (rc=$rc: $err)"
 fi
 # A write that fails, at the end or on the way, is reported with status 1.
 if [ -e /dev/full ]; then

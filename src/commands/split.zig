@@ -256,6 +256,6 @@ fn report(context: ?*anyopaque, ev: split.Event) void {
         .write_error => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
         .close_error => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), sys.errnoText(e.errno) }),
         .read_error => |e| cli.warn(ctx.*, "read error: {s}", .{cli.errText(e)}),
-        .cannot_determine_size => cli.warn(ctx.*, "{f}: cannot determine file size", .{cli.quote("-")}),
+        .cannot_determine_size => |e| cli.warn(ctx.*, "{f}: cannot determine file size: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
     }
 }

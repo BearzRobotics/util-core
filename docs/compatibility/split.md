@@ -25,6 +25,7 @@ GNU coreutils 9.7 (`/usr/bin/split --version` on the development machine, instal
 ## Supported behaviour
 
 - Without -a the suffix grows when exhausted in order-preserving fashion (x89 then x9000, xyz then xzaaa), as GNU does.
+- `-n N`, `K/N`, `l/N` and `l/K/N` take the input size as GNU does: input that ends within the first 128 KiB is measured by reading it, a regular file whose size is believable is asked, and anything else (pipes, large /proc files, character devices) is copied to a temporary file in `$TMPDIR` first. Input without an end fails when that file can grow no further.
 - The tests compare the names, modes and contents (cksum) of every output file.
 
 ## Known deviations and gaps

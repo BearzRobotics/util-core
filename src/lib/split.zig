@@ -70,7 +70,9 @@ pub const Event = union(enum) {
     /// close() failed: some file systems only report a failed write there.
     close_error: struct { name: []const u8, errno: std.os.linux.E },
     read_error: anyerror,
-    cannot_determine_size,
+    /// -n needs the size first, and reading or spooling the input to find it
+    /// failed.
+    cannot_determine_size: struct { name: []const u8, err: anyerror },
 };
 pub const Observer = common.Observer(Event);
 
@@ -155,6 +157,7 @@ pub fn run(env: Env, opts: Options, input: Input, stdout: *Io.Writer, obs: Obser
         .unbuffered = opts.unbuffered,
         .elide = opts.elide_empty,
         .input_stat = null,
+        .input_name = input.name orelse "-",
     };
     defer st.cur_name.deinit(gpa);
 
@@ -246,6 +249,7 @@ const State = struct {
     unbuffered: bool,
     elide: bool,
     input_stat: ?sys.FileStat,
+    input_name: []const u8,
     out: ?wsink.Sink = null,
     child: ?std.process.Child = null,
     cur_name: std.ArrayList(u8) = .empty,
@@ -479,6 +483,96 @@ fn readAll(io: Io, file: Io.File, buf: []u8) !usize {
     return n;
 }
 
+/// The input of the -n modes, which may have been read ahead to find its size.
+const ChunkInput = struct {
+    file: Io.File,
+    /// Bytes already read from `file`, handed out before anything else.
+    held: []const u8 = &.{},
+    /// There is nothing to read after `held` (a terminal must not be asked
+    /// again).
+    ended: bool = false,
+    /// The temporary file that `file` now is, if it was spooled.
+    spool: ?Spool = null,
+
+    fn read(in: *ChunkInput, io: Io, buf: []u8) !usize {
+        if (in.held.len > 0) {
+            const n = @min(buf.len, in.held.len);
+            @memcpy(buf[0..n], in.held[0..n]);
+            in.held = in.held[n..];
+            return n;
+        }
+        if (in.ended) return 0;
+        return readAll(io, in.file, buf);
+    }
+
+    /// The number of bytes left in the input. As GNU does: if it ends within
+    /// the first block that is the answer. Otherwise the file system is
+    /// believed where it can be (a regular file whose size covers what has
+    /// been read; files under /proc say 0), and anything else, such as a
+    /// pipe, is copied to a temporary file. `first` must outlive the input.
+    fn measure(in: *ChunkInput, env: Env, first: []u8) !u64 {
+        const got = try readAll(env.io, in.file, first);
+        in.held = first[0..got];
+        if (got < first.len) {
+            in.ended = true;
+            return got;
+        }
+        var err: std.os.linux.E = .SUCCESS;
+        if (sys.fstatFd(in.file.handle, &err)) |info| {
+            if (info.isReg()) {
+                if (sys.seekFd(in.file.handle, 0, 1, &err)) |pos| {
+                    // Standard input may not have been at the start.
+                    if (pos >= got and info.size >= pos) return info.size - (@as(u64, @intCast(pos)) - got);
+                }
+            }
+        }
+        const spool = try Spool.create(env);
+        in.spool = spool;
+        try spool.file.writeStreamingAll(env.io, in.held);
+        var total: u64 = got;
+        while (true) {
+            const n = try readAll(env.io, in.file, first);
+            if (n == 0) break;
+            try spool.file.writeStreamingAll(env.io, first[0..n]);
+            total += n;
+        }
+        var err2: std.os.linux.E = .SUCCESS;
+        if (sys.seekFd(spool.file.handle, 0, 0, &err2) == null) return error.Unseekable;
+        in.file = spool.file;
+        in.held = &.{};
+        return total;
+    }
+};
+
+/// An unnamed temporary file in $TMPDIR.
+const Spool = struct {
+    file: Io.File,
+    /// Set when the name could not be removed while the file was open.
+    path: ?[]u8 = null,
+    gpa: std.mem.Allocator,
+
+    fn create(env: Env) !Spool {
+        const set = env.getenv("TMPDIR") orelse env.getenv("TEMP");
+        const dir = if (set != null and set.?.len > 0) set.? else "/tmp";
+        var random: u64 = undefined;
+        env.io.random(std.mem.asBytes(&random));
+        const path = try std.fmt.allocPrint(env.gpa, "{s}/split.{x}", .{ dir, random });
+        errdefer env.gpa.free(path);
+        const file = try Io.Dir.cwd().createFile(env.io, path, .{ .read = true, .exclusive = true, .permissions = sys.permissionsFromMode(0o600) });
+        Io.Dir.cwd().deleteFile(env.io, path) catch return .{ .file = file, .path = path, .gpa = env.gpa };
+        env.gpa.free(path);
+        return .{ .file = file, .gpa = env.gpa };
+    }
+
+    fn close(s: Spool, io: Io) void {
+        s.file.close(io);
+        if (s.path) |path| {
+            Io.Dir.cwd().deleteFile(io, path) catch {};
+            s.gpa.free(path);
+        }
+    }
+};
+
 fn runMode(st: *State, file: Io.File, mode: Mode, size: u64, chunks: u64, chunk_k: u64, sep: u8) bool {
     const gpa = st.env.gpa;
     const io = st.env.io;
@@ -601,18 +695,17 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
     const io = st.env.io;
     const gpa = st.env.gpa;
     // Chunks by size need the input size; round-robin does not.
+    var input: ChunkInput = .{ .file = file };
+    defer if (input.spool) |spool| spool.close(io);
+    var first: []u8 = &.{};
+    defer gpa.free(first);
     var total: u64 = 0;
     if (mode != .chunk_rr) {
-        const s = file.stat(io) catch {
-            st.obs.emit(.cannot_determine_size);
+        first = gpa.alloc(u8, buf.len) catch return false;
+        total = input.measure(st.env, first) catch |e| {
+            st.obs.emit(.{ .cannot_determine_size = .{ .name = st.input_name, .err = e } });
             return false;
         };
-        if (s.kind == .file) {
-            total = s.size;
-        } else if (s.kind != .character_device) {
-            st.obs.emit(.cannot_determine_size);
-            return false;
-        }
     }
     const per = total / n;
     const rem = total % n;
@@ -657,7 +750,7 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
                 }
                 while (pos < end) {
                     if (rd == have) {
-                        have = readAll(io, file, buf) catch |e| return readFail(st, e);
+                        have = input.read(io, buf) catch |e| return readFail(st, e);
                         rd = 0;
                         if (have == 0) {
                             pos = end;
@@ -700,7 +793,7 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
             // When no round-robin filter is reading any more, stop: the input
             // may never end.
             while (st.filters_gone < n) {
-                const got = readAll(io, file, buf) catch |e| return readFail(st, e);
+                const got = input.read(io, buf) catch |e| return readFail(st, e);
                 if (got == 0) break;
                 var pos: usize = 0;
                 while (pos < got) {
