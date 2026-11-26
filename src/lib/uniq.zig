@@ -85,6 +85,10 @@ fn sameKey(a: []const u8, b: []const u8, ignore_case: bool) bool {
 fn filter(env: Env, out: *stickyout.Out, reader: *lines.LineReader, cfg: Options, observer: Observer) !bool {
     var first_line: std.ArrayList(u8) = .empty; // copy of the current group's first line
     defer first_line.deinit(env.gpa);
+    // -D with -u prints each line only once another one follows it in the
+    // group: this is the line still waiting.
+    var held: std.ArrayList(u8) = .empty;
+    defer held.deinit(env.gpa);
     var count: u64 = 0;
     var groups_started: u64 = 0;
     var groups_printed: u64 = 0; // for -D separators
@@ -101,12 +105,16 @@ fn filter(env: Env, out: *stickyout.Out, reader: *lines.LineReader, cfg: Options
         if (count > 0 and sameKey(keyOf(first_line.items, cfg), keyOf(line.text, cfg), cfg.ignore_case)) {
             count += 1;
             if (cfg.all_repeated) {
-                if (count == 2) {
-                    startAllRepeated(out, cfg, &groups_printed);
-                    // -u together with -D drops the first line of each group.
-                    if (cfg.output_first_repeated) writeLine(out, first_line.items, cfg.term);
+                if (count == 2) startAllRepeated(out, cfg, &groups_printed);
+                if (cfg.output_first_repeated) {
+                    if (count == 2) writeLine(out, first_line.items, cfg.term);
+                    writeLine(out, line.text, cfg.term);
+                } else {
+                    // As in GNU, -u drops the last line of each group.
+                    writeLine(out, if (count == 2) first_line.items else held.items, cfg.term);
+                    held.clearRetainingCapacity();
+                    try held.appendSlice(env.gpa, line.text);
                 }
-                writeLine(out, line.text, cfg.term);
             } else if (cfg.group) writeLine(out, line.text, cfg.term);
             continue;
         }
