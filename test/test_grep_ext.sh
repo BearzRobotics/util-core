@@ -99,6 +99,10 @@ if command -v python3 > /dev/null; then
     all_json 'json: no separator between files' --json -C1 two a.txt b.c
     all_json 'json with --stats' --json --stats two a.txt
     all_json 'json with --group-separator' --json -C1 --group-separator=== two apart.txt
+    all_json 'json with context after -m' --json -m1 -A2 two a.txt apart.txt
+    all_json 'json with non-UTF-8 and control bytes' --json -C1 two bad.txt a.txt
+    all_json 'json with no match' --json zzz a.txt
+    all_json 'json with -q' --json -q two a.txt
 else
     skip_test 'json: every line is JSON (no python3)'
 fi

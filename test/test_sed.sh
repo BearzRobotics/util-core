@@ -654,6 +654,14 @@ sd 'ERE unmatched (' altin -E 's/(/x/'
 sd 'ERE unmatched )' altin -E 's/)/x/'
 sd 'BRE a**' altin 's/a**/x/'
 
+# Each word anchor by itself, in places where \< , \> and \b differ, in the C
+# locale and in a UTF-8 one (the two are translated differently).
+printf 'abc def\n abc_1 -x-  abcdef\nfoo.bar  (baz)\n\n_ _a a_\nab abab b\n' > anchors
+for sc in 's/\>/X/g' 's/\</X/g' 's/\b/X/g' 's/\B/X/g' 's/.\>/X/g' 's/\<./X/g' 's/\>./X/g' 's/.\</X/g' \
+    's/\<[a-z]*/<&>/g' 's/[a-z]*\>/<&>/g' 's/abc\>/X/g' 's/\>abc/X/g' '/\<\W/d'; do
+    for loc in C C.UTF-8; do CMP_LOCALE=$loc sd "anchor $loc $sc" anchors "$sc"; done
+done
+
 # ---- --debug (program listing and execution trace)
 printf 'a/b\n' > dab; printf 'tab\there\\x\001\n' > dweird; printf 'zz\n' > rf.txt
 DBGCASES='p
