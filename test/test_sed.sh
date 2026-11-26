@@ -513,6 +513,37 @@ else
     ok_if '-i limits the permissions of a group it cannot keep' \
         "$? $(stat -c '%a %g' "$d/g") $(cat "$d/g") $(grep -c 'could not keep the group' "$d/err")" "0 744 $(id -g) b 1"
 fi
+# The access ACL goes with the file, and one inherited from the directory by
+# the new copy must not be added. acl_of lists a file's entries.
+acl_of() { getfacl -cpE "$1" | tr '\n' ' '; }
+d="$W/acl"; mkdir "$d"; printf 'x\n' > "$d/a"
+if ! command -v getfacl > /dev/null || ! setfacl -m u:65534:r "$d/a" 2>/dev/null; then
+    for t in 'keeps an access ACL' 'adds no inherited ACL' 'warns when the ACL is lost' 'limits the ACL entry of another group'; do
+        skip_test "-i $t (no ACL support)"
+    done
+else
+    cp -p "$d/a" "$d/b"; "$BIN_DIR/sed" -i s/x/y/ "$d/a"; "${GNU_BIN:-/usr/bin}/sed" -i s/x/y/ "$d/b"
+    ok_if '-i keeps an access ACL' "$(acl_of "$d/a")" "$(acl_of "$d/b")"
+    mkdir "$d/in"; setfacl -d -m u:65534:rwx "$d/in"
+    printf 'x\n' > "$d/in/a"; cp "$d/in/a" "$d/in/b"; setfacl -b "$d/in/a" "$d/in/b"; chmod 640 "$d/in/a" "$d/in/b"
+    "$BIN_DIR/sed" -i s/x/y/ "$d/in/a"; "${GNU_BIN:-/usr/bin}/sed" -i s/x/y/ "$d/in/b"
+    ok_if '-i adds no inherited ACL' "$(acl_of "$d/in/a")" "$(acl_of "$d/in/b")"
+    if can_inject; then
+        printf 'x\n' > "$d/l"; chmod 600 "$d/l"; setfacl -m u:65534:rw "$d/l"
+        strace -o /dev/null -e trace=fsetxattr -e inject=fsetxattr:error=EPERM "$BIN_DIR/sed" -i s/x/y/ "$d/l" 2> "$d/err"
+        ok_if '-i warns when the ACL is lost' "$? $(stat -c %a "$d/l") $(grep -c 'could not keep all of its permissions' "$d/err")" "0 600 1"
+        printf 'x\n' > "$d/g"; chmod 660 "$d/g"; setfacl -m u:65534:rw "$d/g"
+        if [ -n "$grp" ] && chgrp "$grp" "$d/g" 2>/dev/null; then
+            strace -o /dev/null -e trace=fchown -e inject=fchown:error=EPERM:when=1+ "$BIN_DIR/sed" -i s/x/y/ "$d/g" 2> /dev/null
+            ok_if '-i limits the ACL entry of another group' "$(acl_of "$d/g")" 'user::rw- user:nobody:rw- group::--- mask::rw- other::---  '
+        else
+            skip_test '-i limits the ACL entry of another group (no second group)'
+        fi
+    else
+        skip_test '-i warns when the ACL is lost (cannot inject)'
+        skip_test '-i limits the ACL entry of another group (cannot inject)'
+    fi
+fi
 run_tree_t '--in-place' "$SET" --in-place 's/a/A/' f
 run_tree_t '--in-place=.b' "$SET" --in-place=.b 's/a/A/' f
 run_tree_t '-i missing' "$SET" -i 's/a/A/' nosuch

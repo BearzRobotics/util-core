@@ -127,6 +127,71 @@ pub noinline fn preserve(src: Place, dst: Place, mode: u32, is_dir: bool) ?sys.E
     return failure;
 }
 
+/// Give `dst`, a new file about to take the place of `src`, the permissions
+/// of `src` and nothing else: unlike a copy made by cp, it does not keep an
+/// access ACL it got from its directory. `mode` is the permission bits of
+/// `src`; `same_group` says whether `dst` has its group. A group that is not
+/// the same gets no more than others had. Returns the errno of what failed;
+/// `dst` then allows nobody more than `src` did.
+pub noinline fn replacement(src: sys.Handle, dst: sys.Handle, mode: u32, same_group: bool) ?sys.E {
+    var buf: [max_len]u8 = undefined;
+    var err: sys.E = .SUCCESS;
+    var failure: ?sys.E = null;
+    var granted = mode;
+    if (read(.{ .fd = src }, access_name, &buf, &err)) |n| {
+        if (!same_group) limitOwningGroup(buf[0..n]);
+        const e = sys.setXattrFd(dst, access_name, buf[0..n]) orelse return sys.fchmodFd(dst, granted);
+        failure = e;
+        granted = modeWithoutAcl(mode, buf[0..n]);
+    } else {
+        if (!absent(err)) {
+            failure = err;
+            granted = mode & ~@as(u32, 0o077);
+        } else if (!same_group) {
+            granted = mode & ~@as(u32, 0o070) | (mode & (mode << 3) & 0o070);
+        }
+    }
+    if (sys.getXattrFd(dst, access_name, &buf, &err) != null) {
+        // An ACL of only these three entries is stored as the plain mode.
+        const plain = plainAcl(granted);
+        if (sys.setXattrFd(dst, access_name, &plain)) |e| {
+            // The group bits would be the mask of the ACL that stays.
+            failure = e;
+            granted &= ~@as(u32, 0o077);
+        }
+    }
+    return sys.fchmodFd(dst, granted) orelse failure;
+}
+
+/// The access ACL that says what the permission bits of `mode` say.
+fn plainAcl(mode: u32) [4 + 3 * 8]u8 {
+    var out: [4 + 3 * 8]u8 = @splat(0xff); // 0xffffffff: no user or group id
+    std.mem.writeInt(u32, out[0..4], 2, .little);
+    // The owner, the owning group, others.
+    for ([_]u16{ 0x01, 0x04, 0x20 }, [_]u5{ 6, 3, 0 }, 0..) |tag, shift, i| {
+        std.mem.writeInt(u16, out[4 + 8 * i ..][0..2], tag, .little);
+        std.mem.writeInt(u16, out[6 + 8 * i ..][0..2], @intCast((mode >> shift) & 7), .little);
+    }
+    return out;
+}
+
+/// Let the owning group's entry of `acl` allow no more than the one for
+/// others.
+fn limitOwningGroup(acl: []u8) void {
+    if (acl.len < 4 or (acl.len - 4) % 8 != 0) return;
+    var other: u16 = 0;
+    var i: usize = 4;
+    while (i < acl.len) : (i += 8) {
+        if (std.mem.readInt(u16, acl[i..][0..2], .little) == 0x20) other = std.mem.readInt(u16, acl[i + 2 ..][0..2], .little);
+    }
+    i = 4;
+    while (i < acl.len) : (i += 8) {
+        if (std.mem.readInt(u16, acl[i..][0..2], .little) != 0x04) continue;
+        const perm = acl[i + 2 ..][0..2];
+        std.mem.writeInt(u16, perm, std.mem.readInt(u16, perm, .little) & other, .little);
+    }
+}
+
 /// The mode for a file that has to do without the access ACL `acl`. The owning
 /// group gets its own entry, not the mask. A named user or group that loses its
 /// entry falls under the group or the other bits, so neither may exceed what
@@ -176,4 +241,12 @@ test "a mode without its ACL never allows more" {
     const barred = testAcl(&.{ .{ 1, 6 }, .{ 2, 0 }, .{ 4, 4 }, .{ 0x10, 4 }, .{ 0x20, 4 } });
     try t.expectEqual(@as(u32, 0o600), modeWithoutAcl(0o644, &barred));
     try t.expectEqual(@as(u32, 0o700), modeWithoutAcl(0o775, "junk"));
+}
+
+test "the owning group's entry of another group" {
+    var acl = testAcl(&.{ .{ 1, 6 }, .{ 2, 6 }, .{ 4, 6 }, .{ 0x10, 6 }, .{ 0x20, 4 } });
+    limitOwningGroup(&acl);
+    const want = testAcl(&.{ .{ 1, 6 }, .{ 2, 6 }, .{ 4, 4 }, .{ 0x10, 6 }, .{ 0x20, 4 } });
+    try std.testing.expectEqualSlices(u8, &want, &acl);
+    try std.testing.expectEqualSlices(u8, &testAcl(&.{ .{ 1, 6 }, .{ 4, 4 }, .{ 0x20, 0 } }), &plainAcl(0o4640));
 }

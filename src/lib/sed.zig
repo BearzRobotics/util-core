@@ -26,6 +26,7 @@ const common = @import("common.zig");
 const posixre = @import("../posixre.zig");
 const regex = @import("regex");
 const sys = @import("../sys.zig");
+const posixacl = @import("../posixacl.zig");
 const unicode = @import("../unicode.zig");
 const Io = std.Io;
 const LX = std.os.linux;
@@ -150,6 +151,9 @@ pub const Event = union(enum) {
     /// An in-place edit could not give the new file the old one's group (the
     /// edit goes on; the group gets no more than others had).
     group_not_kept: struct { name: []const u8, errno: LX.E },
+    /// An in-place edit could not give the new file all of the old one's
+    /// mode and access ACL (the edit goes on; it allows nobody more).
+    permissions_not_kept: struct { name: []const u8, errno: LX.E },
     /// "couldn't close NAME: ERRNO" (fatal, status 4). Some file systems only
     /// report a failed write here. An in-place original is not replaced.
     close_failed: struct { name: []const u8, errno: LX.E },
@@ -1584,7 +1588,7 @@ const Exec = struct {
         const tmp = e.in_place_tmp orelse return;
         const o = e.cur_out;
         try e.flushOut(o);
-        if (e.in_place_st) |st| e.keepAttributes(o.fd, st);
+        if (e.in_place_st) |st| e.keepAttributes(e.in.cur.fd, o.fd, st);
         const close_error = sys.closeFd(o.fd);
         o.fd = sys.invalid_handle;
         if (close_error) |er| {
@@ -1619,10 +1623,11 @@ const Exec = struct {
         e.cur_out = e.stdout_o;
     }
 
-    /// Give the finished copy the owner, group and mode of the file it
-    /// replaces, as far as this user may.
-    fn keepAttributes(e: *Exec, fd: sys.Handle, old: sys.FileStat) void {
+    /// Give the finished copy `fd` the owner, group, mode and access ACL of
+    /// the file `from` that it replaces, as far as this user may.
+    fn keepAttributes(e: *Exec, from: sys.Handle, fd: sys.Handle, old: sys.FileStat) void {
         var mode = old.mode & 0o7777;
+        var same_group = true;
         // The owner first: changing it clears the set-ID bits.
         if (sys.fchownFd(fd, old.uid, old.gid) != null) {
             // Only a privileged user can give a file away; the group alone
@@ -1633,13 +1638,14 @@ const Exec = struct {
             // A set-ID bit must not pass to another user or group.
             if (new == null or new.?.uid != old.uid) mode &= ~@as(u32, 0o4000);
             if (new == null or new.?.gid != old.gid) {
-                // Whoever is in the new file's group had only the others'
-                // permissions on the old file.
-                mode = mode & ~@as(u32, 0o2070) | (mode & (mode << 3) & 0o070);
+                mode &= ~@as(u32, 0o2000);
+                same_group = false;
                 e.s.obs.emit(.{ .group_not_kept = .{ .name = e.in_place_target, .errno = group_error orelse serr } });
             }
         }
-        _ = sys.fchmodFd(fd, mode);
+        if (posixacl.replacement(from, fd, mode, same_group)) |er| {
+            e.s.obs.emit(.{ .permissions_not_kept = .{ .name = e.in_place_target, .errno = er } });
+        }
     }
 
     /// Fatal, as in GNU sed. `deinit` removes the temporary file.
