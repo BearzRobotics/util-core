@@ -51,6 +51,58 @@ fn validInterval(rest: []const u8) bool {
     return digits1 > 0 or digits2 > 0;
 }
 
+fn isWordByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+/// Whether anything matching the pattern text `rest` surely begins with an
+/// ASCII word character: it starts with a literal one, or \w, that cannot be
+/// repeated zero times. False when in doubt.
+fn startsWithWord(rest: []const u8) bool {
+    var after: []const u8 = undefined;
+    if (std.mem.startsWith(u8, rest, "\\w")) {
+        after = rest[2..];
+    } else if (rest.len > 0 and isWordByte(rest[0])) {
+        after = rest[1..];
+    } else return false;
+    // "+" keeps one, but may itself be made optional.
+    if (std.mem.startsWith(u8, after, "\\+")) after = after[2..] else if (std.mem.startsWith(u8, after, "+")) after = after[1..];
+    for ([_][]const u8{ "*", "?", "{", "\\?", "\\{" }) |q| if (std.mem.startsWith(u8, after, q)) return false;
+    return true;
+}
+
+/// Whether anything matching the pattern text `before` surely ends with an
+/// ASCII word character. False when in doubt.
+fn endsWithWord(before: []const u8, ere: bool) bool {
+    const plus: []const u8 = if (ere) "+" else "\\+";
+    const atom = if (std.mem.endsWith(u8, before, plus)) before[0 .. before.len - plus.len] else before;
+    if (atom.len == 0) return false;
+    const last = atom[atom.len - 1];
+    // An escaped letter or digit is something else (\W, \s, \1), except \w.
+    var slashes: usize = 0;
+    while (slashes + 1 < atom.len and atom[atom.len - 2 - slashes] == '\\') slashes += 1;
+    if (slashes % 2 == 1) return last == 'w';
+    return isWordByte(last);
+}
+
+test "word start and end in the C locale" {
+    const gpa = std.testing.allocator;
+    const cases = [_][2][]const u8{
+        .{ "\\<foo\\>", "\\bfoo\\b" },
+        .{ "\\<\\w\\+\\>", "\\b\\w+\\b" },
+        .{ "\\>", "\\b(?![0-9A-Za-z_])" },
+        .{ "\\<.", "\\b(?=[0-9A-Za-z_])." },
+        .{ "\\<a*x", "\\b(?=[0-9A-Za-z_])a*x" },
+        .{ "ab*\\>", "ab*\\b(?![0-9A-Za-z_])" },
+        .{ "\\W\\>", "\\W\\b(?![0-9A-Za-z_])" },
+    };
+    for (cases) |c| {
+        const got = try translate(gpa, c[0], false);
+        defer gpa.free(got);
+        try std.testing.expectEqualStrings(c[1], got);
+    }
+}
+
 /// What the pattern contains that matters for longest-match emulation.
 pub const Flags = struct {
     /// The pattern itself has an alternation.
@@ -126,7 +178,15 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
             }
             if (n == '<' or n == '>' or n == 'b' or n == 'B' or n == '\'') flags.right = true;
             if ((n == '<' or n == '>') and !opts.utf8) {
+                // The Perl dialect has only \b. That is the same as \< or
+                // \> where the pattern puts a word character on the inner
+                // side. Elsewhere a lookahead says which end is meant, at the
+                // price of the backtracking engine, so it is not added
+                // without need.
                 try out.appendSlice(gpa, "\\b");
+                if (n == '<') {
+                    if (!startsWithWord(pat[i..])) try out.appendSlice(gpa, "(?=[0-9A-Za-z_])");
+                } else if (!endsWithWord(pat[0 .. i - 2], ere)) try out.appendSlice(gpa, "(?![0-9A-Za-z_])");
                 continue;
             }
             if (opts.utf8 and (n == 'w' or n == 'W' or n == 's' or n == 'S')) {

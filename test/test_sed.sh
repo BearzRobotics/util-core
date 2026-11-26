@@ -649,4 +649,11 @@ help_text_cmp() {
     else FAIL=$((FAIL + 1)); printf "FAIL --help text\n"; fi
 }
 help_text_cmp
+# \< and \> are each one end of a word, also in the C locale and next to
+# something that need not be a word character.
+printf 'abc def\n abc_1 -x-  abcdef\nfoo.bar  (baz)\n\n_ _a a_\nab abab b\n' > "$TEST_TMP/words"
+for p in '\<' '\>' '\<.' '.\>' 'abc\<' '\>abc' '\<a*' 'ab*\>' '\W\>' '\<\W' '\<[a-z]*def\>' '\<abc\>' '\<\w\+\>' '\<a\?b' '\(abc\)\>'; do
+    CMP_STDIN="$TEST_TMP/words" run_cmp "word ends: s/$p/[&]/g" "s/$p/[&]/g"
+    CMP_STDIN="$TEST_TMP/words" run_cmp "word ends: -E s/$p" -n -E "s/$p/<&>/gp"
+done
 cd /; print_summary

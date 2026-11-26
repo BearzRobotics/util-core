@@ -394,5 +394,11 @@ else
     skip_test "grep on pipes with late writers (needs bash)"
 fi
 rm -rf pipes
+# \< and \> are each one end of a word (C locale, next to anything).
+printf 'abc def\n abc_1 -x-  abcdef\nfoo.bar  (baz)\n\n_ _a a_\nab abab b\n' > words
+for p in '\<' '\>' '\<.' '.\>' 'abc\<' '\>abc' '\<a*' 'ab*\>' '\W\>' '\<\W' '\<[a-z]*def\>' '\<abc\>' '\<\w\+\>' '\<a\?b' '\(abc\)\>'; do
+    gd "word ends: -on '$p'" words -on -- "$p"
+    gd "word ends: -c '$p'" words -c -- "$p"
+done
 help_cmp
 cd /; print_summary
