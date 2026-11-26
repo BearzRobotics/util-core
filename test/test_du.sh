@@ -229,6 +229,22 @@ else
     FAIL=$((FAIL + 1)); echo "FAIL the depth limit is reported (rc=$rc, $(wc -c < huge.err) bytes of messages)"
 fi
 /usr/bin/rm -rf huge
+# An error while a directory is being listed is not taken for its end.
+if can_inject; then
+    mkdir -p listing/sub; echo x > listing/sub/a
+    for when in 1 3; do
+        exp=$(LC_ALL=C strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=$when /usr/bin/du -a listing 2>&1; echo "rc=$?")
+        act=$(strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=$when "$BIN_DIR/du" -a listing 2>&1; echo "rc=$?")
+        if [ "$act" = "$exp" ]; then
+            PASS=$((PASS + 1)); echo "PASS a directory read error is reported (getdents $when)"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL a directory read error is reported (getdents $when)"; printf '%s\n--\n%s\n' "$exp" "$act"
+        fi
+    done
+    /usr/bin/rm -rf listing
+else
+    skip_test "directory read errors (no usable strace)"
+fi
 # A directory replaced by a link after du has examined it is not followed.
 # strace holds du just before it opens the directory.
 if can_inject; then

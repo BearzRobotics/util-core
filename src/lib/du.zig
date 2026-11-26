@@ -408,7 +408,12 @@ fn visit(s: *Du, dir: ?*dirat.Level, name: []const u8, level: u64, parent: *Leve
             for (entries) |entry| {
                 if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
                 s.path.shrinkRetainingCapacity(base_len);
-                s.path.ensureUnusedCapacity(ctx.gpa, entry.name.len + 1) catch continue;
+                s.path.ensureUnusedCapacity(ctx.gpa, entry.name.len + 1) catch {
+                    // The totals would be short without a word.
+                    s.observer.emit(.{ .cannot_read_dir = .{ .path = s.path.items[0..base_len], .errno = .NOMEM } });
+                    ok = false;
+                    break;
+                };
                 s.path.appendAssumeCapacity('/');
                 s.path.appendSliceAssumeCapacity(entry.name);
                 if (!visit(s, &below, entry.name, level + 1, &children, root_dev)) ok = false;
