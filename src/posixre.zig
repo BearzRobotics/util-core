@@ -32,6 +32,10 @@ pub const Opts = struct {
     icase: bool = false,
     /// GNU grep -E: a `{` that does not start a valid interval is literal.
     lenient_brace: bool = false,
+    /// `compileFull` only: `.` also matches a newline, as in POSIX. Not the
+    /// default because GNU's other users of these patterns (ptx, for one)
+    /// ask glibc for the opposite.
+    dot_newline: bool = false,
 };
 
 /// `rest` follows a `{`: true for `n}`, `n,}`, `,m}` and `n,m}`.
@@ -829,7 +833,8 @@ pub fn compileFull(gpa: std.mem.Allocator, pat: []const u8, ere: bool, ignore_ca
     var flags: Flags = .{};
     const body = try translateFlags(gpa, pat, ere, opts, &flags);
     defer gpa.free(body);
-    const src = if (anchored) try std.fmt.allocPrint(gpa, "^(?:{s})", .{body}) else try gpa.dupe(u8, body);
+    const prefix = if (opts.dot_newline) "(?s)" else "";
+    const src = if (anchored) try std.fmt.allocPrint(gpa, "{s}^(?:{s})", .{ prefix, body }) else try std.fmt.allocPrint(gpa, "{s}{s}", .{ prefix, body });
     defer gpa.free(src);
     var re = regex.Regex.compile(gpa, src, .{ .dialect = .perl, .ignore_case = ignore_case, .limits = big_limits }, null) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -837,7 +842,7 @@ pub fn compileFull(gpa: std.mem.Allocator, pat: []const u8, ere: bool, ignore_ca
     };
     errdefer re.deinit(gpa);
     // An anchored match starts at the start, so the oracle needs no anchor.
-    const longest = try Longest.compile(gpa, .{ .pattern = pat, .ere = ere, .body = body, .flags = flags, .ignore_case = ignore_case, .utf8 = opts.utf8 });
+    const longest = try Longest.compile(gpa, .{ .pattern = pat, .ere = ere, .body = body, .prefix = prefix, .flags = flags, .ignore_case = ignore_case, .utf8 = opts.utf8 });
     return .{ .re = re, .groups = re.groupCount(), .longest = longest };
 }
 

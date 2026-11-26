@@ -93,6 +93,20 @@ run_cmp "nested" '(' '(' 1 ')' ')'
 run_cmp "paren string" '(' abc ')'
 run_cmp "paren op" '(' + ')'
 
+# "." matches a newline (POSIX), as the other atoms do.
+nl='a
+b'
+run_cmp "newline: .* length" "$nl" : '.*'
+run_cmp "newline: dot between" "$nl" : 'a.b'
+run_cmp "newline: interval of dots" "$nl" : '.\{3\}'
+run_cmp "newline: group" "$nl" : '\(.*\)'
+run_cmp "newline: match keyword" match "$nl" '.*b'
+run_cmp "newline: longest alternative" "$nl" : 'a\|a.b'
+run_cmp "newline: alternation with dot" "$nl" : '\(a\|a.\)b'
+run_cmp "newline: bracket" "$nl" : 'a[^x]b'
+run_cmp "newline: \$ is the end only" "$nl" : 'a$'
+run_cmp "newline: ^ is the start only" "$nl" : '.*^b'
+
 printf "\n[ Random arithmetic ]\n"
 for s in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     set -- $(awk -v s=$s 'BEGIN{srand(s); a=int(rand()*2000000-1000000); b=int(rand()*2000)-1000; printf "%d %d", a, b}')

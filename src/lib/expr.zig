@@ -297,7 +297,7 @@ const Parser = struct {
     fn regexMatch(p: *Parser, subject: []const u8, pattern: []const u8) Error![]const u8 {
         if (p.skip > 0) return "0";
         const gpa = p.alloc();
-        var c = posixre.compileMode(gpa, pattern, false, false, true) catch |e| switch (e) {
+        var c = posixre.compileFull(gpa, pattern, false, false, true, .{ .dot_newline = true }) catch |e| switch (e) {
             error.BadPattern => return p.fatal(.{ .regex_error = posixre.diagnose(pattern) }),
             else => return error.Fatal,
         };
