@@ -291,23 +291,41 @@ const State = struct {
             st.child.?.stdin = st.out.?.file;
             return true;
         }
-        const f = Io.Dir.cwd().createFile(st.env.io, name, .{ .truncate = true }) catch |e| {
-            st.obs.emit(.{ .create_failed = .{ .name = name, .err = e } });
-            return false;
-        };
-        if (st.input_stat) |ins| {
-            var err: std.os.linux.E = .SUCCESS;
-            if (sys.fileStat(name, true, &err)) |os| {
-                if (os.ino == ins.ino and os.dev_major == ins.dev_major and os.dev_minor == ins.dev_minor and ins.isReg()) {
-                    f.close(st.env.io);
-                    st.obs.emit(.{ .would_overwrite = name });
-                    return false;
-                }
-            }
-        }
+        const f = st.createOutput(name) orelse return false;
         st.out = wsink.Sink.initFile(st.env.io, f);
         st.files_made += 1;
         return true;
+    }
+
+    /// Create or empty the output file `name`; null (already reported) when
+    /// that fails. It is opened without truncation so that the input is still
+    /// intact when `name` turns out to be it.
+    fn createOutput(st: *State, name: []const u8) ?Io.File {
+        const io = st.env.io;
+        const f = Io.Dir.cwd().createFile(io, name, .{ .truncate = false }) catch |e| {
+            st.obs.emit(.{ .create_failed = .{ .name = name, .err = e } });
+            return null;
+        };
+        var err: std.os.linux.E = .SUCCESS;
+        const out = sys.fstatFd(f.handle, &err) orelse {
+            f.close(io);
+            st.obs.emit(.{ .create_failed = .{ .name = name, .err = error.Unexpected } });
+            return null;
+        };
+        if (st.input_stat) |in| {
+            if (out.ino == in.ino and out.dev_major == in.dev_major and out.dev_minor == in.dev_minor) {
+                f.close(io);
+                st.obs.emit(.{ .would_overwrite = name });
+                return null;
+            }
+        }
+        // Devices and pipes have no length to cut.
+        if (out.isReg()) f.setLength(io, 0) catch |e| {
+            f.close(io);
+            st.obs.emit(.{ .create_failed = .{ .name = name, .err = e } });
+            return null;
+        };
+        return f;
     }
 
     fn closeCurrent(st: *State) bool {

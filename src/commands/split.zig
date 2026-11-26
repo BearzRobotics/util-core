@@ -249,7 +249,7 @@ fn report(context: ?*anyopaque, ev: split.Event) void {
         },
         .spawn_failed => |e| cli.warn(ctx.*, "failed to run command: \"{s} -c {s}\": {s}", .{ e.shell, e.command, cli.errText(e.err) }),
         .create_failed => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
-        .would_overwrite => |name| cli.warn(ctx.*, "{f} would overwrite input; aborting", .{cli.quote(name)}),
+        .would_overwrite => |name| cli.warn(ctx.*, "{f} would overwrite input; aborting", .{cli.quoteA(name)}),
         .filter_exit => |e| cli.warn(ctx.*, "with FILE={s}, exit {d} from command: {s}", .{ e.file, e.code, e.command }),
         .filter_signal => |e| cli.warn(ctx.*, "with FILE={s}, signal {d} from command: {s}", .{ e.file, e.signal, e.command }),
         .write_error => |name| cli.warn(ctx.*, "{f}: write error", .{cli.quote(name)}),

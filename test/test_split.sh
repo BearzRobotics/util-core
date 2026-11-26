@@ -75,6 +75,15 @@ run_tree "extra operand"        "$S" in p extra
 run_tree "bad option"           "$S" -z in
 run_tree "long abbrev"          "$S" --line=5 in
 run_tree "overwrite input"      "$S" -l 5 xaa xa
+# An output name that is the input: refuse and leave the input as it was.
+run_tree "input is first output" 'seq 1 9 > xaa' -l 1 xaa
+run_tree "input is later output" 'seq 1 9 > xac' -l 1 xac
+run_tree "output links to input" 'seq 1 9 > in; ln in xaa' -l 1 in
+run_tree "output symlink to input" 'seq 1 9 > in; ln -s in xab' -b 4 in
+run_tree "-n input is output"   'seq 1 9 > xab' -n 3 xab
+run_tree "-n l/ input is output" 'seq 1 9 > xab' -n l/3 xab
+run_tree "existing outputs are replaced" 'seq 1 9 > in; seq 1 99 > xaa' -l 3 in
+run_tree "output is /dev/null"  'seq 1 9 > in; ln -s /dev/null xaa' -l 3 in
 run_tree "verbose"              "$S" --verbose -l 10 in
 run_tree "verbose -b"           "$S" --verbose -b 20 in
 run_tree "-e"                   "$S" -e -l 10 in
