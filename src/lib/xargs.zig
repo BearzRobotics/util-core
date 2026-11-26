@@ -13,6 +13,7 @@
 //! have been waited for, exactly as the executable exits.
 
 const std = @import("std");
+const programpath = @import("../programpath.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
@@ -308,6 +309,20 @@ fn runCommand(x: *X) Stop!void {
         tty_file = Io.Dir.cwd().openFile(x.env.io, "/dev/tty", .{}) catch null;
         if (tty_file) |f| stdin_opt = .{ .file = f };
     }
+    // On Windows the program is found through PATH here, so that one in the
+    // current directory is not run for a bare name.
+    const name = argv.items[0];
+    const program: ?[]const u8 = programpath.resolve(x.env, gpa, name) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.FileNotFound => null,
+    };
+    defer if (program) |found| if (found.ptr != name.ptr) gpa.free(found);
+    if (program == null) {
+        x.observer.emit(.{ .spawn_failed = .{ .name = name, .err = error.FileNotFound } });
+        try finishAll(x);
+        return x.abort(127);
+    }
+    argv.items[0] = program.?;
     var child = std.process.spawn(x.env.io, .{
         .argv = argv.items,
         .stdin = stdin_opt,

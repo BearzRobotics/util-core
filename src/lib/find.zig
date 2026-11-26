@@ -28,6 +28,7 @@ const common = @import("common.zig");
 const fu = @import("fu_common.zig");
 const sys = @import("../sys.zig");
 const dirat = @import("../dirat.zig");
+const programpath = @import("../programpath.zig");
 const regex = @import("regex");
 const fnmatch = @import("../fnmatch.zig");
 const strftime = @import("../strftime.zig");
@@ -1500,13 +1501,21 @@ fn flushLeftBehind(st: *State) void {
     }
 }
 
+/// Start `argv`. Its program is never looked for in the directory it runs in
+/// unless the expression says so with a path (programpath.zig).
+fn spawnCommand(st: *State, argv: []const []const u8, cwd: std.process.Child.Cwd, asked: bool) !std.process.Child {
+    const resolved = try st.gpa.dupe([]const u8, argv);
+    resolved[0] = try programpath.resolve(st.env, st.gpa, argv[0]);
+    return std.process.spawn(st.env.io, .{ .argv = resolved, .cwd = cwd, .stdin = if (asked) .ignore else .inherit });
+}
+
 /// Run `argv` and wait. A command that was asked about (-ok, -okdir) reads
 /// /dev/null: standard input holds the answers to the questions.
 fn runCommand(st: *State, argv: []const []const u8, cwd: ?sys.Handle, asked: bool) bool {
     flushOut(st);
     for (st.outs.items) |o| flushFile(st, o);
     const cwd_opt: std.process.Child.Cwd = if (cwd) |fd| .{ .dir = .{ .handle = fd } } else .inherit;
-    var child = std.process.spawn(st.env.io, .{ .argv = argv, .cwd = cwd_opt, .stdin = if (asked) .ignore else .inherit }) catch |e| {
+    var child = spawnCommand(st, argv, cwd_opt, asked) catch |e| {
         const text: []const u8 = switch (e) {
             error.FileNotFound => "No such file or directory",
             error.AccessDenied, error.PermissionDenied => "Permission denied",
