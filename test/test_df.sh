@@ -45,7 +45,10 @@ else
 fi
 for e in DF_BLOCK_SIZE BLOCK_SIZE BLOCKSIZE; do
     for v in 1 1K 1M 4096 human-readable si 1KB zz 0 ''; do
-        eval "$e='$v' retry_cmp '$e=$v' ''" 2>/dev/null
+        # Exported around the call: a subshell would lose the counters.
+        export "$e=$v"
+        retry_cmp "$e=$v" /
+        unset "$e"
     done
 done
 POSIXLY_CORRECT=1 retry_cmp "POSIXLY_CORRECT -P" -P
