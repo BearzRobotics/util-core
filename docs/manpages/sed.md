@@ -26,7 +26,7 @@ Stream editor for filtering and transforming text.
 : Use extended regular expressions.
 
 -i[SUFFIX], --in-place[=SUFFIX]
-: Edit files in place; with SUFFIX keep a backup (a `*` in SUFFIX stands for the base name, a `/` makes it a path). If the backup cannot be made, sed stops with status 4 and leaves the file unchanged.
+: Edit files in place; with SUFFIX keep a backup (a `*` in SUFFIX stands for the base name, a `/` makes it a path). If the backup cannot be made, sed stops with status 4 and leaves the file unchanged. The new file gets the owner, group and permissions of the file that was read, as far as the user may set them (see DIFFERENCES FROM GNU).
 
 --follow-symlinks
 : Edit the target of a symbolic link when editing in place.
@@ -54,6 +54,10 @@ Stream editor for filtering and transforming text.
 
 --help, --version
 : Print help or version and exit.
+
+# DIFFERENCES FROM GNU
+
+- `-i`, when the new file cannot be given the old one's group: GNU says nothing and keeps the group permission bits, which then apply to another group. We limit that group to what others had, drop the set-group-ID bit and warn on standard error. The set-user-ID bit is likewise dropped when the owner cannot be kept. Output and exit status are as in GNU.
 
 # EXIT STATUS
 

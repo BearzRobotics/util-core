@@ -147,6 +147,9 @@ pub const Event = union(enum) {
     /// "cannot rename NAME: ERRNO" (fatal, status 4). The original is not
     /// replaced.
     rename_failed: struct { name: []const u8, errno: LX.E },
+    /// An in-place edit could not give the new file the old one's group (the
+    /// edit goes on; the group gets no more than others had).
+    group_not_kept: struct { name: []const u8, errno: LX.E },
     /// "couldn't close NAME: ERRNO" (fatal, status 4). Some file systems only
     /// report a failed write here. An in-place original is not replaced.
     close_failed: struct { name: []const u8, errno: LX.E },
@@ -1292,6 +1295,9 @@ const Exec = struct {
     delim: u8 = '\n',
     in_place_tmp: ?[]const u8 = null,
     in_place_target: []const u8 = "",
+    /// Of the descriptor being edited, from before anything ran: the name may
+    /// lead to another file by the time the edit is done.
+    in_place_st: ?sys.FileStat = null,
     stdout_o: *Output,
     last_re: ?*Re = null,
     dbg_level: usize = 0,
@@ -1475,10 +1481,11 @@ const Exec = struct {
                 r = in.ahead.?;
                 in.ahead = null;
             } else r = e.openReader(index) orelse continue;
-            if (e.s.opts.in_place and input.source == .path) {
+            var in_place_st: ?sys.FileStat = null;
+            if (e.s.opts.in_place) {
                 var serr: LX.E = .SUCCESS;
-                const st = sys.fstatFd(r.fd, &serr);
-                if (st == null or !st.?.isReg()) {
+                in_place_st = sys.fstatFd(r.fd, &serr);
+                if (input.source == .path and (in_place_st == null or !in_place_st.?.isReg())) {
                     e.s.obs.emit(.{ .cant_edit = r.name });
                     e.s.exit_code = 4;
                     r.close(e.gpa);
@@ -1487,6 +1494,7 @@ const Exec = struct {
             }
             in.cur.close(e.gpa);
             in.cur = r;
+            e.in_place_st = in_place_st;
             in.name = r.name;
             in.opened = true;
             if (e.s.opts.separate) {
@@ -1576,17 +1584,7 @@ const Exec = struct {
         const tmp = e.in_place_tmp orelse return;
         const o = e.cur_out;
         try e.flushOut(o);
-        // copy mode and owner from the original
-        var serr: LX.E = .SUCCESS;
-        var ofd: sys.Handle = sys.invalid_handle;
-        if (sys.openFd(e.in_place_target, sys.O.RDONLY, 0, &serr)) |f| ofd = f;
-        if (ofd != sys.invalid_handle) {
-            if (sys.fstatFd(ofd, &serr)) |st| {
-                _ = sys.fchmodFd(o.fd, st.mode & 0o7777);
-                _ = sys.fchownFd(o.fd, st.uid, st.gid);
-            }
-            _ = sys.closeFd(ofd);
-        }
+        if (e.in_place_st) |st| e.keepAttributes(o.fd, st);
         const close_error = sys.closeFd(o.fd);
         o.fd = sys.invalid_handle;
         if (close_error) |er| {
@@ -1619,6 +1617,29 @@ const Exec = struct {
         if (sys.renamePath(tmp, e.in_place_target, 0)) |er| return e.renameFailed(tmp, er);
         e.in_place_tmp = null;
         e.cur_out = e.stdout_o;
+    }
+
+    /// Give the finished copy the owner, group and mode of the file it
+    /// replaces, as far as this user may.
+    fn keepAttributes(e: *Exec, fd: sys.Handle, old: sys.FileStat) void {
+        var mode = old.mode & 0o7777;
+        // The owner first: changing it clears the set-ID bits.
+        if (sys.fchownFd(fd, old.uid, old.gid) != null) {
+            // Only a privileged user can give a file away; the group alone
+            // can be set by any of its members.
+            const group_error = sys.fchownFd(fd, std.math.maxInt(u32), old.gid);
+            var serr: LX.E = .SUCCESS;
+            const new = sys.fstatFd(fd, &serr);
+            // A set-ID bit must not pass to another user or group.
+            if (new == null or new.?.uid != old.uid) mode &= ~@as(u32, 0o4000);
+            if (new == null or new.?.gid != old.gid) {
+                // Whoever is in the new file's group had only the others'
+                // permissions on the old file.
+                mode = mode & ~@as(u32, 0o2070) | (mode & (mode << 3) & 0o070);
+                e.s.obs.emit(.{ .group_not_kept = .{ .name = e.in_place_target, .errno = group_error orelse serr } });
+            }
+        }
+        _ = sys.fchmodFd(fd, mode);
     }
 
     /// Fatal, as in GNU sed. `deinit` removes the temporary file.

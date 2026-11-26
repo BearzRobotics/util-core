@@ -220,6 +220,7 @@ fn report(context: ?*anyopaque, ev: sed.Event) void {
         },
         .temp_open_failed => |e| cli.warn(ctx, "couldn't open temporary file {s}: {s}", .{ e.path, sys.errnoText(e.errno) }),
         .rename_failed => |e| cli.warn(ctx, "cannot rename {s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
+        .group_not_kept => |e| cli.warn(ctx, "warning: {s}: could not keep the group ({s}); the new group gets only the permissions of others", .{ e.name, sys.errnoText(e.errno) }),
         .close_failed => |e| cli.warn(ctx, "couldn't close {s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
         .no_previous_regex => |ch| {
             if (ch.is_file) {

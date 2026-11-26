@@ -488,6 +488,31 @@ close_fails() {
 close_fails '-i keeps the file when close fails' '/sed[0-9a-f]\{6\}>' a -i 's/a/b/' f
 close_fails '-i.bak keeps the file when close fails' '/sed[0-9a-f]\{6\}>' a -i.bak 's/a/b/' f
 close_fails 'w file close failure' '/w>' a -n 'w w' f
+
+# -i: the new file takes the attributes of the file that was read.
+ok_if() { # DESC GOT WANT
+    if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); printf 'PASS %s\n' "$1"
+    else FAIL=$((FAIL + 1)); printf 'FAIL %s (got "%s", want "%s")\n' "$1" "$2" "$3"; fi
+}
+d="$W/attr"; mkdir "$d"
+printf 'a\n' > "$d/f"; chmod 600 "$d/f"; printf 'o\n' > "$d/other"; chmod 666 "$d/other"
+(cd "$d" && "$BIN_DIR/sed" -i "1e ln -sf $d/other f" f)
+ok_if '-i takes the mode from the file read, not the name' "$(stat -c %a "$d/f")" 600
+# A group of ours that new files do not get by themselves.
+grp=$(id -G | tr ' ' '\n' | grep -v "^$(id -g)\$" | head -n 1)
+printf 'a\n' > "$d/g"
+if [ -z "$grp" ] || ! chgrp "$grp" "$d/g" 2>/dev/null || ! can_inject; then
+    skip_test '-i keeps the group when the owner cannot be set (no second group or strace)'
+    skip_test '-i limits the permissions of a group it cannot keep'
+else
+    chmod 2764 "$d/g"
+    strace -o /dev/null -e trace=fchown -e inject=fchown:error=EPERM:when=1 "$BIN_DIR/sed" -i s/a/b/ "$d/g" 2> "$d/err"
+    ok_if '-i keeps the group when the owner cannot be set' "$? $(stat -c '%a %g' "$d/g") $(cat "$d/err")" "0 2764 $grp "
+    printf 'a\n' > "$d/g"; chmod 2764 "$d/g"
+    strace -o /dev/null -e trace=fchown -e inject=fchown:error=EPERM:when=1+ "$BIN_DIR/sed" -i s/a/b/ "$d/g" 2> "$d/err"
+    ok_if '-i limits the permissions of a group it cannot keep' \
+        "$? $(stat -c '%a %g' "$d/g") $(cat "$d/g") $(grep -c 'could not keep the group' "$d/err")" "0 744 $(id -g) b 1"
+fi
 run_tree_t '--in-place' "$SET" --in-place 's/a/A/' f
 run_tree_t '--in-place=.b' "$SET" --in-place=.b 's/a/A/' f
 run_tree_t '-i missing' "$SET" -i 's/a/A/' nosuch
