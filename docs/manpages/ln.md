@@ -71,6 +71,7 @@ See docs/compatibility/ln.md for details.
 # DIFFERENCES FROM GNU
 
 - With -i and no backup, a destination that holds the source's data is refused ("'SRC' and 'DEST' are the same file", status 1), as it is with -f. GNU 9.7 asks and then destroys the data.
+- For a hard link (without -L and without a backup), a TARGET that is a symbolic link leading to LINK_NAME is refused the same way when LINK_NAME is the file's only name (`ln -f link file`). GNU 9.7 replaces the file by a link that points at itself, losing the data.
 
 # LIMITATIONS
 

@@ -24,6 +24,7 @@ GNU coreutils 9.7 (`/usr/bin/ln --version` on the development machine, installed
 
 - Operand forms and every diagnostic reproduce GNU 9.7; the 'same file' test is only made when the destination would be replaced (-f, -i or a backup), as GNU does.
 - With -i and no backup the 'same file' test is made as with -f. GNU 9.7 does not make it, so answering yes to `ln -si LINK FILE`, where LINK points to FILE, destroys FILE; here it is refused with status 1.
+- `ln -f LINK FILE` (a hard link, without -L or a backup), where LINK is a symbolic link leading to FILE and FILE has no other name, is refused as 'same file'. GNU 9.7 replaces FILE by a link to itself and the data is lost.
 
 ## Library
 

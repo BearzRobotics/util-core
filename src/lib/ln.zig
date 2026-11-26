@@ -178,10 +178,20 @@ fn replacingWouldDestroySource(cfg: Options, src: []const u8, dest: []const u8) 
     var err: sys.E = .SUCCESS;
     const source = sys.fileStat(src, cfg.symbolic or cfg.logical, &err) orelse return false;
     const destination = sys.fileStat(dest, false, &err) orelse return false;
-    if (source.ino != destination.ino or source.dev_major != destination.dev_major or
-        source.dev_minor != destination.dev_minor) return false;
-    // Two names for one file are fine: the data stays under the other name.
-    return source.nlink == 1 or sameEntry(src, dest);
+    if (sameFile(source, destination)) {
+        // Two names for one file are fine: the data stays under the other name.
+        return source.nlink == 1 or sameEntry(src, dest);
+    }
+    // A hard link of a symbolic link puts that link at `dest`. If it leads to
+    // the file being replaced, and that has no other name, the data is lost
+    // and the link points at itself. GNU does not look for this.
+    if (cfg.symbolic or cfg.backup != .none or !source.isLink() or destination.nlink != 1) return false;
+    const reached = sys.fileStat(src, true, &err) orelse return false;
+    return sameFile(reached, destination);
+}
+
+fn sameFile(a: sys.FileStat, b: sys.FileStat) bool {
+    return a.ino == b.ino and a.dev_major == b.dev_major and a.dev_minor == b.dev_minor;
 }
 
 /// True when the two paths name one entry of one directory ("a" and "./a").

@@ -154,4 +154,25 @@ if [ "$rc" -eq 1 ] && [ "$(cat "$d/a")" = data ] && [ ! -L "$d/a" ]; then
 else
     FAIL=$((FAIL + 1)); echo "FAIL -si link to dest is refused (rc=$rc $out)"
 fi
+rm -rf "$d"
+# A hard link of a symbolic link, put in place of the file the link leads to,
+# would point at itself and lose the data. GNU 9.7 does that; we refuse.
+for case in "-f l a" "-fn l a" "-f m a" "-f sub/up a" "-i l a" "-f l ./a"; do
+    d=$(mktemp -d); echo data > "$d/a"; ln -s a "$d/l"; ln -s l "$d/m"; mkdir "$d/sub"; ln -s ../a "$d/sub/up"
+    out=$(cd "$d" && echo y | ours $case 2>&1); rc=$?
+    set -- $case
+    if [ "$rc" -eq 1 ] && [ "$out" = "ln: '$2' and '$3' are the same file" ] && [ "$(cat "$d/a")" = data ] && [ ! -L "$d/a" ]; then
+        PASS=$((PASS + 1)); echo "PASS ln $case keeps the data"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL ln $case keeps the data (rc=$rc $out)"
+    fi
+    rm -rf "$d"
+done
+# The data stays reachable: through another name, or in the backup.
+TREE_CONTENT=1
+run_tree "-f link to a file with two names" 'echo data > a; ln a h; ln -s h l' -f l a
+run_tree "-fb link to dest"                 'echo data > a; ln -s a l' -fb l a
+run_tree "-f link to another file"          'echo data > a; echo b > b; ln -s b l' -f l a
+run_tree "-f dangling link"                 'echo data > a; ln -s nowhere l' -f l a
+unset TREE_CONTENT
 print_summary
