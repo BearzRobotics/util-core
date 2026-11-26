@@ -314,6 +314,17 @@ gd 'exit status 1' nums zzz nums
 gd 'exit status 2 error + match' nums two nums nosuch
 gd 'exit status -q error' nums -q zzz nosuch
 gd 'long line' longline x longline
+# A directory that cannot be listed to the end is an error, not "no match".
+mkdir -p listerr/D; echo foo > listerr/D/a
+if can_inject; then
+    out=$(cd listerr && strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=1 "$BIN_DIR/grep" -r foo D 2>&1); rc=$?
+    if [ "$rc" -eq 2 ] && [ "$out" = "grep: D: Input/output error" ]; then PASS=$((PASS + 1)); echo "PASS -r reports a directory read error"
+    else FAIL=$((FAIL + 1)); echo "FAIL -r reports a directory read error (rc=$rc: $out)"; fi
+else
+    skip_test "-r reports a directory read error (no strace)"
+fi
+rm -rf listerr
+
 # -r does not follow a link that takes the place of an entry after the
 # directory was listed. strace holds grep just after the listing.
 for swapped in file directory; do
