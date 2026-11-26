@@ -676,4 +676,31 @@ for p in 'a|abc|abcabc' '(a|ab)(c|bcab)?' 'x{,2}a|xab' '^a|aaa a' '(ab|a)|b c' '
 done 2>/dev/null
 CMP_STDIN="$TEST_TMP/altin" run_cmp "longest with the M flag" -E 'N;s/^a|^ab/X/Mg'
 CMP_STDIN="$TEST_TMP/altin" run_cmp "longest BRE" 's/a\|aaa\|ab\(c\|cab\)/<&>/g'
+# Input is processed as it arrives. (The memory limit stops a sed that keeps
+# reading an endless input; the timeouts one that waits for its end.)
+stream_case() { # DESC SHELL-SCRIPT using "$S"
+    e=$(cd "$TEST_TMP" && S="${GNU_BIN:-/usr/bin}/sed" LC_ALL=C timeout 20 sh -c "ulimit -v 400000; $2" 2>&1; echo "status $?")
+    a=$(cd "$TEST_TMP" && S="$BIN_DIR/sed" LC_ALL=C timeout 20 sh -c "ulimit -v 400000; $2" 2>&1; echo "status $?")
+    if [ "$e" = "$a" ]; then PASS=$((PASS + 1)); echo "PASS $1"
+    else FAIL=$((FAIL + 1)); echo "FAIL $1"; printf '%s\n---\n%s\n' "$e" "$a" | head -c 600; fi
+}
+printf '1\n2\n3\n4\n5\n' > "$TEST_TMP/five"; printf 'x' > "$TEST_TMP/nonl"; : > "$TEST_TMP/nothing"
+stream_case "q ends an endless input"            'yes | timeout 5 "$S" 5q'
+# Without -u GNU keeps this in its buffer; we write it before waiting.
+got=$(cd "$TEST_TMP" && { echo a; sleep 3; } | { timeout 2 "$BIN_DIR/sed" p > out1; true; }; cat "$TEST_TMP/out1")
+if [ "$got" = "a
+a" ]; then PASS=$((PASS + 1)); echo "PASS output before the input ends"
+else FAIL=$((FAIL + 1)); echo "FAIL output before the input ends ($got)"; fi
+stream_case "output before the input ends, -u"   '{ echo a; sleep 3; } | { timeout 2 "$S" -u p > out2; true; }; cat out2'
+stream_case "q leaves a file after the line"     '{ "$S" 2q; cat; } < five'
+stream_case "Q leaves a file after the line"     '{ "$S" 2Q; cat; } < five'
+stream_case "q after looking for the last line"  '{ "$S" -n "2{\$p;q}"; cat; } < five'
+stream_case "-u takes only what it uses"         'cat five | { "$S" -u 2q; echo rest; cat; }'
+stream_case "last line across empty files"       '"$S" "\$s/\$/ last/" five nothing nothing'
+stream_case "last line with more files to come"  '"$S" -n "\$=" five nonl nothing five'
+stream_case "N across a file without newline"    '"$S" "N;N;s/\n/ /g" nonl five'
+stream_case "F and the last line of stdin"       'printf "a\nb\n" | "$S" -e F -e "\$s/^/end /" - nothing'
+stream_case "r /dev/stdin from a file"           '"$S" "1r /dev/stdin" < five'
+stream_case "r /dev/stdin from a pipe"           'cat five | "$S" "1r /dev/stdin"'
+stream_case "a line longer than a read"          '{ head -c 300000 /dev/zero | tr "\0" a; echo; echo end; } | "$S" "s/a\{5\}/b/g" | cksum'
 cd /; print_summary

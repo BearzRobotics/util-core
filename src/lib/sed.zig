@@ -1226,16 +1226,53 @@ fn convertEscapes(a: std.mem.Allocator, pat: []const u8, is_re: bool) ![]u8 {
 
 // -------------------------------------------------------------- executor
 
+/// One input being read: only what has not been used yet is held, so that a
+/// stream is processed as it arrives and memory does not grow with its length.
+const Reader = struct {
+    fd: sys.Handle = sys.invalid_handle,
+    /// Opened here, to be closed here; otherwise the caller's descriptor.
+    owned: bool = false,
+    /// `buf.items[pos..]` is read but not used; no delimiter is before
+    /// `scanned`.
+    buf: std.ArrayList(u8) = .empty,
+    pos: usize = 0,
+    scanned: usize = 0,
+    eof: bool = true,
+    /// Reading may wait (a pipe, a terminal): write what is pending first.
+    may_wait: bool = false,
+    name: []const u8 = "-",
+    /// Which of the inputs this is.
+    index: usize = 0,
+
+    fn unused(r: *const Reader) usize {
+        return r.buf.items.len - r.pos;
+    }
+
+    /// Done with the input. A caller's descriptor that can seek is left
+    /// just after what was used, for whoever reads it next (`q` in a
+    /// shell's `{ sed 1q; cat; } < file`).
+    fn close(r: *Reader, gpa: std.mem.Allocator) void {
+        if (r.owned) {
+            _ = sys.closeFd(r.fd);
+        } else if (r.fd != sys.invalid_handle and r.unused() > 0) {
+            var e: LX.E = .SUCCESS;
+            _ = sys.seekFd(r.fd, -@as(i64, @intCast(r.unused())), 1, &e);
+        }
+        r.buf.deinit(gpa);
+        r.* = .{};
+    }
+};
+
 const Cursor = struct {
     files: []const Input,
     next_file: usize = 0,
-    data: []const u8 = &.{},
-    pos: usize = 0,
+    cur: Reader = .{},
+    /// The next input with anything in it, opened to find out whether the
+    /// current line is the last one.
+    ahead: ?Reader = null,
     name: []const u8 = "-",
     opened: bool = false,
     line_no: u64 = 0,
-    pre: ?[]const u8 = null,
-    pre_idx: usize = 0,
 };
 
 const Exec = struct {
@@ -1273,6 +1310,8 @@ const Exec = struct {
             if (e.cur_out.fd != sys.invalid_handle) _ = sys.closeFd(e.cur_out.fd);
             _ = sys.unlinkPath(tmp, false);
         }
+        if (e.in.ahead) |*r| r.close(e.gpa);
+        e.in.cur.close(e.gpa);
         e.ps.deinit(e.gpa);
         e.hs.deinit(e.gpa);
         e.append_q.deinit(e.gpa);
@@ -1372,53 +1411,92 @@ const Exec = struct {
         };
     }
 
+    /// Open input `index`. Null, after the diagnostic, when it cannot be.
+    fn openReader(e: *Exec, index: usize) ?Reader {
+        const input = e.in.files[index];
+        const name = inputName(input);
+        var r: Reader = .{ .eof = false, .name = name, .index = index };
+        var err: LX.E = .SUCCESS;
+        switch (input.source) {
+            .file => |f| r.fd = f.handle,
+            .path => |path| {
+                r.fd = sys.openFd(path, sys.O.RDONLY, 0, &err) orelse {
+                    e.s.obs.emit(.{ .cant_read = .{ .name = name, .errno = err } });
+                    e.s.exit_code = 2;
+                    return null;
+                };
+                r.owned = true;
+            },
+        }
+        const st = sys.fstatFd(r.fd, &err);
+        r.may_wait = st == null or !st.?.isReg();
+        return r;
+    }
+
+    /// Read some more of `r`, at its end noting that. With -u no more is
+    /// taken than is used, as with GNU sed.
+    fn fill(e: *Exec, r: *Reader) Err!void {
+        const left = r.unused();
+        if (r.pos > 0) {
+            std.mem.copyForwards(u8, r.buf.items[0..left], r.buf.items[r.pos..]);
+            r.buf.shrinkRetainingCapacity(left);
+            r.scanned -|= r.pos;
+            r.pos = 0;
+        }
+        const want: usize = if (e.s.opts.unbuffered) 1 else 65536;
+        r.buf.ensureUnusedCapacity(e.gpa, want) catch return error.OutOfMemory;
+        // Whoever writes the input may be waiting to see our output.
+        if (r.may_wait) try e.flushAll();
+        var err: LX.E = .SUCCESS;
+        const n = sys.readFd(r.fd, r.buf.unusedCapacitySlice()[0..want], &err) orelse {
+            e.s.obs.emit(.{ .read_error = .{ .name = r.name, .errno = err } });
+            try e.flushAll();
+            e.s.exit_code = 4;
+            return error.Abort;
+        };
+        if (n == 0) r.eof = true else r.buf.items.len += n;
+    }
+
+    /// Read until `r` has something unused or is at its end.
+    fn peek(e: *Exec, r: *Reader) Err!bool {
+        while (r.unused() == 0 and !r.eof) try e.fill(r);
+        return r.unused() > 0;
+    }
+
     fn openNext(e: *Exec) Err!bool {
         const in = &e.in;
         while (true) {
             if (in.next_file >= in.files.len) return false;
-            const input = in.files[in.next_file];
-            const name = inputName(input);
+            const index = in.next_file;
+            const input = in.files[index];
             in.next_file += 1;
-            var data: std.ArrayList(u8) = .empty;
-            if (in.pre != null and in.pre_idx == in.next_file - 1) {
-                try data.appendSlice(e.ar(), in.pre.?);
-                in.pre = null;
-                in.name = name;
-            } else if (input.source == .file) {
-                if (!try e.readAll(input.source.file.handle, &data, name)) continue;
-                in.name = name;
-            } else {
-                const path = input.source.path;
-                var err: LX.E = .SUCCESS;
-                const fd = sys.openFd(path, sys.O.RDONLY, 0, &err) orelse {
-                    e.s.obs.emit(.{ .cant_read = .{ .name = name, .errno = err } });
-                    e.s.exit_code = 2;
+            var r: Reader = undefined;
+            if (in.ahead != null and in.ahead.?.index == index) {
+                r = in.ahead.?;
+                in.ahead = null;
+            } else r = e.openReader(index) orelse continue;
+            if (e.s.opts.in_place and input.source == .path) {
+                var serr: LX.E = .SUCCESS;
+                const st = sys.fstatFd(r.fd, &serr);
+                if (st == null or !st.?.isReg()) {
+                    e.s.obs.emit(.{ .cant_edit = r.name });
+                    e.s.exit_code = 4;
+                    r.close(e.gpa);
                     continue;
-                };
-                defer _ = sys.closeFd(fd);
-                if (e.s.opts.in_place) {
-                    var serr: LX.E = .SUCCESS;
-                    const st = sys.fstatFd(fd, &serr);
-                    if (st == null or !st.?.isReg()) {
-                        e.s.obs.emit(.{ .cant_edit = name });
-                        e.s.exit_code = 4;
-                        continue;
-                    }
                 }
-                if (!try e.readAll(fd, &data, name)) continue;
-                in.name = name;
             }
-            in.data = data.items;
-            in.pos = 0;
+            in.cur.close(e.gpa);
+            in.cur = r;
+            in.name = r.name;
             in.opened = true;
             if (e.s.opts.separate) {
                 in.line_no = 0;
                 e.resetRanges();
             }
             if (e.s.opts.in_place) {
-                const path = if (input.source == .path) input.source.path else name;
+                const path = if (input.source == .path) input.source.path else in.name;
                 if (!try e.beginInPlace(if (e.s.opts.follow) try e.resolveLink(path) else path)) {
-                    in.data = &.{};
+                    in.cur.close(e.gpa);
                     continue;
                 }
             }
@@ -1555,60 +1633,51 @@ const Exec = struct {
     /// no more lines.
     fn atEof(e: *Exec) Err!bool {
         const in = &e.in;
-        if (in.pos < in.data.len) return false;
+        if (try e.peek(&in.cur)) return false;
         if (e.s.opts.separate) return true;
         // look ahead: skip to the next file with data without finishing this one
-        while (in.next_file < in.files.len) {
-            const input = in.files[in.next_file];
-            const name = inputName(input);
-            var data: std.ArrayList(u8) = .empty;
-            if (input.source == .file) {
-                if (!try e.readAll(input.source.file.handle, &data, name)) {
-                    in.next_file += 1;
-                    continue;
-                }
-            } else {
-                var err: LX.E = .SUCCESS;
-                const fd = sys.openFd(input.source.path, sys.O.RDONLY, 0, &err) orelse {
-                    e.s.obs.emit(.{ .cant_read = .{ .name = name, .errno = err } });
-                    e.s.exit_code = 2;
-                    in.next_file += 1;
-                    continue;
-                };
-                defer _ = sys.closeFd(fd);
-                if (!try e.readAll(fd, &data, name)) {
-                    in.next_file += 1;
-                    continue;
-                }
+        if (in.ahead != null) return false;
+        while (in.next_file < in.files.len) : (in.next_file += 1) {
+            var r = e.openReader(in.next_file) orelse continue;
+            const found = e.peek(&r) catch |err| {
+                r.close(e.gpa);
+                return err;
+            };
+            if (found) {
+                in.ahead = r;
+                return false;
             }
-            if (data.items.len == 0) {
-                in.next_file += 1;
-                continue;
-            }
-            in.pre = data.items;
-            in.pre_idx = in.next_file;
-            return false;
+            r.close(e.gpa);
         }
         return true;
     }
 
     fn readLine(e: *Exec) Err!bool {
         const in = &e.in;
-        while (in.pos >= in.data.len) {
+        while (true) {
+            const r = &in.cur;
+            if (std.mem.indexOfScalarPos(u8, r.buf.items, @max(r.scanned, r.pos), e.delim)) |i| {
+                e.ps.clearRetainingCapacity();
+                e.ps.appendSlice(e.gpa, r.buf.items[r.pos..i]) catch return error.OutOfMemory;
+                r.pos = i + 1;
+                r.scanned = r.pos;
+                e.ps_chomped = true;
+                break;
+            }
+            r.scanned = r.buf.items.len;
+            if (!r.eof) {
+                try e.fill(r);
+                continue;
+            }
+            if (r.unused() > 0) {
+                e.ps.clearRetainingCapacity();
+                e.ps.appendSlice(e.gpa, r.buf.items[r.pos..]) catch return error.OutOfMemory;
+                r.pos = r.buf.items.len;
+                e.ps_chomped = false;
+                break;
+            }
             if (e.s.opts.in_place and e.in_place_tmp != null) try e.finishInPlace();
             if (!try e.openNext()) return false;
-        }
-        const rest = in.data[in.pos..];
-        if (std.mem.indexOfScalar(u8, rest, e.delim)) |i| {
-            e.ps.clearRetainingCapacity();
-            e.ps.appendSlice(e.gpa, rest[0..i]) catch return error.OutOfMemory;
-            in.pos += i + 1;
-            e.ps_chomped = true;
-        } else {
-            e.ps.clearRetainingCapacity();
-            e.ps.appendSlice(e.gpa, rest) catch return error.OutOfMemory;
-            in.pos = in.data.len;
-            e.ps_chomped = false;
         }
         in.line_no += 1;
         return true;
@@ -1630,14 +1699,14 @@ const Exec = struct {
                 'r' => {
                     try e.missingNl(e.cur_out);
                     var data: std.ArrayList(u8) = .empty;
-                    if (std.mem.eql(u8, a.text, "/dev/stdin")) {
+                    // As in GNU, /dev/stdin is opened like any name: a file
+                    // is read from its start, a pipe from where it is.
+                    var err: LX.E = .SUCCESS;
+                    if (sys.openFd(a.text, sys.O.RDONLY, 0, &err)) |fd| {
+                        defer _ = sys.closeFd(fd);
+                        _ = try e.readAll(fd, &data, a.text);
+                    } else if (std.mem.eql(u8, a.text, "/dev/stdin")) {
                         _ = try e.readAll(std.Io.File.stdin().handle, &data, a.text);
-                    } else {
-                        var err: LX.E = .SUCCESS;
-                        if (sys.openFd(a.text, sys.O.RDONLY, 0, &err)) |fd| {
-                            defer _ = sys.closeFd(fd);
-                            _ = try e.readAll(fd, &data, a.text);
-                        }
                     }
                     try e.emit(e.cur_out, data.items);
                 },

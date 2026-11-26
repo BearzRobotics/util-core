@@ -41,7 +41,7 @@ Stream editor for filtering and transforming text.
 : Lines are separated by NUL.
 
 -u, --unbuffered
-: Flush output after every line.
+: Flush output after every line, and take no more from a pipe than is used.
 
 --posix
 : Disable some GNU extensions (N at end of input discards the pattern space).

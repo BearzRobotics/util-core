@@ -32,7 +32,7 @@ GNU sed 4.9 (`/usr/bin/sed --version` on the development machine). Consulted 202
 - `s` flags `g p N i I m M e w FILE`; replacement escapes `\1`..`\9`, `&`, `\n`, `\t`, `\L \U \l \u \E`, `\cX \dNNN \oNNN \xHH`.
 - A missing newline at the end of the last line is preserved; `w /dev/stdout` and `/dev/stderr` are special.
 - `#n` on the first line of the script acts as `-n`.
-- Input files are read whole into memory before processing.
+- Input is read as it is processed, with one byte of look-ahead where `$` needs it (so `yes | sed 5q` ends and `tail -f log | sed ...` runs); only the unused part of a read is held. What has been written is flushed before sed waits for more input from a pipe or terminal. `-u` takes no more from a pipe than it uses, and after `q` or `Q` a seekable standard input is left just after the last line used, as in GNU.
 
 ## Extensions
 
