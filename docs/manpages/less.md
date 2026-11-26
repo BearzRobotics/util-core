@@ -68,6 +68,8 @@ The screen is drawn on the alternate screen of the terminal; the keys are read f
 
 Reference: GNU less 668 (`less --version` on the development machine). Behaviour was compared by hand, not by differential test; paging is interactive. See docs/compatibility/less.md.
 
+One deliberate difference: scrolling, searching and quitting work while following (see FOLLOWING).
+
 # LIMITATIONS
 
 - Regular-expression search, marks, `:n`/`:p` between files, the `LESS` variable, editing (`v`), horizontal scrolling and numeric prefixes are not implemented.
