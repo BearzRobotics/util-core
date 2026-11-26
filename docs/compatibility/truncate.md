@@ -33,7 +33,7 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Tests
 
-test/test_truncate.sh (172 cases) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
+test/test_truncate.sh (173 cases) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets, file sizes and the contents of files up to 4 MiB are compared).
 
 ## Not yet done
 

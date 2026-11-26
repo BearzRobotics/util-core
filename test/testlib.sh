@@ -1,8 +1,10 @@
 #!/bin/sh
 # testlib.sh - Shared helpers for all util test scripts
 
-# Safety net: no test may write more than ~100 MB to any one file.
-ulimit -f 200000 2>/dev/null
+# Safety net: no test may write more than ~100 MB to any one file. The limit
+# also stops large sparse files, so a suite whose subject is file sizes (and
+# that never writes that much data) sets SPARSE_FILES=1 before sourcing this.
+[ "${SPARSE_FILES:-}" = 1 ] || ulimit -f 200000 2>/dev/null
 
 PASS=0
 FAIL=0
@@ -163,7 +165,9 @@ trap testlib_exit EXIT
 # For commands that change the file system. SETUP_CMD (a shell snippet) runs in
 # two fresh directories, then GNU and ours run the same arguments, one in each.
 # Compared: stdout, normalised stderr, exit status, and the resulting tree
-# (path, type, octal mode). Set TREE_UMASK to run both under a given umask.
+# (path, type, octal mode). Set TREE_UMASK to run both under a given umask,
+# TREE_SIZES to compare the sizes of regular files too (and the contents of
+# those up to 4 MiB, so that huge sparse files cost nothing).
 run_tree() {
     description="$1"; setup="$2"; shift 2
     base="$(dirname "$TMPDIR_CMP")/tree"; chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
@@ -178,7 +182,7 @@ run_tree() {
     # Trees are compared with symlink targets (%l); the two working directories
     # differ only in their last component, which is masked in the output.
     for x in g o; do
-        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort | awk -v start="$tree_start" '$2 + 0 >= start { $2 = "now" } $1 ~ /^\.\/(z|e)(\/|$)/ { print } $1 !~ /^\.\/(z|e)(\/|$)/ { print $1, "-", $3 }'; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; true; } 2>/dev/null > "$base/$x.tree")
+        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort | awk -v start="$tree_start" '$2 + 0 >= start { $2 = "now" } $1 ~ /^\.\/(z|e)(\/|$)/ { print } $1 !~ /^\.\/(z|e)(\/|$)/ { print $1, "-", $3 }'; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; [ -n "$TREE_SIZES" ] && { find . -type f -printf '%p size %s\n' | sort; find . -type f -size -4097k -exec cksum {} + | sort -k3; }; true; } 2>/dev/null > "$base/$x.tree")
         rel="${base#/}"
         norm_err < "$base/$x.err" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.err2"
         norm_err < "$base/$x.out" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.out2"

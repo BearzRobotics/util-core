@@ -1,9 +1,12 @@
 #!/bin/sh
 # truncate: differential tests against GNU truncate 9.7 (C locale). File sizes
-# are part of the compared tree through the %s of a size listing.
+# are part of the compared tree (TREE_SIZES), as are the contents of files up
+# to 4 MiB. The 1G and 1T cases make sparse files, which the file size limit of
+# testlib.sh would stop (SPARSE_FILES); truncate writes no data.
 UTIL="truncate"
+SPARSE_FILES=1
 . "$(dirname "$0")/testlib.sh"
-sz() { :; }
+TREE_SIZES=1
 S='printf 0123456789 > ten; : > empty; head -c 5000 /dev/zero > big'
 for sz in 0 1 5 10 11 100 4096 1K 1KB 1KiB 2M 1G 1T 2K 1b; do
     run_tree "-s $sz new file"     "$S" -s $sz newfile
@@ -87,4 +90,13 @@ if [ "$(norm_err < "$TEST_TMP/gnu.fifo.err"; cat "$TEST_TMP/gnu.fifo.rc")" = "$(
 else
     FAIL=$((FAIL + 1)); printf "FAIL fifo with a reader: %s\n" "$(cat "$TEST_TMP/ours.fifo.err")"
 fi
+# Extending leaves a hole: no blocks are allocated for it.
+d="$TEST_TMP/hole"; mkdir "$d"
+(cd "$d" && ours -s 1G sparse)
+if [ "$(stat -c '%s %b' "$d/sparse" 2>/dev/null)" = "1073741824 0" ]; then
+    PASS=$((PASS + 1)); printf "PASS extending leaves a hole\n"
+else
+    FAIL=$((FAIL + 1)); printf "FAIL extending leaves a hole: %s\n" "$(stat -c '%s %b' "$d/sparse" 2>&1)"
+fi
+rm -rf "$d"
 print_summary
