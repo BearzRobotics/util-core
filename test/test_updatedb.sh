@@ -102,7 +102,37 @@ export PRUNEFS='ext4'; ud 'env PRUNEFS' --localpaths="$W/tree" $P; unset PRUNEFS
 ud 'order of options' $P --localpaths="$W/tree/c" --prunepaths="$W/tree/c/four.sh"
 ud 'option twice' --localpaths="$W/tree/a" --localpaths="$W/tree/c" $P
 ud 'option with space value' "--localpaths=$W/tree/sp ace" $P
-ud 'output dir missing' --localpaths="$W/tree/c" $P --output="$W/nodir/db"
+
+# A database that cannot be created: status 1 and the script's message, which
+# is compared with GNU's last line (the first line, and the status, come from
+# the shell that runs the script). Not through ud, whose own --output would
+# replace the one under test.
+# cannot_create DESC OUTPUT REASON
+cannot_create() {
+    d="$1"; out="$2"; reason="$3"
+    "$FU/updatedb" --localpaths="$W/tree/c" $P --output="$out" > "$W/g.out" 2> "$W/g.err"; gx=$?
+    "$BIN_DIR/updatedb" --localpaths="$W/tree/c" $P --output="$out" > "$W/o.out" 2> "$W/o.err"; ox=$?
+    if [ "$gx" != 0 ] && [ "$ox" = 1 ] && [ ! -s "$W/o.out" ] &&
+       [ "$(head -n 1 "$W/o.err" | sed 's/^[^:]*: //')" = "$out.n: $reason" ] &&
+       [ "$(sed 1d "$W/o.err")" = "$(tail -n 1 "$W/g.err")" ]; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$d"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s (rc=%s, GNU %s) %s\n" "$d" "$ox" "$gx" "$(cat "$W/o.err")"
+    fi
+}
+cannot_create 'output dir missing' "$W/nodir/db" "No such file or directory"
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$W/rodir"; echo old > "$W/rodir/db"; chmod 555 "$W/rodir"
+    cannot_create 'output dir not writable' "$W/rodir/db" "Permission denied"
+    if [ "$(cat "$W/rodir/db")" = old ] && [ "$(ls -A "$W/rodir")" = db ]; then
+        PASS=$((PASS + 1)); echo "PASS the old database survives a run that cannot create the new one"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL the old database survives a run that cannot create the new one"; ls -lA "$W/rodir"
+    fi
+    chmod 755 "$W/rodir"
+else
+    skip_test "unwritable output directory (running as root)"
+fi
 
 # no_leftover DB: no temporary file of DB (`DB.n`, `DB.n.XXXXXXXX`) is left.
 no_leftover() {
