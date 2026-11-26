@@ -369,16 +369,9 @@ fn putInfo(t: *T, e: *const Entry) void {
     }
     if (o.date) {
         sep(t, &first);
-        ensureZone(t);
-        const tm = tzmod.localtime(&t.zone, s.mtime_s);
         var tb: std.ArrayList(u8) = .empty;
         defer tb.deinit(t.gpa);
-        if (o.timefmt) |f| {
-            strftime.format(&tb, t.gpa, f, &tm, s.mtime_s, s.mtime_ns) catch t.nomem();
-        } else {
-            const old = t.now - s.mtime_s > 182 * 86400 or s.mtime_s > t.now;
-            strftime.format(&tb, t.gpa, if (old) "%b %e  %Y" else "%b %e %H:%M", &tm, s.mtime_s, s.mtime_ns) catch t.nomem();
-        }
+        formatMtime(t, s, &tb);
         put(t, tb.items);
     }
     put(t, "]  ");
@@ -675,11 +668,14 @@ fn typeName(e: *const Entry) []const u8 {
 fn formatMtime(t: *T, s: sys.FileStat, tb: *std.ArrayList(u8)) void {
     ensureZone(t);
     const tm = tzmod.localtime(&t.zone, s.mtime_s);
-    if (t.o.timefmt) |f| {
-        strftime.format(tb, t.gpa, f, &tm, s.mtime_s, s.mtime_ns) catch {};
+    // A year beyond struct tm has no calendar form: the seconds are shown.
+    if (!tzmod.fitsStructTm(&tm)) {
+        tb.print(t.gpa, "{d}", .{s.mtime_s}) catch t.nomem();
+    } else if (t.o.timefmt) |f| {
+        strftime.format(tb, t.gpa, f, &tm, s.mtime_s, s.mtime_ns) catch t.nomem();
     } else {
-        const old = t.now - s.mtime_s > 182 * 86400 or s.mtime_s > t.now;
-        strftime.format(tb, t.gpa, if (old) "%b %e  %Y" else "%b %e %H:%M", &tm, s.mtime_s, s.mtime_ns) catch {};
+        const old = t.now -| s.mtime_s > 182 * 86400 or s.mtime_s > t.now;
+        strftime.format(tb, t.gpa, if (old) "%b %e  %Y" else "%b %e %H:%M", &tm, s.mtime_s, s.mtime_ns) catch t.nomem();
     }
 }
 

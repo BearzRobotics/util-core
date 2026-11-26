@@ -1136,8 +1136,9 @@ fn testTime(st: *State, n: *Node, s: sys.FileStat) bool {
         else => s.mtime_ns,
     };
     const on: u32 = if (st.daystart) 0 else st.start_nsec;
-    var delta = originTime(st) - t;
-    if (on < tn) delta -= 1;
+    // The file time can be anything an i64 holds, so ages are computed wider.
+    const age: i128 = @as(i128, originTime(st)) - t;
+    const delta = if (on < tn) age - 1 else age;
     const unit: i64 = switch (n.kind) {
         .amin, .cmin, .mmin => 60,
         else => 86400,
@@ -1145,24 +1146,16 @@ fn testTime(st: *State, n: *Node, s: sys.FileStat) bool {
     // GNU rounds toward minus infinity for negative deltas as well
     if (unit == 60) {
         // minutes round up: a file 30 seconds old is "1" minute old
-        const age_ns: i128 = @as(i128, delta) * 1_000_000_000 + (if (on < tn) @as(i128, on) + 1_000_000_000 - tn else @as(i128, on) - tn);
-        _ = age_ns;
-        var secs = originTime(st) - t;
-        const frac: i64 = @as(i64, on) - @as(i64, tn);
-        var total_ns: i128 = @as(i128, secs) * 1_000_000_000 + frac;
-        _ = &secs;
+        const total_ns = age * 1_000_000_000 + (@as(i64, on) - @as(i64, tn));
         const nn: i128 = n.num;
         const min_ns: i128 = 60 * 1_000_000_000;
         return switch (n.cmp) {
             .gt => total_ns > nn * min_ns,
             .lt => total_ns < nn * min_ns,
-            .eq => blk: {
-                total_ns = total_ns;
-                break :blk total_ns > (nn - 1) * min_ns and total_ns <= nn * min_ns;
-            },
+            .eq => total_ns > (nn - 1) * min_ns and total_ns <= nn * min_ns,
         };
     }
-    const v = @divFloor(delta, unit);
+    const v: i64 = @intCast(@divFloor(delta, unit)); // a 65-bit age in days fits
     return cmpI(n.cmp, v, n.num);
 }
 
@@ -1724,10 +1717,12 @@ fn printLs(st: *State, o: ?*OutFile) void {
     ensureZone(st);
     const tm = tzmod.localtime(&st.zone, s.mtime_s);
     const six_months: i64 = 183 * 86400 / 1; // GNU: 6 months
-    const recent = st.start_sec - s.mtime_s < six_months and s.mtime_s - st.start_sec < 3600;
+    const recent = st.start_sec -| s.mtime_s < six_months and s.mtime_s -| st.start_sec < 3600;
     var tbuf: std.ArrayList(u8) = .empty;
     defer tbuf.deinit(st.gpa);
-    strftime.format(&tbuf, st.gpa, if (recent) "%b %e %H:%M" else "%b %e  %Y", &tm, s.mtime_s, 0) catch st.nomem();
+    if (tzmod.fitsStructTm(&tm)) {
+        strftime.format(&tbuf, st.gpa, if (recent) "%b %e %H:%M" else "%b %e  %Y", &tm, s.mtime_s, 0) catch st.nomem();
+    } else tbuf.print(st.gpa, "{d}", .{s.mtime_s}) catch st.nomem();
     out.print(st.gpa, "{d: >9} {d: >6} {s} {d: >3} {s: <8} {s: <8} ", .{ s.ino, (s.blocks + 1) / 2, ms[0..], s.nlink, user, group }) catch st.nomem();
     const kind = s.mode & 0o170000;
     if (kind == 0o020000 or kind == 0o060000) {
@@ -1773,6 +1768,15 @@ fn padTo(out: *std.ArrayList(u8), gpa: std.mem.Allocator, text: []const u8, widt
 fn fmtTime(st: *State, out: *std.ArrayList(u8), tchar: u8, sec: i64, nsec: i64) void {
     ensureZone(st);
     const tm = tzmod.localtime(&st.zone, sec);
+    const known = tchar == 1 or std.mem.indexOfScalar(u8, "aAbBcCdDeFgGhHIjklmMnprRsStTuUVwWxXyYzZEO", tchar) != null;
+    if ((known or tchar == '+') and !tzmod.fitsStructTm(&tm)) {
+        // As GNU: the number of seconds, with the fraction where one belongs.
+        out.print(st.gpa, "{d}", .{sec}) catch st.nomem();
+        if (tchar == 1 or std.mem.indexOfScalar(u8, "+STX", tchar) != null) {
+            out.print(st.gpa, ".{d:0>10}", .{@as(u64, @intCast(nsec)) * 10}) catch st.nomem();
+        }
+        return;
+    }
     switch (tchar) {
         '@' => out.print(st.gpa, "{d}.{d:0>10}", .{ sec, @as(u64, @intCast(nsec)) * 10 }) catch st.nomem(),
         '+' => {
@@ -1782,7 +1786,7 @@ fn fmtTime(st: *State, out: *std.ArrayList(u8), tchar: u8, sec: i64, nsec: i64) 
         },
         else => {
             const f = [_]u8{ '%', tchar };
-            if (tchar != 1 and std.mem.indexOfScalar(u8, "aAbBcCdDeFgGhHIjklmMnprRsStTuUVwWxXyYzZEO", tchar) == null) {
+            if (!known) {
                 out.appendSlice(st.gpa, &f) catch st.nomem();
             } else if (tchar == 'S') {
                 strftime.format(out, st.gpa, "%S", &tm, sec, @intCast(nsec)) catch st.nomem();

@@ -36,6 +36,7 @@ None added by util-core: tree is not a GNU program and its own options (`-J`, `-
 - Not implemented: `-H` (HTML), `--fromfile`, `--fromtabfile`, `--gitignore`, `--info`, `--hyperlink`, `--compress`, `--condense`, `-R`, `--opt-toggle`, ACL and SELinux display.
 - The multi-root JSON/XML output reproduces tree's separators only for the cases covered by the tests; a symbolic link to the start directory in -J output lacks tree's empty `contents` array.
 - `-J` and `-X` differences from tree 2.3.1 that are left as they are: with `-i` tree writes the JSON on one line (ours keeps the indentation); tree prints inode and device `0` for the start directory and for symbolic links under `--inodes`/`--device` (ours prints the real numbers, which is more useful); with `-J -l -f` tree 2.3.1 names a link that it does not follow `DIR/.` (ours prints its path). With `-l` a link to an already-listed directory is `recursive, not followed` in every output mode and for `--du`, as in tree.
+- A modification time whose year does not fit a `struct tm` is shown as seconds since the Epoch (`--timefmt` is not applied to it). tree 2.3.1 crashes on such a file.
 - --charset names other than UTF-8 and ASCII only change the last connector (`&middot;--`) like tree does; the 'Valid charsets' list for a missing argument is not printed.
 
 ## Tests

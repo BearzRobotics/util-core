@@ -623,6 +623,21 @@ race_check "deep tree with 48 descriptors" test "$exp" = "$act"
 (cd "$W" && ulimit -n 48 && "$BIN_DIR/find" deepfd -delete > "$W/race.out" 2>&1)
 race_check "-delete of a deep tree with 48 descriptors" test ! -e "$W/deepfd"
 
+# Any time the file system can hold: no crash, and where the year does not fit
+# a struct tm the seconds are printed, as GNU does. (Skipped where the file
+# system clamps such times.)
+mkdir "$W/times"; cd "$W/times"
+for secs in -9223372036854775808 -100000000000000000 100000000000000000 9223372036854775807; do
+    : > f; touch -m -d "@$secs" f
+    if [ "$(stat -c %Y f)" != "$secs" ]; then SKIP=$((SKIP + 1)); echo "SKIP mtime $secs not stored here"; continue; fi
+    for expr in '-mtime +1' '-mtime -1' '-mtime 1' '-mmin +1' '-mmin -1' '-mmin 1' '-daystart -mtime +1' '-newer /dev/null' '-ls' \
+                '-printf %T+|%t|%TY|%Ts|%T@|%Tc|%TH|%TS|%TT|%TX|%Ta\n'; do
+        fd "mtime $secs: $expr" f $expr
+    done
+    TZ=EST5EDT,M3.2.0,M11.1.0 fd "mtime $secs: -ls with a rule zone" f -ls
+done
+cd "$W/t"
+
 help_cmp_find() {
     exp=$(LC_ALL=C /usr/bin/find --help | sed 's#/usr/bin/find#find#')
     act=$(ours --help | grep -v '^Actions (not in GNU):' | sed 's#^Usage: [^ ]*#Usage: find#')

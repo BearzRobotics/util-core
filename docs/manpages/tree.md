@@ -64,6 +64,8 @@ Results go to standard output; diagnostics go to standard error prefixed with th
 
 Reference: tree 2.3.1 by Steve Baker, Thomas Moore, Francesc Rocher, Florian Sesser and Kyosuke Tokoro (`/usr/bin/tree --version` on the development machine). tree has no specification beyond its manual page; the behaviour was taken from the installed binary and checked with differential tests (`sh test/test_tree.sh`).
 
+A modification time whose year is too large for a calendar date (a file system can hold such a time) is shown as a number of seconds since the Epoch; tree 2.3.1 crashes on it.
+
 See docs/compatibility/tree.md for details.
 
 # LIMITATIONS

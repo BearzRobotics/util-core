@@ -427,7 +427,7 @@ pub fn run(env: Env, options: Options, patterns: []const []const u8, writer: *Io
                 mtime = .{ st.mtime_s, st.mtime_ns };
                 const now = Io.Timestamp.now(env.io, .real);
                 const now_s: i64 = @intCast(@divFloor(now.nanoseconds, std.time.ns_per_s));
-                const age: f64 = @floatFromInt(now_s - st.mtime_s);
+                const age: f64 = @floatFromInt(now_s -| st.mtime_s);
                 const warn_s: f64 = @floatFromInt(@as(u32, 86400) *% @as(u32, @truncate(o.max_age_days)));
                 if (age > warn_s) {
                     flush(&l);

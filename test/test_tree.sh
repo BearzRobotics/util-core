@@ -89,6 +89,19 @@ help_cmp_tree() {
     else FAIL=$((FAIL + 1)); printf "FAIL --help text\n"; fi
 }
 help_cmp_tree
+# Any time the file system can hold: no crash, the seconds are shown where there
+# is no calendar form. (tree 2.3.1 crashes, so there is nothing to compare with.
+# Skipped where the file system clamps such times.)
+mkdir "$W/times"
+for secs in -9223372036854775808 -100000000000000000 100000000000000000 9223372036854775807; do
+    : > "$W/times/f"; touch -m -d "@$secs" "$W/times/f"
+    if [ "$(stat -c %Y "$W/times/f")" != "$secs" ]; then SKIP=$((SKIP + 1)); echo "SKIP mtime $secs not stored here"; continue; fi
+    for o in "-D" "-J -D" "-X -D" "-D --timefmt %Y"; do
+        out=$(cd "$W" && ours $o times 2>&1); rc=$?
+        if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -e "\\[$secs\\]" -e "\"$secs\"" -e ">$secs<"; then PASS=$((PASS + 1)); echo "PASS mtime $secs: tree $o"
+        else FAIL=$((FAIL + 1)); echo "FAIL mtime $secs: tree $o (rc=$rc)"; printf '%s\n' "$out" | head -8; fi
+    done
+done
 # Link loops end in every output mode, not only in the text listing. (With a
 # timeout: without loop detection these never finish.)
 mkdir -p "$W/loops/two/d" "$W/loops/up/a/b/c" "$W/loops/cross/one" "$W/loops/cross/other"
