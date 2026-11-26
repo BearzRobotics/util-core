@@ -396,6 +396,12 @@ fn addItem(x: *X, item: []u8) Stop!void {
                 return x.abort(1);
             }
             try runCommand(x);
+            // The item may be too long even for a command line to itself.
+            if (base + len > max_chars) {
+                x.observer.emit(.argument_line_too_long);
+                try finishAll(x);
+                return x.abort(1);
+            }
         }
     }
     try x.items.append(gpa, item);
@@ -418,6 +424,23 @@ fn nextByte(r: *Io.Reader) ?u8 {
     return r.takeByte() catch null;
 }
 
+/// Add a byte to the item being read. An item as long as a whole command line
+/// can never be passed on, so reading stops there instead of collecting an
+/// endless one. As GNU xargs, run the items already waiting first, except
+/// where a command must be complete (-I, -L, -x).
+fn appendByte(x: *X, tok: *std.ArrayList(u8), c: u8) Stop!void {
+    if (tok.items.len + 1 >= x.max_chars) {
+        const partial_ok = x.opt.replace == null and x.opt.max_lines == 0 and !x.opt.exit_if_too_long;
+        if (partial_ok and x.items.items.len > 0) try runCommand(x);
+        // When the command itself does not fit, that is what is wrong.
+        const command_too_big = x.opt.replace == null and initialBytes(x) > x.max_chars;
+        x.observer.emit(if (command_too_big) .cannot_fit_single_argument else .argument_line_too_long);
+        try finishAll(x);
+        return x.abort(1);
+    }
+    try tok.append(x.env.gpa, c);
+}
+
 fn unmatchedQuote(x: *X, quote: u8) Stop {
     x.observer.emit(.{ .unmatched_quote = .{ .single = quote == '\'' } });
     finishAll(x) catch |e| return e;
@@ -425,9 +448,8 @@ fn unmatchedQuote(x: *X, quote: u8) Stop {
 }
 
 fn processInput(x: *X, rd: *Io.Reader) Stop!void {
-    const gpa = x.env.gpa;
     var tok: std.ArrayList(u8) = .empty;
-    defer tok.deinit(gpa);
+    defer tok.deinit(x.env.gpa);
 
     if (x.opt.null_input or x.opt.delimiter != null) {
         const d: u8 = x.opt.delimiter orelse 0;
@@ -439,7 +461,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
                 try finishToken(x, &tok, true);
             } else {
                 have = true;
-                try tok.append(gpa, c);
+                try appendByte(x, &tok, c);
             }
         }
         if (have) try finishToken(x, &tok, true);
@@ -476,7 +498,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
             x.observer.emit(.nul_in_input);
         }
         if (escaped) {
-            try tok.append(gpa, c);
+            try appendByte(x, &tok, c);
             in_token = true;
             escaped = false;
             continue;
@@ -486,7 +508,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
                 if (x.items.items.len > 0 and x.opt.max_lines == 0) try runCommand(x);
                 return unmatchedQuote(x, quote);
             }
-            if (c == quote) quote = 0 else try tok.append(gpa, c);
+            if (c == quote) quote = 0 else try appendByte(x, &tok, c);
             continue;
         }
         if (c == '\\') {
@@ -523,7 +545,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
         }
         if (isBlank(c) and replace_mode and !in_token) continue;
         pending_continue = false;
-        try tok.append(gpa, c);
+        try appendByte(x, &tok, c);
         in_token = true;
     }
 }

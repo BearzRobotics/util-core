@@ -144,6 +144,35 @@ a_stdin "-a /dev/stdin" -a /dev/stdin echo
 a_stdin "-a ./- is a file" -a ./- echo
 a_stdin "without -a the commands read nothing" sh -c 'echo "$@"; cat' x
 rm -f ./- aitems
+# -s limits the length of one item too, and reading stops as soon as an item
+# cannot fit. (Compared: standard output, the diagnostic and the status;
+# where the diagnostic falls between the command's output is left open.)
+long=$(printf 'a%.0s' $(seq 40)); fit=aaaaaaaaaaaaaa; nofit=aaaaaaaaaaaaaaa
+too_long() { # DESC INPUT-FORMAT ARG...
+    d="$1"; printf "$2" > toolong.in; shift 2
+    run_x "$d" toolong.in "$@"
+}
+too_long "-s: an item that just fits" "x\n$fit\n" -s 20 echo
+too_long "-s: an item that cannot fit follows others" "x\n$nofit\n" -s 20 echo
+too_long "-s: a far too long item" "x\ny\n$long\nz\n" -s 20 echo
+too_long "-s: a far too long item, no newline" "x y $long" -s 20 echo
+too_long "-s: too long, in quotes" "x\n\"$long\n" -s 20 echo
+too_long "-s: too long, -0" "x\0y\0$long\0" -s 20 -0 echo
+too_long "-s: too long, -d" "x,y,$long," -s 20 -d , echo
+too_long "-s: too long, -L" "x y $long\n" -s 20 -L1 echo
+too_long "-s: too long, -x" "x y $long\n" -s 20 -x -n 9 echo
+too_long "-s: too long, -E" "x\n$long\n" -s 20 -E "$long" echo
+too_long "-s: -I reads an item one shorter than the limit" "$long\n" -s 41 -I{} echo hi
+too_long "-s: -I refuses an item as long as the limit" "$long\n" -s 40 -I{} echo hi
+rm -f toolong.in
+# An endless item must not be collected: bounded memory.
+for o in "-0" ""; do
+    o_out=$( (ulimit -v 600000; tr '\0' a < /dev/zero | LC_ALL=C timeout 20 "$BIN_DIR/xargs" $o true 2>&1; echo "status $?") )
+    if printf '%s\n' "$o_out" | grep -q 'argument line too long' && printf '%s\n' "$o_out" | grep -q '^status 1$'; then
+        PASS=$((PASS+1)); echo "PASS an endless item $o"
+    else FAIL=$((FAIL+1)); echo "FAIL an endless item $o"; printf '%s\n' "$o_out" | head -c 300; fi
+done
+
 # An empty replacement string: GNU's "command too long" for any argument that
 # is not empty, at once (a time limit and a memory limit: it must not grow
 # the argument without end).
