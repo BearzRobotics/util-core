@@ -117,6 +117,38 @@ rgcmp 'stats' "--stats two a.txt" "--stats two a.txt" "$SNORM"
 rgcmp 'stats two files' "--stats --sort path two a.txt b.c" "--stats two a.txt b.c" "$SNORM"
 rgcmp 'stats no match' "--stats zzz a.txt" "--stats zzz a.txt" "$SNORM"
 
+# Ignore files come with the tree: only regular files of a sane size are read,
+# and a .gitignore may not be a link. Nothing here may hang or use up memory.
+# The trees are kept out of $W: later cases run other programs over all of it.
+IG=$(mktemp -d)
+# ig DESC DIR WANT-STDOUT+STDERR
+ig() {
+    got=$( (cd "$IG" && ulimit -v 400000 && timeout 20 "$OURS" -r --sort=path --ignore-vcs foo "$2") 2>&1 </dev/null; echo "rc=$?")
+    if [ "$got" = "$3" ]; then pass "$1"; else fail "$1" "$3" "$got"; fi
+}
+(
+    cd "$IG" || exit 1
+    mkdir ig_zero ig_fifo ig_big ig_link ig_dot
+    for d in ig_zero ig_fifo ig_big ig_link ig_dot; do echo foo > $d/a; done
+    ln -s /dev/zero ig_zero/.gitignore
+    mkfifo ig_fifo/.gitignore
+    { echo a; head -c 5000000 /dev/zero | tr '\0' '\n'; } > ig_big/.gitignore
+    echo a > rules; ln -s ../rules ig_link/.gitignore; ln -s ../rules ig_dot/.ignore
+)
+ig 'ignore-vcs: .gitignore link to /dev/zero' ig_zero "grep: ig_zero/.gitignore: ignore file not used: it is a symbolic link
+ig_zero/a:foo
+rc=0"
+ig 'ignore-vcs: .gitignore that is a FIFO' ig_fifo "grep: ig_fifo/.gitignore: ignore file not used: it is not a regular file
+ig_fifo/a:foo
+rc=0"
+ig 'ignore-vcs: a huge .gitignore' ig_big "grep: ig_big/.gitignore: ignore file not used: it is larger than 4 MiB
+ig_big/a:foo
+rc=0"
+ig 'ignore-vcs: .gitignore symlink is not followed' ig_link "grep: ig_link/.gitignore: ignore file not used: it is a symbolic link
+ig_link/a:foo
+rc=0"
+ig 'ignore-vcs: .ignore symlink to a file is followed' ig_dot "rc=1"
+
 # --------------------------------------------------- ripgrep: smart case
 for pat in two Two tWo 'o' 'T' '\\Sw' 'w\\w'; do
     rgcmp "smart-case $pat" "--smart-case '$pat' a.txt" "--smart-case '$pat' a.txt"

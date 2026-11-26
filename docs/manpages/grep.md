@@ -71,7 +71,7 @@ From ripgrep (tested against `rg` 15):
 : GNU `-r` searches hidden files; `--hidden` says so explicitly and `--no-hidden` skips names starting with a dot.
 
 --ignore-vcs, --no-ignore
-: With `-r`, honour `.gitignore` and `.ignore` files found in the searched directories (negation, `dir/`, anchored and `**` patterns). Off by default, so recursion stays GNU. `--no-ignore` turns it off again.
+: With `-r`, honour `.gitignore` and `.ignore` files found in the searched directories (negation, `dir/`, anchored and `**` patterns). Off by default, so recursion stays GNU. `--no-ignore` turns it off again. An ignore file is used only if it is a regular file of at most 4 MiB, and a `.gitignore` only if it is not a symbolic link (as in git); otherwise a warning says so (`-s` silences it) and nothing is hidden on its account.
 
 --replace=TEXT
 : Print each selected line with every match replaced by TEXT, or with `-o` only the replaced matches. TEXT may use `$1`, `${name}`, `$name` (longest word) and `$$`; an unknown group is empty.

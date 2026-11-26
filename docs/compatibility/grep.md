@@ -43,7 +43,7 @@ Every extension is opt-in and leaves GNU behaviour unchanged when not used (deci
 | `--smart-case` | ripgrep | Case-insensitive unless a pattern has an uppercase letter; escapes (`\S`) do not count; `-i` wins. | `rg --smart-case` |
 | `--glob=GLOB` | ripgrep | Include/exclude (`!`) with gitignore-style globs, later wins, only while walking (command-line files are never filtered, as in rg). | `rg -g` |
 | `--hidden`, `--no-hidden` | ripgrep | GNU `-r` already searches hidden files, so `--hidden` is the default spelled out and `--no-hidden` skips dot names. rg's default (hidden skipped) is `--no-hidden`. | `rg --hidden`, `rg` |
-| `--ignore-vcs`, `--no-ignore` | ripgrep | `.gitignore` / `.ignore` honoured only when asked (GNU does not read them); `--no-ignore` is the default. Only files inside the searched directories are read (no parent, global or `.git/info/exclude` files; rg reads those). | `rg --no-require-git` |
+| `--ignore-vcs`, `--no-ignore` | ripgrep | `.gitignore` / `.ignore` honoured only when asked (GNU does not read them); `--no-ignore` is the default. Only files inside the searched directories are read (no parent, global or `.git/info/exclude` files; rg reads those). Ignore files must be regular files of at most 4 MiB; a symbolic link is not followed for `.gitignore` (git does not; rg does). A skipped file is reported. | `rg --no-require-git` |
 | `--replace=TEXT` | ripgrep | Replacement with `$N`, `${name}`, `$name`, `$$`; whole line or, with `-o`, each match. | `rg -r` |
 | `--count-matches` | ripgrep | Matches per file; files with none are omitted (rg's rule, unlike GNU `-c`). | `rg --count-matches` |
 | `--stats` | ripgrep | Statistics block after the results. | `rg --stats`, times normalised |

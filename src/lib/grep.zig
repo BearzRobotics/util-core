@@ -206,11 +206,20 @@ pub const Event = union(enum) {
     /// --decompress: what follows the compressed data is not more of it and
     /// was not searched.
     decompress_trailing: []const u8,
+    /// --ignore-vcs: the ignore file `file` of the directory `dir` was not
+    /// used; its patterns hide nothing.
+    ignore_file_skipped: struct { dir: []const u8, file: []const u8, reason: IgnoreSkip },
     /// A regex search gave up on a line (backtracking or stack limit). GNU
     /// -P reports this as an error; the line counts as not matching.
     search_limit: struct { name: []const u8, line: u64 },
 };
 pub const Observer = common.Observer(Event);
+
+pub const IgnoreSkip = enum { symbolic_link, not_regular, too_large };
+
+/// The largest ignore file that is read. Such files come with the tree being
+/// searched and are held in memory while it is walked.
+pub const max_ignore_file = 4 << 20;
 
 pub const CompileError = struct {
     kind: Kind = .syntax,
@@ -2236,8 +2245,9 @@ fn ignored(g: *G, display: []const u8, is_dir: bool) bool {
     return false;
 }
 
-/// Read the open file `fd` to its end; null on error.
-fn slurp(gpa: std.mem.Allocator, fd: sys.Handle) ?[]u8 {
+/// Read the open file `fd` to its end; null on error, or when it holds more
+/// than `limit` bytes.
+fn slurp(gpa: std.mem.Allocator, fd: sys.Handle, limit: usize) ?[]u8 {
     var err: LX.E = .SUCCESS;
     var data: std.ArrayList(u8) = .empty;
     var buf: [16384]u8 = undefined;
@@ -2247,6 +2257,10 @@ fn slurp(gpa: std.mem.Allocator, fd: sys.Handle) ?[]u8 {
             return null;
         };
         if (n == 0) break;
+        if (n > limit - data.items.len) {
+            data.deinit(gpa);
+            return null;
+        }
         data.appendSlice(gpa, buf[0..n]) catch {
             data.deinit(gpa);
             return null;
@@ -2255,12 +2269,34 @@ fn slurp(gpa: std.mem.Allocator, fd: sys.Handle) ?[]u8 {
     return data.toOwnedSlice(gpa) catch null;
 }
 
-fn pushIgnore(g: *G, dir: sys.Handle, prefix_len: usize) Err!void {
+/// The contents of the ignore file `nm` in `dir` (shown as `display`); null
+/// when there is none to use.
+fn readIgnoreFile(g: *G, dir: sys.Handle, display: []const u8, nm: []const u8) ?[]u8 {
+    // As git, do not follow a .gitignore that is a link. ".ignore" is
+    // ripgrep's, where links are followed.
+    const nofollow: u32 = if (std.mem.eql(u8, nm, ".gitignore")) sys.O.NOFOLLOW else 0;
+    var err: LX.E = .SUCCESS;
+    // NONBLOCK: opening a FIFO must not wait for a writer.
+    const fd = sys.openFdAt(dir, nm, sys.O.RDONLY | sys.O.NONBLOCK | sys.O.NOCTTY | nofollow, 0, &err) orelse {
+        if (err == .LOOP) g.obs.emit(.{ .ignore_file_skipped = .{ .dir = display, .file = nm, .reason = .symbolic_link } });
+        return null;
+    };
+    defer _ = sys.closeFd(fd);
+    const st = sys.fstatFd(fd, &err) orelse return null;
+    if (!st.isReg()) {
+        g.obs.emit(.{ .ignore_file_skipped = .{ .dir = display, .file = nm, .reason = .not_regular } });
+        return null;
+    }
+    if (st.size > max_ignore_file) {
+        g.obs.emit(.{ .ignore_file_skipped = .{ .dir = display, .file = nm, .reason = .too_large } });
+        return null;
+    }
+    return slurp(g.gpa, fd, max_ignore_file);
+}
+
+fn pushIgnore(g: *G, dir: sys.Handle, display: []const u8, prefix_len: usize) Err!void {
     for ([_][]const u8{ ".gitignore", ".ignore" }) |nm| {
-        var err: LX.E = .SUCCESS;
-        const fd = sys.openFdAt(dir, nm, sys.O.RDONLY, 0, &err) orelse continue;
-        defer _ = sys.closeFd(fd);
-        const data = slurp(g.gpa, fd) orelse continue;
+        const data = readIgnoreFile(g, dir, display, nm) orelse continue;
         var pats: std.ArrayList(ign.Pattern) = .empty;
         var it = std.mem.splitScalar(u8, data, '\n');
         while (it.next()) |ln| {
@@ -2425,7 +2461,7 @@ fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8,
         else => in_dir,
     };
     if (o.decompress and st.isReg()) {
-        const raw = slurp(g.gpa, fd) orelse {
+        const raw = slurp(g.gpa, fd, std.math.maxInt(usize)) orelse {
             g.obs.emit(.{ .read_error = .{ .name = display, .errno = .IO } });
             g.errseen = true;
             return false;
@@ -2529,7 +2565,7 @@ fn grepDir(g: *G, parent: ?*dirat.Level, name: []const u8, seen: sys.FileStat, d
             g.gpa.free(lv.data);
         }
     }
-    if (o.ignore_vcs) try pushIgnore(g, level.fd, if (implicit) 0 else dbase.len + 1);
+    if (o.ignore_vcs) try pushIgnore(g, level.fd, dbase, if (implicit) 0 else dbase.len + 1);
     if (o.sort != .none) {
         var ents: std.ArrayList(SortEnt) = .empty;
         defer ents.deinit(g.gpa);
