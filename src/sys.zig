@@ -288,7 +288,18 @@ pub const FileStat = struct {
 /// stat (follow = true) or lstat of `path`; null if the call fails. `err`
 /// receives the error.
 pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
-    if (comptime !is_linux) return other.fileStat(path, follow, err);
+    return fileStatAt(cwdFd(), path, follow, err);
+}
+
+/// The handle that makes the `...At` functions resolve a relative path from
+/// the current directory.
+pub fn cwdFd() Handle {
+    return Io.Dir.cwd().handle;
+}
+
+/// `fileStat` of `path` resolved from the open directory `dir`.
+pub fn fileStatAt(dir: Handle, path: []const u8, follow: bool, err: *E) ?FileStat {
+    if (comptime !is_linux) return other.fileStatAt(dir, path, follow, err);
     var buf: [4097]u8 = undefined;
     if (path.len >= 4096) {
         err.* = .NAMETOOLONG;
@@ -300,7 +311,7 @@ pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
     var sx: L.Statx = undefined;
     var flags: u32 = L.AT.NO_AUTOMOUNT;
     if (!follow) flags |= L.AT.SYMLINK_NOFOLLOW;
-    const rc = L.statx(L.AT.FDCWD, @ptrCast(&buf), flags, .{ .TYPE = true, .MODE = true, .NLINK = true, .UID = true, .GID = true, .ATIME = true, .MTIME = true, .CTIME = true, .INO = true, .SIZE = true, .BLOCKS = true, .BTIME = true }, &sx);
+    const rc = L.statx(dir, @ptrCast(&buf), flags, .{ .TYPE = true, .MODE = true, .NLINK = true, .UID = true, .GID = true, .ATIME = true, .MTIME = true, .CTIME = true, .INO = true, .SIZE = true, .BLOCKS = true, .BTIME = true }, &sx);
     const e = L.errno(rc);
     if (e != .SUCCESS) {
         err.* = e;
@@ -1004,13 +1015,18 @@ test "open flags do what they are named for" {
 
 /// openat(AT_FDCWD, path, flags | O_CLOEXEC, mode).
 pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
-    if (comptime !is_linux) return other.openFd(path, flags, mode, err);
+    return openFdAt(cwdFd(), path, flags, mode, err);
+}
+
+/// `openFd` of `path` resolved from the open directory `dir`.
+pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
+    if (comptime !is_linux) return other.openFdAt(dir, path, flags, mode, err);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse {
         err.* = .NAMETOOLONG;
         return null;
     };
-    const rc = LX.syscall4(.openat, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), flags | O.CLOEXEC, mode);
+    const rc = LX.syscall4(.openat, @bitCast(@as(isize, dir)), @intFromPtr(p), flags | O.CLOEXEC, mode);
     const e = LX.errno(rc);
     if (e != .SUCCESS) {
         err.* = e;
@@ -1033,6 +1049,16 @@ pub fn freeDirEntries(gpa: std.mem.Allocator, entries: []RawEntry) void {
 /// of the directory.
 pub fn readDirNames(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEntry {
     const all = readDirRaw(gpa, path, err) orelse return null;
+    return dropDots(gpa, all, err);
+}
+
+/// `readDirNames` of a directory that is already open and not yet read.
+pub fn readDirNamesFd(gpa: std.mem.Allocator, fd: Handle, err: *LX.E) ?[]RawEntry {
+    const all = readDirFd(gpa, fd, err) orelse return null;
+    return dropDots(gpa, all, err);
+}
+
+fn dropDots(gpa: std.mem.Allocator, all: []RawEntry, err: *LX.E) ?[]RawEntry {
     var kept: usize = 0;
     for (all) |entry| {
         if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) {
@@ -1055,9 +1081,14 @@ pub fn readDirNames(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]Raw
 /// All entries of the directory `path` in readdir order, including "." and
 /// ".." (std.Io hides them). Names are allocated with `gpa`.
 pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEntry {
-    if (comptime !is_linux) return other.readDirRaw(gpa, path, err);
     const fd = openFd(path, O.RDONLY | O.DIRECTORY, 0, err) orelse return null;
     defer _ = closeFd(fd);
+    return readDirFd(gpa, fd, err);
+}
+
+/// `readDirRaw` of a directory that is already open and not yet read.
+pub fn readDirFd(gpa: std.mem.Allocator, fd: Handle, err: *LX.E) ?[]RawEntry {
+    if (comptime !is_linux) return other.readDirFd(gpa, fd, err);
     var list: std.ArrayList(RawEntry) = .empty;
     // Whatever has not been handed to the caller (every failure path).
     defer {
@@ -1200,10 +1231,15 @@ pub fn mkdirPath(path: []const u8, mode: u32) ?LX.E {
 
 /// unlinkat(AT_FDCWD, path, removedir ? AT_REMOVEDIR : 0).
 pub fn unlinkPath(path: []const u8, removedir: bool) ?LX.E {
-    if (comptime !is_linux) return other.unlinkPath(path, removedir);
+    return unlinkAt(cwdFd(), path, removedir);
+}
+
+/// `unlinkPath` of `path` resolved from the open directory `dir`.
+pub fn unlinkAt(dir: Handle, path: []const u8, removedir: bool) ?LX.E {
+    if (comptime !is_linux) return other.unlinkAt(dir, path, removedir);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
-    return errOf(LX.unlinkat(LX.AT.FDCWD, p, if (removedir) LX.AT.REMOVEDIR else 0));
+    return errOf(LX.unlinkat(dir, p, if (removedir) LX.AT.REMOVEDIR else 0));
 }
 
 pub const RENAME_NOREPLACE: u32 = 1;
@@ -1238,13 +1274,18 @@ pub fn symlinkPath(target: []const u8, path: []const u8) ?LX.E {
 }
 
 pub fn readlinkPath(path: []const u8, buf: []u8, err: *LX.E) ?usize {
-    if (comptime !is_linux) return other.readlinkPath(path, buf, err);
+    return readlinkAt(cwdFd(), path, buf, err);
+}
+
+/// `readlinkPath` of `path` resolved from the open directory `dir`.
+pub fn readlinkAt(dir: Handle, path: []const u8, buf: []u8, err: *LX.E) ?usize {
+    if (comptime !is_linux) return other.readlinkAt(dir, path, buf, err);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse {
         err.* = .NAMETOOLONG;
         return null;
     };
-    const rc = LX.readlinkat(LX.AT.FDCWD, p, buf.ptr, buf.len);
+    const rc = LX.readlinkat(dir, p, buf.ptr, buf.len);
     const e = LX.errno(rc);
     if (e != .SUCCESS) {
         err.* = e;
@@ -1285,10 +1326,15 @@ pub fn ftruncateFd(fd: Handle, len: u64) ?LX.E {
 }
 
 pub fn accessPath(path: []const u8, mode: u32) ?LX.E {
-    if (comptime !is_linux) return other.accessPath(path, mode);
+    return accessAt(cwdFd(), path, mode);
+}
+
+/// `accessPath` of `path` resolved from the open directory `dir`.
+pub fn accessAt(dir: Handle, path: []const u8, mode: u32) ?LX.E {
+    if (comptime !is_linux) return other.accessAt(dir, path, mode);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
-    return errOf(LX.syscall4(.faccessat2, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), mode, 0x200));
+    return errOf(LX.syscall4(.faccessat2, @bitCast(@as(isize, dir)), @intFromPtr(p), mode, 0x200));
 }
 
 /// lseek(2): whence 0/1/2 or SEEK_DATA 3 / SEEK_HOLE 4.

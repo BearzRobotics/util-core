@@ -27,6 +27,7 @@ const LX = std.os.linux;
 const common = @import("common.zig");
 const fu = @import("fu_common.zig");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 const regex = @import("regex");
 const fnmatch = @import("../fnmatch.zig");
 const strftime = @import("../strftime.zig");
@@ -267,9 +268,20 @@ const State = struct {
     cur_root: []const u8 = "",
     cur_dev: u64 = 0,
     cur_dir_path: []const u8 = "",
+    /// The open directory the current file was found in; null for a start
+    /// point.
+    cur_parent: ?*dirat.Level = null,
     prune_flag: bool = false,
     mounts: ?fu.Mounts = null,
     stdin_used: bool = false,
+
+    /// How system calls name the current file: its entry name in the open
+    /// directory it was listed in (a start point is named by its path). The
+    /// path in `cur_path` is for output and for the programs find runs.
+    fn at(st: *const State) At {
+        if (st.cur_parent) |p| return .{ .dir = p.fd, .name = st.cur_path[st.cur_name_off..] };
+        return .{ .dir = sys.cwdFd(), .name = st.cur_path };
+    }
 
     fn nomem(st: *State) void {
         st.oom = true;
@@ -282,6 +294,8 @@ const State = struct {
     }
 };
 
+
+const At = struct { dir: sys.Handle, name: []const u8 };
 
 // -------------------------------------------------------------- parsing
 
@@ -1035,7 +1049,7 @@ fn loadStat(st: *State) bool {
     var err: LX.E = .SUCCESS;
     var lst: ?sys.FileStat = null;
     var stt: ?sys.FileStat = null;
-    if (!statEntry(st, st.cur_path, st.cur_cmdline, &lst, &stt, &err)) {
+    if (!statEntry(st, st.at(), st.cur_cmdline, &lst, &stt, &err)) {
         st.cur_failed = true;
         if (!(st.ignore_race and err == .NOENT)) {
             flushOut(st);
@@ -1172,7 +1186,7 @@ fn evalNode(st: *State, n: *Node) bool {
             if (!s.isLink()) return false;
             var buf: [4096]u8 = undefined;
             var err: LX.E = .SUCCESS;
-            const k = sys.readlinkPath(st.cur_path, &buf, &err) orelse return false;
+            const k = sys.readlinkAt(st.at().dir, st.at().name, &buf, &err) orelse return false;
             if (n.kind == .ilname) return fnmatch.match(n.str, buf[0..k], .{ .casefold = true });
             return fnmatch.match(n.str, buf[0..k], .{});
         },
@@ -1199,7 +1213,7 @@ fn evalNode(st: *State, n: *Node) bool {
             }
             if (!s0.isLink()) return n.types & typeBit(s0.mode) != 0;
             var err: LX.E = .SUCCESS;
-            const s = sys.fileStat(st.cur_path, true, &err) orelse {
+            const s = sys.fileStatAt(st.at().dir, st.at().name, true, &err) orelse {
                 // dangling link
                 return n.types & (@as(u64, 1) << ('l' - 'A')) != 0;
             };
@@ -1273,12 +1287,12 @@ fn evalNode(st: *State, n: *Node) bool {
         .empty => {
             const s = getSt(st) orelse return false;
             if (s.isReg()) return s.size == 0;
-            if (s.isDir()) return dirIsEmpty(st, st.cur_path);
+            if (s.isDir()) return dirIsEmpty(st);
             return false;
         },
-        .readable => return sys.accessPath(st.cur_path, 4) == null,
-        .writable => return sys.accessPath(st.cur_path, 2) == null,
-        .executable => return sys.accessPath(st.cur_path, 1) == null,
+        .readable => return sys.accessAt(st.at().dir, st.at().name, 4) == null,
+        .writable => return sys.accessAt(st.at().dir, st.at().name, 2) == null,
+        .executable => return sys.accessAt(st.at().dir, st.at().name, 1) == null,
         .print => {
             emit(st, st.cur_path);
             emit(st, "\n");
@@ -1332,23 +1346,26 @@ fn evalNode(st: *State, n: *Node) bool {
     }
 }
 
-fn dirIsEmpty(st: *State, path: []const u8) bool {
-    var d = Io.Dir.cwd().openDir(st.env.io, path, .{ .iterate = true }) catch |e| {
-        const emap: LX.E = switch (e) {
-            error.AccessDenied => .ACCES,
-            error.FileNotFound => .NOENT,
-            error.NotDir => .NOTDIR,
-            else => .IO,
-        };
-        flushOut(st);
-        st.observer.emit(.{ .path_error = .{ .path = path, .text = sys.errnoText(emap) } });
-        st.exit_status = 1;
-        return false;
-    };
-    defer d.close(st.env.io);
-    var it = d.iterate();
-    const first = it.next(st.env.io) catch return false;
-    return first == null;
+fn dirIsEmpty(st: *State) bool {
+    var level: dirat.Level = undefined;
+    var failure: ?LX.E = dirat.enter(&level, st.cur_parent, st.at().name, .{ .follow = followsHere(st, st.cur_cmdline) });
+    if (failure == null) {
+        defer _ = dirat.leave(&level);
+        var err: LX.E = .SUCCESS;
+        if (sys.readDirNamesFd(st.env.gpa, level.fd, &err)) |names| {
+            defer sys.freeDirEntries(st.env.gpa, names);
+            return names.len == 0;
+        }
+        failure = err;
+    }
+    pathError(st, st.cur_path, failure.?);
+    return false;
+}
+
+fn pathError(st: *State, path: []const u8, errno: LX.E) void {
+    flushOut(st);
+    st.observer.emit(.{ .path_error = .{ .path = path, .text = sys.errnoText(errno) } });
+    st.exit_status = 1;
 }
 
 fn outWrite(st: *State, o: *OutFile, bytes: []const u8) void {
@@ -1378,7 +1395,7 @@ fn doDelete(st: *State) bool {
     // never delete the "." start point name
     if (st.cur_depth == 0 and std.mem.eql(u8, st.cur_path, ".")) return true;
     const is_dir = s.isDir();
-    if (sys.unlinkPath(st.cur_path, is_dir)) |e| {
+    if (sys.unlinkAt(st.at().dir, st.at().name, is_dir)) |e| {
         flushOut(st);
         st.observer.emit(.{ .delete_failed = .{ .path = st.cur_path, .text = sys.errnoText(e) } });
         st.exit_status = 1;
@@ -1603,7 +1620,7 @@ fn printJson(st: *State) void {
     var target: ?[]const u8 = null;
     if (s.isLink()) {
         var err: LX.E = .SUCCESS;
-        if (sys.readlinkPath(path, &target_buf, &err)) |k| target = target_buf[0..k];
+        if (sys.readlinkAt(st.at().dir, st.at().name, &target_buf, &err)) |k| target = target_buf[0..k];
     }
     var aw: std.Io.Writer.Allocating = .init(st.gpa);
     defer aw.deinit();
@@ -1640,7 +1657,7 @@ fn printLs(st: *State, o: ?*OutFile) void {
     if (s.isLink()) {
         var buf: [4096]u8 = undefined;
         var err: LX.E = .SUCCESS;
-        if (sys.readlinkPath(st.cur_path, &buf, &err)) |k| {
+        if (sys.readlinkAt(st.at().dir, st.at().name, &buf, &err)) |k| {
             out.appendSlice(st.gpa, " -> ") catch st.nomem();
             quotearg.quote(&out, st.gpa, buf[0..k], .escape, &space_set) catch st.nomem();
         }
@@ -1763,7 +1780,7 @@ fn printFormat(st: *State, parts: []const FmtPart, o: ?*OutFile) void {
                     };
                     if (pt.dir == 'Y' and sv.isLink()) {
                         var err: LX.E = .SUCCESS;
-                        if (sys.fileStat(st.cur_path, true, &err)) |t| {
+                        if (sys.fileStatAt(st.at().dir, st.at().name, true, &err)) |t| {
                             c = switch (t.mode & 0o170000) {
                                 0o100000 => 'f',
                                 0o040000 => 'd',
@@ -1782,7 +1799,7 @@ fn printFormat(st: *State, parts: []const FmtPart, o: ?*OutFile) void {
                 if (s) |sv| if (sv.isLink()) {
                     var buf: [4096]u8 = undefined;
                     var err: LX.E = .SUCCESS;
-                    if (sys.readlinkPath(st.cur_path, &buf, &err)) |k| tmp.appendSlice(st.gpa, buf[0..k]) catch st.nomem();
+                    if (sys.readlinkAt(st.at().dir, st.at().name, &buf, &err)) |k| tmp.appendSlice(st.gpa, buf[0..k]) catch st.nomem();
                 };
             },
             's' => if (s) |sv| {
@@ -1871,16 +1888,20 @@ fn printFormat(st: *State, parts: []const FmtPart, o: ?*OutFile) void {
 
 const Ancestor = struct { dev: u64, ino: u64, path: []const u8 };
 
-fn statEntry(st: *State, path: []const u8, cmdline: bool, lst: *?sys.FileStat, stt: *?sys.FileStat, err: *LX.E) bool {
+/// Whether a symbolic link met here is followed (-L, or -H on a start point).
+fn followsHere(st: *const State, cmdline: bool) bool {
+    return st.follow == .logical or (st.follow == .command_line and cmdline);
+}
+
+fn statEntry(st: *State, file: At, cmdline: bool, lst: *?sys.FileStat, stt: *?sys.FileStat, err: *LX.E) bool {
     var e: LX.E = .SUCCESS;
-    lst.* = sys.fileStat(path, false, &e);
+    lst.* = sys.fileStatAt(file.dir, file.name, false, &e);
     if (lst.* == null) {
         err.* = e;
         return false;
     }
-    const follow = st.follow == .logical or (st.follow == .command_line and cmdline);
-    if (follow and lst.*.?.isLink()) {
-        stt.* = sys.fileStat(path, true, &e);
+    if (followsHere(st, cmdline) and lst.*.?.isLink()) {
+        stt.* = sys.fileStatAt(file.dir, file.name, true, &e);
         if (stt.* == null) stt.* = lst.*;
     } else stt.* = lst.*;
     return true;
@@ -1897,10 +1918,11 @@ const Cur = struct {
     failed: bool,
     cmdline: bool,
     dir: []const u8,
+    parent: ?*dirat.Level,
 };
 
 fn saveCur(st: *State) Cur {
-    return .{ .path = st.cur_path, .name_off = st.cur_name_off, .depth = st.cur_depth, .st = st.cur_st, .lst = st.cur_lst, .dtype = st.cur_dtype, .loaded = st.cur_loaded, .failed = st.cur_failed, .cmdline = st.cur_cmdline, .dir = st.cur_dir_path };
+    return .{ .path = st.cur_path, .name_off = st.cur_name_off, .depth = st.cur_depth, .st = st.cur_st, .lst = st.cur_lst, .dtype = st.cur_dtype, .loaded = st.cur_loaded, .failed = st.cur_failed, .cmdline = st.cur_cmdline, .dir = st.cur_dir_path, .parent = st.cur_parent };
 }
 
 fn restoreCur(st: *State, c: Cur) void {
@@ -1914,22 +1936,24 @@ fn restoreCur(st: *State, c: Cur) void {
     st.cur_failed = c.failed;
     st.cur_cmdline = c.cmdline;
     st.cur_dir_path = c.dir;
+    st.cur_parent = c.parent;
 }
 
-fn dtypeOf(kind: Io.File.Kind) u8 {
-    return switch (kind) {
-        .directory => 'd',
-        .file => 'f',
-        .sym_link => 'l',
-        .block_device => 'b',
-        .character_device => 'c',
-        .named_pipe => 'p',
-        .unix_domain_socket => 's',
+/// find's type letter for a readdir `d_type`; 0 when it says nothing.
+fn dtypeOf(d_type: u8) u8 {
+    return switch (d_type) {
+        4 => 'd',
+        8 => 'f',
+        10 => 'l',
+        6 => 'b',
+        2 => 'c',
+        1 => 'p',
+        12 => 's',
         else => 0,
     };
 }
 
-fn visit(st: *State, path: []const u8, name_off: usize, depth: i64, cmdline: bool, ancestors: *std.ArrayList(Ancestor), root_dev: u64, parent_dir: []const u8, dtype: u8) void {
+fn visit(st: *State, path: []const u8, name_off: usize, depth: i64, cmdline: bool, ancestors: *std.ArrayList(Ancestor), root_dev: u64, parent_dir: []const u8, parent: ?*dirat.Level, dtype: u8) void {
     if (st.quit) return;
     st.cur_path = path;
     st.cur_name_off = name_off;
@@ -1937,6 +1961,7 @@ fn visit(st: *State, path: []const u8, name_off: usize, depth: i64, cmdline: boo
     st.cur_dtype = dtype;
     st.cur_cmdline = cmdline;
     st.cur_dir_path = parent_dir;
+    st.cur_parent = parent;
     st.cur_loaded = false;
     st.cur_failed = false;
     st.cur_st = null;
@@ -1982,51 +2007,39 @@ fn visit(st: *State, path: []const u8, name_off: usize, depth: i64, cmdline: boo
         _ = ancestors.pop();
         if (st.quit) return;
         restoreCur(st, snap);
+        // The directory this entry is in was lost while below it.
+        if (parent) |p| if (!p.open) return;
     }
     if (st.depth_first and eval_here) {
         evalHere(st);
     }
 }
 
+/// Visit the entries of the current file, a directory.
 fn walkDir(st: *State, path: []const u8, depth: i64, ancestors: *std.ArrayList(Ancestor), root_dev: u64) void {
-    var d = Io.Dir.cwd().openDir(st.env.io, path, .{ .iterate = true }) catch |e| {
-        const emap: LX.E = switch (e) {
-            error.AccessDenied => .ACCES,
-            error.FileNotFound => .NOENT,
-            error.NotDir => .NOTDIR,
-            error.SymLinkLoop => .LOOP,
-            else => .IO,
-        };
-        flushOut(st);
-        st.observer.emit(.{ .path_error = .{ .path = path, .text = sys.errnoText(emap) } });
-        st.exit_status = 1;
-        return;
-    };
-    var names: std.ArrayList([]u8) = .empty;
-    var kinds: std.ArrayList(u8) = .empty;
-    defer {
-        for (names.items) |nm| st.gpa.free(nm);
-        names.deinit(st.gpa);
-        kinds.deinit(st.gpa);
-    }
-    var it = d.iterate();
-    while (it.next(st.env.io) catch null) |entry| {
-        const dup = st.gpa.dupe(u8, entry.name) catch {
-            st.nomem();
-            continue;
-        };
-        names.append(st.gpa, dup) catch st.nomem();
-        kinds.append(st.gpa, dtypeOf(entry.kind)) catch st.nomem();
-    }
-    d.close(st.env.io);
+    // The directory opened here must be the one the tests have seen, and a
+    // symbolic link now in its place must not be followed.
+    var level: dirat.Level = undefined;
+    if (dirat.enter(&level, st.cur_parent, st.at().name, .{
+        .follow = followsHere(st, st.cur_cmdline),
+        .expect = if (st.cur_loaded and !st.cur_failed) st.cur_st else null,
+        .same_device = st.xdev,
+    })) |e| return pathError(st, path, e);
+    defer if (dirat.leave(&level)) |e| pathError(st, dirnameOf(path), e);
+
+    var err: LX.E = .SUCCESS;
+    const entries = sys.readDirNamesFd(st.env.gpa, level.fd, &err) orelse return pathError(st, path, err);
+    defer sys.freeDirEntries(st.env.gpa, entries);
     var base = path;
     if (base.len > 1 and base[base.len - 1] == '/') {
         // fts: the trailing slash of the parent is not doubled
         base = base[0 .. base.len - 1];
         if (base.len == 0) base = "/";
     }
-    for (names.items, kinds.items) |nm, kd| {
-        if (st.quit) return;
+    for (entries) |entry| {
+        // A level that could not be reopened cannot be walked any further.
+        if (st.quit or !level.open) return;
+        const nm = entry.name;
         const child = (if (std.mem.eql(u8, base, "/"))
             std.fmt.allocPrint(st.gpa, "/{s}", .{nm})
         else
@@ -2035,7 +2048,7 @@ fn walkDir(st: *State, path: []const u8, depth: i64, ancestors: *std.ArrayList(A
             continue;
         };
         const off = child.len - nm.len;
-        visit(st, child, off, depth + 1, false, ancestors, root_dev, path, kd);
+        visit(st, child, off, depth + 1, false, ancestors, root_dev, path, &level, dtypeOf(entry.dtype));
     }
 }
 // ------------------------------------------------------------------ public API
@@ -2210,7 +2223,7 @@ fn runWalk(st: *State, starts_in: []const []const u8) error{OutOfMemory}!Result 
         var tl = sp.len;
         while (tl > 1 and sp[tl - 1] == '/') tl -= 1;
         const off = if (std.mem.lastIndexOfScalar(u8, sp[0..tl], '/')) |k| (if (tl == 1) 0 else k + 1) else 0;
-        visit(st, sp, off, 0, true, &anc, rdev, dirOf(sp), 0);
+        visit(st, sp, off, 0, true, &anc, rdev, dirOf(sp), null, 0);
     }
     for (st.execs.items) |n| flushBatch(st, n);
     flushOut(st);

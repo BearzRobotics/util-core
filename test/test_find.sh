@@ -515,6 +515,43 @@ done
 execdir_path_cmp "-execdir with an absolute PATH" "/usr/bin:/bin" -execdir
 execdir_path_cmp "-exec is not restricted" ".:/usr/bin:/bin" -exec
 
+# A directory that is replaced by a symbolic link during the walk must not
+# lead find outside the tree. -exec makes each swap happen at a fixed point.
+# Everything, the "victim" included, is inside $R.
+race_setup() {
+    R="$W/race"; rm -rf "$R"; mkdir -p "$R/tree/a/sub" "$R/victim"
+    echo keep > "$R/victim/precious"; echo x > "$R/tree/a/sub/precious"
+}
+race_check() { # NAME CONDITION...
+    race_name=$1; shift
+    if "$@"; then PASS=$((PASS + 1)); printf "PASS %s\n" "$race_name"
+    else FAIL=$((FAIL + 1)); printf "FAIL %s\n" "$race_name"; sed 's/^/  /' "$W/race.out"; fi
+}
+race_setup
+printf '#!/bin/sh\ncd "%s" && mv tree/a/sub moved && ln -s "%s/victim" tree/a/sub\n' "$R" "$R" > "$R/swap"; chmod +x "$R/swap"
+"$BIN_DIR/find" "$R/tree" -depth \( -name precious -exec "$R/swap" ';' \) -delete > "$W/race.out" 2>&1
+race_check "-delete stays in the directory it listed" test -f "$R/victim/precious"
+race_check "-delete removed the file it examined" test ! -e "$R/moved/precious"
+
+rm -rf "$W/race"; mkdir -p "$W/race/tree/a/z1" "$W/race/tree/a/z2" "$W/race/victim"; echo keep > "$W/race/victim/precious"
+# Replace every z directory but the one being visited with a link.
+printf '#!/bin/sh\ncd "%s/race/tree/a" || exit 1\nfor z in z*; do [ "$W_KEEP/$z" = "$1" ] && continue; [ -d "$z" ] && [ ! -L "$z" ] && rmdir "$z" && ln -s "%s/race/victim" "$z"; done\n' "$W" "$W" > "$W/race/swap"; chmod +x "$W/race/swap"
+W_KEEP="$W/race/tree/a" LC_ALL=C "$BIN_DIR/find" "$W/race/tree" -name 'z*' -type d -exec "$W/race/swap" {} ';' -o -print > "$W/race.out" 2>&1
+st=$?
+race_check "a link that replaced a directory is not followed" sh -c '! grep -q "^[^ ]*/precious$" "$1"' _ "$W/race.out"
+race_check "the replaced directory is reported" sh -c '[ "$2" = 1 ] && grep -q "Not a directory" "$1"' _ "$W/race.out" "$st"
+rm -rf "$W/race"
+
+# Deeper than the walker keeps directories open, with few descriptors.
+mkdir "$W/deepfd"
+( cd "$W/deepfd" && mkdir -p "$(awk 'BEGIN { for (i = 0; i < 120; i++) printf "n/"; print "n" }')" &&
+  : > "$(awk 'BEGIN { for (i = 0; i < 120; i++) printf "n/"; print "n/leaf" }')" )
+exp=$(cd "$W" && /usr/bin/find deepfd -printf '%d %f\n' | cksum)
+act=$(cd "$W" && ulimit -n 48 && "$BIN_DIR/find" deepfd -printf '%d %f\n' 2>&1 | cksum)
+race_check "deep tree with 48 descriptors" test "$exp" = "$act"
+(cd "$W" && ulimit -n 48 && "$BIN_DIR/find" deepfd -delete > "$W/race.out" 2>&1)
+race_check "-delete of a deep tree with 48 descriptors" test ! -e "$W/deepfd"
+
 help_cmp_find() {
     exp=$(LC_ALL=C /usr/bin/find --help | sed 's#/usr/bin/find#find#')
     act=$(ours --help | grep -v '^Actions (not in GNU):' | sed 's#^Usage: [^ ]*#Usage: find#')

@@ -39,6 +39,11 @@ fn cwd() Io.Dir {
     return Io.Dir.cwd();
 }
 
+/// The `std.Io` view of an open directory (or of `sys.cwdFd()`).
+fn dirOf(h: Handle) Io.Dir {
+    return .{ .handle = h };
+}
+
 fn fileOf(h: Handle) Io.File {
     return .{ .handle = h, .flags = .{ .nonblocking = false } };
 }
@@ -514,7 +519,7 @@ fn fromCStat(st: c.Stat) FileStat {
     };
 }
 
-pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
+pub fn fileStatAt(dir: Handle, path: []const u8, follow: bool, err: *E) ?FileStat {
     if (comptime is_libc_posix) {
         var b: [4097]u8 = undefined;
         const p = cstr(&b, path) orelse {
@@ -523,13 +528,13 @@ pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
         };
         var st: c.Stat = undefined;
         const flags: u32 = if (follow) 0 else c.AT.SYMLINK_NOFOLLOW;
-        if (cerr(c.fstatat(c.AT.FDCWD, p, &st, flags))) |e| {
+        if (cerr(c.fstatat(dir, p, &st, flags))) |e| {
             err.* = e;
             return null;
         }
         return fromCStat(st);
     }
-    const st = cwd().statFile(io(), path, .{ .follow_symlinks = follow }) catch |e| {
+    const st = dirOf(dir).statFile(io(), path, .{ .follow_symlinks = follow }) catch |e| {
         err.* = errFrom(e);
         return null;
     };
@@ -556,25 +561,25 @@ pub fn fstatFd(fd: Handle, err: *E) ?FileStat {
 
 /// O flags of sys.zig are abstract (the Linux values) on every OS other than
 /// Linux; this builds the matching Io open call.
-pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *E) ?Handle {
+pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?Handle {
     const acc = flags & 3;
     const follow = flags & O.NOFOLLOW == 0;
     if (flags & O.DIRECTORY != 0) {
-        const d = cwd().openDir(io(), path, .{ .follow_symlinks = follow }) catch |e| {
+        const d = dirOf(dir).openDir(io(), path, .{ .follow_symlinks = follow, .iterate = true }) catch |e| {
             err.* = errFrom(e);
             return null;
         };
         return d.handle;
     }
     const file = if (flags & O.CREAT != 0)
-        cwd().createFile(io(), path, .{
+        dirOf(dir).createFile(io(), path, .{
             .read = acc == O.RDWR,
             .truncate = flags & O.TRUNC != 0,
             .exclusive = flags & O.EXCL != 0,
             .permissions = sys.permissionsFromMode(mode),
         })
     else
-        cwd().openFile(io(), path, .{
+        dirOf(dir).openFile(io(), path, .{
             .mode = switch (acc) {
                 O.WRONLY => .write_only,
                 O.RDWR => .read_write,
@@ -754,8 +759,8 @@ pub fn mkdirPath(path: []const u8, mode: u32) ?E {
     return null;
 }
 
-pub fn unlinkPath(path: []const u8, removedir: bool) ?E {
-    if (removedir) cwd().deleteDir(io(), path) catch |e| return errFrom(e) else cwd().deleteFile(io(), path) catch |e| return errFrom(e);
+pub fn unlinkAt(dir: Handle, path: []const u8, removedir: bool) ?E {
+    if (removedir) dirOf(dir).deleteDir(io(), path) catch |e| return errFrom(e) else dirOf(dir).deleteFile(io(), path) catch |e| return errFrom(e);
     return null;
 }
 
@@ -784,8 +789,8 @@ pub fn symlinkPath(target: []const u8, path: []const u8) ?E {
     return null;
 }
 
-pub fn readlinkPath(path: []const u8, buf: []u8, err: *E) ?usize {
-    return cwd().readLink(io(), path, buf) catch |e| {
+pub fn readlinkAt(dir: Handle, path: []const u8, buf: []u8, err: *E) ?usize {
+    return dirOf(dir).readLink(io(), path, buf) catch |e| {
         err.* = errFrom(e);
         return null;
     };
@@ -796,8 +801,8 @@ pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?E {
     return null;
 }
 
-pub fn accessPath(path: []const u8, mode: u32) ?E {
-    cwd().access(io(), path, .{ .read = mode & 4 != 0, .write = mode & 2 != 0, .execute = mode & 1 != 0 }) catch |e| return errFrom(e);
+pub fn accessAt(dir: Handle, path: []const u8, mode: u32) ?E {
+    dirOf(dir).access(io(), path, .{ .read = mode & 4 != 0, .write = mode & 2 != 0, .execute = mode & 1 != 0 }) catch |e| return errFrom(e);
     return null;
 }
 
@@ -1115,12 +1120,8 @@ pub fn getXattr(path: []const u8, name: [:0]const u8, follow: bool, buf: []u8, e
 
 /// Directory entries through std.Io, with "." and ".." added (the Linux version
 /// returns them from getdents). `dtype` uses the DT_* values.
-pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *E) ?[]sys.RawEntry {
-    var dir = cwd().openDir(io(), path, .{ .iterate = true }) catch |e| {
-        err.* = errFrom(e);
-        return null;
-    };
-    defer dir.close(io());
+pub fn readDirFd(gpa: std.mem.Allocator, fd: Handle, err: *E) ?[]sys.RawEntry {
+    const dir = dirOf(fd);
     var list: std.ArrayList(sys.RawEntry) = .empty;
     const fail = struct {
         fn f(g: std.mem.Allocator, l: *std.ArrayList(sys.RawEntry), er: *E) ?[]sys.RawEntry {
