@@ -124,4 +124,26 @@ if can_inject; then
 else
     skip_test "write and close failures (no strace)"
 fi
+# A directory that becomes a symbolic link between being examined and being
+# opened is not followed: its target's names must not enter the database.
+mkdir -p "$W/race/t/user" "$W/race/secret"; : > "$W/race/t/user/mine"; : > "$W/race/secret/topsecret-name"
+walk_cmd() { "$@" "$BIN_DIR/updatedb" --localpaths="$W/race/t" --prunepaths=/nonexistent --prunefs=nofs --output="$W/race/db"; }
+if can_inject; then
+    # Which openat is the one that opens "user"?
+    walk_cmd strace -o "$W/race/trace" -e trace=openat > /dev/null 2>&1
+    nth=$(grep '^openat' "$W/race/trace" | grep -n 'user", .*O_DIRECTORY' | head -n 1 | cut -d: -f1)
+    walk_cmd exec timeout 30 strace -o /dev/null -e trace=openat -e inject=openat:delay_enter=3000000:when="${nth:-1}" > "$W/race/out" 2>&1 &
+    race_pid=$!
+    sleep 1.5
+    mv "$W/race/t/user" "$W/race/moved" && ln -s "$W/race/secret" "$W/race/t/user"
+    wait "$race_pid"
+    if [ -n "$nth" ] && [ -f "$W/race/db" ] && ! grep -a -q topsecret "$W/race/db"; then
+        PASS=$((PASS + 1)); echo "PASS a swapped-in link is not walked"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL a swapped-in link is not walked (openat $nth)"; cat "$W/race/out"
+    fi
+else
+    skip_test "updatedb link race (needs strace)"
+fi
+rm -rf "$W/race"
 cd /; print_summary

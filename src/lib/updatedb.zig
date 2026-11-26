@@ -18,6 +18,7 @@ const LX = std.os.linux;
 const common = @import("common.zig");
 const fu = @import("fu_common.zig");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 const posixre = @import("../posixre.zig");
 const regex = @import("regex");
 const fnmatch = @import("../fnmatch.zig");
@@ -112,38 +113,44 @@ fn pruned(u: *U, display: []const u8, s: sys.FileStat) Error!bool {
     return false;
 }
 
-fn walk(u: *U, display: []const u8, fs_path: []const u8, depth: i64, root_dev: u64) Error!void {
+/// Record the file `name` in the open directory `parent` (a search path is
+/// named by its path, from the current directory) and what is below it.
+/// `display` is how the database names it. The walk is descriptor-relative
+/// (dirat.zig): a symbolic link put where a directory was is never followed,
+/// so names from elsewhere cannot end up under this one.
+fn walk(u: *U, display: []const u8, parent: ?*dirat.Level, name: []const u8, depth: i64, root_dev: u64) Error!void {
     var err: LX.E = .SUCCESS;
-    const s = sys.fileStat(fs_path, false, &err) orelse {
-        u.observer.emit(.{ .find_error = .{ .path = display, .text = sys.errnoText(err) } });
-        return;
-    };
+    const s = sys.fileStatAt(dirat.fdOf(parent), name, false, &err) orelse return findError(u, display, err);
     if (try pruned(u, display, s)) return;
     const is_dir = s.isDir();
     var descend = is_dir and (u.maxdepth < 0 or depth < u.maxdepth);
     if (u.xdev and is_dir and depth > 0 and devKey(s) != root_dev) descend = false;
     if (!u.depth_first and depth >= u.mindepth) try addPath(u, display);
-    if (descend) {
-        if (sys.readDirRaw(u.gpa, fs_path, &err)) |rd| {
-            defer {
-                for (rd) |x| u.gpa.free(x.name);
-                u.gpa.free(rd);
-            }
-            const base = if (display.len > 1 and display[display.len - 1] == '/') display[0 .. display.len - 1] else display;
-            const fbase = if (fs_path.len > 1 and fs_path[fs_path.len - 1] == '/') fs_path[0 .. fs_path.len - 1] else fs_path;
-            for (rd) |x| {
-                if (std.mem.eql(u8, x.name, ".") or std.mem.eql(u8, x.name, "..")) continue;
-                const cd = if (std.mem.eql(u8, base, "/")) try std.fmt.allocPrint(u.gpa, "/{s}", .{x.name}) else try std.fmt.allocPrint(u.gpa, "{s}/{s}", .{ base, x.name });
-                defer u.gpa.free(cd);
-                const cf = if (std.mem.eql(u8, fbase, "/")) try std.fmt.allocPrint(u.gpa, "/{s}", .{x.name}) else try std.fmt.allocPrint(u.gpa, "{s}/{s}", .{ fbase, x.name });
-                defer u.gpa.free(cf);
-                try walk(u, cd, cf, depth + 1, root_dev);
-            }
-        } else {
-            u.observer.emit(.{ .find_error = .{ .path = display, .text = sys.errnoText(err) } });
-        }
-    }
+    if (descend) try walkContents(u, display, parent, name, s, depth, root_dev);
+    // The directory this file is in may have been lost while below it.
+    if (parent) |p| if (!p.open) return;
     if (u.depth_first and depth >= u.mindepth) try addPath(u, display);
+}
+
+fn findError(u: *U, path: []const u8, errno: LX.E) void {
+    u.observer.emit(.{ .find_error = .{ .path = path, .text = sys.errnoText(errno) } });
+}
+
+fn walkContents(u: *U, display: []const u8, parent: ?*dirat.Level, name: []const u8, seen: sys.FileStat, depth: i64, root_dev: u64) Error!void {
+    var level: dirat.Level = undefined;
+    // With -xdev the directory opened must also be on the device examined.
+    if (dirat.enter(&level, parent, name, .{ .expect = seen, .same_device = u.xdev })) |e| return findError(u, display, e);
+    defer if (dirat.leave(&level)) |e| findError(u, display, e);
+    var err: LX.E = .SUCCESS;
+    const entries = sys.readDirNamesFd(u.env.gpa, level.fd, &err) orelse return findError(u, display, err);
+    defer sys.freeDirEntries(u.env.gpa, entries);
+    const base = if (display.len > 1 and display[display.len - 1] == '/') display[0 .. display.len - 1] else display;
+    for (entries) |x| {
+        if (!level.open) break;
+        const cd = if (std.mem.eql(u8, base, "/")) try std.fmt.allocPrint(u.gpa, "/{s}", .{x.name}) else try std.fmt.allocPrint(u.gpa, "{s}/{s}", .{ base, x.name });
+        defer u.gpa.free(cd);
+        try walk(u, cd, &level, x.name, depth + 1, root_dev);
+    }
 }
 
 fn addPath(u: *U, display: []const u8) Error!void {
@@ -251,7 +258,7 @@ fn walkRoot(u: *U, sp: []const u8, changeto: []const u8) Error!void {
     var err: LX.E = .SUCCESS;
     var root_dev: u64 = 0;
     if (sys.fileStat(fs_path, false, &err)) |s| root_dev = devKey(s);
-    try walk(u, sp, fs_path, 0, root_dev);
+    try walk(u, sp, null, fs_path, 0, root_dev);
 }
 
 /// Walk the search paths and front-code the sorted names. Returns the
