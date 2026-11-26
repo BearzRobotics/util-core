@@ -182,6 +182,22 @@ if can_inject; then
 else
     skip_test "rm -r reports a read error (no strace)"
 fi
+# Trees whose paths are longer than PATH_MAX (4096) can be removed.
+d=$(mktemp -d)
+(
+    cd "$d" && mkdir deep && cd deep || exit 1
+    name=$(printf 'd%.0s' $(seq 200)); i=0
+    while [ $i -lt 30 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done
+    : > leaf
+)
+out=$(cd "$d" && "$BIN_DIR/rm" -rf deep 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -e "$d/deep" ]; then
+    PASS=$((PASS + 1)); echo "PASS rm -rf of a tree deeper than PATH_MAX"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL rm -rf of a tree deeper than PATH_MAX (rc=$rc: $(printf %.200s "$out"))"
+fi
+"${GNU_BIN:-/usr/bin}/rm" -rf "$d"
+
 # A directory replaced by a symbolic link while rm is working must not lead it
 # outside the tree. The -i prompts hold rm still between examining 'tree/sub'
 # and opening it. Everything, the "victim" included, is in a new directory.
