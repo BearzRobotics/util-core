@@ -361,7 +361,7 @@ fn putInfo(t: *T, e: *const Entry) void {
     }
     if (o.size or o.human) {
         sep(t, &first);
-        const sz: u64 = if (o.du and e.is_dir and !e.lst.isLink()) e.du else s.size;
+        const sz: u64 = if (o.du and e.is_dir) e.du else s.size;
         if (o.human) {
             humanSize(t, sz, &tmp);
             put(t, tmp.items);
@@ -565,11 +565,22 @@ fn classifyChar(e: *const Entry) u8 {
     };
 }
 
-/// Size of `e` with everything listed below it (--du).
+/// Size of `e` with everything listed below it (--du). It runs ahead of the
+/// listing, so the directories it passes count as visited only until it
+/// returns; the listing then meets them in the same order.
 fn duOf(t: *T, e: *Entry, level: i64, unf: bool) u64 {
+    const mark = t.visited.items.len;
+    defer t.visited.shrinkRetainingCapacity(mark);
+    return sizeBelow(t, e, level, unf);
+}
+
+fn sizeBelow(t: *T, e: *Entry, level: i64, unf: bool) u64 {
     var total: u64 = e.lst.size;
     if (!e.is_dir or (e.lst.isLink() and !t.o.follow)) return total;
     if (t.o.max_level >= 0 and level + 1 >= t.o.max_level) return total;
+    // As in the listing, a link back into what has been seen is not followed.
+    if (e.lst.isLink() and seen(t, e.st.?)) return total;
+    visit(t, e.lst, e.st);
     var err: LX.E = .SUCCESS;
     const items = listDir(t, e.path, &err) orelse return total;
     defer freeEntries(t, items);
@@ -577,7 +588,7 @@ fn duOf(t: *T, e: *Entry, level: i64, unf: bool) u64 {
     if (t.o.matchdirs and t.o.patterns.len > 0 and matchList(t, t.o.patterns, e.name)) child_unf = true;
     for (items) |*c| {
         if (!visibleEntry(t, c, level + 1, child_unf)) continue;
-        total += duOf(t, c, level + 1, child_unf);
+        total += sizeBelow(t, c, level + 1, child_unf);
     }
     return total;
 }
@@ -765,6 +776,13 @@ fn seen(t: *T, s: sys.FileStat) bool {
     return false;
 }
 
+/// Remember the directory a descent goes into: the entry itself, or what the
+/// link `lst` leads to.
+fn visit(t: *T, lst: sys.FileStat, target: ?sys.FileStat) void {
+    const s = if (lst.isLink()) target.? else lst;
+    t.visited.append(t.gpa, .{ .dev = (@as(u64, s.dev_major) << 32) | s.dev_minor, .ino = s.ino }) catch t.nomem();
+}
+
 fn walk(t: *T, path: []const u8, level: i64, frames: *std.ArrayList(Frame), dev: u64, unf: bool) void {
     const o = &t.o;
     var err: LX.E = .SUCCESS;
@@ -843,8 +861,13 @@ fn walkStruct(t: *T, path: []const u8, level: i64, indent: usize, json: bool, de
         if (o.du and e.is_dir) e.du = duOf(t, e, level, false);
         const into_dir = e.is_dir and (!e.lst.isLink() or o.follow);
         if (e.is_dir) t.dirs += 1 else t.files += 1;
-        const descend = into_dir and !(o.max_level >= 0 and level + 1 >= o.max_level) and !(o.xdev and (@as(u64, (e.st orelse e.lst).dev_major) << 32 | (e.st orelse e.lst).dev_minor) != dev);
-        structEntry(t, e, indent, json, last, descend, level, dev);
+        var descend = into_dir and !(o.max_level >= 0 and level + 1 >= o.max_level) and !(o.xdev and (@as(u64, (e.st orelse e.lst).dev_major) << 32 | (e.st orelse e.lst).dev_minor) != dev);
+        // The same loop rule as the text listing: every directory counts as
+        // visited when listed, and a link to a visited one is not followed.
+        const recursive = descend and e.lst.isLink() and seen(t, e.st.?);
+        if (recursive) descend = false;
+        if (e.lst.isDir() or descend) visit(t, e.lst, e.st);
+        structEntry(t, e, indent, json, last, descend, recursive, level, dev);
     }
 }
 
@@ -852,7 +875,7 @@ fn pad(t: *T, n: usize) void {
     t.out.appendNTimes(t.gpa, ' ', n * 4) catch t.nomem();
 }
 
-fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend: bool, level: i64, dev: u64) void {
+fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend: bool, recursive: bool, level: i64, dev: u64) void {
     const tn = typeName(e);
     pad(t, indent);
     var has_children = false;
@@ -884,7 +907,12 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
             put(t, "\"");
         }
         putAttrs(t, e, true);
-        if (unreadable) {
+        if (recursive) {
+            put(t, ",\"contents\":[{\"error\": \"recursive, not followed\"}");
+            // tree pads by depth here, except with --du.
+            if (t.o.du) pad(t, 1) else pad(t, indent);
+            put(t, "]}");
+        } else if (unreadable) {
             put(t, ",\"contents\":[{\"error\": \"error opening dir\"}    ]}");
             t.json_err = true;
         } else if (descend and has_children) {
@@ -909,7 +937,10 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
         }
         putAttrs(t, e, false);
         put(t, ">");
-        if (unreadable) {
+        if (recursive) {
+            put(t, "<error>recursive, not followed</error>");
+            if (!t.o.du) pad(t, indent);
+        } else if (unreadable) {
             put(t, "<error>error opening dir</error>");
         } else if (descend and has_children) {
             put(t, "\n");
@@ -1009,6 +1040,8 @@ pub fn run(env: Env, options: Options, roots_in: []const []const u8, writer: *Io
         _ = &target;
         var e = Entry{ .name = root, .path = root, .lst = if (st) |s| s else lst, .st = st, .is_dir = is_dir };
         const dev: u64 = (@as(u64, e.lst.dev_major) << 32) | e.lst.dev_minor;
+        t.visited.clearRetainingCapacity();
+        if (is_dir) t.visited.append(t.gpa, .{ .dev = (@as(u64, lst.dev_major) << 32) | lst.dev_minor, .ino = lst.ino }) catch {};
         if (t.o.du and is_dir) {
             e.du = duOf(&t, &e, -1, false);
             t.total_du += e.du;
@@ -1020,8 +1053,6 @@ pub fn run(env: Env, options: Options, roots_in: []const []const u8, writer: *Io
         }
         if (root_unreadable) t.files += 1;
         const before_count = t.dirs + t.files;
-        t.visited.clearRetainingCapacity();
-        if (is_dir) t.visited.append(t.gpa, .{ .dev = (@as(u64, lst.dev_major) << 32) | lst.dev_minor, .ino = lst.ino }) catch {};
         switch (t.o.mode) {
             .text => {
                 var frames: std.ArrayList(Frame) = .empty;

@@ -89,4 +89,19 @@ help_cmp_tree() {
     else FAIL=$((FAIL + 1)); printf "FAIL --help text\n"; fi
 }
 help_cmp_tree
+# Link loops end in every output mode, not only in the text listing. (With a
+# timeout: without loop detection these never finish.)
+mkdir -p "$W/loops/two/d" "$W/loops/up/a/b/c" "$W/loops/cross/one" "$W/loops/cross/other"
+ln -s . "$W/loops/two/d/s1"; ln -s . "$W/loops/two/d/s2"
+ln -s ../.. "$W/loops/up/a/b/c/back"; ln -s a "$W/loops/up/q"; echo z > "$W/loops/up/a/b/c/z"
+ln -s ../other "$W/loops/cross/one/over"; ln -s ../one "$W/loops/cross/other/back"; echo y > "$W/loops/cross/other/y"
+cd "$W/loops"
+ours() { timeout 20 "$BIN_DIR/$UTIL" "$@"; }
+for o in "-l" "-J -l" "-X -l" "--du -l" "--du -l -h" "-J --du -l" "-X --du -l" "-J -l -s" "-X -l -s" "-J --du -l -s" "-J -l --noreport" "-J -l -d" "-J -l -a"; do
+    for t in two up cross; do
+        td "loop $o $t" $o $t
+    done
+done
+td "loop -J -l two roots" -J -l two cross
+ours() { "$BIN_DIR/$UTIL" "$@"; }
 cd /; print_summary
