@@ -19,7 +19,7 @@ GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from t
 
 ## Supported behaviour
 
-- Walks the tree, sorts the names bytewise, front-codes them and writes the database to FILE.n then renames it. Environment overrides: FINDOPTIONS, SEARCHPATHS, NETPATHS, PRUNEPATHS, PRUNEFS, LOCATE_DB.
+- Walks the tree, sorts the names bytewise, front-codes them and writes the database to a new temporary file `FILE.n.XXXXXXXX` (created exclusively, mode 0600, made 0644 through its descriptor) then renames it. Environment overrides: FINDOPTIONS, SEARCHPATHS, NETPATHS, PRUNEPATHS, PRUNEFS, LOCATE_DB.
 - A failing walk still produces a header-only database and exit status 0, as the GNU shell script does.
 - If PRUNEPATHS does not make a regular expression, GNU find's message is printed, nothing is walked and the database is header-only, as with GNU: pruning is never silently dropped. A directory whose name cannot be matched because of a matching limit is pruned.
 - As GNU find does for the GNU script, the walk works relative to the open directories and never follows a symbolic link, including one that takes a directory's place during the walk. Paths longer than PATH_MAX are recorded; below 10000 levels (4000 in a debug build) or 64 KiB of names a directory is reported (`File name too long`) and skipped.
@@ -32,6 +32,7 @@ None. The executable follows the GNU updatedb script. The library (`util_core.up
 
 - GNU changes user with `su`; here the searching thread takes the user's effective ids and supplementary groups (from /etc/passwd and /etc/group, no NSS) and takes its own back before the database is written. Linux only; elsewhere a change of user fails.
 - When the user cannot be assumed (unknown, or the caller is not root) nothing is written and the status is 1; GNU's `su` asks for a password, even when the user is the caller.
+- GNU writes through the fixed name `FILE.n`; ours is a name of its own for each run (see Supported behaviour), so a symbolic link in a directory others can write to is never followed and concurrent runs do not share a file. A run that is killed while writing leaves `FILE.n.XXXXXXXX` behind. Messages still say `FILE.n`, and an old `FILE.n` is removed before the search, as by the script.
 - Databases are byte-identical to GNU's in all tested cases.
 
 ## Tests

@@ -104,13 +104,20 @@ ud 'option twice' --localpaths="$W/tree/a" --localpaths="$W/tree/c" $P
 ud 'option with space value' "--localpaths=$W/tree/sp ace" $P
 ud 'output dir missing' --localpaths="$W/tree/c" $P --output="$W/nodir/db"
 
+# no_leftover DB: no temporary file of DB (`DB.n`, `DB.n.XXXXXXXX`) is left.
+no_leftover() {
+    for f in "$1".n*; do
+        [ ! -e "$f" ] && [ ! -L "$f" ] || return 1
+    done
+}
+
 # A database that cannot be written completely must not replace the old one.
 # keeps_old DESC TEXT PREFIX...: run updatedb behind PREFIX over a database.
 keeps_old() {
     d="$1"; text="$2"; shift 2
     echo old > "$W/keep.db"
     "$@" "$BIN_DIR/updatedb" --localpaths="$W/tree" $P --output="$W/keep.db" > "$W/o.out" 2> "$W/o.err"; ox=$?
-    if [ "$ox" = 1 ] && [ "$(cat "$W/keep.db")" = old ] && [ ! -e "$W/keep.db.n" ] && grep -q "$text" "$W/o.err"; then
+    if [ "$ox" = 1 ] && [ "$(cat "$W/keep.db")" = old ] && no_leftover "$W/keep.db" && grep -q "$text" "$W/o.err"; then
         PASS=$((PASS + 1)); printf "PASS %s\n" "$d"
     else
         FAIL=$((FAIL + 1)); printf "FAIL %s (rc=%s, %s bytes) %s\n" "$d" "$ox" "$(wc -c < "$W/keep.db")" "$(cat "$W/o.err")"
@@ -134,6 +141,38 @@ fi
   : > leaf )
 ud 'paths longer than PATH_MAX' --localpaths="$W/long" $P
 "${GNU_BIN_RM:-/usr/bin}/rm" -rf "$W/long"
+
+# The temporary database is a new file of this run's own: a link put at
+# <output>.n while the search runs is neither written through nor installed.
+# strace holds the first directory listing; the link is planted once the stale
+# file of that name has been removed, which happens just before the search.
+if can_inject; then
+    mkdir -p "$W/plant/t" "$W/plant/shared"; : > "$W/plant/t/f"; : > "$W/plant/shared/db.n"
+    echo precious > "$W/plant/victim"; chmod 600 "$W/plant/victim"
+    timeout 30 strace -f -o /dev/null -e trace=getdents64 -e inject=getdents64:delay_enter=3000000:when=1 \
+        "$BIN_DIR/updatedb" --localpaths="$W/plant/t" --prunepaths=/nonexistent --prunefs=nofs --output="$W/plant/shared/db" > "$W/o.out" 2>&1 &
+    plant_pid=$!
+    tries=0
+    while [ -e "$W/plant/shared/db.n" ] && [ "$tries" -lt 100 ]; do sleep 0.1; tries=$((tries + 1)); done
+    ln -s "$W/plant/victim" "$W/plant/shared/db.n"
+    wait "$plant_pid"; ox=$?
+    if [ "$ox" = 0 ] && [ "$(cat "$W/plant/victim")" = precious ] && [ "$(stat -c %a "$W/plant/victim")" = 600 ] &&
+       [ ! -L "$W/plant/shared/db" ] && [ "$(stat -c %a "$W/plant/shared/db")" = 644 ]; then
+        PASS=$((PASS + 1)); echo "PASS a link planted at <output>.n is left alone"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL a link planted at <output>.n is left alone (rc=$ox) $(cat "$W/o.out")"
+        ls -l "$W/plant/shared" "$W/plant/victim"
+    fi
+    rm -f "$W/plant/shared/db.n"
+    ( umask 077; "$BIN_DIR/updatedb" --localpaths="$W/plant/t" --prunepaths=/nonexistent --prunefs=nofs --output="$W/plant/shared/db" ) > "$W/o.out" 2>&1
+    if [ "$(stat -c %a "$W/plant/shared/db")" = 644 ] && [ "$(ls -A "$W/plant/shared")" = db ]; then
+        PASS=$((PASS + 1)); echo "PASS the database is mode 644 and no temporary file is left"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL the database is mode 644 and no temporary file is left"; ls -lA "$W/plant/shared"
+    fi
+else
+    skip_test "planted temporary file (no strace)"
+fi
 
 # A directory that becomes a symbolic link between being examined and being
 # opened is not followed: its target's names must not enter the database.
@@ -173,7 +212,7 @@ user_fails() {
     d="$1"; text="$2"; shift 2
     echo old > "$W/keep.db"
     "$BIN_DIR/updatedb" --localpaths="$W/who" $P --output="$W/keep.db" "$@" > "$W/o.out" 2> "$W/o.err"; ox=$?
-    if [ "$ox" = 1 ] && [ "$(cat "$W/keep.db")" = old ] && [ ! -e "$W/keep.db.n" ] && [ "$(sed 's/^[^:]*: //' "$W/o.err")" = "$text" ]; then
+    if [ "$ox" = 1 ] && [ "$(cat "$W/keep.db")" = old ] && no_leftover "$W/keep.db" && [ "$(sed 's/^[^:]*: //' "$W/o.err")" = "$text" ]; then
         PASS=$((PASS + 1)); echo "PASS $d"
     else
         FAIL=$((FAIL + 1)); echo "FAIL $d (rc=$ox) $(cat "$W/o.err")"

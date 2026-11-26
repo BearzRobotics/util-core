@@ -462,30 +462,55 @@ pub fn run(env: Env, options: Options, observer: Observer) Error!Result {
     defer env.gpa.free(data);
 
     var err: LX.E = .SUCCESS;
-    const fd = sys.openFd(tmp_name, sys.O.WRONLY | sys.O.CREAT | sys.O.TRUNC, 0o644, &err) orelse {
+    var name_buf: std.ArrayList(u8) = .empty;
+    defer name_buf.deinit(env.gpa);
+    const new = (try createNew(env, tmp_name, &name_buf, &err)) orelse {
         observer.emit(.{ .create_failed = .{ .tmp = tmp_name, .text = sys.errnoText(err) } });
         return .{ .status = 1 };
     };
-    const write_error = sys.writeAllFd(fd, data);
+    const write_error = sys.writeAllFd(new.fd, data);
+    // Readable by all, as the script's `chmod 644`; set through the
+    // descriptor, so it cannot reach any other file.
+    if (write_error == null) _ = sys.fchmodFd(new.fd, 0o644);
     // Some file systems report a failed write only here.
-    const close_error = sys.closeFd(fd);
+    const close_error = sys.closeFd(new.fd);
     if (write_error orelse close_error) |e| {
-        _ = sys.unlinkPath(tmp_name, false);
+        _ = sys.unlinkPath(new.name, false);
         observer.emit(.{ .create_failed = .{ .tmp = tmp_name, .text = sys.errnoText(e) } });
         return .{ .status = 1 };
     }
     // `test -s`: a header alone still makes a non-empty file
     if (data.len > 0) {
-        _ = sys.chmodPath(tmp_name, 0o644, false);
-        if (sys.renamePath(tmp_name, options.output, 0)) |e| {
+        if (sys.renamePath(new.name, options.output, 0)) |e| {
+            _ = sys.unlinkPath(new.name, false);
             observer.emit(.{ .move_failed = .{ .from = tmp_name, .to = options.output, .text = sys.errnoText(e) } });
             return .{ .status = 1 };
         }
     } else {
         observer.emit(.empty_database);
-        _ = sys.unlinkPath(tmp_name, false);
+        _ = sys.unlinkPath(new.name, false);
     }
     return .{ .status = 0 };
+}
+
+const NewFile = struct { fd: sys.Handle, name: []const u8 };
+
+/// Create the file the database is written to before it takes the output's
+/// place: `<tmp_name>.XXXXXXXX`, new and ours alone. The script's fixed
+/// `<output>.n` could be a link planted during the walk, or the file another
+/// run is still writing. `name_buf` holds the name.
+fn createNew(env: Env, tmp_name: []const u8, name_buf: *std.ArrayList(u8), err: *LX.E) Error!?NewFile {
+    var attempts: usize = 0;
+    while (true) : (attempts += 1) {
+        var random: u32 = undefined;
+        env.io.random(std.mem.asBytes(&random));
+        name_buf.clearRetainingCapacity();
+        try name_buf.print(env.gpa, "{s}.{x:0>8}", .{ tmp_name, random });
+        if (sys.openFd(name_buf.items, sys.O.WRONLY | sys.O.CREAT | sys.O.EXCL, 0o600, err)) |fd| {
+            return .{ .fd = fd, .name = name_buf.items };
+        }
+        if (err.* != .EXIST or attempts == 100) return null;
+    }
 }
 
 test "encode front-codes sorted names" {
