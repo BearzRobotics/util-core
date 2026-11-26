@@ -203,6 +203,9 @@ pub const Event = union(enum) {
     unsupported_compression: struct { name: []const u8, format: []const u8 },
     /// --decompress: the compressed data is damaged.
     decompress_failed: []const u8,
+    /// --decompress: what follows the compressed data is not more of it and
+    /// was not searched.
+    decompress_trailing: []const u8,
     /// A regex search gave up on a line (backtracking or stack limit). GNU
     /// -P reports this as an error; the line counts as not matching.
     search_limit: struct { name: []const u8, line: u64 },
@@ -2267,45 +2270,75 @@ fn pushIgnore(g: *G, dir: sys.Handle, prefix_len: usize) Err!void {
     }
 }
 
-const Decompressed = union(enum) { raw, data: []u8, failed };
+const Decompressed = union(enum) {
+    raw,
+    data: struct { bytes: []u8, trailing: bool },
+    failed,
+};
+
+const gzip_magic = [_]u8{ 0x1f, 0x8b };
+const xz_magic = [_]u8{ 0xFD, '7', 'z', 'X', 'Z', 0x00 };
+
+fn isZlib(data: []const u8) bool {
+    return data.len >= 2 and data[0] == 0x78 and (data[1] == 0x01 or data[1] == 0x5e or data[1] == 0x9c or data[1] == 0xda) and ((@as(u16, data[0]) << 8) | data[1]) % 31 == 0;
+}
 
 /// Decompress gzip, zlib, xz or zstd data (by magic number).
 fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
     const std_c = std.compress;
+    const gzip = std.mem.startsWith(u8, data, &gzip_magic);
+    const xz = std.mem.startsWith(u8, data, &xz_magic);
+    const zstd = std.mem.startsWith(u8, data, &.{ 0x28, 0xb5, 0x2f, 0xfd });
+    if (!gzip and !xz and !zstd and !isZlib(data)) {
+        if (std.mem.startsWith(u8, data, "BZh")) {
+            g.obs.emit(.{ .unsupported_compression = .{ .name = g.fname, .format = "bzip2" } });
+        }
+        return .raw;
+    }
     var in = Io.Reader.fixed(data);
-    if (data.len >= 2 and data[0] == 0x1f and data[1] == 0x8b) {
-        var win: [std_c.flate.max_window_len]u8 = undefined;
-        var d = std_c.flate.Decompress.init(&in, .gzip, &win);
-        const out = d.reader.allocRemaining(gpa, .unlimited) catch return .failed;
-        return .{ .data = out };
-    }
-    if (data.len >= 2 and data[0] == 0x78 and (data[1] == 0x01 or data[1] == 0x5e or data[1] == 0x9c or data[1] == 0xda) and ((@as(u16, data[0]) << 8) | data[1]) % 31 == 0) {
-        var win: [std_c.flate.max_window_len]u8 = undefined;
-        var d = std_c.flate.Decompress.init(&in, .zlib, &win);
-        const out = d.reader.allocRemaining(gpa, .unlimited) catch return .failed;
-        return .{ .data = out };
-    }
-    if (data.len >= 6 and std.mem.eql(u8, data[0..6], &.{ 0xFD, '7', 'z', 'X', 'Z', 0x00 })) {
-        const b0 = gpa.alloc(u8, 0) catch return .failed;
-        var d = std_c.xz.Decompress.init(&in, gpa, b0) catch {
-            gpa.free(b0);
-            return .failed;
-        };
-        defer d.deinit();
-        const out = d.reader.allocRemaining(gpa, .unlimited) catch return .failed;
-        return .{ .data = out };
-    }
-    if (data.len >= 4 and std.mem.eql(u8, data[0..4], &.{ 0x28, 0xb5, 0x2f, 0xfd })) {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    var trailing = false;
+    if (zstd) {
+        // The decoder goes on from frame to frame by itself.
         const zbuf = gpa.alloc(u8, std_c.zstd.default_window_len + std_c.zstd.block_size_max) catch return .failed;
         defer gpa.free(zbuf);
         var d = std_c.zstd.Decompress.init(&in, zbuf, .{});
-        const out = d.reader.allocRemaining(gpa, .unlimited) catch return .failed;
-        return .{ .data = out };
+        d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
+    } else if (xz) {
+        // A file may hold several streams, with zeros between and after
+        // them in multiples of four ("Stream Padding").
+        while (true) {
+            const b0 = gpa.alloc(u8, 0) catch return .failed;
+            var d = std_c.xz.Decompress.init(&in, gpa, b0) catch {
+                gpa.free(b0);
+                return .failed;
+            };
+            defer d.deinit();
+            d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
+            const rest = data[in.seek..];
+            const padding = std.mem.findNone(u8, rest, &.{0}) orelse rest.len;
+            if (padding % 4 == 0 and std.mem.startsWith(u8, rest[padding..], &xz_magic)) {
+                in.toss(padding);
+                continue;
+            }
+            trailing = padding != rest.len or padding % 4 != 0;
+            break;
+        }
+    } else {
+        // gzip files may be concatenated ("members"); zlib data may not.
+        var win: [std_c.flate.max_window_len]u8 = undefined;
+        while (true) {
+            var d = std_c.flate.Decompress.init(&in, if (gzip) .gzip else .zlib, &win);
+            d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
+            const rest = data[in.seek..];
+            if (gzip and std.mem.startsWith(u8, rest, &gzip_magic)) continue;
+            // As gzip, accept zeros that fill up the last block.
+            trailing = if (gzip) !std.mem.allEqual(u8, rest, 0) else rest.len != 0;
+            break;
+        }
     }
-    if (data.len >= 3 and std.mem.eql(u8, data[0..3], "BZh")) {
-        g.obs.emit(.{ .unsupported_compression = .{ .name = g.fname, .format = "bzip2" } });
-    }
-    return .raw;
+    return .{ .data = .{ .bytes = out.toOwnedSlice(gpa) catch return .failed, .trailing = trailing } };
 }
 
 /// Search the file or directory `name` in the open directory `parent` (an
@@ -2409,10 +2442,14 @@ fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8,
             },
             .data => |d| {
                 g.gpa.free(raw);
-                g.file_mem = d;
+                if (d.trailing) {
+                    g.obs.emit(.{ .decompress_trailing = display });
+                    g.errseen = true;
+                }
+                g.file_mem = d.bytes;
                 defer {
                     g.file_mem = null;
-                    g.gpa.free(d);
+                    g.gpa.free(d.bytes);
                 }
                 return try grepOpened(g, fd, display, false, false);
             },

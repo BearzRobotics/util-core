@@ -579,6 +579,7 @@ fn report(context: ?*anyopaque, ev: grep.Event) void {
             else => cli.warn(ctx, "warning: {c} at start of expression", .{ch}),
         },
         .unsupported_compression => |u| cli.warn(ctx, "{s}: {s} compression is not supported by --decompress; searching the compressed bytes", .{ u.name, u.format }),
+        .decompress_trailing => |n| cli.warn(ctx, "{s}: --decompress: what follows the compressed data was not searched", .{n}),
         .decompress_failed => |n| cli.warn(ctx, "{s}: cannot decompress: the compressed data is damaged or truncated", .{n}),
         .search_limit => |e| cli.warn(ctx, "{s}: regular expression search exceeded its limits near line {d}; lines it gave up on were treated as not matching", .{ e.name, e.line }),
         .deprecated_grep_color => |gc| cli.warn(ctx, "warning: GREP_COLOR='{s}' is deprecated; use GREP_COLORS='mt={s}'", .{ gc, gc }),

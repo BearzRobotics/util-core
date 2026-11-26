@@ -245,6 +245,24 @@ for f in p.gz p.xz p.zst; do
     if [ $HAVE_UG = 1 ]; then cmp "ugrep: --decompress $f" "$UGREP -F -z needle $f" "\$G -F --decompress needle $f"; else skip_test "ugrep: --decompress $f"; fi
     cmp "decompress $f -c" "echo 2" "\$G --decompress -c needle $f"
 done
+# Every gzip member and xz stream is searched, and anything else is reported.
+(gzip -c plain.txt; gzip -c plain.txt) > two.gz
+(xz -c plain.txt; xz -c plain.txt) > two.xz
+(xz -c plain.txt; head -c 8 /dev/zero; xz -c plain.txt; head -c 4 /dev/zero) > pad.xz
+(zstd -q -c plain.txt; zstd -q -c plain.txt) > two.zst
+(gzip -c plain.txt; head -c 512 /dev/zero) > zeros.gz
+for f in two.gz two.xz pad.xz two.zst; do
+    cmp "decompress all of $f" "echo 4" "\$G --decompress -c needle $f"
+done
+cmp 'decompress gzip padded with zeros' "echo 2" "\$G --decompress -c needle zeros.gz"
+(gzip -c plain.txt; echo junk) > junk.gz
+(xz -c plain.txt; echo junk) > junk.xz
+(xz -c plain.txt; head -c 3 /dev/zero) > badpad.xz
+(zlib plain.txt; echo junk) > junk.zlib 2>/dev/null
+for f in junk.gz junk.xz badpad.xz junk.zlib; do
+    if [ $f = junk.zlib ] && ! command -v python3 > /dev/null; then skip_test "decompress $f (no python3)"; continue; fi
+    cmp "decompress reports what follows the data: $f" "echo 'grep: $f: --decompress: what follows the compressed data was not searched'; echo 2; exit 2" "\$G --decompress -c needle $f 2>err >out; rc=\$?; cat err; \$G --decompress -c needle $f 2>/dev/null; exit \$rc"
+done
 cmp 'decompress plain file untouched' "/usr/bin/grep needle plain.txt" "\$G --decompress needle plain.txt"
 cmp 'without --decompress gzip is binary (GNU)' "/usr/bin/grep needle p.gz" "\$G needle p.gz"
 cmp 'decompress stdin is not decompressed' "/usr/bin/grep -c needle < p.gz" "\$G --decompress -c needle < p.gz"

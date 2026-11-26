@@ -54,7 +54,7 @@ Every extension is opt-in and leaves GNU behaviour unchanged when not used (deci
 | `-O`, `-p`, `-S` | FreeBSD | Symbolic links with `-r`: command line only, never, all (`-S` is GNU's `-R` behaviour). `-O`/`-p` read links to files met while walking; GNU `-r` skips them. FreeBSD's default (`-R` follows all links) is not adopted: GNU wins. | FreeBSD grep |
 | `--include-dir=GLOB` | FreeBSD | Descend only into matching directories (also tested on the starting directory). | FreeBSD grep |
 | `--mmap` | FreeBSD | Accepted, ignored. | FreeBSD grep |
-| `--decompress` | FreeBSD (`-Z`/`-z`/`-J`...) | gzip, zlib, xz, zstd by magic number, through std.compress. bzip2 is detected and reported, searched raw; lzma/lz4/brotli/zip unsupported. Not applied to standard input. FreeBSD's short letters clash with GNU (`-Z`, `-z`, `-X`) and are not provided. | `ugrep -z` (same formats) |
+| `--decompress` | FreeBSD (`-Z`/`-z`/`-J`...) | gzip, zlib, xz, zstd by magic number, through std.compress. bzip2 is detected and reported, searched raw; lzma/lz4/brotli/zip unsupported. Not applied to standard input. All gzip members, xz streams (with stream padding) and zstd frames are searched; other data after gzip, zlib or xz data is reported (status 2). FreeBSD's short letters clash with GNU (`-Z`, `-z`, `-X`) and are not provided. | `ugrep -z` (same formats) |
 
 Better diagnostics (kind "diagnostic"; stdout and exit status are GNU's, only stderr text differs; tests check status and the text):
 

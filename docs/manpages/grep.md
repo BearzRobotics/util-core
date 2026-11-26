@@ -105,7 +105,7 @@ From FreeBSD grep (tested against the FreeBSD grep of the Chimera Linux sysroot)
 : Accepted and ignored.
 
 --decompress
-: Search inside gzip, zlib, xz and zstd files (recognised by their magic number) and, otherwise, the file as it is. bzip2, lzma and lz4 are not supported (a diagnostic is printed and the file is searched as is). Standard input is not decompressed. FreeBSD's `-J`, `-Z`, `-X`, `-M` and `-z` conflict with GNU and are not provided.
+: Search inside gzip, zlib, xz and zstd files (recognised by their magic number) and, otherwise, the file as it is. All gzip members, xz streams and zstd frames of a file are searched; if anything else follows gzip, zlib or xz data (zero padding aside), what could be decompressed is searched, the rest is reported and the status is 2. bzip2, lzma and lz4 are not supported (a diagnostic is printed and the file is searched as is). Standard input is not decompressed. FreeBSD's `-J`, `-Z`, `-X`, `-M` and `-z` conflict with GNU and are not provided.
 
 Abbreviations of long options keep GNU's meaning: `--cou` is `--count` although `--count-matches` also starts that way.
 
