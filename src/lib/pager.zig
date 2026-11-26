@@ -563,6 +563,20 @@ pub const Pager = struct {
         }
     }
 
+    /// Write all the lines to a screen that is not being paged (less -F):
+    /// each as `render` would show it, one after another, with no cursor
+    /// positioning and the terminal left to wrap them.
+    pub fn print(p: *const Pager, w: *Io.Writer) Io.Writer.Error!void {
+        for (0..p.lineCount()) |i| {
+            const ln = p.line(i);
+            if (p.opts.numbers) try w.print("\x1b[90m{d: >6} \x1b[0m", .{i + 1});
+            try p.emitRow(w, ln, 0, ln.len);
+            if (p.opts.raw and std.mem.indexOfScalar(u8, ln, 0x1b) != null) try w.writeAll("\x1b[0m");
+            // The last line may still be without its newline.
+            if (i + 1 < p.lineCount() or p.at_line_start) try w.writeByte('\n');
+        }
+    }
+
     /// Draw the whole frame at the top of the screen: the visible rows and
     /// the status row.
     pub fn render(p: *Pager, w: *Io.Writer) Io.Writer.Error!void {
@@ -750,6 +764,17 @@ test "pager: search ignores escape sequences, smart case, no wrap" {
     for ("zzz") |c| _ = p.key(.{ .char = c });
     _ = p.key(.enter);
     try std.testing.expectEqualStrings("Pattern not found", p.message);
+}
+
+test "pager: printing without paging filters like a drawn row" {
+    const gpa = std.testing.allocator;
+    var p = Pager.init(gpa, .{}, 10, 80);
+    defer p.deinit();
+    _ = try p.append("a\x1b]0;t\x07\rb\r\n\x1b[2Jend");
+    var aw: Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    try p.print(&aw.writer);
+    try std.testing.expectEqualStrings("a^[]0;t^G^Mb\n^[[2Jend", aw.written());
 }
 
 test "pager: control characters are shown as ^X without raw" {

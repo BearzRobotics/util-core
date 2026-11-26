@@ -12,6 +12,7 @@ const Io = std.Io;
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const pager_ui = @import("../pager_ui.zig");
+const pager = @import("../lib/pager.zig");
 
 const help_text = @embedFile("../help/less.txt");
 
@@ -93,7 +94,7 @@ pub fn main(ctx: cli.Context) u8 {
 
     const label = if (inputs.items.len == 1) inputs.items[0].name else "";
     const ui = if (tty_out) pager_ui.Ui.start(ctx.gpa, ctx.io, opts, label, quit_if_one) else null;
-    if (ui == null) return copyAll(ctx, inputs.items, status);
+    if (ui == null) return copyAll(ctx, inputs.items, status, tty_out and !opts.raw);
     defer ui.?.deinit();
 
     var buf: [65536]u8 = undefined;
@@ -108,8 +109,10 @@ pub fn main(ctx: cli.Context) u8 {
     return status;
 }
 
-/// No terminal to page on: behave like cat.
-fn copyAll(ctx: cli.Context, inputs: []const Input, status: u8) u8 {
+/// No terminal to page on: behave like cat. With `visible` (the output is a
+/// terminal all the same, and -R was not given) control characters are shown
+/// as the pager shows them.
+fn copyAll(ctx: cli.Context, inputs: []const Input, status: u8, visible: bool) u8 {
     var obuf: [8192]u8 = undefined;
     var out = Io.File.stdout().writerStreaming(ctx.io, &obuf);
     var buf: [65536]u8 = undefined;
@@ -117,7 +120,7 @@ fn copyAll(ctx: cli.Context, inputs: []const Input, status: u8) u8 {
         while (true) {
             const n = in.file.readStreaming(ctx.io, &.{&buf}) catch break;
             if (n == 0) break;
-            out.interface.writeAll(buf[0..n]) catch {
+            writeCopy(ctx.gpa, &out.interface, buf[0..n], visible) catch {
                 cli.noteStdoutFailure(cli.errText(out.err orelse error.WriteFailed));
                 return 1;
             };
@@ -128,6 +131,14 @@ fn copyAll(ctx: cli.Context, inputs: []const Input, status: u8) u8 {
         return 1;
     };
     return status;
+}
+
+fn writeCopy(gpa: std.mem.Allocator, w: *Io.Writer, bytes: []const u8, visible: bool) !void {
+    if (!visible) return w.writeAll(bytes);
+    var part = pager.Pager.init(gpa, .{}, 24, 80);
+    defer part.deinit();
+    _ = try part.append(bytes);
+    try part.print(w);
 }
 
 fn oom(ctx: cli.Context) u8 {

@@ -40,6 +40,9 @@ pub const Ui = struct {
     tty: ?sys.Tty = null,
     /// The terminal could not be taken after all: the input is passed on.
     direct: bool = false,
+    /// Text that is printed without being paged goes out as the bytes it
+    /// is, as from `cat`. Otherwise it is shown as the pager would show it.
+    verbatim: bool = false,
     pg: pager.Pager,
     out_buf: [16384]u8 = undefined,
     out: Io.File.Writer,
@@ -105,11 +108,22 @@ pub const Ui = struct {
         ui.tty = null;
     }
 
-    /// Write `bytes` to the normal screen as they are.
-    fn pass(ui: *Ui, bytes: []const u8) bool {
-        ui.out.interface.writeAll(bytes) catch return false;
-        ui.out.interface.flush() catch return false;
+    /// Write what the pager holds to the normal screen.
+    fn printHeld(ui: *Ui, held: *const pager.Pager) bool {
+        const w = &ui.out.interface;
+        if (ui.verbatim) {
+            w.writeAll(held.text.items) catch return false;
+        } else held.print(w) catch return false;
+        w.flush() catch return false;
         return true;
+    }
+
+    /// `printHeld` for input that arrives when nothing is paged any more.
+    fn pass(ui: *Ui, bytes: []const u8) bool {
+        var part = pager.Pager.init(ui.gpa, ui.pg.opts, ui.pg.rows, ui.pg.cols);
+        defer part.deinit();
+        _ = part.append(bytes) catch return false;
+        return ui.printHeld(&part);
     }
 
     /// Take over the screen if that has not happened yet (mutex held). When
@@ -119,7 +133,7 @@ pub const Ui = struct {
         if (!ui.direct) {
             if (ui.takeTerminal()) return true;
             ui.direct = true;
-            _ = ui.pass(ui.pg.text.items);
+            _ = ui.printHeld(&ui.pg);
         }
         return false;
     }
@@ -236,10 +250,7 @@ pub const Ui = struct {
         if (quit_if_fits and ui.pg.fits()) {
             ui.stopped = true;
             ui.restore();
-            // Put the text on the normal screen, as plain output.
-            var w = Io.File.stdout().writerStreaming(ui.io, &ui.out_buf);
-            w.interface.writeAll(ui.pg.text.items) catch {};
-            w.interface.flush() catch {};
+            _ = ui.printHeld(&ui.pg);
             ui.unlock();
             return .printed;
         }

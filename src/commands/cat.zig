@@ -250,6 +250,8 @@ pub fn main(ctx: cli.Context) u8 {
         pager_ui.Ui.start(ctx.gpa, ctx.io, .{ .raw = true }, "", true)
     else
         null;
+    // Short output is cat's bytes themselves.
+    if (ui) |u| u.verbatim = true;
     var sink_buf: [16384]u8 = undefined;
     var stdout = (if (pager) |p| p.stdin else Io.File.stdout()).writerStreaming(ctx.io, &buf);
     const sink: *Io.Writer = if (ui) |u| u.sink(&sink_buf) else &stdout.interface;

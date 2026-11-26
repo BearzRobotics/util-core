@@ -124,6 +124,22 @@ check("less -F: short file printed and exits", st == 0 and 'alpha' in out and '\
 out, st, _ = session([less, '-F', big], [(b'q', 0.5)])
 check("less -F: long file is paged", '\x1b[?1049h' in out)
 
+# -F shows a short file as the pager would: no control sequence of the file
+# reaches the terminal without -R.
+hostile = os.path.join(tmp, 'pty_esc.txt')
+with open(hostile, 'wb') as f:
+    f.write(b'hi\x1b]0;OWNED\x07\x1b[2J\rthere\r\nred \x1b[31mtext\x1b[0m\n\ttab')
+out, st, _ = session([less, '-F', hostile], [])
+check('less -F: control characters of a short file are shown, not sent',
+      st == 0 and '\x1b' not in out and '\x07' not in out and 'hi^[]0;OWNED^G^[[2J^Mthere' in out
+      and '^[[31mtext' in out and '        tab' in out)
+out, st, _ = session([less, '-F', '-R', hostile], [])
+check('less -F -R: colours pass', st == 0 and 'red \x1b[31mtext\x1b[0m' in out)
+out, st, _ = session([less, '-F', '-N', short], [])
+check('less -F -N: lines are numbered', st == 0 and '     2 ' in visible(out) and 'beta' in out)
+out, st, _ = session([cat, '-p', '--color=never', hostile], [])
+check('cat: a short file is written as it is', st == 0 and 'hi\x1b]0;OWNED\x07\x1b[2J' in out)
+
 # cat: a long file is paged, a short one is not
 out, st, _ = session([cat, big], [(b'q', 0.5)])
 check("cat: long view is paged and quits with q", '\x1b[?1049h' in out and st == 0)
