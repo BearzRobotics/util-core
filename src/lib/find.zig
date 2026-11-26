@@ -38,6 +38,7 @@ const fileinfo = @import("../fileinfo.zig");
 const datetime = @import("../datetime.zig");
 const quotearg = @import("../quotearg.zig");
 const quote = @import("../quote.zig");
+const subprog = @import("subprog.zig");
 const modemod = @import("../mode.zig");
 
 pub const Env = common.Env;
@@ -1519,7 +1520,7 @@ fn flushLeftBehind(st: *State) void {
 fn spawnCommand(st: *State, argv: []const []const u8, cwd: std.process.Child.Cwd, asked: bool) !std.process.Child {
     const resolved = try st.gpa.dupe([]const u8, argv);
     resolved[0] = try programpath.resolve(st.env, st.gpa, argv[0]);
-    return std.process.spawn(st.env.io, .{ .argv = resolved, .cwd = cwd, .stdin = if (asked) .ignore else .inherit });
+    return subprog.spawn(st.env, .{ .argv = resolved, .cwd = cwd, .stdin = if (asked) .ignore else .inherit });
 }
 
 /// Run `argv` and wait. A command that was asked about (-ok, -okdir) reads

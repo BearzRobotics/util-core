@@ -679,6 +679,28 @@ for o in "-name" "-iname" "-path" "-ipath"; do
 done
 cd "$W/t"
 
+# As execvp, a script without a "#!" line is run by /bin/sh: the file PATH
+# leads to, not a file of that name in the directory it runs in.
+mkdir "$W/shbang"; cd "$W/shbang"; mkdir bin d d/sub
+printf 'echo script-ran "$0" "$@"\n' > bin/noshebang; chmod +x bin/noshebang
+cp bin/noshebang d/sub/s; chmod +x d/sub/s
+printf 'echo PLANTED\n' > d/sub/noshebang
+sb() {
+    d="$1"; shift
+    exp=$(PATH="$W/shbang/bin:/usr/bin:/bin" /usr/bin/find d -name s "$@" 2>&1; echo "status $?")
+    act=$(PATH="$W/shbang/bin:/usr/bin:/bin" "$BIN_DIR/find" d -name s "$@" 2>&1; echo "status $?")
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $d"
+    else FAIL=$((FAIL + 1)); echo "FAIL $d"; printf '  GNU : %s\n  ours: %s\n' "$exp" "$act"; fi
+}
+sb 'no "#!": -exec path' -exec d/sub/s {} ';'
+sb 'no "#!": -exec from PATH' -exec noshebang {} ';'
+sb 'no "#!": -exec +' -exec noshebang {} +
+sb 'no "#!": -execdir from PATH' -execdir noshebang {} ';'
+sb 'no "#!": -execdir path' -execdir ./s {} ';'
+printf 'exit 3\n' > bin/fails; chmod +x bin/fails
+sb 'no "#!": a failing script is false' -exec fails ';' -print
+cd "$W/t"
+
 # Any time the file system can hold: no crash, and where the year does not fit
 # a struct tm the seconds are printed, as GNU does. (Skipped where the file
 # system clamps such times.)

@@ -19,6 +19,7 @@ const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
 const quotearg = @import("../quotearg.zig");
+const subprog = @import("subprog.zig");
 
 pub const Env = common.Env;
 
@@ -369,7 +370,7 @@ fn runCommand(x: *X) Stop!void {
     // Make room first: a started child must not be lost track of.
     try x.running.ensureUnusedCapacity(gpa, 1);
     try x.pids.ensureTotalCapacity(gpa, x.running.items.len + 1);
-    const child = std.process.spawn(x.env.io, .{
+    const child = subprog.spawn(x.env, .{
         .argv = argv.items,
         .stdin = stdin_opt,
         .environ_map = if (env_copy) |*m| m else null,

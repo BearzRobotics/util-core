@@ -144,6 +144,22 @@ a_stdin "-a /dev/stdin" -a /dev/stdin echo
 a_stdin "-a ./- is a file" -a ./- echo
 a_stdin "without -a the commands read nothing" sh -c 'echo "$@"; cat' x
 rm -f ./- aitems
+# As execvp, a script without a "#!" line is run by /bin/sh: the file PATH
+# leads to, not a file of that name in the current directory.
+mkdir shbin; printf 'echo script-ran "$0" "$@"\n' > shbin/noshebang; chmod +x shbin/noshebang
+printf 'echo PLANTED\n' > noshebang; printf 'echo a script in this directory\n' > ./-dashed; chmod +x ./-dashed
+sb() {
+    d="$1"; shift
+    e=$(echo a b | PATH="$PWD/shbin:/usr/bin:/bin" LC_ALL=C /usr/bin/xargs "$@" 2>&1; echo "status $?")
+    o=$(echo a b | PATH="$PWD/shbin:/usr/bin:/bin" LC_ALL=C "$BIN_DIR/xargs" "$@" 2>&1; echo "status $?")
+    if [ "$e" = "$o" ]; then PASS=$((PASS+1)); echo "PASS $d"; else FAIL=$((FAIL+1)); echo "FAIL $d"; printf '  GNU: %s\n  ours: %s\n' "$e" "$o"; fi
+}
+sb 'no "#!": from PATH' noshebang
+sb 'no "#!": a path' shbin/noshebang
+sb 'no "#!": with -I and -P' -P2 -I{} noshebang {}
+sb 'no "#!": with --process-slot-var' --process-slot-var=SLOT noshebang
+rm -rf shbin noshebang ./-dashed
+
 # With -P whichever command ends first frees its slot. "slow" waits (10 s at
 # most) for the last item to have run, which needs the other slot to be reused
 # while "slow" still runs.
