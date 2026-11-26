@@ -73,7 +73,7 @@ run_cmp "continues stopped"    -s TERM 0.3 sh -c 'kill -STOP $$'
 # it at the limit. Each case runs a shell as the leader of a new session on a
 # pty. Whatever is left after 10 s counts as a failure and is killed.
 tty_run() { # SHELL-SCRIPT: prints the output, then "left=N" stray processes
-    timeout 30 python3 -I - "$1" <<'PY'
+    LC_ALL=C timeout 30 python3 -I - "$1" <<'PY'
 import os, pty, select, signal, sys, time
 pid, fd = pty.fork()
 if pid == 0:

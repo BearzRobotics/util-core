@@ -60,7 +60,6 @@ See docs/compatibility/timeout.md for details.
 # LIMITATIONS
 
 - Requires Linux 5.3+ (pidfd_open).
-- GNU also ignores SIGTTIN/SIGTTOU while waiting; we do not.
 - `--help` omits the "GNU coreutils online help" footer.
 
 # SEE ALSO
