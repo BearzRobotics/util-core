@@ -616,6 +616,31 @@ pub fn setNice(value: i32) ?LX.E {
     return errOf(LX.syscall3(.setpriority, 0, 0, @bitCast(@as(isize, value))));
 }
 
+fn terminalStopHandler(_: LX.SIG) callconv(.c) void {}
+
+/// A process that is not in the terminal's foreground group is stopped, with
+/// its whole group, when one of them reads the terminal (SIGTTIN) or changes
+/// it (SIGTTOU). These two keep a supervisor running through that.
+///
+/// Call this before starting the program to be watched: caught signals do not
+/// stop the caller, and revert to their default action in the new program.
+/// Call `ignoreTerminalStops` once it has started.
+pub fn catchTerminalStops() void {
+    if (comptime !is_linux) return other.catchTerminalStops();
+    const act: LX.Sigaction = .{ .handler = .{ .handler = terminalStopHandler }, .mask = LX.sigemptyset(), .flags = LX.SA.RESTART };
+    _ = LX.sigaction(.TTIN, &act, null);
+    _ = LX.sigaction(.TTOU, &act, null);
+}
+
+/// Ignore SIGTTIN and SIGTTOU. A handler would not do for good: a diagnostic
+/// written under `stty tostop` would be signalled and retried for ever.
+pub fn ignoreTerminalStops() void {
+    if (comptime !is_linux) return other.ignoreTerminalStops();
+    const act: LX.Sigaction = .{ .handler = .{ .handler = LX.SIG.IGN }, .mask = LX.sigemptyset(), .flags = 0 };
+    _ = LX.sigaction(.TTIN, &act, null);
+    _ = LX.sigaction(.TTOU, &act, null);
+}
+
 /// Make this process a process-group leader (setpgid(0, 0)).
 pub fn becomeGroupLeader() void {
     if (comptime !is_linux) return other.becomeGroupLeader();

@@ -219,6 +219,22 @@ pub fn raiseSelf(sg: u8) ?E {
     return cerr(c.kill(c.getpid(), @enumFromInt(sg)));
 }
 
+fn terminalStopHandler(_: c.SIG) callconv(.c) void {}
+
+pub fn catchTerminalStops() void {
+    if (comptime !is_libc_posix) return;
+    const act: c.Sigaction = .{ .handler = .{ .handler = terminalStopHandler }, .mask = std.posix.sigemptyset(), .flags = c.SA.RESTART };
+    _ = c.sigaction(c.SIG.TTIN, &act, null);
+    _ = c.sigaction(c.SIG.TTOU, &act, null);
+}
+
+pub fn ignoreTerminalStops() void {
+    if (comptime !is_libc_posix) return;
+    const act: c.Sigaction = .{ .handler = .{ .handler = c.SIG.IGN }, .mask = std.posix.sigemptyset(), .flags = 0 };
+    _ = c.sigaction(c.SIG.TTIN, &act, null);
+    _ = c.sigaction(c.SIG.TTOU, &act, null);
+}
+
 fn statisticsHandler(_: c.SIG) callconv(.c) void {
     sys.recordStatisticsRequest();
 }

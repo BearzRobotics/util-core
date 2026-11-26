@@ -68,5 +68,80 @@ run_cmp "ambiguous"            --k 5 true
 run_cmp "group kill"           0.2 sh -c 'sleep 5 & wait'
 run_cmp "ignore TERM -s KILL"  -s KILL 0.2 sh -c 'trap "" TERM; sleep 5'
 run_cmp "continues stopped"    -s TERM 0.3 sh -c 'kill -STOP $$'
+# A command that reads the terminal while timeout is not in the foreground
+# group (here: run by a shell) is stopped; timeout must keep running and end
+# it at the limit. Each case runs a shell as the leader of a new session on a
+# pty. Whatever is left after 10 s counts as a failure and is killed.
+tty_run() { # SHELL-SCRIPT: prints the output, then "left=N" stray processes
+    timeout 30 python3 -I - "$1" <<'PY'
+import os, pty, select, signal, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv("/bin/sh", ["sh", "-c", sys.argv[1]])
+def session():
+    found = []
+    for d in os.listdir("/proc"):
+        if d.isdigit() and int(d) != pid:
+            try:
+                fields = open("/proc/%s/stat" % d).read().rpartition(")")[2].split()
+            except OSError:
+                continue
+            if int(fields[3]) == pid and fields[0] != "Z":
+                found.append(int(d))
+    return found
+out, done, end = b"", False, time.time() + 10
+while not done and time.time() < end:
+    if select.select([fd], [], [], 0.1)[0]:
+        try:
+            out += os.read(fd, 4096)
+        except OSError:
+            time.sleep(0.05)
+    done = os.waitpid(pid, os.WNOHANG)[0] != 0
+while done and select.select([fd], [], [], 0.2)[0]:
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+time.sleep(0.3)
+left = session()
+for p in left + ([] if done else [pid]):
+    try:
+        os.kill(p, signal.SIGKILL)
+    except OSError:
+        pass
+sys.stdout.write(out.decode(errors="replace").replace("\r", ""))
+print("left=%d" % len(left))
+PY
+}
+tty_case() { # DESC EXPECTED SHELL-SCRIPT
+    got=$(tty_run "$3")
+    if [ "$got" = "$2" ]; then
+        PASS=$((PASS + 1)); echo "PASS $1"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $1"; printf '%s\n' "$got" | head -n 8
+    fi
+}
+if command -v python3 > /dev/null; then
+    tty_case "limit enforced on a command reading the terminal" "rc=124
+left=0" "\"$BIN_DIR/timeout\" 1 cat; echo rc=\$?"
+    tty_case "limit enforced when a grandchild reads the terminal" "rc=124
+left=0" "\"$BIN_DIR/timeout\" 1 sh -c 'cat; :'; echo rc=\$?"
+    tty_case "-v writes under stty tostop from the background" "timeout: sending signal TERM to command 'cat'
+rc=124
+left=0" "stty tostop; \"$BIN_DIR/timeout\" -v 1 cat 2>&1 | /bin/cat; \"$BIN_DIR/timeout\" 1 cat; echo rc=\$?"
+else
+    skip_test "timeout on a terminal (needs python3)"
+fi
+# The command gets the default actions of the terminal stop signals.
+got=$(sh -c 'trap "" TTIN TTOU; "$1" 5 grep SigIgn /proc/self/status' sh "$BIN_DIR/timeout")
+ref=$(sh -c 'trap "" TTIN TTOU; "$1" 5 grep SigIgn /proc/self/status' sh "${GNU_BIN:-/usr/bin}/timeout")
+if [ -n "$got" ] && [ "$got" = "$ref" ]; then
+    PASS=$((PASS + 1)); echo "PASS command does not inherit ignored terminal stops"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL command does not inherit ignored terminal stops ($got, GNU $ref)"
+fi
 print_summary
 [ "$FAIL" -eq 0 ]

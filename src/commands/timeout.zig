@@ -3,7 +3,8 @@
 //! Reference: GNU coreutils manual "timeout invocation" (9.7).
 //!
 //! The supervision loop is in src/lib/timeout.zig. This wrapper does the
-//! process-wide parts: becoming a process-group leader, blocking the watched
+//! process-wide parts: becoming a process-group leader, ignoring the terminal
+//! stop signals, blocking the watched
 //! signals (creating the `sys.Watcher`) and re-raising the command's fatal
 //! signal on itself.
 
@@ -65,7 +66,13 @@ pub fn main(ctx: cli.Context) u8 {
 
     if (!foreground) sys.becomeGroupLeader();
     const env: timeout.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
-    var child = timeout.spawn(env, command) catch |e| {
+    // A command that reads the terminal from our group stops the whole group;
+    // we must keep running to enforce the limit. It starts with the default
+    // actions, as under GNU.
+    sys.catchTerminalStops();
+    const spawned = timeout.spawn(env, command);
+    sys.ignoreTerminalStops();
+    var child = spawned catch |e| {
         const text: []const u8 = switch (e) {
             error.FileNotFound => "No such file or directory",
             error.AccessDenied, error.PermissionDenied => "Permission denied",

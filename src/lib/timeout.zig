@@ -10,7 +10,9 @@
 //! command cannot be run, otherwise the command's status.
 //!
 //! Decision 0004: blocking signals (creating the `sys.Watcher`), becoming a
-//! process-group leader and re-raising the command's fatal signal on the
+//! process-group leader, ignoring SIGTTIN and SIGTTOU (a caller that may share
+//! a terminal with the command needs `sys.catchTerminalStops` around `spawn`),
+//! and re-raising the command's fatal signal on the
 //! host are process-wide actions; the caller does them (see
 //! `src/commands/timeout.zig`) and hands the ready `Watcher` to `supervise`.
 
@@ -125,6 +127,12 @@ const Supervisor = struct {
                 s.self_signals += 1;
             };
         }
+        // A stopped process (the command, or one of its children stopped for
+        // reading the terminal) must be continued to see the signal.
+        if (sig != sys.signo.KILL and sig != sys.signo.CONT) {
+            _ = sys.sendSignal(pid, sys.signo.CONT);
+            if (!s.foreground) _ = sys.signalOwnGroup(sys.signo.CONT);
+        }
     }
 };
 
@@ -153,10 +161,6 @@ pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Obs
                     timed_out = true;
                     sup.sendTo(pid, opts.signal);
                     deadline = if (opts.kill_after) |k| nowNs(env.io) + @as(i96, k) else null;
-                    if (opts.signal != sys.signo.KILL) {
-                        // A stopped command needs CONT to see the signal.
-                        if (opts.signal != sys.signo.CONT) _ = sys.sendSignal(pid, sys.signo.CONT);
-                    }
                 } else {
                     sent_kill = true;
                     sup.sendTo(pid, sys.signo.KILL);
