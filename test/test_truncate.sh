@@ -43,4 +43,25 @@ run_tree "--bogus"                 "$S" --bogus -s 5 ten
 run_tree "-- operand"              "$S" -s 5 -- -dash
 run_tree "-s attached"             "$S" -s5 ten
 run_tree "-r attached"             "$S" -rten empty
+# A size, block count or result beyond off_t is an error and leaves the file
+# alone. The size is not part of the run_tree comparison, so it is listed here.
+size_cmp() {
+    description="$1"; shift
+    for x in gnu ours; do
+        d="$TEST_TMP/size-$x"; rm -rf "$d"; mkdir "$d"
+        (cd "$d" && printf 'precious\n' > f && { LC_ALL=C $x "$@" f > /dev/null 2> ../size-$x.err; echo "rc=$? size=$(stat -c %s f)"; } > ../size-$x.out)
+        norm_err < "$TEST_TMP/size-$x.err" >> "$TEST_TMP/size-$x.out"
+    done
+    if cmp -s "$TEST_TMP/size-gnu.out" "$TEST_TMP/size-ours.out"; then
+        PASS=$((PASS + 1)); printf "PASS %s\n" "$description"
+    else
+        FAIL=$((FAIL + 1)); printf "FAIL %s\n     GNU : %s\n     OURS: %s\n" "$description" "$(cat "$TEST_TMP/size-gnu.out")" "$(cat "$TEST_TMP/size-ours.out")"
+    fi
+}
+for sz in -1Z -99999999999999999999999 /1Z '<1Z' '>1Z' '%1Z' 1Z +1Z 8E -8E 9223372036854775808 -9223372036854775808 -9223372036854775809 +9223372036854775807; do
+    size_cmp "out of range: -s $sz" -s "$sz"
+done
+for sz in /1E '<1E' 9223372036854775807 -9223372036854775807 -1E +4611686018427387904; do
+    size_cmp "out of range: -o -s $sz" -o -s "$sz"
+done
 print_summary
