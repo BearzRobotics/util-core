@@ -177,4 +177,36 @@ else
     skip_test "mv ACL (needs setfacl and a second file system with ACLs)"
 fi
 rm -rf "$d"; [ -z "$other" ] || rm -rf "$other"
+# The copy of a cross-device mv stays in the tree too: a directory replaced by
+# a link while it runs is neither copied from nor emptied. strace holds mv before
+# it examines or opens the file below the swapped directory.
+other=$(mktemp -d /dev/shm/mvtest.XXXXXX 2>/dev/null)
+d=$(mktemp -d)
+if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$d")" ] && can_inject; then
+    for case in 'statx:[/"]data", AT_' 'openat:[/"]data", O_RDONLY'; do
+        call=${case%%:*}; pattern=${case#*:}
+        swap_setup() {
+            rm -rf "$d/src" "$d/victim" "$d/moved" "$other/dst"; mkdir -p "$d/src/a/sub" "$d/victim"
+            echo mine > "$d/src/a/sub/data"; echo VICTIM > "$d/victim/data"
+        }
+        swap_setup
+        (cd "$d" && strace -o trace -e trace="$call" "$BIN_DIR/mv" src "$other/dst" > /dev/null 2>&1)
+        n=$(grep "^$call(" "$d/trace" | grep -n -e "$pattern" | head -n 1 | cut -d: -f1)
+        swap_setup; rm -f "$d/trace"
+        (cd "$d" && exec timeout 30 strace -o trace -e trace="$call" -e inject="$call":delay_enter=3000000:when="${n:-1}" "$BIN_DIR/mv" src "$other/dst" > out 2>&1) & mv_pid=$!
+        tries=0
+        while [ "$(cat "$d/trace" 2>/dev/null | grep -c "^$call(")" -lt $((${n:-1} - 1)) ] && [ $tries -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+        sleep 1
+        mv "$d/src/a/sub" "$d/moved"; ln -s "$d/victim" "$d/src/a/sub"
+        wait $mv_pid
+        if [ -n "$n" ] && [ "$(cat "$d/victim/data" 2>/dev/null)" = VICTIM ] && ! grep -r -q VICTIM "$other/dst" 2>/dev/null; then
+            PASS=$((PASS + 1)); echo "PASS mv leaves a swapped-in directory alone ($call)"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL mv leaves a swapped-in directory alone ($call, call $n)"; cat "$d/out"
+        fi
+    done
+else
+    skip_test "mv source swap race (needs strace and a second file system)"
+fi
+rm -rf "$d"; [ -z "$other" ] || rm -rf "$other"
 cd /; print_summary

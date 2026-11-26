@@ -14,7 +14,8 @@ const E = sys.E;
 
 pub const Kind = union(enum) {
     /// A hard link to `source`; `follow` links to the target of a symlink.
-    hard: struct { follow: bool },
+    /// `source_dir`, when set, is the open directory `source` is a name in.
+    hard: struct { follow: bool, source_dir: ?sys.Handle = null },
     /// A symbolic link whose text is `source`.
     symbolic,
 };
@@ -36,7 +37,7 @@ pub fn replace(io: Io, source: []const u8, dest: []const u8, kind: Kind) ?E {
     while (true) : (attempts += 1) {
         fillRandom(io, temp[temp.len - 6 ..]);
         const failure = switch (kind) {
-            .hard => |h| sys.linkPath(source, temp, h.follow),
+            .hard => |h| sys.linkAt(h.source_dir orelse sys.cwdFd(), source, temp, h.follow),
             .symbolic => sys.symlinkPath(source, temp),
         } orelse break;
         if (failure != .EXIST or attempts == 100) return failure;

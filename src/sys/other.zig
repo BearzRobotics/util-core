@@ -764,18 +764,18 @@ pub fn unlinkAt(dir: Handle, path: []const u8, removedir: bool) ?E {
     return null;
 }
 
-pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?E {
+pub fn renameAt(old_dir: Handle, old: []const u8, new: []const u8, flags: u32) ?E {
     if (flags & sys.RENAME_EXCHANGE != 0) return .OPNOTSUPP;
     if (flags & sys.RENAME_NOREPLACE != 0) {
-        Io.Dir.renamePreserve(cwd(), old, cwd(), new, io()) catch |e| return errFrom(e);
+        Io.Dir.renamePreserve(dirOf(old_dir), old, cwd(), new, io()) catch |e| return errFrom(e);
         return null;
     }
-    Io.Dir.rename(cwd(), old, cwd(), new, io()) catch |e| return errFrom(e);
+    Io.Dir.rename(dirOf(old_dir), old, cwd(), new, io()) catch |e| return errFrom(e);
     return null;
 }
 
-pub fn linkPath(old: []const u8, new: []const u8, follow: bool) ?E {
-    Io.Dir.hardLink(cwd(), old, cwd(), new, io(), .{ .follow_symlinks = follow }) catch |e| return errFrom(e);
+pub fn linkAt(old_dir: Handle, old: []const u8, new: []const u8, follow: bool) ?E {
+    Io.Dir.hardLink(dirOf(old_dir), old, cwd(), new, io(), .{ .follow_symlinks = follow }) catch |e| return errFrom(e);
     return null;
 }
 

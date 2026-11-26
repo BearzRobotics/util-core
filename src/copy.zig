@@ -16,6 +16,7 @@ const quote = @import("quote.zig");
 const errtext = @import("errtext.zig");
 const sys = @import("sys.zig");
 const posixacl = @import("posixacl.zig");
+const dirat = @import("dirat.zig");
 const replacelink = @import("replacelink.zig");
 const backup = @import("backup.zig");
 const Io = std.Io;
@@ -118,6 +119,24 @@ pub const Opts = struct {
 };
 
 const DevIno = struct { dev: u64, ino: u64 };
+
+/// How the walk reaches a source: `name` in the open directory `dir`, or, for
+/// a command-line operand (null), by its path from the current directory.
+/// Every access to a source goes through this, so that renaming directories in
+/// the source tree cannot send the copy elsewhere, and so that the source is
+/// not limited by PATH_MAX.
+const Source = struct {
+    dir: ?*dirat.Level,
+    name: []const u8,
+
+    fn fd(s: Source) sys.Handle {
+        return dirat.fdOf(s.dir);
+    }
+
+    fn stat(s: Source, follow: bool, e: *E) ?sys.FileStat {
+        return sys.fileStatAt(s.fd(), s.name, follow, e);
+    }
+};
 
 fn devOf(st: sys.FileStat) u64 {
     return (@as(u64, st.dev_major) << 32) | st.dev_minor;
@@ -326,17 +345,17 @@ pub const Copier = struct {
     // ------------------------------------------------------------- creation
 
     /// force_linkat: returns null on success, a negative marker via `removed`.
-    fn forceLink(c: *Copier, src: []const u8, dst: []const u8, follow: bool, force: bool, removed: *bool) ?E {
+    fn forceLink(c: *Copier, src: Source, dst: []const u8, follow: bool, force: bool, removed: *bool) ?E {
         removed.* = false;
-        const e1 = sys.linkPath(src, dst, follow) orelse return null;
+        const e1 = sys.linkAt(src.fd(), src.name, dst, follow) orelse return null;
         if (e1 != .EXIST or !force) return e1;
         // Replace the destination; keep it if source and destination are
         // the same file.
         var e: E = .SUCCESS;
-        const s = if (follow) stat(src, &e) else lstat(src, &e);
+        const s = src.stat(follow, &e);
         const d = lstat(dst, &e);
         if (s != null and d != null and sameInode(s.?, d.?)) return null;
-        if (replacelink.replace(c.env.io, src, dst, .{ .hard = .{ .follow = follow } })) |e2| return e2;
+        if (replacelink.replace(c.env.io, src.name, dst, .{ .hard = .{ .follow = follow, .source_dir = src.fd() } })) |e2| return e2;
         removed.* = true;
         return null;
     }
@@ -350,9 +369,10 @@ pub const Copier = struct {
         return null;
     }
 
-    fn createHardLink(c: *Copier, src_name: []const u8, dst_name: []const u8, replace: bool, verbose: bool, dereference: bool) bool {
+    /// `src` is where the file `src_name` is reached.
+    fn createHardLink(c: *Copier, src: Source, src_name: []const u8, dst_name: []const u8, replace: bool, verbose: bool, dereference: bool) bool {
         var removed = false;
-        if (c.forceLink(src_name, dst_name, dereference, replace, &removed)) |e| {
+        if (c.forceLink(src, dst_name, dereference, replace, &removed)) |e| {
             c.errno("cannot create hard link {f} to {f}", .{ quote.quoteA(dst_name), quote.quoteA(src_name) }, e);
             return false;
         }
@@ -371,7 +391,7 @@ pub const Copier = struct {
 
     // ---------------------------------------------------------- same_file_ok
 
-    fn sameFileOk(c: *Copier, src_name: []const u8, src_sb: sys.FileStat, dst_name: []const u8, dst_sb: sys.FileStat, return_now: *bool) bool {
+    fn sameFileOk(c: *Copier, src: Source, src_name: []const u8, src_sb: sys.FileStat, dst_name: []const u8, dst_sb: sys.FileStat, return_now: *bool) bool {
         const x = &c.x;
         const same = sameInode(src_sb, dst_sb);
         return_now.* = false;
@@ -399,7 +419,7 @@ pub const Copier = struct {
         } else {
             if (!same) return true;
             const d = lstat(dst_name, &e) orelse return true;
-            const s = lstat(src_name, &e) orelse return true;
+            const s = src.stat(false, &e) orelse return true;
             src_link = s;
             dst_link = d;
             same_link = sameInode(s, d);
@@ -433,7 +453,7 @@ pub const Copier = struct {
         if (x.dereference == .never) {
             var ts = src_link;
             var td = dst_link;
-            if (src_link.isLink()) ts = stat(src_name, &e) orelse return true;
+            if (src_link.isLink()) ts = src.stat(true, &e) orelse return true;
             if (dst_link.isLink()) td = stat(dst_name, &e) orelse return true;
             if (!sameInode(ts, td)) return true;
             if (x.hard_link) {
@@ -462,14 +482,16 @@ pub const Copier = struct {
         c.top_src = src_name;
         c.top_dst = dst_name;
         var first_dir = false;
-        return c.copyInternal(src_name, dst_name, nonexistent_dst, null, &.{}, true, &first_dir, copy_into_self, rename_succeeded);
+        return c.copyInternal(.{ .dir = null, .name = src_name }, src_name, dst_name, nonexistent_dst, null, &.{}, true, &first_dir, copy_into_self, rename_succeeded);
     }
 
     fn debugLine(c: *Copier, offload: []const u8, reflink: []const u8, sparse: []const u8) void {
         c.say("copy offload: {s}, reflink: {s}, sparse detection: {s}\n", .{ offload, reflink, sparse });
     }
 
-    fn copyInternal(c: *Copier, src_name: []const u8, dst_name: []const u8, nonexistent_dst_in: i32, parent: ?sys.FileStat, ancestors: []const DevIno, command_line_arg: bool, first_dir_created: *bool, copy_into_self: *bool, rename_succeeded: *?bool) bool {
+    /// Copy the source reached at `src`, which `src_name` is the path of (for
+    /// messages and name comparisons), to `dst_name`.
+    fn copyInternal(c: *Copier, src: Source, src_name: []const u8, dst_name: []const u8, nonexistent_dst_in: i32, parent: ?sys.FileStat, ancestors: []const DevIno, command_line_arg: bool, first_dir_created: *bool, copy_into_self: *bool, rename_succeeded: *?bool) bool {
         const x = &c.x;
         var nonexistent_dst = nonexistent_dst_in;
         copy_into_self.* = false;
@@ -489,7 +511,7 @@ pub const Copier = struct {
 
         if (x.move_mode) {
             if (rename_errno < 0) {
-                rename_errno = if (sys.renamePath(src_name, drelname, sys.RENAME_NOREPLACE)) |re| @intFromEnum(re) else 0;
+                rename_errno = if (sys.renameAt(src.fd(), src.name, drelname, sys.RENAME_NOREPLACE)) |re| @intFromEnum(re) else 0;
             }
             nonexistent_dst = @intFromBool(rename_errno == 0);
             rename_succeeded.* = rename_errno == 0;
@@ -498,9 +520,9 @@ pub const Copier = struct {
 
         if (if (rename_errno == 0) !x.last_file else (rename_errno != eexist or (x.update != .none and x.update != .none_fail))) {
             const name = if (rename_errno == 0) dst_name else src_name;
-            const relname = if (rename_errno == 0) drelname else src_name;
+            const at: Source = if (rename_errno == 0) .{ .dir = null, .name = drelname } else src;
             const follow = x.dereference != .never;
-            const st = sys.fileStat(relname, follow, &e) orelse {
+            const st = at.stat(follow, &e) orelse {
                 c.errno("cannot stat {f}", .{quote.quoteA(name)}, e);
                 return false;
             };
@@ -554,7 +576,7 @@ pub const Copier = struct {
                 if (new_dst) {
                     // The destination vanished; fall through as a new file.
                 } else {
-                    if ((x.update != .none and x.update != .none_fail) and !c.sameFileOk(src_name, src_sb, dst_name, dst_sb, &return_now)) {
+                    if ((x.update != .none and x.update != .none_fail) and !c.sameFileOk(src, src_name, src_sb, dst_name, dst_sb, &return_now)) {
                         c.errPrint("{f} and {f} are the same file", .{ quote.quoteA(src_name), quote.quoteA(dst_name) });
                         return false;
                     }
@@ -565,7 +587,7 @@ pub const Copier = struct {
                             rename_succeeded.* = true;
                             earlier_file = c.rememberCopied(dst_name, src_sb);
                             if (earlier_file) |ef| {
-                                if (!c.createHardLink(ef, dst_name, true, x.verbose, dereference)) {
+                                if (!c.createHardLink(.{ .dir = null, .name = ef }, ef, dst_name, true, x.verbose, dereference)) {
                                     return c.unBackup(dst_backup, dst_name, earlier_file, src_sb, false);
                                 }
                             }
@@ -692,7 +714,7 @@ pub const Copier = struct {
                     return c.unBackup(dst_backup, dst_name, earlier_file, src_sb, false);
                 }
             } else {
-                if (!c.createHardLink(ef, dst_name, true, x.verbose, dereference)) {
+                if (!c.createHardLink(.{ .dir = null, .name = ef }, ef, dst_name, true, x.verbose, dereference)) {
                     return c.unBackup(dst_backup, dst_name, earlier_file, src_sb, false);
                 }
                 return true;
@@ -701,7 +723,7 @@ pub const Copier = struct {
 
         if (x.move_mode) {
             if (rename_errno == eexist) {
-                rename_errno = if (sys.renamePath(src_name, drelname, 0)) |re| @intFromEnum(re) else 0;
+                rename_errno = if (sys.renameAt(src.fd(), src.name, drelname, 0)) |re| @intFromEnum(re) else 0;
             }
             if (rename_errno == 0) {
                 if (x.verbose) c.emitVerbose("renamed {f} -> {f}", src_name, dst_name, dst_backup);
@@ -776,7 +798,7 @@ pub const Copier = struct {
             if (x.one_file_system and parent != null and devOf(parent.?) != devOf(src_sb)) {
                 // Crossing a file system boundary: do not copy the contents.
             } else {
-                delayed_ok = c.copyDir(src_name, dst_name, new_dst, src_sb, ancestors, first_dir_created, copy_into_self);
+                delayed_ok = c.copyDir(src, src_name, dst_name, new_dst, src_sb, ancestors, first_dir_created, copy_into_self);
             }
         } else if (x.symbolic_link) {
             dest_is_symlink = true;
@@ -801,12 +823,12 @@ pub const Copier = struct {
             }
         } else if (x.hard_link) {
             const replace = x.unlink_dest_after_failed_open or x.interactive == .ask_user;
-            if (!c.createHardLink(src_name, dst_name, replace, false, dereference)) {
+            if (!c.createHardLink(src, src_name, dst_name, replace, false, dereference)) {
                 return c.unBackup(dst_backup, dst_name, earlier_file, src_sb, false);
             }
         } else if (src_sb.isReg() or (x.copy_as_regular and !src_sb.isLink())) {
             copied_as_regular = true;
-            if (!c.copyReg(src_name, dst_name, dst_mode_bits & 0o777, omitted, &new_dst, &src_sb)) {
+            if (!c.copyReg(src, src_name, dst_name, dst_mode_bits & 0o777, omitted, &new_dst, &src_sb)) {
                 return c.unBackup(dst_backup, dst_name, earlier_file, src_sb, false);
             }
         } else if ((src_mode & 0o170000) == 0o010000) {
@@ -826,7 +848,7 @@ pub const Copier = struct {
         } else if (src_sb.isLink()) {
             var lbuf: [4096]u8 = undefined;
             var le: E = .SUCCESS;
-            const n = sys.readlinkPath(src_name, &lbuf, &le) orelse {
+            const n = sys.readlinkAt(src.fd(), src.name, &lbuf, &le) orelse {
                 c.errno("cannot read symbolic link {f}", .{quote.quoteA(src_name)}, le);
                 return c.unBackup(dst_backup, dst_name, earlier_file, src_sb, false);
             };
@@ -880,7 +902,7 @@ pub const Copier = struct {
         if (dest_is_symlink) return delayed_ok;
 
         if (x.preserve_mode or x.move_mode) {
-            if (posixacl.preserve(.{ .path = src_name }, .{ .path = drelname }, src_mode & 0o7777, src_is_dir)) |ce| {
+            if (c.preservePermissions(src, src_name, src_sb, drelname, src_mode & 0o7777)) |ce| {
                 if (!c.ownerFailureOk(ce)) {
                     c.errno("preserving permissions for {f}", .{quote.quoteA(dst_name)}, ce);
                     if (x.require_preserve) return false;
@@ -976,12 +998,47 @@ pub const Copier = struct {
         return 0;
     }
 
+    /// Give `dst`, a directory or special file, the permissions and ACLs of
+    /// the source.
+    fn preservePermissions(c: *Copier, src: Source, src_name: []const u8, src_sb: sys.FileStat, dst: []const u8, mode: u32) ?E {
+        if (src_sb.isDir()) {
+            const nofollow: u32 = if (c.x.dereference == .never) sys.O.NOFOLLOW else 0;
+            var e: E = .SUCCESS;
+            var held = sys.openFdAt(src.fd(), src.name, sys.O.RDONLY | sys.O.DIRECTORY | sys.O.NONBLOCK | nofollow, 0, &e) orelse sys.invalid_handle;
+            defer if (held != sys.invalid_handle) {
+                _ = sys.closeFd(held);
+            };
+            if (held != sys.invalid_handle) {
+                const now = sys.fstatFd(held, &e);
+                if (now == null or !sameInode(now.?, src_sb)) {
+                    _ = sys.closeFd(held);
+                    held = sys.invalid_handle;
+                }
+            }
+            // Without a descriptor the ACL is unknown, which preserve reports,
+            // granting the group and others nothing.
+            return posixacl.preserve(.{ .fd = held }, .{ .path = dst }, mode, true);
+        }
+        // A fifo or device cannot be held open to read attributes from, so
+        // only here is the path used (nothing but the ACL is read through it).
+        return posixacl.preserve(.{ .path = src_name }, .{ .path = dst }, mode, false);
+    }
+
     // ------------------------------------------------------------ directories
 
-    fn copyDir(c: *Copier, src_name: []const u8, dst_name: []const u8, new_dst: bool, src_sb: sys.FileStat, ancestors: []const DevIno, first_dir_created: *bool, copy_into_self: *bool) bool {
+    fn copyDir(c: *Copier, src: Source, src_name: []const u8, dst_name: []const u8, new_dst: bool, src_sb: sys.FileStat, ancestors: []const DevIno, first_dir_created: *bool, copy_into_self: *bool) bool {
         const ctx = c.env;
+        // The directory that was examined, listed and read through one
+        // descriptor: nothing put in its place is walked into.
+        var level: dirat.Level = undefined;
+        if (dirat.enter(&level, src.dir, src.name, .{ .follow = c.x.dereference != .never, .expect = src_sb })) |de| {
+            c.errno("cannot access {f}", .{quote.quoteA(src_name)}, de);
+            return false;
+        }
+        // A failure to get back to the directory above is seen there.
+        defer _ = dirat.leave(&level);
         var de: E = .SUCCESS;
-        const names = sys.readDirNames(ctx.gpa, src_name, &de) orelse {
+        const names = sys.readDirNamesFd(ctx.gpa, level.fd, &de) orelse {
             c.errno("cannot access {f}", .{quote.quoteA(src_name)}, de);
             return false;
         };
@@ -1014,12 +1071,19 @@ pub const Copier = struct {
             var first_dir = first_dir_created.*;
             var local_self = false;
             var rs: ?bool = null;
-            if (!c.copyInternal(sname, dname, @intFromBool(new_dst), src_sb, anc.items, false, &first_dir, &local_self, &rs)) ok = false;
+            if (!c.copyInternal(.{ .dir = &level, .name = n.name }, sname, dname, @intFromBool(new_dst), src_sb, anc.items, false, &first_dir, &local_self, &rs)) ok = false;
             if (local_self) {
                 copy_into_self.* = true;
                 break;
             }
             new_first_dir = new_first_dir or first_dir;
+            // Deep trees close the directories far above; this one was moved
+            // while below it, so the rest of it is out of reach.
+            if (!level.open) {
+                c.errno("cannot access {f}", .{quote.quoteA(src_name)}, .NOENT);
+                ok = false;
+                break;
+            }
         }
         first_dir_created.* = new_first_dir;
         return ok;
@@ -1027,7 +1091,7 @@ pub const Copier = struct {
 
     // ------------------------------------------------------------- regular files
 
-    fn copyReg(c: *Copier, src_name: []const u8, dst_name: []const u8, dst_mode: u32, omitted_in: u32, new_dst: *bool, src_sb: *sys.FileStat) bool {
+    fn copyReg(c: *Copier, src: Source, src_name: []const u8, dst_name: []const u8, dst_mode: u32, omitted_in: u32, new_dst: *bool, src_sb: *sys.FileStat) bool {
         const x = &c.x;
         var omitted = omitted_in;
         var extra: u32 = 0;
@@ -1035,7 +1099,7 @@ pub const Copier = struct {
         var data_copy_required = x.data_copy_required;
         const drelname = dst_name;
 
-        const src_fd = sys.openFd(src_name, sys.O.RDONLY | (if (x.dereference == .never) sys.O.NOFOLLOW else 0), 0, &e) orelse {
+        const src_fd = sys.openFdAt(src.fd(), src.name, sys.O.RDONLY | (if (x.dereference == .never) sys.O.NOFOLLOW else 0), 0, &e) orelse {
             c.errno("cannot open {f} for reading", .{quote.quoteA(src_name)}, e);
             return false;
         };

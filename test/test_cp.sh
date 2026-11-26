@@ -360,4 +360,54 @@ if setfacl -m u:nobody:rw "$TEST_TMP/aclprobe/f" 2>/dev/null; then
 else
     skip_test "ACL preservation (needs setfacl and a file system with ACLs)"
 fi
+# A directory of the source replaced by a link while cp runs is not followed.
+# strace holds cp before the call that matches PATTERN while the test swaps
+# tree/a/sub for a link to a directory outside the tree.
+swap_race() { # DESC SYSCALL PATTERN ARGS...
+    description="$1"; call="$2"; pattern="$3"; shift 3
+    base="$TEST_TMP/swap"
+    swap_setup() {
+        chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/tree/a/sub" "$base/victim"
+        echo mine > "$base/tree/a/sub/data"; echo VICTIM > "$base/victim/data"; echo VICTIM > "$base/victim/other"
+    }
+    swap_setup
+    (cd "$base" && strace -o trace -e trace="$call" "$BIN_DIR/cp" "$@" > /dev/null 2>&1)
+    n=$(grep "^$call(" "$base/trace" | grep -n -e "$pattern" | head -n 1 | cut -d: -f1)
+    swap_setup
+    (cd "$base" && exec timeout 30 strace -o trace -e trace="$call" -e inject="$call":delay_enter=3000000:when="${n:-1}" "$BIN_DIR/cp" "$@" > out 2>&1) & cp_pid=$!
+    tries=0
+    while [ "$(cat "$base/trace" 2>/dev/null | grep -c "^$call(")" -lt $((${n:-1} - 1)) ] && [ $tries -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    sleep 1
+    mv "$base/tree/a/sub" "$base/moved"; ln -s "$base/victim" "$base/tree/a/sub"
+    wait $cp_pid
+    if [ -n "$n" ] && ! grep -r -q VICTIM "$base/copy" 2>/dev/null && [ "$(cat "$base/victim/data")" = VICTIM ]; then
+        PASS=$((PASS + 1)); echo "PASS $description"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $description (call $n)"; cat "$base/out"; (cd "$base" && find copy | head)
+    fi
+}
+if can_inject; then
+    swap_race "cp -r: directory swapped before a file is examined" statx '[/"]data", AT_' -r tree copy
+    swap_race "cp -r: directory swapped before it is listed" openat '[/"]sub", .*O_DIRECTORY' -r tree copy
+    swap_race "cp -r: directory swapped before a file is read" openat '[/"]data", O_RDONLY' -r tree copy
+    swap_race "cp -a: directory swapped before a file is read" openat '[/"]data", O_RDONLY' -a tree copy
+    # cp -al makes hard links to the source files.
+    swap_race "cp -al: directory swapped before a file is linked" linkat '[/"]data", ' -al tree copy
+else
+    skip_test "cp source swap races (no usable strace)"
+fi
+# A source deeper than PATH_MAX is copied when the copy's names are shorter.
+d="$TEST_TMP/deepsrc"; mkdir -p "$d"
+name=$(printf 'n%.0s' $(seq 200))
+( cd "$d" && i=0; while [ $i -lt 19 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done
+  mkdir -p "in/$name/$name" && cd -P "in/$name/$name" && mkdir sub && echo deep > sub/file && ln -s file sub/link )
+prefix=$(i=0; while [ $i -lt 19 ]; do printf '%s/' "$name"; i=$((i + 1)); done)
+# (the operand is just short enough; the files below it are not)
+long="$prefix"in
+if (cd "$d" && ours -r "$long" got > out 2>&1) && [ "$(cat "$d/got/$name/$name/sub/file")" = deep ] && [ "$(readlink "$d/got/$name/$name/sub/link")" = file ]; then
+    PASS=$((PASS + 1)); echo "PASS cp -r reads sources past PATH_MAX"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL cp -r reads sources past PATH_MAX"; head -c 300 "$d/out"; echo
+fi
+/usr/bin/rm -rf "$d"
 cd /; print_summary

@@ -1288,13 +1288,18 @@ pub const RENAME_NOREPLACE: u32 = 1;
 pub const RENAME_EXCHANGE: u32 = 2;
 
 pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?LX.E {
-    if (comptime !is_linux) return other.renamePath(old, new, flags);
+    return renameAt(cwdFd(), old, new, flags);
+}
+
+/// `renamePath` with `old` resolved from the open directory `old_dir`.
+pub noinline fn renameAt(old_dir: Handle, old: []const u8, new: []const u8, flags: u32) ?LX.E {
+    if (comptime !is_linux) return other.renameAt(old_dir, old, new, flags);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
     const p2 = cstr(&b2, new) orelse return .NAMETOOLONG;
-    if (flags == 0) return errOf(LX.renameat(LX.AT.FDCWD, p1, LX.AT.FDCWD, p2));
-    const failed = errOf(LX.syscall5(.renameat2, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p1), @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p2), flags)) orelse return null;
+    if (flags == 0) return errOf(LX.renameat(old_dir, p1, LX.AT.FDCWD, p2));
+    const failed = errOf(LX.syscall5(.renameat2, @bitCast(@as(isize, old_dir)), @intFromPtr(p1), @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p2), flags)) orelse return null;
     // NFS, CIFS and many FUSE file systems reject the flag (and old kernels
     // the call). As gnulib's renameatu does: check that nothing has the new
     // name, then rename without the flag. That is not atomic.
@@ -1302,17 +1307,22 @@ pub fn renamePath(old: []const u8, new: []const u8, flags: u32) ?LX.E {
     var e: LX.E = .SUCCESS;
     if (fileStat(new, false, &e) != null or e == .OVERFLOW) return .EXIST;
     if (e != .NOENT) return e;
-    return errOf(LX.renameat(LX.AT.FDCWD, p1, LX.AT.FDCWD, p2));
+    return errOf(LX.renameat(old_dir, p1, LX.AT.FDCWD, p2));
 }
 
 /// linkat(2); `follow` makes a hard link to the target of a symlink.
 pub fn linkPath(old: []const u8, new: []const u8, follow: bool) ?LX.E {
-    if (comptime !is_linux) return other.linkPath(old, new, follow);
+    return linkAt(cwdFd(), old, new, follow);
+}
+
+/// `linkPath` with `old` resolved from the open directory `old_dir`.
+pub noinline fn linkAt(old_dir: Handle, old: []const u8, new: []const u8, follow: bool) ?LX.E {
+    if (comptime !is_linux) return other.linkAt(old_dir, old, new, follow);
     var b1: [4097]u8 = undefined;
     var b2: [4097]u8 = undefined;
     const p1 = cstr(&b1, old) orelse return .NAMETOOLONG;
     const p2 = cstr(&b2, new) orelse return .NAMETOOLONG;
-    return errOf(LX.linkat(LX.AT.FDCWD, p1, LX.AT.FDCWD, p2, if (follow) LX.AT.SYMLINK_FOLLOW else 0));
+    return errOf(LX.linkat(old_dir, p1, LX.AT.FDCWD, p2, if (follow) LX.AT.SYMLINK_FOLLOW else 0));
 }
 
 pub fn symlinkPath(target: []const u8, path: []const u8) ?LX.E {
