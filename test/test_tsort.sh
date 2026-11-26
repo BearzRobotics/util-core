@@ -121,4 +121,14 @@ printf 'a b b a c d d c e f\n' > two
 [ "$rc" = 0 ] && { PASS=$((PASS + 1)); echo "PASS -w on acyclic input exits 0"; } || { FAIL=$((FAIL + 1)); echo "FAIL -w acyclic status $rc"; }
 
 cd /; rm -rf "$W"
+# Memory stays in proportion to the input however many cycles it has (with
+# a memory limit: keeping each cycle's working lists needs over 1 GB here).
+cycles=$(mktemp)
+awk 'BEGIN { for (i = 0; i < 20000; i++) printf "n%d m%d m%d n%d\n", i, i, i, i }' > "$cycles"
+exp=$(LC_ALL=C timeout 60 /usr/bin/tsort "$cycles" 2>/dev/null | cksum)
+act=$( (ulimit -v 300000; LC_ALL=C timeout 60 "$BIN_DIR/tsort" "$cycles" 2>/dev/null) | cksum)
+if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS 20000 cycles in bounded memory"
+else FAIL=$((FAIL + 1)); echo "FAIL 20000 cycles in bounded memory"; fi
+rm -f "$cycles"
+
 print_summary
