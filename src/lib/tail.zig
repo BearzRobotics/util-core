@@ -122,13 +122,19 @@ pub fn run(env: Env, cfg: Options, inputs: []const Input, writer: *Io.Writer, ob
             continue;
         };
         if (cfg.follow and is_regular) {
+            const resume_at = switch (in.source) {
+                .path => end,
+                // An open descriptor need not have started at offset 0, so the
+                // number of bytes read from it says nothing about where it is.
+                .file => followStart(file, cfg) orelse end,
+            };
             var fe: std.os.linux.E = .SUCCESS;
             const fst = sys.fstatFd(file.handle, &fe);
             try followed.append(env.gpa, .{
                 .file = file,
                 .owned = opened.owned,
                 .path = name,
-                .pos = end,
+                .pos = resume_at,
                 .dev = if (fst) |f| (@as(u64, f.dev_major) << 32) | f.dev_minor else 0,
                 .ino = if (fst) |f| f.ino else 0,
             });
@@ -156,8 +162,19 @@ fn printHeader(out: *stickyout.Out, name: []const u8, first: *bool) void {
     out.write(" <==\n");
 }
 
+/// Where to start following a file that was handed to us already open: where
+/// reading it stopped, or its end when nothing was to be read.
+fn followStart(file: Io.File, cfg: Options) ?u64 {
+    if (!cfg.from_start and cfg.count == 0) {
+        var e: sys.E = .SUCCESS;
+        // As in GNU, the shared descriptor is left at the end.
+        _ = sys.seekFd(file.handle, 0, 2, &e);
+    }
+    return sys.filePosition(file.handle);
+}
+
 /// Print the requested tail of `file`. Returns the offset just past the last
-/// byte consumed (the starting position for --follow).
+/// byte consumed (for a file we opened ourselves, where --follow starts).
 fn tail(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, seekable: bool, buf: []u8) !u64 {
     if (!cfg.from_start and cfg.count == 0) {
         // Nothing to print; for -f still start following at the current end.

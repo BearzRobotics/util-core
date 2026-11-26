@@ -122,6 +122,19 @@ follow_case "-n +1 -f"               -n +1 -s 0.1 -f
 seq 1 5 > ff; (sleep 0.3; : > ff; sleep 0.3; echo new >> ff) &
 timeout 2 "$BIN_DIR/tail" -n 0 -s 0.1 -f ff > ours.trunc 2>&1; wait
 grep -q "ff: file truncated" ours.trunc && grep -q "^new$" ours.trunc && { PASS=$((PASS + 1)); echo "PASS truncation is reported and followed"; } || { FAIL=$((FAIL + 1)); echo "FAIL truncation: $(cat ours.trunc)"; }
+# Standard input redirected from a file, possibly not at its start: only what
+# is appended afterwards may follow the initial output.
+for a in "-n0" "-c0" "-n1" "" "-n +2" "-c +2" "-c3"; do
+    for skip in 0 1; do
+        for t in gnu ours; do
+            if [ $t = gnu ]; then bin=/usr/bin/tail; else bin="$BIN_DIR/tail"; fi
+            printf 'a\nb\nc\nd\n' > sf
+            { [ $skip = 0 ] || read -r _; timeout 1.2 $bin $a -s 0.1 -f > $t.out 2>&1; } < sf &
+            sleep 0.5; echo e >> sf; wait
+        done
+        cmp -s gnu.out ours.out && { PASS=$((PASS + 1)); echo "PASS -f on redirected stdin: '$a', $skip line(s) already read"; } || { FAIL=$((FAIL + 1)); printf "FAIL -f on redirected stdin: '%s' skip %s\n     GNU : %s\n     OURS: %s\n" "$a" $skip "$(cat gnu.out)" "$(cat ours.out)"; }
+    done
+done
 sleep 30 & spid=$!
 echo x > pf; timeout 5 "$BIN_DIR/tail" --pid=$spid -s 0.1 -f pf > /dev/null & tpid=$!
 sleep 0.5; kill $spid; wait $spid 2>/dev/null; sleep 0.5

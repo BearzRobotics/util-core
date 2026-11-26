@@ -118,6 +118,7 @@ const win = if (is_win) struct {
         max_y: i16,
     };
     extern "kernel32" fn GetConsoleScreenBufferInfo(h: w.HANDLE, info: *CONSOLE_SCREEN_BUFFER_INFO) callconv(.winapi) c_int;
+    extern "kernel32" fn SetFilePointerEx(h: w.HANDLE, distance: i64, new_pos: ?*i64, method: u32) callconv(.winapi) c_int;
     extern "kernel32" fn GetConsoleMode(h: w.HANDLE, mode: *u32) callconv(.winapi) c_int;
     extern "kernel32" fn SetConsoleMode(h: w.HANDLE, mode: u32) callconv(.winapi) c_int;
     extern "kernel32" fn SetConsoleOutputCP(cp: u32) callconv(.winapi) c_int;
@@ -735,6 +736,19 @@ pub fn writeFd(fd: Handle, bytes: []const u8, err: *E) ?usize {
 
 pub fn writeAllFd(fd: Handle, bytes: []const u8) ?E {
     fileOf(fd).writeStreamingAll(io(), bytes) catch return .IO;
+    return null;
+}
+
+pub fn filePosition(fd: Handle) ?u64 {
+    if (comptime is_win) {
+        var pos: i64 = 0;
+        if (win.SetFilePointerEx(fd, 0, &pos, 1) == 0) return null; // FILE_CURRENT
+        return @intCast(pos);
+    }
+    if (comptime is_libc_posix) {
+        const rc = c.lseek(fd, 0, 1);
+        return if (rc < 0) null else @intCast(rc);
+    }
     return null;
 }
 

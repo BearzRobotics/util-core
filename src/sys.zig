@@ -1608,6 +1608,15 @@ pub fn seekFd(fd: Handle, off: i64, whence: u32, err: *LX.E) ?i64 {
     return @bitCast(rc);
 }
 
+/// The offset at which the next streaming read or write of `fd` happens, or
+/// null when it has none or the system cannot say. (seekFd's result cannot be
+/// used for this everywhere: on Windows it does not report a position.)
+pub fn filePosition(fd: Handle) ?u64 {
+    if (comptime !is_linux) return other.filePosition(fd);
+    var e: LX.E = .SUCCESS;
+    return if (seekFd(fd, 0, 1, &e)) |p| @intCast(p) else null;
+}
+
 /// statx(2) on an open descriptor.
 pub fn fstatFd(fd: Handle, err: *LX.E) ?FileStat {
     if (comptime !is_linux) return other.fstatFd(fd, err);
