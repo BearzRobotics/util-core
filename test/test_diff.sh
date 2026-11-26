@@ -157,5 +157,24 @@ done
 GENPASS=$((PASS - GENSTART)); GENFAILS=$((FAIL - GENFAIL0)); GENTOTAL=$((GENPASS + GENFAILS))
 printf "\nGenerated pairs: %d/%d agree with GNU diff\n" "$GENPASS" "$GENTOTAL"
 
+CMP_STDIN=/dev/null
+# Two files with the same inode number, size and time on different file systems
+# are not the same file. bwrap gives each its own tmpfs, where the first file
+# gets the same number.
+d="$TEST_TMP/twofs"; mkdir -p "$d/m1" "$d/m2"
+TWO='echo AAAA > "$1/m1/f"; echo BBBB > "$1/m2/f"; touch -d @1000000000 "$1/m1/f" "$1/m2/f"'
+two_fs() { # SHELL-SCRIPT, with the directory as $1 and the program as $2
+    timeout 20 bwrap --ro-bind / / --tmpfs "$d/m1" --tmpfs "$d/m2" /bin/sh -c "$TWO; $1" sh "$d" "$2"
+}
+if command -v bwrap > /dev/null && [ "$(two_fs 'stat -c %i "$1/m1/f" "$1/m2/f" | uniq | wc -l' '' 2>/dev/null)" = 1 ]; then
+    for args in "m1/f m2/f" "-r m1 m2" "-q m1/f m2/f" "-rs m1 m2"; do
+        exp=$(LC_ALL=C two_fs "cd \"\$1\" && \"\$2\" $args; echo status \$?" "${GNU_BIN:-/usr/bin}/$UTIL" 2>&1)
+        act=$(LC_ALL=C two_fs "cd \"\$1\" && \"\$2\" $args; echo status \$?" "$BIN_DIR/$UTIL" 2>&1)
+        if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS equal inodes on two file systems: $UTIL $args"
+        else FAIL=$((FAIL + 1)); echo "FAIL equal inodes on two file systems: $UTIL $args"; printf '%s\n---\n%s\n' "$exp" "$act"; fi
+    done
+else
+    skip_test "equal inodes on two file systems (needs bwrap and matching inode numbers)"
+fi
 print_summary
 [ "$FAIL" -eq 0 ]

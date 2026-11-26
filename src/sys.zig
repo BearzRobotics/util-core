@@ -306,6 +306,35 @@ pub const FileStat = struct {
     }
 };
 
+/// Whether the two describe one file. An inode number is unique only within
+/// its file system, so the device has to match too. False where the system
+/// gives no device number (Windows): a caller that would skip reading a file
+/// because it is "the same" must then read it.
+pub fn isSameFile(a: FileStat, b: FileStat) bool {
+    if (builtin.os.tag == .windows) return false;
+    return a.ino != 0 and a.ino == b.ino and a.dev_major == b.dev_major and a.dev_minor == b.dev_minor;
+}
+
+test "isSameFile needs the device as well as the inode" {
+    if (builtin.os.tag == .windows) return;
+    var a = std.mem.zeroes(FileStat);
+    a.ino = 2;
+    a.dev_minor = 117;
+    var b = a;
+    try std.testing.expect(isSameFile(a, b));
+    b.dev_minor = 118;
+    try std.testing.expect(!isSameFile(a, b));
+    b.dev_minor = 117;
+    b.dev_major = 8;
+    try std.testing.expect(!isSameFile(a, b));
+    b.dev_major = 0;
+    b.ino = 3;
+    try std.testing.expect(!isSameFile(a, b));
+    a.ino = 0;
+    b.ino = 0;
+    try std.testing.expect(!isSameFile(a, b));
+}
+
 /// stat (follow = true) or lstat of `path`; null if the call fails. `err`
 /// receives the error.
 pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
