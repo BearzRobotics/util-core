@@ -90,10 +90,7 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
         const chars = std.math.mul(usize, f.width + 1, bpb / f.size) catch return error.OutOfMemory;
         line_w = @max(line_w, chars);
     }
-    for (fmts.items) |*f| {
-        const n = bpb / f.size;
-        f.pad = (line_w - (f.width + 1) * n) / n;
-    }
+    for (fmts.items) |*f| f.pad = line_w - (f.width + 1) * (bpb / f.size);
 
     var src = Source.init(env, obs, inputs, opts.limit);
     defer src.deinit();
@@ -130,7 +127,7 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
                 // Zero only up to the end of the last element: with a large
                 // -w the rest of the block is never looked at.
                 if (n < bpb) @memset(cur[n..@min(bpb, std.mem.alignForward(usize, n, lcm))], 0);
-                printBlock(&out, fmts.items, cur, n, addr, radix, opts.big_endian, line_w, if (have_label) lab else null);
+                printBlock(&out, fmts.items, cur, n, addr, radix, opts.big_endian, if (have_label) lab else null);
                 have_prev = n == bpb;
                 if (have_prev) @memcpy(prev, cur);
             }
@@ -313,7 +310,13 @@ fn spaces(out: *wsink.Sink, n: usize) void {
     while (i < n) : (i += 1) out.writeByte(' ');
 }
 
-fn printBlock(out: *wsink.Sink, fmts: []const Fmt, block: []const u8, n_bytes: usize, addr: u64, radix: u8, big: bool, line_w: usize, label: ?u64) void {
+/// The part of a line's `pad` extra spaces that belongs to its last `left`
+/// of `fields` fields.
+fn padLeft(pad: usize, left: usize, fields: usize) usize {
+    return @intCast(@as(u128, pad) * left / fields);
+}
+
+fn printBlock(out: *wsink.Sink, fmts: []const Fmt, block: []const u8, n_bytes: usize, addr: u64, radix: u8, big: bool, label: ?u64) void {
     for (fmts, 0..) |f, fi| {
         if (fi == 0) {
             printAddr(out, addr, radix);
@@ -327,6 +330,7 @@ fn printBlock(out: *wsink.Sink, fmts: []const Fmt, block: []const u8, n_bytes: u
             if (label != null) spaces(out, 3 + addrWidth(radix));
         }
         const n_elems = (n_bytes + f.size - 1) / f.size;
+        const fields = block.len / f.size;
         var i: usize = 0;
         while (i < n_elems) : (i += 1) {
             var tmp: [16]u8 = undefined;
@@ -334,16 +338,15 @@ fn printBlock(out: *wsink.Sink, fmts: []const Fmt, block: []const u8, n_bytes: u
             @memcpy(tmp[0..f.size], e);
             if (big and f.size > 1) std.mem.reverse(u8, tmp[0..f.size]);
             out.writeByte(' ');
-            spaces(out, f.pad);
+            // As in GNU, the padding is spread over the fields, so that the
+            // formats of a block end in the same column.
+            spaces(out, padLeft(f.pad, fields - i, fields) - padLeft(f.pad, fields - i - 1, fields));
             printElem(out, f, tmp[0..f.size]);
         }
         if (f.z) {
             // Pad the missing fields, then ">printable<".
-            const missing = (block.len / f.size) - n_elems;
-            spaces(out, missing * (1 + f.pad + f.width));
-            // Alignment remainder lost to integer division in `pad`.
-            const used = (block.len / f.size) * (1 + f.pad + f.width);
-            spaces(out, line_w - used);
+            const missing = fields - n_elems;
+            spaces(out, missing * (1 + f.width) + padLeft(f.pad, missing, fields));
             out.write("  >");
             for (block[0..n_bytes]) |c| out.writeByte(if (c >= 0x20 and c < 0x7f) c else '.');
             out.writeByte('<');

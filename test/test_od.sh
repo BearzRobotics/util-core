@@ -203,5 +203,12 @@ printf 'a b c\n' > widew
 for w in 1048576 1048577 2000000 100000000; do run_cmp "-w$w" -w$w -tx1 -An widew; done
 run_cmp "-w too large for memory" -w100000000000 -tx1 -An widew
 
+# Formats of different natural widths: the padding is spread over the fields.
+printf 'abcdefghijklmnop' > spread; printf 'aA\215a\000\000\245' > spread2
+for o in "-tx1 -tfD" "-An -tu4 -tfD" "-tx2z -tu4z" "-tu8 -tx2" "-tx1 -td2 -An" "-tfD -tx4" "-td8z -tx2" "-w24 -tx2 -tfD" "-to1z -td8"; do
+    run_cmp "padding $o" $o spread
+    run_cmp "padding, short block $o" $o spread2
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]
