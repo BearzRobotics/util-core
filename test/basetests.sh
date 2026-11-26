@@ -49,14 +49,14 @@ enc "-- operand"                 -- a
 
 printf "\n[ Decoding round trips ]\n"
 for f in empty a zeros4 ff5 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r31 r32 r33 r57 r75 r76 r77 r100 r1000 r4095 r4096 r4097 r65535 r65536 r65537; do
-    $ENC_BIN $ENC "$f" > "enc_$f" 2>/dev/null || /usr/bin/$UTIL $ENC "$f" > "enc_$f"
+    $ENC_BIN $ENC "$f" > "enc_$f" 2>/dev/null || gnu $ENC "$f" > "enc_$f"
     run_cmp "decode $f"          $ENC -d "enc_$f"
     run_cmp "decode -i $f"       $ENC -d -i "enc_$f"
     run_cmp "decode -w0 form $f" $ENC -d "enc_$f"
 done
-/usr/bin/$UTIL $ENC -w 0 r1000 > enc_nowrap
+gnu $ENC -w 0 r1000 > enc_nowrap
 run_cmp "decode unwrapped"       $ENC -d enc_nowrap
-/usr/bin/$UTIL $ENC -w 7 r1000 > enc_w7
+gnu $ENC -w 7 r1000 > enc_w7
 run_cmp "decode wrapped at 7"    $ENC -d enc_w7
 CMP_STDIN=enc_r1000 run_cmp "decode stdin"        $ENC -d
 CMP_STDIN=enc_r1000 run_cmp "decode stdin -"      $ENC -d -

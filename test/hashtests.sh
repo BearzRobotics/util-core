@@ -67,12 +67,12 @@ run_cmp "--untagged is not ours"      --untagged a
 run_cmp "-c no file, empty stdin"     -c
 
 printf "\n[ Checking ]\n"
-"/usr/bin/$UTIL" a 'b c' > sums
-"/usr/bin/$UTIL" --tag a 'b c' > tsums
-"/usr/bin/$UTIL" -b a 'b c' > bsums
-"/usr/bin/$UTIL" 'we\ird' "$(printf 'nl\nname')" "$(printf 'cr\rname')" > esums
-"/usr/bin/$UTIL" --tag 'we\ird' "$(printf 'nl\nname')" > tesums
-"/usr/bin/$UTIL" a empty > sums2
+gnu a 'b c' > sums
+gnu --tag a 'b c' > tsums
+gnu -b a 'b c' > bsums
+gnu 'we\ird' "$(printf 'nl\nname')" "$(printf 'cr\rname')" > esums
+gnu --tag 'we\ird' "$(printf 'nl\nname')" > tesums
+gnu a empty > sums2
 run_cmp "-c good"                     -c sums
 run_cmp "-c tag"                      -c tsums
 run_cmp "-c binary"                   -c bsums
@@ -86,7 +86,7 @@ run_cmp "-c --strict good"            -c --strict sums
 run_cmp "-c -w good"                  -c -w sums
 # Corrupt a file and a digest.
 cp a a_mod; printf 'X' >> a_mod
-"/usr/bin/$UTIL" a_mod > modsums
+gnu a_mod > modsums
 sed 's/a_mod/a/' modsums > badsums
 run_cmp "-c mismatch"                 -c badsums
 run_cmp "-c mismatch --quiet"         -c --quiet badsums
@@ -111,7 +111,7 @@ run_cmp "-c blank and comment lines"  -c blanks
 { cat sums; printf '\n'; cat tsums; } > blend
 run_cmp "-c blank line and mixed formats" -c blend
 # Missing files.
-"/usr/bin/$UTIL" a nonexistent_2 > misssums 2>/dev/null; printf '%s  nonexistent_2\n' "$("/usr/bin/$UTIL" empty | cut -d' ' -f1)" > misssums2
+gnu a nonexistent_2 > misssums 2>/dev/null; printf '%s  nonexistent_2\n' "$(gnu empty | cut -d' ' -f1)" > misssums2
 { cat sums; cat misssums2; } > misssums
 run_cmp "-c missing file"             -c misssums2
 run_cmp "-c missing file and good"    -c misssums
@@ -122,7 +122,7 @@ run_cmp "-c --ignore-missing all missing" -c --ignore-missing misssums2
 run_cmp "-c --ignore-missing none missing" -c --ignore-missing sums
 run_cmp "-c listing file missing"     -c nonexistent_list
 run_cmp "-c a directory as list"      -c dir
-printf '%s  dir\n' "$("/usr/bin/$UTIL" empty | cut -d' ' -f1)" > dirsums
+printf '%s  dir\n' "$(gnu empty | cut -d' ' -f1)" > dirsums
 run_cmp "-c entry is a directory"     -c dirsums
 # Format variants.
 awk '{ printf "%s %s\n", $1, $2 }' sums | sed 's/  / /' > one_space
@@ -135,9 +135,9 @@ cut -c3- sums > shortdigest
 run_cmp "-c short digest"             -c shortdigest
 sed 's/^/0/' sums > longdigest
 run_cmp "-c long digest"              -c longdigest
-printf '\\%s  we\\\\ird\n' "$("/usr/bin/$UTIL" 'we\ird' | sed 's/^\\//; s/ .*//')" > esc_one
+printf '\\%s  we\\\\ird\n' "$(gnu 'we\ird' | sed 's/^\\//; s/ .*//')" > esc_one
 run_cmp "-c backslash escaped name"   -c esc_one
-printf '\\%s  bad\\xescape\n' "$("/usr/bin/$UTIL" a | cut -d' ' -f1)" > esc_bad
+printf '\\%s  bad\\xescape\n' "$(gnu a | cut -d' ' -f1)" > esc_bad
 run_cmp "-c bad escape"               -c esc_bad
 printf '%s' "$(cat sums)" > nonl_sums
 run_cmp "-c last line without newline" -c nonl_sums
