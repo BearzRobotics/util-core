@@ -166,7 +166,77 @@ if command -v git >/dev/null 2>&1; then
     printf 'x\n' > "$G/u.txt"
     actual=$(cd "$G" && ours --decorations=always --color=never u.txt 2>&1 | sed -n 4p)
     if [ "$actual" = "   1 │ x" ]; then PASS=$((PASS + 1)); printf "PASS no markers for untracked file\n"; else FAIL=$((FAIL + 1)); printf "FAIL no markers for untracked file\n"; fi
+    printf 'one\r\nTWO\r\nthree\r\nfour\r\n' > "$G/f.txt"
+    git -C "$G" config core.autocrlf true
+    actual=$(cd "$G" && ours --decorations=always --color=never f.txt 2>&1 | sed -n 4,7p | tr -d '\r')
+    expected="   1   │ one
+   2 ~ │ TWO
+   3   │ three
+   4   │ four"
+    if [ "$actual" = "$expected" ]; then PASS=$((PASS + 1)); printf "PASS markers ignore a CRLF checkout\n"; else FAIL=$((FAIL + 1)); printf "FAIL markers ignore a CRLF checkout\n"; fi
     rm -rf "$G"
+
+    # A repository that came with the files must not get to run anything.
+    # Every program it can name leaves a file in $H/ran.
+    H=$(mktemp -d)
+    mkdir "$H/ran" "$H/repo" "$H/repo/.rel"
+    trap_prog() { # NAME: a program that records that it ran
+        printf '#!/bin/sh\necho "$@" >> "%s/ran/%s"\n%s\n' "$H" "$1" "$2" > "$H/$1"
+        chmod +x "$H/$1"
+    }
+    # A filter passes the text through; the others only fail.
+    trap_prog clean 'exec cat'
+    trap_prog smudge 'exec cat'
+    for p in fsmonitor process textconv external pager hook ssh uploadpack ext; do trap_prog "$p" 'exit 1'; done
+    cp "$H/hook" "$H/repo/.rel/git"
+    (
+        cd "$H/repo" && git init -q . && printf 'one\ntwo\n' > f.txt && cp f.txt g.txt && printf 'lazy\n' > l.txt &&
+        printf 'f.txt diff=y\ng.txt filter=x\n' > .gitattributes && git add . &&
+        git -c user.name=t -c user.email=t@t commit -qm i &&
+        printf 'one\nTWO\n' > f.txt && cp f.txt g.txt && printf 'more\n' >> l.txt
+    ) </dev/null
+    gc() { git -C "$H/repo" config "$1" "$2"; }
+    gc core.fsmonitor "$H/fsmonitor"
+    gc filter.x.clean "$H/clean"
+    gc filter.x.smudge "$H/smudge"
+    gc filter.x.process "$H/process"
+    gc diff.y.textconv "$H/textconv"
+    gc diff.external "$H/external"
+    gc core.pager "$H/pager"
+    gc pager.cat-file "$H/pager"
+    mkdir -p "$H/repo/.git/hooks"
+    cp "$H/hook" "$H/repo/.git/hooks/post-index-change"
+    untouched() { # NAME FILE: view FILE; nothing of the repository's ran
+        ( cd "$H/repo" && timeout 60 "$BIN_DIR/$UTIL" --decorations=always --color=never --paging=never "$2" ) >"$H/out" 2>&1
+        if [ -z "$(ls "$H/ran")" ]; then PASS=$((PASS + 1)); printf "PASS %s\n" "$1"; else FAIL=$((FAIL + 1)); printf "FAIL %s: ran %s\n" "$1" "$(ls "$H/ran" | tr '\n' ' ')"; fi
+        rm -f "$H"/ran/*
+    }
+    untouched "hostile repository: modified file" f.txt
+    if grep -q '^   2 ~ ' "$H/out"; then PASS=$((PASS + 1)); printf "PASS hostile repository still shows markers\n"; else FAIL=$((FAIL + 1)); printf "FAIL hostile repository still shows markers\n"; fi
+    untouched "hostile repository: filtered file" g.txt
+    # A "git" that a relative PATH entry would find next to the files.
+    saved_path=$PATH
+    PATH=".rel:$PATH"
+    untouched "hostile repository: git from a relative PATH entry" f.txt
+    PATH=$saved_path
+    # A partial clone fetches a missing object through a program the
+    # repository chooses. Remove the blob of l.txt to force that.
+    blob=$(git -C "$H/repo" -c core.fsmonitor= rev-parse :l.txt)
+    rm -f "$H/repo/.git/objects/$(printf %s "$blob" | cut -c1-2)/$(printf %s "$blob" | cut -c3-)"
+    rm -f "$H"/ran/*
+    gc core.repositoryformatversion 1
+    gc extensions.partialClone origin
+    gc remote.origin.promisor true
+    gc core.sshCommand "$H/ssh"
+    gc remote.origin.url ssh://host.invalid/repo
+    untouched "hostile repository: lazy fetch over ssh" l.txt
+    gc protocol.ext.allow always
+    gc remote.origin.url "ext::$H/ext"
+    untouched "hostile repository: lazy fetch through ext::" l.txt
+    gc remote.origin.url "$H/repo"
+    gc remote.origin.uploadpack "$H/uploadpack"
+    untouched "hostile repository: lazy fetch with uploadpack" l.txt
+    rm -rf "$H"
 fi
 
 print_summary
