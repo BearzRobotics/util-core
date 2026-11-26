@@ -301,7 +301,7 @@ extern "c" fn getgroups(n: c_int, list: [*]u32) c_int;
 extern "c" fn getpriority(which: c_int, who: u32) c_int;
 extern "c" fn setpriority(which: c_int, who: u32, prio: c_int) c_int;
 extern "c" fn chroot(path: [*:0]const u8) c_int;
-extern "c" fn mknod(path: [*:0]const u8, mode: u16, dev: i32) c_int;
+extern "c" fn mknodat(dir: c_int, path: [*:0]const u8, mode: u16, dev: i32) c_int;
 extern "c" fn clock_settime(clk: c_int, ts: *const c.timespec) c_int;
 
 pub fn umask() u16 {
@@ -754,8 +754,8 @@ pub fn fdOpen(fd: i32) bool {
 
 // ------------------------------------------------------------------- paths
 
-pub fn mkdirPath(path: []const u8, mode: u32) ?E {
-    cwd().createDir(io(), path, sys.permissionsFromMode(mode)) catch |e| return errFrom(e);
+pub fn mkdirAt(dir: Handle, path: []const u8, mode: u32) ?E {
+    dirOf(dir).createDir(io(), path, sys.permissionsFromMode(mode)) catch |e| return errFrom(e);
     return null;
 }
 
@@ -798,6 +798,13 @@ pub fn readlinkAt(dir: Handle, path: []const u8, buf: []u8, err: *E) ?usize {
 
 pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?E {
     cwd().setFilePermissions(io(), path, sys.permissionsFromMode(mode), .{ .follow_symlinks = !nofollow }) catch |e| return errFrom(e);
+    return null;
+}
+
+/// chmod of `name` in `dir`. Windows has no links to guard against here (and
+/// std cannot change permissions without following one).
+pub fn chmodAt(dir: Handle, name: []const u8, mode: u32) ?E {
+    dirOf(dir).setFilePermissions(io(), name, sys.permissionsFromMode(mode), .{ .follow_symlinks = is_win }) catch |e| return errFrom(e);
     return null;
 }
 
@@ -853,8 +860,12 @@ pub fn chrootPath(path: [:0]const u8) ?E {
     return .NOSYS;
 }
 
-pub fn mknodPath(path: [:0]const u8, mode: u32, dev: u64) ?E {
-    if (comptime is_libc_posix) return cerr(mknod(path.ptr, @intCast(mode), @intCast(dev)));
+pub fn mknodAt(dir: Handle, path: []const u8, mode: u32, dev: u64) ?E {
+    if (comptime is_libc_posix) {
+        var b: [4097]u8 = undefined;
+        const p = cstr(&b, path) orelse return .NAMETOOLONG;
+        return cerr(mknodat(dir, p, @intCast(mode), @intCast(dev)));
+    }
     return .NOSYS;
 }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Descriptor-relative directory traversal for the commands that walk trees.
+//! Descriptor-relative directory access: for the commands that walk trees,
+//! and for those that create a file and then change it (`Spot`, below).
 //!
 //! A walker that hands full path strings to the kernel resolves every
 //! component again at each call. Someone who can rename directories in the
@@ -138,6 +139,67 @@ pub fn leave(level: *Level) ?sys.E {
     parent.fd = fd;
     parent.open = true;
     return null;
+}
+
+// --------------------------------------------------------- creating files
+
+/// The place a file is about to be created: the directory its path leads to,
+/// held open, and its name there. Creating the file and changing it through
+/// the same `Spot` cannot be redirected by renaming things in between.
+pub const Spot = struct {
+    dir: sys.Handle,
+    /// Borrows from the path given to `open`.
+    name: []const u8,
+
+    /// The kernel would resolve the leading directories of `path` the same
+    /// way (following links), and fail with the same errno.
+    pub fn open(path: []const u8, err: *sys.E) ?Spot {
+        var end = path.len;
+        while (end > 0 and path[end - 1] == '/') end -= 1;
+        const slash = std.mem.lastIndexOfScalar(u8, path[0..end], '/');
+        const start = if (slash) |s| s + 1 else 0;
+        // A path of slashes only names an existing directory.
+        const name = if (end == 0) path else path[start..];
+        const above: []const u8 = if (start == 0) "." else path[0..start];
+        const dir = sys.openFd(above, sys.O.PATH | sys.O.DIRECTORY, 0, err) orelse return null;
+        return .{ .dir = dir, .name = name };
+    }
+
+    pub fn close(spot: Spot) void {
+        _ = sys.closeFd(spot.dir);
+    }
+
+    /// Set the mode of the file just created here, which must still be of the
+    /// kind created (`type_bits`, as in `st_mode`). A symbolic link found in
+    /// its place is never followed.
+    pub fn setMode(spot: Spot, type_bits: u32, mode: u32) ?sys.E {
+        if (builtin.os.tag != .linux) return sys.chmodAtOther(spot.dir, spot.name, mode);
+        // A trailing slash would make the open follow a link.
+        const name = std.mem.trimEnd(u8, spot.name, "/");
+        const is_dir = type_bits == 0o040000;
+        var err: sys.E = .SUCCESS;
+        const fd = sys.openFdAt(spot.dir, name, sys.O.PATH | sys.O.NOFOLLOW | (if (is_dir) sys.O.DIRECTORY else 0), 0, &err) orelse return err;
+        defer _ = sys.closeFd(fd);
+        const st = sys.fstatFd(fd, &err) orelse return err;
+        if (st.mode & 0o170000 != type_bits) return .OPNOTSUPP;
+        return sys.chmodHeld(fd, mode);
+    }
+};
+
+test "setMode does not follow a link put in place of what was created" {
+    if (builtin.os.tag != .linux) return;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    try tmp.dir.writeFile(io, .{ .sub_path = "victim", .data = "" });
+    try tmp.dir.symLink(io, "victim", "node", .{});
+    var buf: [128]u8 = undefined;
+    const path = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}/node", .{tmp.sub_path});
+    var err: sys.E = .SUCCESS;
+    const spot = Spot.open(path, &err).?;
+    defer spot.close();
+    try std.testing.expectEqual(@as(?sys.E, .OPNOTSUPP), spot.setMode(0o010000, 0o777));
+    try std.testing.expectEqual(@as(?sys.E, .NOTDIR), spot.setMode(0o040000, 0o777));
 }
 
 test "walking past the open limit, links and replaced directories" {

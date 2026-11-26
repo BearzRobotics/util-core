@@ -613,8 +613,15 @@ pub fn syncFile(fd: Handle, kind: SyncKind) ?LX.E {
 /// mknodat(2) relative to the working directory; `mode` includes the file
 /// type bits (S_IFIFO, S_IFCHR, ...) and `dev` is makedev(major, minor).
 pub fn mknod(path: [:0]const u8, mode: u32, dev: u64) ?LX.E {
-    if (comptime !is_linux) return other.mknodPath(path, mode, dev);
-    return errOf(LX.mknodat(LX.AT.FDCWD, path.ptr, mode, @intCast(dev)));
+    return mknodAt(cwdFd(), path, mode, dev);
+}
+
+/// `mknod` of `path` resolved from the open directory `dir`.
+pub noinline fn mknodAt(dir: Handle, path: []const u8, mode: u32, dev: u64) ?LX.E {
+    if (comptime !is_linux) return other.mknodAt(dir, path, mode, dev);
+    var b: [4097]u8 = undefined;
+    const p = cstr(&b, path) orelse return .NAMETOOLONG;
+    return errOf(LX.mknodat(dir, p, mode, @intCast(dev)));
 }
 
 /// Result of waiting for a child.
@@ -1228,10 +1235,15 @@ pub fn writeAllFd(fd: Handle, bytes: []const u8) ?LX.E {
 }
 
 pub fn mkdirPath(path: []const u8, mode: u32) ?LX.E {
-    if (comptime !is_linux) return other.mkdirPath(path, mode);
+    return mkdirAt(cwdFd(), path, mode);
+}
+
+/// `mkdirPath` of `path` resolved from the open directory `dir`.
+pub noinline fn mkdirAt(dir: Handle, path: []const u8, mode: u32) ?LX.E {
+    if (comptime !is_linux) return other.mkdirAt(dir, path, mode);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
-    return errOf(LX.mkdirat(LX.AT.FDCWD, p, mode));
+    return errOf(LX.mkdirat(dir, p, mode));
 }
 
 /// unlinkat(AT_FDCWD, path, removedir ? AT_REMOVEDIR : 0).
@@ -1313,6 +1325,27 @@ pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?LX.E {
         } else return e;
     }
     return errOf(LX.syscall4(.fchmodat, @bitCast(@as(isize, LX.AT.FDCWD)), @intFromPtr(p), mode, 0));
+}
+
+/// `chmodAt` for the systems without O_PATH (see sys/other.zig).
+pub fn chmodAtOther(dir: Handle, name: []const u8, mode: u32) ?LX.E {
+    if (comptime is_linux) return .NOSYS;
+    return other.chmodAt(dir, name, mode);
+}
+
+/// Change the mode of the file an `O.PATH` descriptor names: fchmodat2(2)
+/// with AT_EMPTY_PATH, or on kernels before 6.6 a chmod of the descriptor's
+/// /proc/self/fd link, which leads to that file and nowhere else.
+pub fn chmodHeld(fd: Handle, mode: u32) ?LX.E {
+    if (comptime !is_linux) return other.fchmodFd(fd, mode);
+    const AT_EMPTY_PATH = 0x1000;
+    const empty: [*:0]const u8 = "";
+    const e = LX.errno(LX.syscall4(.fchmodat2, @bitCast(@as(isize, fd)), @intFromPtr(empty), mode, AT_EMPTY_PATH));
+    // A sandbox that does not know the call may answer EPERM.
+    if (e != .NOSYS and e != .PERM) return if (e == .SUCCESS) null else e;
+    var buf: [32]u8 = undefined;
+    const link = std.fmt.bufPrint(&buf, "/proc/self/fd/{d}", .{fd}) catch unreachable;
+    return chmodPath(link, mode, false);
 }
 
 pub fn fchmodFd(fd: Handle, mode: u32) ?LX.E {

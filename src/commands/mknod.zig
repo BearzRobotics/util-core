@@ -104,7 +104,7 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         },
         .permissions => |e| {
-            cli.warn(ctx, "cannot set permissions of {f}: {s}", .{ cli.quoteA(name), cli.errText(e) });
+            cli.warn(ctx, "cannot set permissions of {f}: {s}", .{ cli.quoteA(name), sys.errnoText(e) });
             return 1;
         },
     };

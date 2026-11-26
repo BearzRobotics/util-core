@@ -16,6 +16,10 @@ GNU coreutils 9.7 (`/usr/bin/mkfifo --version` on the development machine, insta
 
 - mknodat(2) with S_IFIFO; modes above 0777 are rejected like GNU.
 
+## Safety
+
+The new file is created and its mode set relative to one open descriptor of its parent directory, and the mode is never set through a symbolic link. If another user replaces the new file before the mode is set, mkfifo reports `cannot set permissions` and leaves the other file alone.
+
 ## Library
 
 Module `util_core.mkfifo` (src/lib/mkfifo.zig); `src/commands/mkfifo.zig` is the argument parser and diagnostics wrapper (decision 0004).

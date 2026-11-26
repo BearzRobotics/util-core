@@ -39,5 +39,26 @@ run_tree "--context=x"        "$S" --context=x a
 run_tree "bad option"         "$S" -x a
 run_tree "long abbrev"        "$S" --mo=600 a
 run_tree "fifo is fifo"       "$S; " a
+# The new file is replaced by a link to "victim" before mkfifo sets its mode;
+# strace holds mkfifo after the call that creates it.
+d=$(mktemp -d)
+if can_inject; then
+    : > "$d/victim"
+    chmod 600 "$d/victim"
+    (cd "$d" && exec timeout 30 strace -o /dev/null -e trace=mknodat -e inject=mknodat:delay_exit=1500000:when=1 "$BIN_DIR/mkfifo" -m 666 node > out 2>&1) & race_pid=$!
+    tries=0
+    while [ ! -e "$d/node" ] && [ "$tries" -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    mv "$d/node" "$d/moved" && ln -s victim "$d/node"
+    wait "$race_pid"; rc=$?
+    mode=$(stat -c %a "$d/victim")
+    if [ "$rc" -eq 1 ] && [ "$mode" = 600 ]; then
+        PASS=$((PASS + 1)); echo "PASS mkfifo -m 666 node does not change the target of a swapped-in link"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL mkfifo -m 666 node does not change the target of a swapped-in link (rc=$rc, victim $mode)"; cat "$d/out"
+    fi
+else
+    skip_test "mkfifo -m 666 node link race (needs strace)"
+fi
+chmod -R u+rwx "$d"; rm -rf "$d"
 print_summary
 [ "$FAIL" -eq 0 ]

@@ -115,8 +115,8 @@ fn report(context: ?*anyopaque, ev: mkdir.Event) void {
         .created => |p| cli.say(ctx.*, "created directory '{s}'", .{p}),
         .not_a_directory => |p| cli.warn(ctx.*, "cannot create directory '{s}': Not a directory", .{p}),
         .exists => |p| cli.warn(ctx.*, "cannot create directory '{s}': File exists", .{p}),
-        .create_failed => |f| cli.warn(ctx.*, "cannot create directory '{s}': {s}", .{ f.path, cli.errText(f.err) }),
-        .chmod_failed => |f| cli.warn(ctx.*, "cannot set permissions of '{s}': {s}", .{ f.path, cli.errText(f.err) }),
+        .create_failed => |f| cli.warn(ctx.*, "cannot create directory '{s}': {s}", .{ f.path, sys.errnoText(f.errno) }),
+        .chmod_failed => |f| cli.warn(ctx.*, "cannot set permissions of '{s}': {s}", .{ f.path, sys.errnoText(f.errno) }),
     }
 }
 

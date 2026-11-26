@@ -3,6 +3,10 @@
 //! References: GNU coreutils manual "mkdir invocation" (9.7); POSIX.1-2024
 //! mkdir.
 //!
+//! Each directory is created and changed relative to its open parent
+//! (dirat.zig), and the change is refused if a symbolic link has taken the new
+//! directory's place.
+//!
 //! The final mode is set exactly (the caller resolves -m MODE against the
 //! umask with src/mode.zig and passes the result). The directory is created
 //! with the mode masked to rwx bits and then chmod'ed, so it is never less
@@ -13,6 +17,7 @@
 
 const std = @import("std");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 
@@ -39,9 +44,9 @@ pub const Event = union(enum) {
     /// The final component exists and is not a directory (-p).
     exists: []const u8,
     /// Creating `path` failed.
-    create_failed: struct { path: []const u8, err: anyerror },
+    create_failed: struct { path: []const u8, errno: sys.E },
     /// Setting the permissions of `path` failed.
-    chmod_failed: struct { path: []const u8, err: anyerror },
+    chmod_failed: struct { path: []const u8, errno: sys.E },
 };
 pub const Observer = common.Observer(Event);
 
@@ -78,14 +83,18 @@ pub fn makeOne(env: Env, path: []const u8, options: Options, observer: Observer)
             } else |_| {}
             // Parent mode: umask-modified rwx plus u+wx.
             const pmode: u16 = (0o777 & ~options.umask) | 0o300;
-            Io.Dir.cwd().createDir(io, prefix, sys.permissionsFromMode(pmode)) catch |e| {
-                if (e == error.PathAlreadyExists) continue;
-                observer.emit(.{ .create_failed = .{ .path = prefix, .err = e } });
+            var pe: sys.E = .SUCCESS;
+            const spot = dirat.Spot.open(prefix, &pe) orelse {
+                observer.emit(.{ .create_failed = .{ .path = prefix, .errno = pe } });
                 return false;
             };
-            if (pmode != (pmode & ~options.umask)) {
-                Io.Dir.cwd().setFilePermissions(io, prefix, sys.permissionsFromMode(pmode), .{}) catch {};
+            defer spot.close();
+            if (sys.mkdirAt(spot.dir, spot.name, pmode)) |e| {
+                if (e == .EXIST) continue;
+                observer.emit(.{ .create_failed = .{ .path = prefix, .errno = e } });
+                return false;
             }
+            if (pmode != (pmode & ~options.umask)) _ = spot.setMode(0o040000, pmode);
             if (options.verbose) observer.emit(.{ .created = prefix });
         }
         // Final component: an existing directory is not an error with -p.
@@ -96,17 +105,23 @@ pub fn makeOne(env: Env, path: []const u8, options: Options, observer: Observer)
         } else |_| {}
     }
     const create_mode: u16 = if (options.mode) |m| m & 0o777 else 0o777;
-    Io.Dir.cwd().createDir(io, path, sys.permissionsFromMode(create_mode)) catch |e| {
-        observer.emit(.{ .create_failed = .{ .path = path, .err = e } });
+    var pe: sys.E = .SUCCESS;
+    const spot = dirat.Spot.open(path, &pe) orelse {
+        observer.emit(.{ .create_failed = .{ .path = path, .errno = pe } });
         return false;
     };
+    defer spot.close();
+    if (sys.mkdirAt(spot.dir, spot.name, create_mode)) |e| {
+        observer.emit(.{ .create_failed = .{ .path = path, .errno = e } });
+        return false;
+    }
     if (options.verbose) observer.emit(.{ .created = path });
     if (options.mode) |m| {
         // The kernel applied the umask at creation; set the exact mode now.
-        Io.Dir.cwd().setFilePermissions(io, path, sys.permissionsFromMode(m), .{}) catch |e| {
-            observer.emit(.{ .chmod_failed = .{ .path = path, .err = e } });
+        if (spot.setMode(0o040000, m)) |e| {
+            observer.emit(.{ .chmod_failed = .{ .path = path, .errno = e } });
             return false;
-        };
+        }
     }
     return true;
 }

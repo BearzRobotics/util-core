@@ -20,6 +20,10 @@ GNU coreutils 9.7 (`/usr/bin/mkdir --version` on the development machine, instal
 - The directory is created with MODE & 0777 (masked further by the umask) and then chmod'ed to the exact mode, so it is never less restrictive than MODE (POSIX).
 - Errors as GNU: `cannot create directory 'X': File exists / No such file or directory / Not a directory`. Processing continues after an error (exit 1).
 
+## Safety
+
+The new file is created and its mode set relative to one open descriptor of its parent directory, and the mode is never set through a symbolic link. If another user replaces the new file before the mode is set, mkdir reports `cannot set permissions` and leaves the other file alone.
+
 ## Library
 
 Library: module `util_core.mkdir` (`src/lib/mkdir.zig`); the executable only parses arguments and words the diagnostics.

@@ -17,6 +17,10 @@ GNU coreutils 9.7 (`/usr/bin/mknod --version` on the development machine, instal
 - TYPE is b, c/u or p (only the first character is looked at, like GNU). MAJOR and MINOR accept decimal, octal (0) and hex (0x).
 - Operand-count diagnostics reproduce GNU's wording.
 
+## Safety
+
+The new file is created and its mode set relative to one open descriptor of its parent directory, and the mode is never set through a symbolic link. If another user replaces the new file before the mode is set, mknod reports `cannot set permissions` and leaves the other file alone.
+
 ## Library
 
 Module `util_core.mknod` (src/lib/mknod.zig); `src/commands/mknod.zig` is the argument parser and diagnostics wrapper (decision 0004).

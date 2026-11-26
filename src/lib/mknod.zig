@@ -10,6 +10,7 @@ const Io = std.Io;
 const common = @import("common.zig");
 const mode_mod = @import("../mode.zig");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 
 pub const Env = common.Env;
 
@@ -52,7 +53,7 @@ pub const Failure = union(enum) {
     /// mknod(2) failed.
     create: std.os.linux.E,
     /// The follow-up chmod for -m failed.
-    permissions: anyerror,
+    permissions: std.os.linux.E,
 };
 
 pub const Options = struct {
@@ -65,15 +66,16 @@ pub const Options = struct {
 
 /// Create the node `name`; returns the failure, if any.
 pub fn run(env: Env, name: []const u8, opts: Options) error{OutOfMemory}!?Failure {
+    _ = env; // every command library takes it
     const file_type: u32 = switch (opts.kind) {
         .block => 0o060000,
         .char => 0o020000,
         .fifo => 0o010000,
     };
-    const z = try env.gpa.dupeSentinel(u8, name, 0);
-    defer env.gpa.free(z);
-    if (sys.mknod(z, file_type | (opts.mode orelse 0o666), opts.dev)) |e| return .{ .create = e };
-    if (opts.mode) |m| Io.Dir.cwd().setFilePermissions(env.io, name, sys.permissionsFromMode(m), .{}) catch |e|
-        return .{ .permissions = e };
+    var pe: sys.E = .SUCCESS;
+    const spot = dirat.Spot.open(name, &pe) orelse return .{ .create = pe };
+    defer spot.close();
+    if (sys.mknodAt(spot.dir, spot.name, file_type | (opts.mode orelse 0o666), opts.dev)) |e| return .{ .create = e };
+    if (opts.mode) |m| if (spot.setMode(file_type, m)) |e| return .{ .permissions = e };
     return null;
 }

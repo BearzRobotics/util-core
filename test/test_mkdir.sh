@@ -64,4 +64,44 @@ run_tree "-pm on existing dir"       'mkdir -m 755 d' -p -m 700 d
 printf "\n[ -Z accepted ]\n"
 run_tree "-Z"                        : -Z d
 
+# The new file is replaced by a link to "victim" before mkdir sets its mode;
+# strace holds mkdir after the call that creates it.
+d=$(mktemp -d)
+if can_inject; then
+    mkdir "$d/victim"
+    chmod 700 "$d/victim"
+    (cd "$d" && exec timeout 30 strace -o /dev/null -e trace=mkdirat -e inject=mkdirat:delay_exit=1500000:when=1 "$BIN_DIR/mkdir" -m 777 node > out 2>&1) & race_pid=$!
+    tries=0
+    while [ ! -e "$d/node" ] && [ "$tries" -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    mv "$d/node" "$d/moved" && ln -s victim "$d/node"
+    wait "$race_pid"; rc=$?
+    mode=$(stat -c %a "$d/victim")
+    if [ "$rc" -eq 1 ] && [ "$mode" = 700 ]; then
+        PASS=$((PASS + 1)); echo "PASS mkdir -m 777 node does not change the target of a swapped-in link"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL mkdir -m 777 node does not change the target of a swapped-in link (rc=$rc, victim $mode)"; cat "$d/out"
+    fi
+else
+    skip_test "mkdir -m 777 node link race (needs strace)"
+fi
+chmod -R u+rwx "$d"; rm -rf "$d"
+# The same for a parent made by -p, which is given u+wx under a strict umask.
+d=$(mktemp -d)
+if can_inject; then
+    mkdir "$d/victim"; chmod 500 "$d/victim"
+    (cd "$d" && umask 277 && exec timeout 30 strace -o /dev/null -e trace=mkdirat -e inject=mkdirat:delay_exit=1500000:when=1 "$BIN_DIR/mkdir" -p node/child > out 2>&1) & race_pid=$!
+    tries=0
+    while [ ! -e "$d/node" ] && [ "$tries" -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    mv "$d/node" "$d/moved" && ln -s victim "$d/node"
+    wait "$race_pid"
+    mode=$(stat -c %a "$d/victim")
+    if [ "$mode" = 500 ]; then
+        PASS=$((PASS + 1)); echo "PASS mkdir -p does not change the target of a swapped-in parent link"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL mkdir -p does not change the target of a swapped-in parent link (victim $mode)"; cat "$d/out"
+    fi
+else
+    skip_test "mkdir -p link race (needs strace)"
+fi
+chmod -R u+rwx "$d"; rm -rf "$d"
 print_summary

@@ -54,6 +54,6 @@ fn report(context: ?*anyopaque, ev: mkfifo.Event) void {
     const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
     switch (ev.failure) {
         .create => |e| cli.warn(ctx.*, "cannot create fifo {f}: {s}", .{ cli.quoteA(ev.name), sys.errnoText(e) }),
-        .permissions => |e| cli.warn(ctx.*, "cannot set permissions of {f}: {s}", .{ cli.quoteA(ev.name), cli.errText(e) }),
+        .permissions => |e| cli.warn(ctx.*, "cannot set permissions of {f}: {s}", .{ cli.quoteA(ev.name), sys.errnoText(e) }),
     }
 }
