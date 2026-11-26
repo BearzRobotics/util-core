@@ -369,5 +369,30 @@ for t in loops/one loops/two loops; do
     done
 done
 rm -rf loops
+# Pipes and FIFOs that are named are waited for: the writer starts late.
+# (timeout bounds a grep that never gets the data, and the writers.)
+late() { sleep 0.5; printf 'one\nhello\n'; }
+pipe_case() { # DESC SHELL-SCRIPT-USING-$G
+    rm -rf pipes; mkdir -p pipes/dir; mkfifo pipes/p pipes/dir/f
+    exp=$(G="${GNU_BIN:-/usr/bin}/grep" LC_ALL=C timeout 20 bash -c "$(declare_late); $2" 2>&1; echo "status $?")
+    rm -rf pipes; mkdir -p pipes/dir; mkfifo pipes/p pipes/dir/f
+    act=$(G="$BIN_DIR/grep" LC_ALL=C timeout 20 bash -c "$(declare_late); $2" 2>&1 | sed "s#$BIN_DIR/##"; echo "status $?")
+    exp=$(printf '%s' "$exp" | sed "s#${GNU_BIN:-/usr/bin}/##"); act=$(printf '%s' "$act")
+    if [ "${exp%status *}" = "${act%status *}" ]; then PASS=$((PASS + 1)); echo "PASS $1"
+    else FAIL=$((FAIL + 1)); echo "FAIL $1"; printf '%s\n---\n%s\n' "$exp" "$act" | head -c 600; fi
+}
+declare_late() { echo "late() { sleep 0.5; printf 'one\\nhello\\n'; }"; }
+if command -v bash > /dev/null; then
+    pipe_case "process substitution with a late writer" '"$G" hello <(late); echo $?'
+    pipe_case "/dev/stdin with a late writer"           'late | "$G" -n hello /dev/stdin; echo $?'
+    pipe_case "FIFO opened before its writer"           '{ sleep 0.5; timeout 5 sh -c "echo hello > pipes/p"; } & timeout 8 "$G" hello pipes/p; echo $?; wait'
+    pipe_case "-r on a FIFO operand"                    '{ sleep 0.5; timeout 5 sh -c "echo hello > pipes/p"; } & timeout 8 "$G" -r hello pipes/p; echo $?; wait'
+    pipe_case "-r -D read waits for a FIFO in the tree" '{ sleep 0.5; timeout 5 sh -c "echo hello > pipes/dir/f"; } & timeout 8 "$G" -r -D read hello pipes/dir; echo $?; wait'
+    pipe_case "-r skips a FIFO in the tree"             'timeout 8 "$G" -r hello pipes/dir; echo $?'
+    pipe_case "-D skip on a FIFO operand"               'timeout 8 "$G" -D skip hello pipes/p; echo $?'
+else
+    skip_test "grep on pipes with late writers (needs bash)"
+fi
+rm -rf pipes
 help_cmp
 cd /; print_summary

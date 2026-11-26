@@ -2336,7 +2336,8 @@ fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8,
     }
     const kind = st.mode & 0o170000;
     const is_dev = kind == 0o020000 or kind == 0o060000 or kind == 0o010000 or kind == 0o140000;
-    if (is_dev and (o.devices == .skip or (o.devices == .read_cmdline and in_dir))) return false;
+    const skip_devices = o.devices == .skip or (o.devices == .read_cmdline and in_dir);
+    if (is_dev and skip_devices) return false;
     if (!cmdline or true) {
         const base = if (std.mem.lastIndexOfScalar(u8, display, '/')) |k| display[k + 1 ..] else display;
         if (g.o.globs.len > 0 and matchGlobs(g, display, base, cmdline and !in_dir)) return false;
@@ -2344,7 +2345,12 @@ fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8,
     if (in_dir and !rgFileOk(g, display, false)) return false;
     var oerr: LX.E = .SUCCESS;
     const nofollow: u32 = if (follow) 0 else sys.O.NOFOLLOW;
-    const fd = sys.openFdAt(dirat.fdOf(parent), name, sys.O.RDONLY | sys.O.NONBLOCK | nofollow, 0, &oerr) orelse {
+    // Where a device is to be skipped, one that has taken the file's place
+    // since the stat must not hang the open; it is passed over below. All
+    // others are waited for: a FIFO's writer may not have started yet, and a
+    // pipe (/dev/stdin, a process substitution) may not have data yet.
+    const nonblock: u32 = if (skip_devices) sys.O.NONBLOCK else 0;
+    const fd = sys.openFdAt(dirat.fdOf(parent), name, sys.O.RDONLY | sys.O.NOCTTY | nonblock | nofollow, 0, &oerr) orelse {
         // A link that appeared since the stat is passed over like any other.
         if (!follow and oerr == .LOOP) return false;
         g.obs.emit(.{ .read_error = .{ .name = display, .errno = oerr } });
@@ -2361,7 +2367,7 @@ fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8,
         };
         const opened = st.mode & 0o170000;
         if (opened == 0o040000) return false;
-        if (o.devices != .read and (opened == 0o020000 or opened == 0o060000 or opened == 0o010000 or opened == 0o140000)) return false;
+        if (skip_devices and (opened == 0o020000 or opened == 0o060000 or opened == 0o010000 or opened == 0o140000)) return false;
     }
     // refuse to read the output file
     if (g.stdout_st) |so| {
