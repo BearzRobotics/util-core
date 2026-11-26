@@ -181,5 +181,6 @@ pub fn main(ctx: cli.Context) u8 {
         },
         error.Fatal => return 1,
     };
+    if (result.write_failed) cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
     return result.exit_status;
 }

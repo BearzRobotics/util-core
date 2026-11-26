@@ -133,6 +133,17 @@ loc '-L -e dangling link' locate -d "$W/db3" -L -e lnk
 loc '-P -e dangling link' locate -d "$W/db3" -P -e lnk
 loc '-L -E dangling link' locate -d "$W/db3" -L -E lnk
 loc '-P -E dangling link' locate -d "$W/db3" -P -E lnk
+# Output that cannot be written is an error.
+if [ -e /dev/full ]; then
+    for o in "" "-c" "-S" "-0"; do
+        exp=$("$FU/locate" -d "$W/db1" $o txt 2>&1 >/dev/full; echo "status $?")
+        act=$("$BIN_DIR/locate" -d "$W/db1" $o txt 2>&1 >/dev/full; echo "status $?")
+        exp=$(printf '%s\n' "$exp" | sed 's#^[^ ]*locate: #locate: #'); act=$(printf '%s\n' "$act" | sed 's#^[^ ]*locate: #locate: #')
+        if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS write error $o"
+        else FAIL=$((FAIL + 1)); echo "FAIL write error $o"; printf '  GNU : %s\n  ours: %s\n' "$exp" "$act"; fi
+    done
+fi
+
 # On a terminal, unprintable characters in names are shown as '?', as GNU
 # does; pipes and -0 get every byte. script(1) provides the terminal.
 mkdir "$W/term"; cd "$W/term"; mkdir d

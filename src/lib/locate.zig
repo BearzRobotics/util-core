@@ -9,9 +9,8 @@
 //! Fatal conditions (a corrupt database, a bad regular expression) are
 //! reported as an event and returned as `error.Fatal`; the executable exits 1.
 //!
-//! Deviations (also in docs/compatibility/locate.md): a failed write to the
-//! output writer is dropped silently, as the executable always did, and
-//! `Result.write_failed` tells the caller.
+//! A failed write to the output writer does not stop the search;
+//! `Result.write_failed` tells the caller, who reports it.
 
 const std = @import("std");
 const rx = @import("../regexutil.zig");

@@ -20,7 +20,7 @@ pub fn errText(err: anyerror) []const u8 {
         error.NoSpaceLeft => "No space left on device",
         error.FileTooBig => "File too large",
         error.InputOutput => "Input/output error",
-        error.NotOpenForReading => "Bad file descriptor",
+        error.NotOpenForReading, error.NotOpenForWriting => "Bad file descriptor",
         error.DiskQuota => "Disk quota exceeded",
         error.FileBusy => "Device or resource busy",
         error.LinkQuotaExceeded => "Too many links",

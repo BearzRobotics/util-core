@@ -29,7 +29,7 @@ GNU findutils 4.10.0 (`locate`/`updatedb`). The oracle binaries are built from t
 
 ## Extensions
 
-None. The executable is GNU locate 4.10 behaviour. In the library (`util_core.locate`) database problems are Observer events, `-` (standard input) is a caller-supplied `Options.stdin`, and a failed write to the output writer is dropped (`Result.write_failed` reports it), as the executable always did.
+None. The executable is GNU locate 4.10 behaviour. In the library (`util_core.locate`) database problems are Observer events, `-` (standard input) is a caller-supplied `Options.stdin`, and a failed write to the output writer is reported by `Result.write_failed` (the executable then prints `write error` and exits 1, as GNU does).
 
 ## Known deviations and gaps
 
