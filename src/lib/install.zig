@@ -34,6 +34,10 @@ pub const Options = struct {
     x: copy.Opts = .{},
     mode: u32 = 0o755,
     dir_mode: u32 = 0o755,
+    /// The bits `dir_mode` decides (mode.zig `applyTracked`), all of them
+    /// unless -m was given. -d leaves the others of an existing directory as
+    /// they are, and a new one the set-ID bits it inherits.
+    dir_mode_decided: u32 = 0o7777,
     /// `unset` keeps the current owner/group.
     owner_id: u32 = unset,
     group_id: u32 = unset,
@@ -309,7 +313,9 @@ fn processDir(s: *St, dir_in: []const u8) bool {
     const dir = dir_in[0..end];
     if (!mkAncestors(s, dir)) return false;
     var e: E = .SUCCESS;
+    var existed = false;
     if (sys.fileStat(dir, true, &e)) |st| {
+        existed = true;
         if (!st.isDir()) {
             s.warn("cannot create directory {f}: File exists", .{quote.quoteA(dir)});
             return false;
@@ -330,7 +336,10 @@ fn processDir(s: *St, dir_in: []const u8) bool {
             return false;
         }
     }
-    if (sys.chmodPath(dir, s.o.dir_mode, false)) |ce| {
+    var dir_mode = s.o.dir_mode;
+    const kept: u32 = if (existed) 0o7777 else 0o6000;
+    if (sys.fileStat(dir, true, &e)) |now| dir_mode |= now.mode & kept & ~s.o.dir_mode_decided;
+    if (sys.chmodPath(dir, dir_mode, false)) |ce| {
         s.warn("cannot change permissions of {f}: {s}", .{ quote.quoteA(dir), sys.errnoText(ce) });
         return false;
     }

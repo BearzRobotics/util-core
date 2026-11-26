@@ -173,6 +173,12 @@ pub const Spot = struct {
     /// kind created (`type_bits`, as in `st_mode`). A symbolic link found in
     /// its place is never followed.
     pub fn setMode(spot: Spot, type_bits: u32, mode: u32) ?sys.E {
+        return spot.setModeKeeping(type_bits, mode, 0);
+    }
+
+    /// `setMode`, but the bits of `keep` that the file has (a set-group-ID
+    /// bit it inherited, say) stay set.
+    pub fn setModeKeeping(spot: Spot, type_bits: u32, mode: u32, keep: u32) ?sys.E {
         if (builtin.os.tag != .linux) return sys.chmodAtOther(spot.dir, spot.name, mode);
         // A trailing slash would make the open follow a link.
         const name = std.mem.trimEnd(u8, spot.name, "/");
@@ -182,7 +188,7 @@ pub const Spot = struct {
         defer _ = sys.closeFd(fd);
         const st = sys.fstatFd(fd, &err) orelse return err;
         if (st.mode & 0o170000 != type_bits) return .OPNOTSUPP;
-        return sys.chmodHeld(fd, mode);
+        return sys.chmodHeld(fd, mode | (st.mode & keep));
     }
 };
 

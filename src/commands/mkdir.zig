@@ -89,8 +89,9 @@ pub fn main(ctx: cli.Context) u8 {
 
     const umask = sys.umask();
     var final_mode: ?u16 = null;
+    var decided: u16 = 0;
     if (mode_text) |t| {
-        final_mode = mode_mod.apply(t, 0o777, true, umask) orelse {
+        final_mode = mode_mod.applyTracked(t, 0o777, true, umask, &decided) orelse {
             cli.warn(ctx, "invalid mode '{s}'", .{t});
             return 1;
         };
@@ -101,7 +102,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     const env: mkdir.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
-    const ok = mkdir.run(env, .{ .parents = parents, .mode = final_mode, .verbose = verbose, .umask = umask }, dirs.items, .{
+    const ok = mkdir.run(env, .{ .parents = parents, .mode = final_mode, .mode_decided = if (mode_text != null) decided else null, .verbose = verbose, .umask = umask }, dirs.items, .{
         .context = @constCast(&ctx),
         .func = report,
     });

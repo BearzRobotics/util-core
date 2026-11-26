@@ -20,7 +20,7 @@ GNU coreutils 9.7 (`/usr/bin/install --version` on the development machine, inst
 ## Supported behaviour
 
 - Files are copied with the shared engine (destination removed before opening, created `u+rw`) and then given the requested owner and mode; `install` runs with umask 0 so modes are exact.
-- `-d` creates missing parents with mode 0755 and the final directory with the requested mode.
+- `-d` creates missing parents with mode 0755 and the final directory with the requested mode. With -m, set-ID bits the mode does not mention are kept, as are all unmentioned bits of a directory that already existed (GNU); without -m the mode is exactly 0755.
 
 ## Library
 

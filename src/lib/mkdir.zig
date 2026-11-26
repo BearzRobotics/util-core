@@ -7,17 +7,18 @@
 //! (dirat.zig), and the change is refused if a symbolic link has taken the new
 //! directory's place.
 //!
-//! The final mode is set exactly (the caller resolves -m MODE against the
-//! umask with src/mode.zig and passes the result). The directory is created
-//! with the mode masked to rwx bits and then chmod'ed, so it is never less
-//! restrictive than the mode (POSIX requirement). With `parents`, missing
-//! parents get the umask-modified mode plus u+wx (GNU: "=rwx,u+wx") and
-//! existing directories are not an error. SELinux/SMACK contexts are not
-//! supported.
+//! The caller resolves -m MODE against the umask with src/mode.zig and passes
+//! the result and the bits the text decided (`Options.mode_decided`). As in
+//! GNU (gnulib mkdir-p and dirchownmod), the directory gets exactly the mode
+//! in those bits; a set-ID bit it inherited stays unless decided. With
+//! `parents`, missing parents get the umask-modified mode plus u+wx (GNU:
+//! "=rwx,u+wx") and keep what they inherit, and existing directories are not
+//! an error. SELinux/SMACK contexts are not supported.
 
 const std = @import("std");
 const sys = @import("../sys.zig");
 const dirat = @import("../dirat.zig");
+const mode_mod = @import("../mode.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 
@@ -29,6 +30,10 @@ pub const Options = struct {
     /// Exact final mode (already resolved against the umask), or null for
     /// a=rwx - umask.
     mode: ?u16 = null,
+    /// The bits of `mode` that its text decides (the `decided` of mode.zig's
+    /// `applyTracked`). Null: as for `mode` written in octal, which leaves an
+    /// inherited set-ID bit unless `mode` sets it.
+    mode_decided: ?u16 = null,
     /// -v: report each created directory (`Event.created`).
     verbose: bool = false,
     /// The process umask, supplied by the caller (this library never reads or
@@ -94,7 +99,8 @@ pub fn makeOne(env: Env, path: []const u8, options: Options, observer: Observer)
                 observer.emit(.{ .create_failed = .{ .path = prefix, .errno = e } });
                 return false;
             }
-            if (pmode != (pmode & ~options.umask)) _ = spot.setMode(0o040000, pmode);
+            // The kernel's set-group-ID inheritance must survive this.
+            if (pmode != (pmode & ~options.umask)) _ = spot.setModeKeeping(0o040000, pmode, 0o7000);
             if (options.verbose) observer.emit(.{ .created = prefix });
         }
         // Final component: an existing directory is not an error with -p.
@@ -104,7 +110,16 @@ pub fn makeOne(env: Env, path: []const u8, options: Options, observer: Observer)
             return false;
         } else |_| {}
     }
-    const create_mode: u16 = if (options.mode) |m| m & 0o777 else 0o777;
+    var decided: u16 = 0;
+    var create_mode: u16 = 0o777;
+    if (options.mode) |m| {
+        decided = options.mode_decided orelse ((m & mode_mod.set_id_bits) | 0o1777);
+        // With special bits to settle afterwards, GNU creates the directory
+        // closed to writing by others, and that shows where the mode leaves
+        // the write bits open ("g-s" gives rwxr-xr-x).
+        const special = decided & mode_mod.set_id_bits != 0 or m & 0o1000 != 0;
+        create_mode = m & @as(u16, if (special) 0o1755 else 0o1777);
+    }
     var pe: sys.E = .SUCCESS;
     const spot = dirat.Spot.open(path, &pe) orelse {
         observer.emit(.{ .create_failed = .{ .path = path, .errno = pe } });
@@ -118,12 +133,23 @@ pub fn makeOne(env: Env, path: []const u8, options: Options, observer: Observer)
     if (options.verbose) observer.emit(.{ .created = path });
     if (options.mode) |m| {
         // The kernel applied the umask at creation; set the exact mode now.
-        if (spot.setMode(0o040000, m)) |e| {
+        if (setNewMode(spot, create_mode, m, decided)) |e| {
             observer.emit(.{ .chmod_failed = .{ .path = path, .errno = e } });
             return false;
         }
     }
     return true;
+}
+
+/// Give the directory just created with `create_mode` its final mode: `mode`
+/// where a decided bit is not yet right, and what it already has (counting an
+/// inherited set-ID bit) everywhere else.
+fn setNewMode(spot: dirat.Spot, create_mode: u16, mode: u16, decided: u16) ?sys.E {
+    var err: sys.E = .SUCCESS;
+    const now = sys.fileStatAt(spot.dir, spot.name, false, &err) orelse return err;
+    const had: u32 = create_mode | (now.mode & mode_mod.set_id_bits);
+    const wrong = (had ^ mode) & decided != 0;
+    return spot.setMode(0o040000, if (wrong) mode | (had & ~@as(u32, decided)) else had);
 }
 
 fn trimSlashes(p: []const u8) []const u8 {

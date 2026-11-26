@@ -104,4 +104,19 @@ else
     skip_test "mkdir -p link race (needs strace)"
 fi
 chmod -R u+rwx "$d"; rm -rf "$d"
+
+# In a set-group-ID directory a new directory inherits the bit, and it stays
+# unless the mode mentions it.
+SG='mkdir g; chmod 2775 g'
+for m in 755 0755 00755 700 0 2755 4755 1777 6000 u=rwx u=rwx,g=rx,o= g=rx g=s g-s g+s u+s +s a-s ug=rwx,g-s g+s,g=rx a= = =rwx -w g=u o=g go=; do
+    run_tree "setgid parent -m $m"      "$SG" -m "$m" g/new
+    run_tree "setgid parent -p -m $m"   "$SG" -p -m "$m" g/p/new
+    run_tree "plain parent -m $m"       'mkdir g' -m "$m" g/new
+done
+# (0777 would also make run_tree's own capture files unreadable.)
+for u in 022 077 0277 0377; do
+    TREE_UMASK=$u run_tree "setgid parent umask $u"    "$SG" g/new
+    TREE_UMASK=$u run_tree "setgid parent -p umask $u" "$SG" -p g/p1/p2/p3
+    TREE_UMASK=$u run_tree "setgid parent -p -m 750 umask $u" "$SG" -p -m 750 g/p1/p2
+done
 print_summary

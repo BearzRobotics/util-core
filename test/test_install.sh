@@ -115,4 +115,14 @@ run_tree "install -d -t" "$SETUP" -d -t e x
 run_tree "install empty name" "$SETUP" "" z
 run_tree "install to empty name" "$SETUP" a ""
 run_tree "install long name" "$SETUP" a "$(printf 'n%.0s' $(seq 300))"
+# -d keeps an inherited set-group-ID bit unless -m mentions it (without -m
+# the mode, 0755, decides every bit).
+SG='mkdir g; chmod 2775 g; mkdir g/old; echo x > f'
+for m in 700 755 0755 00755 2755 u=rwx g-s g=rx a=; do
+    run_tree "setgid parent -d -m $m"          "$SG" -d -m "$m" g/new
+    run_tree "setgid parent -d -m $m existing" "$SG" -d -m "$m" g/old
+done
+run_tree "setgid parent -d"                    "$SG" -d g/new
+run_tree "setgid parent -d existing"           "$SG" -d g/old
+run_tree "setgid parent -D"                    "$SG" -D -m 700 f g/a/b/f
 cd /; print_summary
