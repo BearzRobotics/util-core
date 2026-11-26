@@ -161,13 +161,23 @@ testlib_exit() {
 }
 trap testlib_exit EXIT
 
+# Of the tree in the current directory: the link count of everything but
+# directories, then one line for each set of names that are one file. Inode
+# numbers differ between two trees, so they are used only to group the names.
+tree_links() {
+    find . ! -type d -printf '%p nlink %n\n' | sort
+    find . ! -type d -links +1 -printf '%D:%i %p\n' | sort -k2 | awk '{ id = $1; name = substr($0, length(id) + 2); if (id in group) group[id] = group[id] " = " name; else { order[++n] = id; group[id] = name } } END { for (i = 1; i <= n; i++) print "same file: " group[order[i]] }'
+}
+
 # run_tree DESC SETUP_CMD ARGS...
 # For commands that change the file system. SETUP_CMD (a shell snippet) runs in
 # two fresh directories, then GNU and ours run the same arguments, one in each.
 # Compared: stdout, normalised stderr, exit status, and the resulting tree
 # (path, type, octal mode). Set TREE_UMASK to run both under a given umask,
 # TREE_SIZES to compare the sizes of regular files too (and the contents of
-# those up to 4 MiB, so that huge sparse files cost nothing).
+# those up to 4 MiB, so that huge sparse files cost nothing), TREE_LINKS to
+# compare link counts and which names share a file, and TREE_BLOCKS to compare
+# the blocks allocated to regular files (holes).
 run_tree() {
     description="$1"; setup="$2"; shift 2
     base="$(dirname "$TMPDIR_CMP")/tree"; chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
@@ -182,7 +192,7 @@ run_tree() {
     # Trees are compared with symlink targets (%l); the two working directories
     # differ only in their last component, which is masked in the output.
     for x in g o; do
-        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort | awk -v start="$tree_start" '$2 + 0 >= start { $2 = "now" } $1 ~ /^\.\/(z|e)(\/|$)/ { print } $1 !~ /^\.\/(z|e)(\/|$)/ { print $1, "-", $3 }'; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; [ -n "$TREE_SIZES" ] && { find . -type f -printf '%p size %s\n' | sort; find . -type f -size -4097k -exec cksum {} + | sort -k3; }; true; } 2>/dev/null > "$base/$x.tree")
+        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort | awk -v start="$tree_start" '$2 + 0 >= start { $2 = "now" } $1 ~ /^\.\/(z|e)(\/|$)/ { print } $1 !~ /^\.\/(z|e)(\/|$)/ { print $1, "-", $3 }'; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; [ -n "$TREE_SIZES" ] && { find . -type f -printf '%p size %s\n' | sort; find . -type f -size -4097k -exec cksum {} + | sort -k3; }; [ -n "$TREE_LINKS" ] && tree_links; [ -n "$TREE_BLOCKS" ] && find . -type f -printf '%p size %s blocks %b\n' | sort; true; } 2>/dev/null > "$base/$x.tree")
         rel="${base#/}"
         norm_err < "$base/$x.err" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.err2"
         norm_err < "$base/$x.out" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.out2"

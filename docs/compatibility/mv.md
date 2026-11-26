@@ -35,7 +35,7 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Tests
 
-`sh test/test_mv.sh`: about 380 differential cases against GNU mv 9.7 (C locale). Moves across file systems are exercised by hand only, since the test directories share one file system.
+`sh test/test_mv.sh`: about 380 differential cases against GNU mv 9.7 (C locale), comparing the tree, checksums, link counts and which names are one file. Moves across file systems are exercised by hand only, since the test directories share one file system.
 
 ## Not yet done
 

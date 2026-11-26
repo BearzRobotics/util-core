@@ -45,7 +45,7 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Tests
 
-`sh test/test_cp.sh`: about 740 differential cases against GNU cp 9.7 (C locale) comparing output, exit status, file tree, modes and checksums.
+`sh test/test_cp.sh`: about 820 differential cases against GNU cp 9.7 (C locale) comparing output, exit status, file tree, modes, checksums, link counts and which names are one file; the sparse cases also compare allocated blocks.
 
 ## Not yet done
 

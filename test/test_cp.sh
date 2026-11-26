@@ -5,6 +5,7 @@ UTIL="cp"
 . "$(dirname "$0")/testlib.sh"
 help_cmp
 export TREE_CONTENT=1
+export TREE_LINKS=1    # a copy must not pass for a hard link
 SETUP='mkdir -p d/sub e; printf "one\n" > a; printf "two\n" > b; printf x > d/f; printf y > d/sub/g; ln -s a l; ln -s nowhere dang; ln -s d dl; ln a hard; mkfifo ff; : > empty; chmod 640 b; chmod 755 d; mkdir ro; printf z > ro/r; chmod 444 ro/r; chmod 555 ro; printf s > sp; truncate -s 100000 sp2; printf q >> sp2'
 
 # run_tree_t: like run_tree, but every file gets the same timestamp first so
@@ -205,6 +206,9 @@ for s in never auto always bogus a n; do
     run_tree "cp --sparse=$s" "$SETUP" --sparse=$s sp2 z
     run_tree "cp --sparse=$s small" "$SETUP; printf '\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' > zeros" --sparse=$s zeros z
     run_tree "cp --sparse=$s empty" "$SETUP" --sparse=$s empty z
+    # The allocated blocks tell whether holes were kept, made or filled.
+    TREE_BLOCKS=1 run_tree "cp --sparse=$s: blocks of a file with a hole" 'truncate -s 1M holes; printf q >> holes' --sparse=$s holes z
+    TREE_BLOCKS=1 run_tree "cp --sparse=$s: blocks of a file of zeros" 'head -c 1048576 /dev/zero > zeros; printf q >> zeros' --sparse=$s zeros z
 done
 for r in auto always never bogus; do
     run_tree "cp --reflink=$r" "$SETUP" --reflink=$r a z

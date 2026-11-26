@@ -40,7 +40,7 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Tests
 
-test/test_ln.sh (142 cases: hard, symbolic, relative, backup and interactive forms and their errors) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets are compared).
+test/test_ln.sh (142 cases: hard, symbolic, relative, backup and interactive forms and their errors) — differential tests using run_tree (two fresh directories, GNU in one and ours in the other; stdout, stderr with the directory name masked, exit status and the resulting tree including symlink targets, link counts and which names are one file are compared).
 
 ## Not yet done
 

@@ -3,6 +3,7 @@
 # include symlink targets.
 UTIL="ln"
 . "$(dirname "$0")/testlib.sh"
+TREE_LINKS=1    # a copy must not pass for a hard link
 S='echo A > a; echo B > b; mkdir d; echo C > d/c; ln -s a sl; ln -s d sd; ln -s nowhere dang'
 
 printf "\n[ Hard links ]\n"

@@ -5,6 +5,7 @@ UTIL="mv"
 . "$(dirname "$0")/testlib.sh"
 help_cmp
 export TREE_CONTENT=1
+export TREE_LINKS=1    # a copy must not pass for a hard link
 SETUP='mkdir -p d/sub e dd; printf "one\n" > a; printf "two\n" > b; printf x > d/f; printf y > d/sub/g; ln -s a l; ln -s nowhere dang; ln -s d dl; ln a hard; mkfifo ff; : > empty; chmod 640 b; mkdir ro; printf z > ro/r; chmod 444 ro/r; chmod 555 ro; touch -d 2001-01-01 old'
 
 # run_tree_t: every file gets the same timestamp first so that only the times
