@@ -210,5 +210,9 @@ for o in "-tx1 -tfD" "-An -tu4 -tfD" "-tx2z -tu4z" "-tu8 -tx2" "-tx1 -td2 -An" "
     run_cmp "padding, short block $o" $o spread2
 done
 
+# Sizes too large for any type.
+printf 'ab\n' > typed
+for t in x2147483647 x2147483648 x99999999999999999999 f2147483648 f99999999999999999999 d99999999999999999999z; do run_cmp "-t $t" -t $t typed; done
+
 print_summary
 [ "$FAIL" -eq 0 ]

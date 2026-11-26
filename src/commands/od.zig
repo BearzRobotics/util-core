@@ -284,7 +284,12 @@ fn parseType(ctx: cli.Context, text: []const u8, fmts: *std.ArrayList(Fmt)) bool
                 if (i < text.len and std.ascii.isDigit(text[i])) {
                     var j = i;
                     var v: usize = 0;
-                    while (j < text.len and std.ascii.isDigit(text[j])) : (j += 1) v = v * 10 + (text[j] - '0');
+                    while (j < text.len and std.ascii.isDigit(text[j])) : (j += 1) v = v *| 10 +| (text[j] - '0');
+                    // As in GNU, a size beyond an int is only "invalid".
+                    if (v > std.math.maxInt(i32)) {
+                        cli.warn(ctx, "invalid type string {f}", .{cli.quoteC(text)});
+                        return false;
+                    }
                     size = v;
                     i = j;
                 } else if (i < text.len and std.mem.indexOfScalar(u8, "CSIL", text[i]) != null) {
@@ -313,7 +318,12 @@ fn parseType(ctx: cli.Context, text: []const u8, fmts: *std.ArrayList(Fmt)) bool
                 if (i < text.len and std.ascii.isDigit(text[i])) {
                     var j = i;
                     var v: usize = 0;
-                    while (j < text.len and std.ascii.isDigit(text[j])) : (j += 1) v = v * 10 + (text[j] - '0');
+                    while (j < text.len and std.ascii.isDigit(text[j])) : (j += 1) v = v *| 10 +| (text[j] - '0');
+                    // As in GNU, a size beyond an int is only "invalid".
+                    if (v > std.math.maxInt(i32)) {
+                        cli.warn(ctx, "invalid type string {f}", .{cli.quoteC(text)});
+                        return false;
+                    }
                     size = v;
                     i = j;
                 } else if (i < text.len and std.mem.indexOfScalar(u8, "BHFDL", text[i]) != null) {
