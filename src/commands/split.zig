@@ -256,6 +256,7 @@ fn report(context: ?*anyopaque, ev: split.Event) void {
         .filter_signal => |e| cli.warn(ctx.*, "with FILE={s}, signal {d} from command: {s}", .{ e.file, e.signal, e.command }),
         .write_error => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
         .close_error => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), sys.errnoText(e.errno) }),
+        .out_of_memory => cli.warn(ctx.*, "memory exhausted", .{}),
         .read_error => |e| cli.warn(ctx.*, "read error: {s}", .{cli.errText(e)}),
         .cannot_determine_size => |e| cli.warn(ctx.*, "{f}: cannot determine file size: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
     }

@@ -189,6 +189,34 @@ if [ "$(cat "$d/rc")" = 1 ] && grep -q 'Too many open files' "$d/err"; then
 else
     FAIL=$((FAIL + 1)); echo "FAIL more filters than descriptors is diagnosed ($(cat "$d/rc") $(cat "$d/err"))"
 fi
+# A record is not gathered in memory however long it is: 64 MiB without a
+# separator under a 32 MiB address-space limit.
+long_rec() {
+    description="a long record needs little memory $*"
+    d="$TEST_TMP/longrec"; rm -rf "$d"; mkdir -p "$d/g" "$d/o"
+    [ -f "$TEST_TMP/zeros64" ] || head -c 67108864 /dev/zero > "$TEST_TMP/zeros64"
+    (cd "$d/g" && LC_ALL=C gnu "$@" "$TEST_TMP/zeros64" > ../g.out; echo $? > ../g.rc)
+    (cd "$d/o" && ulimit -v 32768 && LC_ALL=C ours "$@" "$TEST_TMP/zeros64" > ../o.out 2> ../o.err; echo $? > ../o.rc)
+    if diff -r "$d/g" "$d/o" > /dev/null && cmp -s "$d/g.out" "$d/o.out" && cmp -s "$d/g.rc" "$d/o.rc"; then
+        PASS=$((PASS + 1)); echo "PASS $description"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $description (rc $(cat "$d/g.rc")/$(cat "$d/o.rc")) $(head -3 "$d/o.err")"
+    fi
+    rm -rf "$d"
+}
+long_rec -C 1M
+long_rec -C 7000000
+long_rec -n l/3
+long_rec -n r/3
+long_rec -n l/1/3
+long_rec -n r/1/3
+rm -f "$TEST_TMP/zeros64"
+# Records around the size of the reads (128 KiB) and of -C.
+LONG='for n in 5 131071 1 131072 200000 3 70000 61000 400000 2; do head -c $n /dev/zero | tr "\0" a; echo; done > long; printf tail >> long'
+for how in "-C 1000" "-C 70001" "-C 131072" "-C 131073" "-C 200001" "-C 1M" "-n l/3" "-n l/7" "-n r/3" "-n l/2/3" "-n r/2/3" "-e -n l/30" "-u -n r/3"; do
+    run_tree "long records $how" "$LONG" $how long
+done
+
 # A filter that stops reading early: the rest of its chunk is dropped and the
 # other chunks are still processed. The input is far larger than a pipe holds,
 # so split is sure to still be writing when the filter has gone.

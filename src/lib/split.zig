@@ -73,6 +73,8 @@ pub const Event = union(enum) {
     /// close() failed: some file systems only report a failed write there.
     close_error: struct { name: []const u8, errno: std.os.linux.E },
     read_error: anyerror,
+    /// -C: no room for the record that is being held back.
+    out_of_memory,
     /// -n needs the size first, and reading or spooling the input to find it
     /// failed.
     cannot_determine_size: struct { name: []const u8, err: anyerror },
@@ -689,10 +691,8 @@ fn runMode(st: *State, file: Io.File, mode: Mode, size: u64, chunks: u64, chunk_
             return true;
         },
         .line_bytes => {
-            var cur: u64 = 0; // bytes in the current file
-            var have_file = false;
-            var rec: std.ArrayList(u8) = .empty;
-            defer rec.deinit(gpa);
+            var out: LineBytes = .{ .size = size };
+            defer out.held.deinit(gpa);
             while (true) {
                 const n = readAll(io, file, buf) catch |e| return readFail(st, e);
                 if (n == 0) break;
@@ -700,15 +700,11 @@ fn runMode(st: *State, file: Io.File, mode: Mode, size: u64, chunks: u64, chunk_
                 while (pos < n) {
                     const nl = std.mem.indexOfScalar(u8, buf[pos..n], sep);
                     const end = if (nl) |i| pos + i + 1 else n;
-                    rec.appendSlice(gpa, buf[pos..end]) catch return false;
+                    if (!out.take(st, buf[pos..end], nl != null)) return false;
                     pos = end;
-                    if (nl == null) break; // record continues in the next block
-                    if (!emitRecord(st, rec.items, size, &cur, &have_file)) return false;
-                    rec.clearRetainingCapacity();
                 }
             }
-            if (rec.items.len > 0 and !emitRecord(st, rec.items, size, &cur, &have_file)) return false;
-            return true;
+            return out.finish(st);
         },
         .chunk_bytes, .chunk_lines, .chunk_rr => return runChunks(st, file, mode, chunks, chunk_k, sep, buf),
     }
@@ -719,39 +715,71 @@ fn readFail(st: *State, e: anyerror) bool {
     return false;
 }
 
-/// -C: write whole records, starting a new file when a record does not fit;
-/// a record longer than SIZE is cut into SIZE-byte pieces.
-fn emitRecord(st: *State, rec: []const u8, size: u64, cur: *u64, have_file: *bool) bool {
-    var r = rec;
-    if (!have_file.*) {
+/// -C: whole records, a new file when the next one does not fit, and a record
+/// longer than SIZE cut into SIZE-byte pieces. A record is held back only
+/// while it may still fit in the current file, so never more than SIZE bytes.
+const LineBytes = struct {
+    size: u64,
+    /// Bytes in the current file.
+    used: u64 = 0,
+    have_file: bool = false,
+    /// The start of a record that may still fit in the current file.
+    held: std.ArrayList(u8) = .empty,
+    /// The record being read no longer waits: its bytes are written at once.
+    passing: bool = false,
+
+    /// The next bytes of a record; `ends` when they finish it.
+    fn take(l: *LineBytes, st: *State, bytes: []const u8, ends: bool) bool {
+        if (!l.passing) {
+            const room = if (l.have_file) l.size - l.used else l.size;
+            if (l.held.items.len + bytes.len <= room) {
+                l.held.appendSlice(st.env.gpa, bytes) catch {
+                    st.obs.emit(.out_of_memory);
+                    return false;
+                };
+                return !ends or l.finish(st);
+            }
+            // It does not fit here: it starts a file of its own.
+            if (!l.have_file or l.used > 0) {
+                if (!l.nextFile(st)) return false;
+            }
+            l.passing = true;
+            if (!l.write(st, l.held.items)) return false;
+            l.held.clearRetainingCapacity();
+        }
+        if (!l.write(st, bytes)) return false;
+        if (ends) l.passing = false;
+        return true;
+    }
+
+    /// Write what is held back, which is known to fit.
+    fn finish(l: *LineBytes, st: *State) bool {
+        if (l.held.items.len == 0) return true;
+        if (!l.have_file and !l.nextFile(st)) return false;
+        if (!l.write(st, l.held.items)) return false;
+        l.held.clearRetainingCapacity();
+        return true;
+    }
+
+    fn nextFile(l: *LineBytes, st: *State) bool {
         if (!st.openNext()) return false;
-        have_file.* = true;
-        cur.* = 0;
+        l.have_file = true;
+        l.used = 0;
+        return true;
     }
-    if (cur.* + r.len <= size) {
-        cur.* += r.len;
-        return st.write(r);
-    }
-    if (r.len <= size or cur.* > 0) {
-        // Does not fit here: it starts a fresh file (if the current one is non-empty).
-        if (cur.* > 0) {
-            if (!st.openNext()) return false;
-            cur.* = 0;
+
+    fn write(l: *LineBytes, st: *State, bytes: []const u8) bool {
+        var rest = bytes;
+        while (rest.len > 0) {
+            if (l.used == l.size and !l.nextFile(st)) return false;
+            const n: usize = @intCast(@min(l.size - l.used, rest.len));
+            if (!st.write(rest[0..n])) return false;
+            l.used += n;
+            rest = rest[n..];
         }
+        return true;
     }
-    while (r.len > 0) {
-        const room = size - cur.*;
-        const take: usize = @intCast(@min(room, r.len));
-        if (!st.write(r[0..take])) return false;
-        cur.* += take;
-        r = r[take..];
-        if (r.len > 0) {
-            if (!st.openNext()) return false;
-            cur.* = 0;
-        }
-    }
-    return true;
-}
+};
 
 fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf: []u8) bool {
     const io = st.env.io;
@@ -834,8 +862,9 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
             return true;
         },
         .chunk_lines, .chunk_rr => {
-            var rec: std.ArrayList(u8) = .empty;
-            defer rec.deinit(gpa);
+            // Where the record being read goes; null between records. Its
+            // bytes are passed on as they arrive, however long it is.
+            var dest: ?RecordDest = null;
             var rr_index: u64 = 0;
             // Round robin writes the N outputs in turn; lines mode one at a time.
             var outs: []?RrOutput = &.{};
@@ -863,15 +892,13 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
                 while (pos < got) {
                     const nl = std.mem.indexOfScalar(u8, buf[pos..got], sep);
                     const end = if (nl) |i| pos + i + 1 else got;
-                    rec.appendSlice(gpa, buf[pos..end]) catch return false;
+                    const bytes = buf[pos..end];
                     pos = end;
-                    if (nl == null) break;
-                    if (!emitChunkRecord(st, mode, rec.items, n, k, to_stdout, &chunk, &opened_chunk, &written_total, &cur_end, per, rem, &rr_index, outs)) return false;
-                    rec.clearRetainingCapacity();
+                    const d = dest orelse startChunkRecord(st, mode, n, k, to_stdout, &chunk, &opened_chunk, written_total, &cur_end, per, rem, &rr_index, outs) orelse return false;
+                    written_total += bytes.len;
+                    if (!writeChunkBytes(st, d, bytes)) return false;
+                    dest = if (nl == null) d else null;
                 }
-            }
-            if (rec.items.len > 0) {
-                if (!emitChunkRecord(st, mode, rec.items, n, k, to_stdout, &chunk, &opened_chunk, &written_total, &cur_end, per, rem, &rr_index, outs)) return false;
             }
             // Create the remaining (empty) files for line chunks, in order.
             if (mode == .chunk_lines and !to_stdout and !st.elide) {
@@ -908,77 +935,93 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
     }
 }
 
-fn emitChunkRecord(
+/// Where the bytes of one -n l/ or r/ record go.
+const RecordDest = union(enum) {
+    /// A chunk that is not the one asked for with K/N.
+    nowhere,
+    /// The caller's writer (K/N).
+    stdout,
+    /// The current file (l/N).
+    current,
+    /// Round-robin output of this number.
+    rr: usize,
+};
+
+/// Choose where the record that starts here goes, creating the files that are
+/// due; null when that fails. `consumed` is the input before this record.
+fn startChunkRecord(
     st: *State,
     mode: Mode,
-    rec: []const u8,
     n: u64,
     k: u64,
     to_stdout: bool,
     chunk: *u64,
     opened_chunk: *?u64,
-    consumed: *u64,
+    consumed: u64,
     cur_end: *u64,
     per: u64,
     rem: u64,
     rr_index: *u64,
     outs: []?RrOutput,
-) bool {
+) ?RecordDest {
     if (mode == .chunk_rr) {
         const idx = rr_index.* % n;
         rr_index.* += 1;
-        if (to_stdout) {
-            if (idx + 1 == k) {
-                st.out.?.write(rec);
-                if (st.unbuffered) st.out.?.flush();
-            }
-            return true;
-        }
+        if (to_stdout) return if (idx + 1 == k) .stdout else .nowhere;
         if (outs[@intCast(idx)] == null and st.elide) {
             // With -e only chunks that receive a line get a file.
             st.rr_opening = @intCast(idx);
-            outs[@intCast(idx)] = RrOutput.create(st, false) orelse return false;
+            outs[@intCast(idx)] = RrOutput.create(st, false) orelse return null;
         } else if (outs[@intCast(idx)] == null) {
             // GNU creates the files for chunks in order 0..N-1 up front when
             // the round robin starts, so names follow chunk numbers.
             for (outs, 0..) |*slot, i| {
                 st.rr_opening = i;
-                slot.* = RrOutput.create(st, true) orelse return false;
+                slot.* = RrOutput.create(st, true) orelse return null;
             }
         }
-        const o = &outs[@intCast(idx)].?;
-        if (o.closed and !st.reopenOutput(@intCast(idx))) return false;
-        const sink = &o.output.sink;
-        const was_failed = sink.failed;
-        sink.write(rec);
-        if (st.unbuffered) sink.flush();
-        if (!sink.failed) return true;
-        if (o.output.child != null and State.pipeClosed(sink)) {
-            if (!was_failed) st.filters_gone += 1;
-            return true;
-        }
-        st.writeError(sink, o.name);
-        return false;
+        return .{ .rr = @intCast(idx) };
     }
     // Lines: the record goes to the chunk its first byte lies in.
     // Advance past chunks whose end offset has been reached.
-    while (consumed.* >= cur_end.* and chunk.* + 1 < n) {
+    while (consumed >= cur_end.* and chunk.* + 1 < n) {
         chunk.* += 1;
         cur_end.* = per * (chunk.* + 1) + @min(chunk.* + 1, rem);
     }
-    consumed.* += rec.len;
-    if (to_stdout) {
-        if (chunk.* + 1 == k) {
-            st.out.?.write(rec);
-        }
-        return true;
-    }
+    if (to_stdout) return if (chunk.* + 1 == k) .stdout else .nowhere;
     // Create files for chunks that were skipped (empty) and the current one.
     var c = if (opened_chunk.*) |o| o + 1 else 0;
     while (c <= chunk.*) : (c += 1) {
         if (c < chunk.* and st.elide) continue; // empty chunk elided, no suffix used
-        if (!st.openNext()) return false;
+        if (!st.openNext()) return null;
     }
     opened_chunk.* = chunk.*;
-    return st.write(rec);
+    return .current;
+}
+
+fn writeChunkBytes(st: *State, dest: RecordDest, bytes: []const u8) bool {
+    switch (dest) {
+        .nowhere => return true,
+        .stdout => {
+            st.out.?.write(bytes);
+            if (st.unbuffered) st.out.?.flush();
+            return true;
+        },
+        .current => return st.write(bytes),
+        .rr => |i| {
+            const o = &st.rr[i].?;
+            if (o.closed and !st.reopenOutput(i)) return false;
+            const sink = &o.output.sink;
+            const was_failed = sink.failed;
+            sink.write(bytes);
+            if (st.unbuffered) sink.flush();
+            if (!sink.failed) return true;
+            if (o.output.child != null and State.pipeClosed(sink)) {
+                if (!was_failed) st.filters_gone += 1;
+                return true;
+            }
+            st.writeError(sink, o.name);
+            return false;
+        },
+    }
 }
