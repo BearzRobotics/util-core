@@ -49,6 +49,7 @@ run_tree "mv same dest" "$SETUP" a d/f e
 run_tree "mv same base" "$SETUP; echo q > e/b" a d/f e
 run_tree "mv just-created" "$SETUP; mkdir x; echo q > x/a" a x/a e
 run_tree "mv just-created -b" "$SETUP; mkdir x; echo q > x/a" -b a x/a e
+run_tree "mv backup after a huge number" "$SETUP; : > 'b.~99999999999999999999999~'" --backup=numbered a b
 run_tree "mv just-created numbered" "$SETUP; mkdir x; echo q > x/a" --backup=numbered a x/a e
 
 for o in -b "--backup" "--backup=none" "--backup=simple" "--backup=existing" "--backup=numbered" "--backup=t" "--backup=bogus" "-b -S .bak" "-S .bak" "--suffix=.orig" "-bv" "-bf" "-bi" "-bn" "-bu"; do

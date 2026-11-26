@@ -81,6 +81,7 @@ run_tree "install unwritable dst" "$SETUP; chmod 444 b" a b
 run_tree "install unreadable src" "$SETUP; chmod 000 a" a z
 run_tree "install onto itself" "$SETUP" a ./a
 run_tree "install hard onto itself" "$SETUP" a hard
+run_tree "install backup after a huge number" ": > a; echo x > b; : > 'b.~18446744073709551615~'" --backup=numbered a b
 for o in -c -C -b "-b -S .bak" "--backup" "--backup=numbered" "--backup=bogus" "-bv" "-Cv" "-C -m 600" "-C -m 4755" "-C -p" "-C -s" "-Z" "--preserve-context" "--debug" "--strip-program=true" "-s" "-s --strip-program=nosuchprog" "-s --strip-program=false" "--strip-program=true" "-S .x" "-p -C"; do
     run_tree "install $o" "$SETUP" $o a b
     run_tree "install $o new" "$SETUP" $o a z

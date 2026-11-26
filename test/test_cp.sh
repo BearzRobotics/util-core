@@ -123,6 +123,10 @@ done
 run_tree "cp backup existing numbered" "$SETUP; : > b.~1~; : > b.~3~" --backup=existing a b
 run_tree "cp backup numbered gap" "$SETUP; : > b.~1~; : > b.~9~; : > b.~x~; : > b.~09~" --backup=numbered a b
 run_tree "cp backup 99" "$SETUP; : > b.~99~" --backup=numbered a b
+for last in 99999999999999999999 18446744073709551615 99999999999999999999999; do
+    run_tree "cp backup after number $last" "$SETUP; : > 'b.~$last~'; : > b.~7~" --backup=numbered a b
+done
+run_tree "cp backup existing, huge number" "$SETUP; : > 'b.~18446744073709551615~'" -b a b
 run_tree "cp backup env" "$SETUP" -b a b
 run_tree "cp backup symlink" "$SETUP; ln -s a z" -b b z
 run_tree "cp backup dir existing" "$SETUP; mkdir z" -b -r d z
