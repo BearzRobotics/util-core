@@ -45,6 +45,7 @@ Per decision 0005 every departure from GNU is listed here.
 ## Known deviations and gaps
 
 - fts is not used: entries are visited in the order the file system returns them, and cycles reached through symbolic links under -L are skipped quietly as fts does while -P cycles produce the `Circular directory structure` warning.
+- The walk opens each directory relative to the one above it, so trees deeper than PATH_MAX are measured (also under -L, where GNU 9.7 reports `File name too long`), and a directory replaced by a link while du runs is reported, not followed. The walk recurses and stops, with `cannot read directory ...: File name too long`, below 10000 levels or 64 KiB of path (src/dirat.zig); GNU has no such limit. If a directory more than 32 levels up is moved during the walk, the rest of what was under it is reported as unreadable.
 - The mount-point test behind `-x` compares device numbers only (GNU uses the same rule); bind mounts of one device are not special-cased.
 - Times are formatted in the local zone from /usr/share/zoneinfo or TZ; leap seconds are not applied.
 

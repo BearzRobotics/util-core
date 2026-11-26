@@ -161,7 +161,8 @@ run_cmp "-X missing"          -a -X nosuch $N
 run_cmp "--exclude-from"      -a --exclude-from=ex1 $N
 run_cmp "-X and --exclude"    -a -X ex1 --exclude=a $N
 run_cmp "-x"                  -x $N
-run_cmp "-x /proc"            -x /proc/self/fdinfo
+# (not /proc/self: its descriptors are the program's own, and differ)
+run_cmp "-x /proc"            -x /proc/sys/kernel/random
 run_cmp "-x dev"              -sx /dev/shm
 
 printf "\n[ files0-from and usage ]\n"
@@ -186,5 +187,68 @@ run_cmp "amb option2"         --b $N
 run_cmp "-- only"             --
 run_cmp "bad arg"             --all=1 $N
 run_cmp "missing arg"         -d
+
+printf "\n[ Deep trees and a changing tree ]\n"
+# Paths longer than PATH_MAX (4096), with more levels than directories are
+# kept open for.
+( mkdir long && cd long || exit 1
+  name=$(printf 'd%.0s' $(seq 100)); i=0
+  while [ $i -lt 50 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done
+  head -c 1000000 /dev/urandom > leaf; ln -s leaf link; ln leaf hard )
+for o in -s -a -c -x -aS "-d 3" --inodes -ab; do
+    run_cmp "past PATH_MAX $o"    $o long
+done
+run_cmp "past PATH_MAX operand slash" -s long/
+# (GNU itself stops with "File name too long" here under -L.)
+act=$(ours -sL long 2>&1); exp=$(gnu -s long)
+if [ "$act" = "$exp" ]; then
+    PASS=$((PASS + 1)); echo "PASS past PATH_MAX -L"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL past PATH_MAX -L" | cut -c1-200
+fi
+# Many short levels, with little stack and few descriptors to spare.
+( mkdir chain && cd chain || exit 1
+  i=0; while [ $i -lt 1500 ]; do mkdir a b && cd -P a || exit 1; i=$((i + 1)); done; echo x > leaf )
+run_cmp "1500 levels"             -s chain
+run_cmp "1500 levels -a"          -a chain
+act=$(ulimit -n 64; ours -s chain 2>&1); exp=$(gnu -s chain)
+if [ "$act" = "$exp" ]; then
+    PASS=$((PASS + 1)); echo "PASS 1500 levels with 64 descriptors"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL 1500 levels with 64 descriptors: $act"
+fi
+/usr/bin/rm -rf long chain
+# The walk has a limit (64 KiB of path); reaching it must be said.
+( mkdir huge && cd huge || exit 1
+  name=$(printf 'd%.0s' $(seq 200)); i=0
+  while [ $i -lt 340 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done )
+ours -s huge > huge.out 2> huge.err; rc=$?
+if [ "$rc" = 1 ] && grep -q "^du: cannot read directory 'huge/d.*': File name too long\$" huge.err; then
+    PASS=$((PASS + 1)); echo "PASS the depth limit is reported"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL the depth limit is reported (rc=$rc, $(wc -c < huge.err) bytes of messages)"
+fi
+/usr/bin/rm -rf huge
+# A directory replaced by a link after du has examined it is not followed.
+# strace holds du just before it opens the directory.
+if can_inject; then
+    mkdir -p swap/tree/sub swap/victim; echo mine > swap/tree/sub/own
+    head -c 3000000 /dev/zero > swap/victim/other
+    (cd swap && strace -o trace -e trace=openat "$BIN_DIR/du" -a tree > /dev/null 2>&1)
+    n=$(grep '^openat(' swap/trace | grep -n '[/"]sub",' | head -n 1 | cut -d: -f1)
+    (cd swap && exec timeout 30 strace -o trace -e trace=openat -e inject=openat:delay_enter=3000000:when="$n" "$BIN_DIR/du" -a tree > out 2>&1) & du_pid=$!
+    tries=0
+    while ! grep -q '[/"]tree",' swap/trace 2>/dev/null && [ $tries -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    sleep 1
+    mv swap/tree/sub swap/moved; ln -s ../victim swap/tree/sub
+    wait $du_pid; rc=$?
+    if [ -n "$n" ] && [ "$rc" = 1 ] && ! grep -q other swap/out && grep -q "cannot read directory 'tree/sub'" swap/out; then
+        PASS=$((PASS + 1)); echo "PASS a directory swapped for a link is not followed"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL a directory swapped for a link is not followed (rc=$rc n=$n)"; cat swap/out
+    fi
+else
+    skip_test "swapped directory (no usable strace)"
+fi
 
 cd /; print_summary

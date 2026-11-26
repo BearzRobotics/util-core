@@ -227,7 +227,13 @@ pub fn printVersion(ctx: Context) bool {
 /// Print a diagnostic `<name>: <message>\n` to stderr. Best effort.
 pub fn warn(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     var buf: [8192]u8 = undefined; // room for two PATH_MAX-long names
-    const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
+    var long: ?[]u8 = null;
+    defer if (long) |l| ctx.gpa.free(l);
+    // A walk can name files far below PATH_MAX; their messages must not vanish.
+    const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch blk: {
+        long = std.fmt.allocPrint(ctx.gpa, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
+        break :blk long.?;
+    };
     if (std.mem.indexOf(u8, msg, "writ") != null) warned = true;
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
