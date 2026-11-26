@@ -150,5 +150,14 @@ while [ $r -lt 12 ]; do
     done
     r=$((r + 1))
 done
+# -e fills every empty field printed, and an empty line has no fields.
+printf 'a,,1\n' > e1; printf 'a,\n' > e2; printf '\n' > blank; : > none
+for o in "-e X" "-e X -a1 -a2" ""; do
+    run_cmp "empty fields $o" -t , $o e1 e2
+    run_cmp "empty line $o" -t , $o -v1 -v2 blank none
+    run_cmp "empty line, join field 3 $o" -t , $o -j 3 -a1 -a2 blank none
+    run_cmp "empty line, whole-line key $o" -t '' $o -j 2 -a1 blank none
+done
+run_cmp "empty key by default" -e X -j 2 -v1 -v2 blank none
 rm -rf "$W"
 print_summary

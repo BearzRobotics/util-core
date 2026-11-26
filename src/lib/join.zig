@@ -148,6 +148,8 @@ fn isBlank(c: u8, term: u8) bool {
 
 /// The n-th field (1-based) of `line`, or null when the line has fewer.
 fn fieldAt(cfg: *const Options, line: []const u8, n: usize) ?[]const u8 {
+    // As in GNU, an empty line has no fields, whatever separates them.
+    if (line.len == 0) return null;
     if (cfg.tab_given and cfg.tab == null) return if (n == 1) line else null; // -t '': whole line
     var count: usize = 0;
     var p: usize = 0;
@@ -379,7 +381,7 @@ fn printPair(st: *State, l1: ?[]const u8, l2: ?[]const u8, fmt_auto: [2]usize) v
     }
     // Default: join field, rest of file 1, rest of file 2.
     const key: []const u8 = if (l1) |x| keyOf(cfg, x, cfg.f1) else if (l2) |y| keyOf(cfg, y, cfg.f2) else "";
-    out.write(key);
+    writeField(st, key);
     if (l1) |x| writeRest(st, x, cfg.f1);
     if (l2) |y| writeRest(st, y, cfg.f2);
     out.writeByte(cfg.term);
@@ -391,7 +393,7 @@ fn writeRest(st: *State, line: []const u8, skip: usize) void {
     while (fieldAt(cfg, line, n)) |f| : (n += 1) {
         if (n == skip) continue;
         st.out.writeByte(sepByte(cfg));
-        st.out.write(f);
+        writeField(st, f);
     }
 }
 
@@ -402,7 +404,7 @@ fn printUnpaired(st: *State, line: []const u8, which: u8, fmt_auto: [2]usize) vo
         return;
     }
     const field = if (which == 1) cfg.f1 else cfg.f2;
-    st.out.write(keyOf(cfg, line, field));
+    writeField(st, keyOf(cfg, line, field));
     writeRest(st, line, field);
     st.out.writeByte(cfg.term);
 }
