@@ -680,13 +680,20 @@ fn help(ctx: cli.Context) u8 {
         "  -M, --month-sort            compare (unknown) < 'JAN' < ... < 'DEC'\n" ++
         "  -h, --human-numeric-sort    compare human readable numbers (e.g., 2K 1G)\n" ++
         "  -n, --numeric-sort          compare according to string numerical value\n" ++
+        "  -R, --random-sort           shuffle, but group identical keys\n" ++
+        "      --random-source=FILE    get random bytes from FILE\n" ++
         "  -r, --reverse               reverse the result of comparisons\n" ++
         "      --sort=WORD             sort according to WORD:\n" ++
         "                                general-numeric -g, human-numeric -h, month -M,\n" ++
-        "                                numeric -n\n\n" ++
+        "                                numeric -n, random -R, version -V\n" ++
+        "  -V, --version-sort          natural sort of (version) numbers within text\n\n" ++
         "Other options:\n\n" ++
+        "      --batch-size=NMERGE   accepted and ignored (no temporary files)\n" ++
         "  -c, --check, --check=diagnose-first  check for sorted input; do not sort\n" ++
         "  -C, --check=quiet, --check=silent  like -c, but do not report first bad line\n" ++
+        "      --compress-program=PROG  accepted and ignored (no temporary files)\n" ++
+        "      --debug               annotate the part of the line used to sort,\n" ++
+        "                              and warn about questionable usage to stderr\n" ++
         "      --files0-from=F       read input from the files specified by\n" ++
         "                            NUL-terminated names in file F;\n" ++
         "                            If F is - then read names from standard input\n" ++
@@ -696,6 +703,8 @@ fn help(ctx: cli.Context) u8 {
         "  -s, --stable              stabilize sort by disabling last-resort comparison\n" ++
         "  -S, --buffer-size=SIZE    accepted and ignored (input is held in memory)\n" ++
         "  -t, --field-separator=SEP  use SEP instead of non-blank to blank transition\n" ++
+        "  -T, --temporary-directory=DIR  accepted and ignored (no temporary files)\n" ++
+        "      --parallel=N          accepted and ignored (one thread is used)\n" ++
         "  -u, --unique              output only the first of lines with equal keys;\n" ++
         "                              with -c, check for strict ordering\n" ++
         "  -z, --zero-terminated     line delimiter is NUL, not newline\n" ++
@@ -704,6 +713,5 @@ fn help(ctx: cli.Context) u8 {
         "KEYDEF is F[.C][OPTS][,F[.C][OPTS]] for start and stop position, where F is a\n" ++
         "field number and C a character position in the field; both are origin 1, and\n" ++
         "the stop position defaults to the line's end.  OPTS is one or more single-letter\n" ++
-        "ordering options [bdfghiMnr], which override global ordering options for that key.\n" ++
-        "Not implemented: -R, -V, --debug.\n")) 0 else 1;
+        "ordering options [bdfghiMnRrV], which override global ordering options for that key.\n")) 0 else 1;
 }

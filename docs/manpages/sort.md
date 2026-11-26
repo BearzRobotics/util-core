@@ -21,7 +21,7 @@ Writes the sorted concatenation of all FILEs to standard output. With no FILE, o
 : Numeric (exact decimal), general numeric (double), human numeric (SI suffixes k/K, M..Q), month (JAN..DEC). `--sort=WORD` selects them by name or unique prefix.
 
 -k F[.C][OPTS][,F[.C][OPTS]]
-: Key definition; OPTS from `bdfghiMnr`. A key with no letters inherits the global options.
+: Key definition; OPTS from `bdfghiMnRrV`. A key with no letters inherits the global options.
 
 -t SEP
 : Field separator (one byte, or `\0` for NUL).
@@ -47,6 +47,9 @@ Writes the sorted concatenation of all FILEs to standard output. With no FILE, o
 -S, -T, --parallel, --batch-size, --compress-program
 : Accepted and validated, then ignored: sorting holds all input in memory on one thread.
 
+-R, --random-sort, --random-source=FILE, -V, --version-sort, --debug
+: Random order keeping equal keys together; version order; show the part of each line used to sort (see COMPATIBILITY).
+
 --help, --version
 : Print help or version and exit.
 
@@ -69,7 +72,7 @@ Sorted output goes to standard output unless -o is given; diagnostics go to stan
 
 # COMPATIBILITY
 
-Reference: GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "sort invocation" (`info '(coreutils) sort invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/sort-invocation.html) and "Version sort ordering" (read, not implemented); POSIX.1-2024 (IEEE Std 1003.1-2024), sort, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sort.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sort.sh`).
+Reference: GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "sort invocation" (`info '(coreutils) sort invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/sort-invocation.html) and "Version sort ordering"; POSIX.1-2024 (IEEE Std 1003.1-2024), sort, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sort.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sort.sh`).
 
 See docs/compatibility/sort.md for details.
 
@@ -80,10 +83,9 @@ See docs/compatibility/sort.md for details.
 - Single-threaded; `--parallel=N` is validated and ignored.
 - Comparison is bytewise (C locale). LC_COLLATE, LC_CTYPE and LC_NUMERIC (thousands separators, multibyte characters) are not consulted; `-f` folds ASCII only.
 - `-g` parses with `double`; GNU uses `long double`, so values that differ only beyond 53 bits compare equal here, and values beyond the range of a double read as zero or infinity (1e-400 equals 0). NaNs compare equal to each other; GNU orders them by representation.
-- The traditional `+POS1 -POS2` key syntax is not recognised (those arguments are file names).
 - An ambiguous long option prints `option '--s' is ambiguous` without GNU's `; possibilities:` list (shared `cli.badLong`).
 - A write failure reports `write failed: 'standard output'` without the strerror text.
-- `--version` prints `sort (util-core) 0.1.0`; `--help` lists only the implemented options.
+- `--help` describes the options that have no effect here as accepted and ignored.
 
 # SEE ALSO
 

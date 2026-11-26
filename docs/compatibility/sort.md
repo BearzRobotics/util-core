@@ -4,13 +4,13 @@ Status: implemented with the gaps listed below; 868 differential test cases pass
 
 ## Reference
 
-GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "sort invocation" (`info '(coreutils) sort invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/sort-invocation.html) and "Version sort ordering" (read, not implemented); POSIX.1-2024 (IEEE Std 1003.1-2024), sort, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sort.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sort.sh`). Where POSIX and GNU differ, the text below says which one we follow.
+GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, installed from Ubuntu `gnu-coreutils` 9.7-3ubuntu2.1). Consulted 2026-11-07: the GNU manual node "sort invocation" (`info '(coreutils) sort invocation'`, https://www.gnu.org/software/coreutils/manual/html_node/sort-invocation.html) and "Version sort ordering"; POSIX.1-2024 (IEEE Std 1003.1-2024), sort, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sort.html. Behaviour was also checked by differential tests against the GNU binary run with LC_ALL=C (`sh test/test_sort.sh`). Where POSIX and GNU differ, the text below says which one we follow.
 
 ## Supported options
 
 - `-b, -d, -f, -i, -r`: Ignore leading blanks in key positions; dictionary order; fold case (ASCII); ignore non-printing (0x20-0x7e kept); reverse.
 - `-n, -g, -h, -M`: Numeric (exact decimal), general numeric (double), human numeric (SI suffixes k/K, M..Q), month (JAN..DEC). `--sort=WORD` selects them by name or unique prefix.
-- `-k F[.C][OPTS][,F[.C][OPTS]]`: Key definition; OPTS from `bdfghiMnr`. A key with no letters inherits the global options.
+- `-k F[.C][OPTS][,F[.C][OPTS]]`: Key definition; OPTS from `bdfghiMnRrV`. A key with no letters inherits the global options.
 - `-t SEP`: Field separator (one byte, or `\0` for NUL).
 - `-s, -u`: Stable (no last-resort comparison); output only the first of each run of equal keys.
 - `-c, -C, --check[=diagnose-first|quiet|silent]`: Check that the single input is sorted (and strictly ordered with -u); exit 1 on disorder.
@@ -19,6 +19,7 @@ GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, install
 - `-z`: NUL-terminated records.
 - `--files0-from=F`: Read NUL-separated input names from F (`-` for standard input).
 - `-S, -T, --parallel, --batch-size, --compress-program`: Accepted and validated, then ignored: sorting holds all input in memory on one thread.
+- `-R, --random-sort, --random-source=FILE, -V, --version-sort, --debug`, and the obsolete `+POS1 -POS2` keys (see below).
 - `--help, --version`: Print help or version and exit.
 
 ## Supported behaviour
@@ -36,10 +37,9 @@ GNU coreutils 9.7 (`/usr/bin/sort --version` on the development machine, install
 - Single-threaded; `--parallel=N` is validated and ignored.
 - Comparison is bytewise (C locale). LC_COLLATE, LC_CTYPE and LC_NUMERIC (thousands separators, multibyte characters) are not consulted; `-f` folds ASCII only.
 - `-g` parses with `double`; GNU uses `long double`, so values that differ only beyond 53 bits compare equal here, and values beyond the range of a double read as zero or infinity (1e-400 equals 0). NaNs compare equal to each other; GNU orders them by representation.
-- The traditional `+POS1 -POS2` key syntax is not recognised (those arguments are file names).
 - An ambiguous long option prints `option '--s' is ambiguous` without GNU's `; possibilities:` list (shared `cli.badLong`).
 - A write failure reports `write failed: 'standard output'` without the strerror text.
-- `--version` prints `sort (util-core) 0.0.0-dev`; `--help` lists only the implemented options.
+- `--help` describes the options that have no effect here as accepted and ignored.
 
 ## Library
 
@@ -76,6 +76,5 @@ Remaining gap: `-k` with a lexicographic key follows two table lookups on a pref
 
 ## Not yet done
 
-- The unimplemented options above.
 - Not run under multicall dispatch.
 - Not run on Windows or macOS.
