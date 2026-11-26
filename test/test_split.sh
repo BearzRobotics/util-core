@@ -168,6 +168,27 @@ run_tree "filter r/ empty input" "$S" --filter='cat > $FILE.out' -n r/3 empty
 run_tree "filter r/ empty input -e" "$S" -e --filter='cat > $FILE.out' -n r/3 empty
 run_tree "filter r/ -e few lines" "$S" -e --filter='cat > $FILE.out' -n r/30 words
 run_tree "filter r/ fails"      "$S" --filter='cat >/dev/null; [ $FILE != xab ] || exit 4; [ $FILE != xac ] || exit 5' -n r/3 words
+# -n r/N with more outputs than descriptors: files are closed and reopened to
+# append. The result must be what GNU writes (it runs without the limit).
+for how in "-n r/60" "-e -n r/60" "-u -n r/60" "--verbose -n r/60"; do
+    description="more outputs than descriptors $how"
+    d="$TEST_TMP/nofile"; rm -rf "$d"; mkdir -p "$d/g" "$d/o"
+    (cd "$d/g" && seq 1 500 > ../in && LC_ALL=C gnu $how ../in > ../g.out; echo $? > ../g.rc)
+    (cd "$d/o" && ulimit -n 16 && LC_ALL=C ours $how ../in > ../o.out 2> ../o.err; echo $? > ../o.rc)
+    if diff -r "$d/g" "$d/o" > /dev/null && cmp -s "$d/g.out" "$d/o.out" && cmp -s "$d/g.rc" "$d/o.rc" && [ ! -s "$d/o.err" ]; then
+        PASS=$((PASS + 1)); echo "PASS $description"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL $description (rc $(cat "$d/g.rc")/$(cat "$d/o.rc")) $(head -3 "$d/o.err")"
+    fi
+done
+# Filters cannot be closed and reopened; the error is the system's words.
+d="$TEST_TMP/nofile"; rm -rf "$d"; mkdir -p "$d"
+(cd "$d" && seq 1 99 | (ulimit -n 16 && "$BIN_DIR/split" -n r/60 --filter='cat >/dev/null' 2> err; echo $? > rc))
+if [ "$(cat "$d/rc")" = 1 ] && grep -q 'Too many open files' "$d/err"; then
+    PASS=$((PASS + 1)); echo "PASS more filters than descriptors is diagnosed"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL more filters than descriptors is diagnosed ($(cat "$d/rc") $(cat "$d/err"))"
+fi
 # A filter that stops reading early: the rest of its chunk is dropped and the
 # other chunks are still processed. The input is far larger than a pipe holds,
 # so split is sure to still be writing when the filter has gone.

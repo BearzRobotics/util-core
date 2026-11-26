@@ -63,6 +63,9 @@ pub const Event = union(enum) {
     open_input: struct { name: []const u8, err: anyerror },
     spawn_failed: struct { shell: []const u8, command: []const u8, err: anyerror },
     create_failed: struct { name: []const u8, err: anyerror },
+    /// -n r/N: an output that had been closed to free its descriptor could
+    /// not be opened again.
+    reopen_failed: struct { name: []const u8, errno: std.os.linux.E },
     would_overwrite: []const u8,
     filter_exit: struct { file: []const u8, code: u8, command: []const u8 },
     filter_signal: struct { file: []const u8, signal: u32, command: []const u8 },
@@ -260,6 +263,56 @@ const State = struct {
     ignore_sigpipe: bool = false,
     /// -n r/N: how many filters stopped reading before the end.
     filters_gone: u64 = 0,
+    /// -n r/N: the outputs. With more of them than there are descriptors,
+    /// files are closed and later reopened to append.
+    rr: []?RrOutput = &.{},
+    /// The slot of `rr` that is being opened.
+    rr_opening: usize = 0,
+
+    const Release = enum { released, nothing, failed };
+
+    /// Close one -n r/N output file to free its descriptor. As GNU does,
+    /// take the nearest one before the slot being opened: in a round robin
+    /// that is the one whose turn comes last. A filter cannot be reopened.
+    fn releaseOutput(st: *State) Release {
+        var i = st.rr_opening;
+        var others = st.rr.len -| 1;
+        while (others > 0) : (others -= 1) {
+            i = (if (i == 0) st.rr.len else i) - 1;
+            const o = if (st.rr[i]) |*o| o else continue;
+            if (o.closed or o.output.child != null) continue;
+            o.closed = true;
+            return if (st.closeOutput(&o.output.sink, o.name, false)) .released else .failed;
+        }
+        return .nothing;
+    }
+
+    /// Open the released output in slot `i` again; false when that fails
+    /// (reported).
+    fn reopenOutput(st: *State, i: usize) bool {
+        const o = &st.rr[i].?;
+        st.rr_opening = i;
+        var err: std.os.linux.E = .SUCCESS;
+        // O_NONBLOCK: do not wait for ever if this is a FIFO whose reader
+        // left when it was closed.
+        const flags = sys.O.WRONLY | sys.O.APPEND | sys.O.NONBLOCK | sys.O.NOCTTY;
+        const fd = while (true) {
+            if (sys.openFd(o.name, flags, 0, &err)) |fd| break fd;
+            if (err == .MFILE or err == .NFILE) switch (st.releaseOutput()) {
+                .released => continue,
+                .failed => return false,
+                .nothing => {},
+            };
+            st.obs.emit(.{ .reopen_failed = .{ .name = o.name, .errno = err } });
+            return false;
+        };
+        if (sys.getStatusFlags(fd, &err)) |old| _ = sys.setStatusFlags(fd, old & ~@as(usize, sys.O.NONBLOCK));
+        // For the systems where O_APPEND is not passed on.
+        _ = sys.seekFd(fd, 0, 2, &err);
+        o.output.sink = wsink.Sink.initFile(st.env.io, .{ .handle = fd, .flags = .{ .nonblocking = false } });
+        o.closed = false;
+        return true;
+    }
 
     fn nextName(st: *State) bool {
         st.cur_name.clearRetainingCapacity();
@@ -326,9 +379,16 @@ const State = struct {
     /// intact when `name` turns out to be it.
     fn createOutput(st: *State, name: []const u8) ?Io.File {
         const io = st.env.io;
-        const f = Io.Dir.cwd().createFile(io, name, .{ .truncate = false }) catch |e| {
-            st.obs.emit(.{ .create_failed = .{ .name = name, .err = e } });
-            return null;
+        const f = while (true) {
+            if (Io.Dir.cwd().createFile(io, name, .{ .truncate = false })) |f| break f else |e| {
+                if (e == error.ProcessFdQuotaExceeded or e == error.SystemFdQuotaExceeded) switch (st.releaseOutput()) {
+                    .released => continue,
+                    .failed => return null,
+                    .nothing => {},
+                };
+                st.obs.emit(.{ .create_failed = .{ .name = name, .err = e } });
+                return null;
+            }
         };
         var err: std.os.linux.E = .SUCCESS;
         const out = sys.fstatFd(f.handle, &err) orelse {
@@ -450,10 +510,12 @@ const Output = struct {
     child: ?std.process.Child = null,
 };
 
-/// One of the N outputs that -n r/N keeps open together.
+/// One of the N outputs that -n r/N writes in turn.
 const RrOutput = struct {
     output: Output,
     name: []u8,
+    /// The file was closed, with everything written, to free its descriptor.
+    closed: bool = false,
 
     /// Start the output with the next name; null when that fails (reported).
     fn create(st: *State, verbose: bool) ?RrOutput {
@@ -468,7 +530,7 @@ const RrOutput = struct {
     }
 
     fn finish(o: *RrOutput, st: *State, quiet: bool) bool {
-        const ok = st.finishOutput(&o.output.sink, &o.output.child, o.name, quiet);
+        const ok = o.closed or st.finishOutput(&o.output.sink, &o.output.child, o.name, quiet);
         st.env.gpa.free(o.name);
         return ok;
     }
@@ -775,18 +837,20 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
             var rec: std.ArrayList(u8) = .empty;
             defer rec.deinit(gpa);
             var rr_index: u64 = 0;
-            // Round robin needs all N outputs open at once; lines mode only one.
+            // Round robin writes the N outputs in turn; lines mode one at a time.
             var outs: []?RrOutput = &.{};
             defer {
                 // Outputs still open here belong to a run that has failed.
                 for (outs) |*slot| if (slot.*) |*o| {
                     _ = o.finish(st, true);
                 };
+                st.rr = &.{};
                 gpa.free(outs);
             }
             if (mode == .chunk_rr and !to_stdout) {
                 outs = gpa.alloc(?RrOutput, @intCast(n)) catch return false;
                 for (outs) |*o| o.* = null;
+                st.rr = outs;
             }
             // Lines mode: sequentially numbered files created lazily in order.
             var cur_end = end_of(0, per, rem);
@@ -822,8 +886,11 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
                 // its (empty) file or filter run, except with -e, where GNU
                 // does not number it either.
                 var closed = true;
-                for (outs) |*slot| {
-                    if (slot.* == null and !st.elide) slot.* = RrOutput.create(st, false) orelse return false;
+                for (outs, 0..) |*slot, i| {
+                    if (slot.* == null and !st.elide) {
+                        st.rr_opening = i;
+                        slot.* = RrOutput.create(st, false) orelse return false;
+                    }
                     if (slot.*) |*o| {
                         if (!o.finish(st, !closed)) closed = false;
                         slot.* = null;
@@ -869,13 +936,18 @@ fn emitChunkRecord(
         }
         if (outs[@intCast(idx)] == null and st.elide) {
             // With -e only chunks that receive a line get a file.
+            st.rr_opening = @intCast(idx);
             outs[@intCast(idx)] = RrOutput.create(st, false) orelse return false;
         } else if (outs[@intCast(idx)] == null) {
             // GNU creates the files for chunks in order 0..N-1 up front when
             // the round robin starts, so names follow chunk numbers.
-            for (outs) |*slot| slot.* = RrOutput.create(st, true) orelse return false;
+            for (outs, 0..) |*slot, i| {
+                st.rr_opening = i;
+                slot.* = RrOutput.create(st, true) orelse return false;
+            }
         }
         const o = &outs[@intCast(idx)].?;
+        if (o.closed and !st.reopenOutput(@intCast(idx))) return false;
         const sink = &o.output.sink;
         const was_failed = sink.failed;
         sink.write(rec);

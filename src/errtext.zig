@@ -25,6 +25,8 @@ pub fn errText(err: anyerror) []const u8 {
         error.FileBusy => "Device or resource busy",
         error.LinkQuotaExceeded => "Too many links",
         error.SystemResources => "Cannot allocate memory",
+        error.ProcessFdQuotaExceeded => "Too many open files",
+        error.SystemFdQuotaExceeded => "Too many open files in system",
         else => @errorName(err),
     };
 }
