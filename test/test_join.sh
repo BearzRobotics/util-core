@@ -159,5 +159,18 @@ for o in "-e X" "-e X -a1 -a2" ""; do
     run_cmp "empty line, whole-line key $o" -t '' $o -j 2 -a1 blank none
 done
 run_cmp "empty key by default" -e X -j 2 -v1 -v2 blank none
+# Repeated options: -o adds to the list; a different second value of a join
+# field, -t or -e is an error.
+printf 'a 1\n' > r1; printf 'a 2\n' > r2
+run_cmp "-o twice" -o 1.1 -o 2.2 r1 r2
+run_cmp "-o list twice" -o 1.1,1.2 -o '2.2 0' r1 r2
+run_cmp "-o list overrides auto" -o 1.2 -o auto r1 r2
+run_cmp "-o auto then list" -o auto -o 1.2 r1 r2
+for o in '' ',' ' ' ',1.1' '1.1,' '1.1,,' '1.1,,2.2' ' 1.1'; do run_cmp "-o spec '$o'" -o "$o" r1 r2; done
+for o in '-1 1 -1 2' '-1 2 -1 1' '-1 1 -1 1' '-j 2 -1 1' '-1 3 -j 2' '-2 3 -j 2' '-j 1 -j 2' '-1 1 -2 2' '-j1 2 -1 1' '-t , -t ;' '-t , -t ,' '-e X -e Y' '-e X -e X'; do
+    run_cmp "repeated $o" $o r1 r2
+done
+run_cmp "repeated -t, empty first" -t '' -t , r1 r2
+run_cmp "repeated -e, empty second" -e X -e '' r1 r2
 rm -rf "$W"
 print_summary

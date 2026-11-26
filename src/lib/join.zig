@@ -413,7 +413,8 @@ fn printSpecified(st: *State, l1: ?[]const u8, l2: ?[]const u8, fmt_auto: [2]usi
     const cfg = st.cfg;
     const out = st.out;
     var first = true;
-    if (cfg.auto) {
+    // A list of fields given with -o overrides "-o auto".
+    if (cfg.auto and cfg.output.len == 0) {
         // 0, then the other fields of file 1 and of file 2 as inferred from
         // the first line of each.
         const key = if (l1) |x| keyOf(cfg, x, cfg.f1) else if (l2) |y| keyOf(cfg, y, cfg.f2) else "";

@@ -22,7 +22,10 @@ pub fn main(ctx: cli.Context) u8 {
     defer out_spec.deinit(ctx.gpa);
     var files: std.ArrayList([]const u8) = .empty;
     defer files.deinit(ctx.gpa);
-    var o_arg: ?[]const u8 = null;
+    // The join fields given so far: a second, different one is an error.
+    var join_fields: [2]?usize = .{ null, null };
+    // The N of an obsolete "-j1 N" or "-j2 N"; GNU applies these last.
+    var old_fields: [2]?usize = .{ null, null };
 
     var i: usize = 0;
     var only_operands = false;
@@ -89,31 +92,43 @@ pub fn main(ctx: cli.Context) u8 {
                             if (n == 1) cfg.print1 = true else cfg.print2 = true;
                             if (c == 'v') cfg.pairs = false;
                         },
-                        'e' => cfg.empty = value,
+                        'e' => {
+                            if (cfg.empty) |e| if (!std.mem.eql(u8, e, value)) {
+                                cli.warn(ctx, "conflicting empty-field replacement strings", .{});
+                                return 1;
+                            };
+                            cfg.empty = value;
+                        },
                         'j' => {
                             const f = fieldNumber(ctx, value) orelse return 1;
-                            if (obsolete == '1') cfg.f1 = f else if (obsolete == '2') cfg.f2 = f else {
-                                cfg.f1 = f;
-                                cfg.f2 = f;
+                            if (obsolete == '1') old_fields[0] = f else if (obsolete == '2') old_fields[1] = f else {
+                                for (&join_fields) |*slot| if (!setJoinField(ctx, slot, f)) return 1;
                             }
                         },
-                        '1' => cfg.f1 = fieldNumber(ctx, value) orelse return 1,
-                        '2' => cfg.f2 = fieldNumber(ctx, value) orelse return 1,
-                        'o' => o_arg = value,
+                        '1', '2' => {
+                            const f = fieldNumber(ctx, value) orelse return 1;
+                            if (!setJoinField(ctx, &join_fields[c - '1'], f)) return 1;
+                        },
+                        // Each -o adds to the list.
+                        'o' => if (!parseOutput(ctx, &cfg, &out_spec, ctx.gpa, value)) return 1,
                         else => { // 't'
-                            if (value.len == 0) {
-                                cfg.tab = null;
-                                cfg.tab_given = true;
-                            } else if (value.len == 1) {
-                                cfg.tab = value[0];
-                                cfg.tab_given = true;
-                            } else if (std.mem.eql(u8, value, "\\0")) {
-                                cfg.tab = 0;
-                                cfg.tab_given = true;
-                            } else {
+                            // null: -t '', the whole line is one field.
+                            const tab: ?u8 = if (value.len == 0)
+                                null
+                            else if (value.len == 1)
+                                value[0]
+                            else if (std.mem.eql(u8, value, "\\0"))
+                                0
+                            else {
                                 cli.warn(ctx, "multi-character tab '{s}'", .{value});
                                 return 1;
+                            };
+                            if (cfg.tab_given and cfg.tab != tab) {
+                                cli.warn(ctx, "incompatible tabs", .{});
+                                return 1;
                             }
+                            cfg.tab = tab;
+                            cfg.tab_given = true;
                         },
                     }
                     j = a.len;
@@ -125,7 +140,11 @@ pub fn main(ctx: cli.Context) u8 {
             }
         }
     }
-    if (o_arg) |spec| if (!parseOutput(ctx, &cfg, &out_spec, ctx.gpa, spec)) return 1;
+    for (&join_fields, old_fields) |*slot, old| {
+        if (old) |f| if (!setJoinField(ctx, slot, f)) return 1;
+    }
+    if (join_fields[0]) |f| cfg.f1 = f;
+    if (join_fields[1]) |f| cfg.f2 = f;
 
     if (files.items.len < 2) {
         if (files.items.len == 0) {
@@ -201,13 +220,27 @@ fn fieldNumber(ctx: cli.Context, v: []const u8) ?usize {
     return n;
 }
 
+/// Record a join field (1-based). The message counts from 0, as GNU's does.
+fn setJoinField(ctx: cli.Context, slot: *?usize, field: usize) bool {
+    if (slot.*) |had| if (had != field) {
+        cli.warn(ctx, "incompatible join fields {d}, {d}", .{ had - 1, field - 1 });
+        return false;
+    };
+    slot.* = field;
+    return true;
+}
+
 fn parseOutput(ctx: cli.Context, cfg: *join.Options, out_spec: *std.ArrayList(join.Spec), gpa: std.mem.Allocator, text: []const u8) bool {
     if (std.mem.eql(u8, text, "auto")) {
         cfg.auto = true;
         return true;
     }
-    var it = std.mem.tokenizeAny(u8, text, ", \t");
-    while (it.next()) |item| {
+    // Every separator ends an entry, and only one at the very end may be
+    // followed by nothing.
+    var it = std.mem.splitAny(u8, text, ", \t");
+    var first = true;
+    while (it.next()) |item| : (first = false) {
+        if (item.len == 0 and !first and it.peek() == null) break;
         if (std.mem.eql(u8, item, "0")) {
             out_spec.append(gpa, .{ .file = 0, .field = 0 }) catch return false;
             continue;
