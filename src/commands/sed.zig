@@ -205,6 +205,7 @@ fn report(context: ?*anyopaque, ev: sed.Event) void {
     switch (ev) {
         .cant_read => |e| cli.warn(ctx, "can't read {s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
         .cant_edit => |n| cli.warn(ctx, "couldn't edit {s}: not a regular file", .{n}),
+        .subprocess_failed => cli.warn(ctx, "error in subprocess", .{}),
         .read_error => |e| cli.warn(ctx, "read error on {s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
         .write_error => |e| {
             if (e.errno) |no| {

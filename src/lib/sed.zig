@@ -132,6 +132,9 @@ pub const Event = union(enum) {
     cant_read: struct { name: []const u8, errno: LX.E },
     /// "couldn't edit NAME: not a regular file" (status 4, continues).
     cant_edit: []const u8,
+    /// "error in subprocess": /bin/sh could not be run for `e` or `s///e`
+    /// (fatal, status 4).
+    subprocess_failed,
     /// "read error on NAME: ERRNO" (fatal, status 4).
     read_error: struct { name: []const u8, errno: LX.E },
     /// "couldn't write ITEMS items to NAME: ERRNO" (fatal, status 4). `name`
@@ -2097,23 +2100,27 @@ const Exec = struct {
         return true;
     }
 
+    /// What `/bin/sh -c COMMAND` writes to its standard output, for `e` and
+    /// `s///e`. As with GNU sed's popen, the command is passed unchanged, the
+    /// text comes through a pipe and the shell's exit status is ignored.
     fn runShell(e: *Exec, command: []const u8) Err![]u8 {
         try e.flushAll();
-        var tmpl: [64]u8 = undefined;
-        const pid: u32 = @intCast(LX.getpid());
-        const outp = std.fmt.bufPrint(&tmpl, "/tmp/.sed-e-{d}", .{pid}) catch unreachable;
-        const sh = std.fmt.allocPrint(e.gpa, "( {s} ) > {s}", .{ command, outp }) catch return error.OutOfMemory;
-        defer e.gpa.free(sh);
-        const child = std.process.spawn(e.s.env.io, .{ .argv = &.{ "/bin/sh", "-c", sh } }) catch return &.{};
-        _ = sys.waitPid(child.id.?, true);
+        const io = e.s.env.io;
+        var child = std.process.spawn(io, .{ .argv = &.{ "/bin/sh", "-c", command }, .stdout = .pipe }) catch return e.subprocessFailed();
         var data: std.ArrayList(u8) = .empty;
-        var err: LX.E = .SUCCESS;
-        if (sys.openFd(outp, sys.O.RDONLY, 0, &err)) |fd| {
-            _ = try e.readAll(fd, &data, outp);
-            _ = sys.closeFd(fd);
-        }
-        _ = sys.unlinkPath(outp, false);
+        // Closing the pipe in wait() ends a child still writing after a
+        // failed read.
+        errdefer _ = child.wait(io) catch {};
+        _ = try e.readAll(child.stdout.?.handle, &data, "subprocess");
+        _ = child.wait(io) catch return e.subprocessFailed();
         return data.items;
+    }
+
+    fn subprocessFailed(e: *Exec) Err {
+        e.s.obs.emit(.subprocess_failed);
+        e.flushAll() catch {};
+        e.s.exit_code = 4;
+        return error.Abort;
     }
 
     /// Run the script once on the current pattern space. Returns true to quit.

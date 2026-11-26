@@ -85,7 +85,7 @@ See docs/compatibility/sed.md for details.
 - Regular expressions use the Perl-dialect engine of regex-zig through src/posixre.zig: alternation is leftmost-first, POSIX and GNU use leftmost-longest, so `s/a|ab/X/` differs on "ab".
 - `--debug` is accepted but prints nothing extra (GNU prints the program and a trace).
 - C locale only: no multibyte characters.
-- `e` and `s///e` run the command through `/bin/sh` and a temporary file in /tmp.
+- `e` and `s///e` run the command with `/bin/sh -c` and read its output through a pipe; no temporary file is used.
 - `--version` prints an abbreviated banner.
 
 # SEE ALSO

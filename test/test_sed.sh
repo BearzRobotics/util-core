@@ -345,6 +345,21 @@ sd '--sandbox w' nums --sandbox 'w x'
 sd '--sandbox e' nums --sandbox 'e echo'
 sd '--sandbox s///e' nums --sandbox 's/a/b/e'
 sd '--sandbox s///w' nums --sandbox 's/a/b/w x'
+# e and s///e pass the command to the shell unchanged and read it from a pipe.
+sd 'e with a trailing comment' nums '1e echo hi # note'
+printf 'echo hi # c\nprintf "a\\n\\n"\n' > shcmds
+sd 'e on pattern space with a comment' shcmds e
+sd 's///e with a here-document' one 's/.*/cat <<E\nbody\nE/e'
+sd 'e with a failing command' nums '1e exit 3'
+# No capture file: a link planted for the old predictable name is not followed.
+printf 'PRECIOUS\n' > victim
+bash -c 'ln -sf "$PWD/victim" /tmp/.sed-e-$$ && exec "$1" "1e echo hijacked" one >e.out' _ "$BIN_DIR/sed"
+if [ "$(cat victim)" = PRECIOUS ] && [ "$(head -n 1 e.out)" = hijacked ]; then PASS=$((PASS + 1)); echo "PASS e writes no file in /tmp"
+else FAIL=$((FAIL + 1)); echo "FAIL e writes no file in /tmp"; fi
+for l in /tmp/.sed-e-*; do
+    if [ -L "$l" ] && [ "$(readlink "$l")" = "$PWD/victim" ]; then rm -f "$l"; fi
+done
+
 sd '--follow-symlinks' nums --follow-symlinks 2p
 sd '-l bad' nums -l x p
 sd '-l 5' nums -l 5 -n l
