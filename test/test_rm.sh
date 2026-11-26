@@ -151,7 +151,7 @@ if unshare -rm true 2>/dev/null; then
         for t in gnu ours; do
             if [ $t = gnu ]; then bin=/usr/bin/rm; else bin="$BIN_DIR/rm"; fi
             rm -rf "$OW/$t"; mkdir -p "$OW/$t/d/m/deep" "$OW/$t/d/n" "$OW/$t/e"; : > "$OW/$t/d/f"; : > "$OW/$t/d/n/g"; : > "$OW/$t/e/h"
-            ( cd "$OW/$t" && unshare -rm sh -c "mount -t tmpfs t d/m && mkdir d/m/deep && : > d/m/x && : > d/m/deep/y && LC_ALL=C $bin \"\$@\" > out 2> err </dev/null; echo \$? > rc; find . -not -path ./out -not -path ./err -not -path ./rc | sort > left" sh "$@" )
+            ( cd "$OW/$t" && unshare -rm sh -c "mount -t tmpfs t d/m && mkdir d/m/deep && : > d/m/x && : > d/m/deep/y && LC_ALL=C $bin \"\$@\" > out 2> err </dev/null; echo \$? > rc; find . -not -path ./out -not -path ./err -not -path ./rc -not -path ./left | sort > left" sh "$@" )
             sed "s#$bin#rm#g" "$OW/$t/err" > "$OW/$t/err2"
         done
         for f in rc err2 left out; do cmp -s "$OW/gnu/$f" "$OW/ours/$f" || { FAIL=$((FAIL + 1)); echo "FAIL $d ($f)"; diff "$OW/gnu/$f" "$OW/ours/$f" | head -5; return; }; done
