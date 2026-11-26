@@ -12,17 +12,18 @@ Module `util_core.pager` (`src/lib/pager.zig`): the growing text, wrapping, scro
 
 ## Supported
 
-Options `-F -R -r -S -N -i -I`, the long names of those, `--help`, `--version`; a set of other options is accepted and ignored (see the manual page). Keys as listed in the manual page, including follow (`F`), which keeps showing data that arrives. Streaming: input is read by the calling thread and fed to the pager while the user scrolls; the screen is redrawn at most about 30 times a second.
+Options `-F -R -r -S -N -i -I`, the long names of those, `--help`, `--version`; a set of other options is accepted and ignored (see the manual page). Keys as listed in the manual page, including follow (`F`), which keeps showing data that arrives from a pipe or is added to a regular file (the last one, if several). Streaming: input is read by the calling thread and fed to the pager while the user scrolls; the screen is redrawn at most about 30 times a second.
 
 ## Extensions
 
-None; it is a subset of less. Choice of the alternate screen: the text is not left on the screen after quitting (less without `-X`).
+Scrolling, searching and quitting work while following; GNU less has to be interrupted first. Otherwise it is a subset of less. Choice of the alternate screen: the text is not left on the screen after quitting (less without `-X`).
 
 ## Known deviations and gaps
 
 - Search is plain text (smart case with `-i`), not a regular expression, and does not wrap past the end.
 - `:n`, `:p`, `v`, marks, numeric prefixes, `-P` prompts, `+CMD` and the `LESS` variable are not implemented.
 - Several files are one concatenated text.
+- Following keeps the open descriptor: there is no `--follow-name`, so rotated files are not reopened, and truncation is not noticed. `+F` is not implemented.
 - Display widths: bytes count one column, UTF-8 continuation bytes none, tabs go to the next multiple of 8; wide and combining characters are not handled.
 - A lone ESC is a key of its own and swallows the byte after it.
 - The text is kept in memory.

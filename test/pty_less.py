@@ -118,6 +118,26 @@ r_in, w_in = None, None
 out, st, mid = session([less], [(b'F', 0.2), (b'x', 0.2), (b'q', 0.5)], stdin_feed=[b"first\n"], delay=0.2)
 check("less: F shows 'Waiting for data'", 'Waiting for data' in out)
 
+# Follow a file that is still being written, scrolling meanwhile
+def following(argv, grow):
+    """Follow `grow`, adding a line before each key is sent."""
+    with open(grow, 'w') as f:
+        f.write(''.join(f"old {i}\n" for i in range(60)))
+    def add(line):
+        return "echo %s >> '%s'" % (line, grow)
+    script = ("(sleep 1; %s; sleep 2; %s) & exec %s" %
+              (add('added-first'), add('added-later'), argv))
+    # F; wait for the first line; scroll up while the second arrives; G; quit.
+    return session(['/bin/sh', '-c', script],
+                   [(b'F', 2.0), (b'k', 2.0), (b'G', 1.0), (b'q', 0.5)])
+
+grow = os.path.join(tmp, 'pty_grow.log')
+for label, argv in [('less FILE', "'%s' '%s'" % (less, grow)), ('less <FILE', "'%s' <'%s'" % (less, grow))]:
+    out, st, _ = following(argv, grow)
+    check('%s: F shows what is added to a file' % label, 'added-first' in out)
+    check('%s: following goes on after scrolling' % label,
+          'Following (G' in out and 'added-later' in out and st == 0)
+
 # -F: fits on one screen: printed, no alternate screen, exits by itself
 out, st, _ = session([less, '-F', short], [])
 check("less -F: short file printed and exits", st == 0 and 'alpha' in out and '\x1b[?1049h' not in out)

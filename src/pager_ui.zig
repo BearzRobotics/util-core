@@ -55,6 +55,8 @@ pub const Ui = struct {
     left: bool = false,
     /// The alternate screen is in use.
     entered: bool = false,
+    /// The key thread has returned: there is nobody left to wait for.
+    keys_ended: std.atomic.Value(bool) = .init(false),
     sink_state: Sink = undefined,
 
     /// Open the terminal and show an empty pager. Null when there is no
@@ -164,6 +166,7 @@ pub const Ui = struct {
     }
 
     fn keyLoop(ui: *Ui) void {
+        defer ui.keys_ended.store(true, .release);
         // A copy: `deinit` may close the terminal while this thread reads.
         const tty = ui.tty.?;
         var parser: pager.KeyParser = .{};
@@ -237,7 +240,14 @@ pub const Ui = struct {
     /// on one screen is printed and the pager closed (less -F). Otherwise
     /// wait here until the user leaves.
     pub fn finish(ui: *Ui, quit_if_fits: bool) Outcome {
+        return ui.finishGrowing(quit_if_fits, null);
+    }
+
+    /// `finish` for input that ends in a regular file, which may still grow:
+    /// while the pager is in follow mode, what is added to `source` is read.
+    pub fn finishGrowing(ui: *Ui, quit_if_fits: bool, source: ?Io.File) Outcome {
         ui.lock();
+        ui.pg.growing = source != null;
         ui.pg.finish();
         if (ui.stopped) {
             ui.unlock();
@@ -260,11 +270,33 @@ pub const Ui = struct {
         }
         ui.draw();
         ui.unlock();
+        if (source) |file| ui.watch(file);
         if (ui.thread) |t| {
             t.join();
             ui.thread = null;
         }
         return .quit;
+    }
+
+    /// Feed the pager what is appended to `file` while it is following, for
+    /// as long as keys can still arrive. Leaving the pager ends the process.
+    fn watch(ui: *Ui, file: Io.File) void {
+        var buf: [65536]u8 = undefined;
+        while (!ui.keys_ended.load(.acquire)) {
+            ui.lock();
+            const following = ui.pg.follow;
+            ui.unlock();
+            if (following) {
+                // At the present end a read returns nothing, or fails with
+                // end of stream; a later one returns what has been added.
+                const n = file.readStreaming(ui.io, &.{&buf}) catch 0;
+                if (n > 0) {
+                    ui.feed(buf[0..n]) catch return;
+                    continue;
+                }
+            }
+            ui.io.sleep(Io.Duration.fromMilliseconds(100), .awake) catch return;
+        }
     }
 
     /// Restore the terminal and free everything. Call after `finish`, or to

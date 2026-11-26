@@ -105,7 +105,11 @@ pub fn main(ctx: cli.Context) u8 {
             ui.?.feed(buf[0..n]) catch break :feed;
         }
     }
-    _ = ui.?.finish(quit_if_one);
+    // A file can still grow (a log being written): F then reads what is
+    // added to the last one.
+    const last = inputs.items[inputs.items.len - 1].file;
+    const regular = if (last.stat(ctx.io)) |st| st.kind == .file else |_| false;
+    _ = ui.?.finishGrowing(quit_if_one, if (regular) last else null);
     return status;
 }
 

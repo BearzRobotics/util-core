@@ -16,7 +16,7 @@
 //!
 //! Keys: space f ^F PgDn page down; b ^B PgUp page up; d ^D / u ^U half page;
 //! j e ^N Enter Down / k y ^P Up one row; g < Home top; G > End bottom;
-//! / ? search forward / backward; n N repeat; F follow (read until a key);
+//! / ? search forward / backward; n N repeat; F follow (^X ^C end it);
 //! = position; r R ^L redraw; h help line; q Q ^C quit.
 
 const std = @import("std");
@@ -139,7 +139,11 @@ pub const Pager = struct {
     sub: usize = 0,
     /// All the input has arrived.
     eof: bool = false,
+    /// Follow mode: new data is read as it comes, and the view moves with it
+    /// while it is at the bottom. The keys keep working.
     follow: bool = false,
+    /// The input is a file that may still grow after `finish`.
+    growing: bool = false,
     mode: enum { browse, input } = .browse,
     forward: bool = true,
     input: std.ArrayList(u8) = .empty,
@@ -169,6 +173,8 @@ pub const Pager = struct {
     pub fn append(p: *Pager, bytes: []const u8) !bool {
         if (bytes.len == 0) return false;
         const was_full = p.screenFull();
+        // Only a view that is at the end moves with the data.
+        const pinned = p.follow and p.atBottom();
         const base = p.text.items.len;
         try p.text.appendSlice(p.gpa, bytes);
         // The line that was still open grows.
@@ -181,7 +187,7 @@ pub const Pager = struct {
             }
             if (c == '\n') p.at_line_start = true;
         }
-        if (p.follow) {
+        if (pinned) {
             p.toBottom();
             return true;
         }
@@ -191,7 +197,7 @@ pub const Pager = struct {
     /// The input has ended.
     pub fn finish(p: *Pager) void {
         p.eof = true;
-        if (p.follow) p.follow = false;
+        if (!p.growing) p.follow = false;
     }
 
     fn textCols(p: *const Pager) usize {
@@ -369,8 +375,9 @@ pub const Pager = struct {
     pub fn key(p: *Pager, k: Key) Action {
         p.message = "";
         if (p.mode == .input) return p.inputKey(k);
-        if (p.follow) {
-            p.follow = false; // any key ends following
+        // ^C and ^X end following; every other key does what it always does.
+        if (p.follow and (k == .interrupt or (k == .char and k.char == 0x18))) {
+            p.follow = false;
             return .redraw;
         }
         const page: isize = @intCast(p.body());
@@ -584,6 +591,10 @@ pub const Pager = struct {
         var pos: Pos = .{ .line = p.top, .sub = p.sub };
         var have = p.lineCount() > 0;
         for (0..p.body()) |_| {
+            // Clear the row before drawing it: line wrapping is off, so after
+            // a full row the cursor is still on the last column, and clearing
+            // then would erase the character there.
+            try w.writeAll("\x1b[K");
             if (have) {
                 const ln = p.line(pos.line);
                 // Where does this screen row start and end inside the line?
@@ -602,7 +613,7 @@ pub const Pager = struct {
                 try w.writeAll("\x1b[0m");
                 have = p.stepDown(&pos);
             } else try w.writeAll("~");
-            try w.writeAll("\x1b[K\r\n");
+            try w.writeAll("\r\n");
         }
         try w.writeAll("\x1b[K");
         if (p.mode == .input) {
@@ -611,7 +622,10 @@ pub const Pager = struct {
         } else if (p.message.len > 0) {
             try w.print("\x1b[7m{s}\x1b[0m", .{p.message});
         } else if (p.follow) {
-            try w.writeAll("\x1b[7mWaiting for data... (press a key to stop)\x1b[0m");
+            try w.writeAll(if (p.atBottom())
+                "\x1b[7mWaiting for data... (^X or ^C to stop)\x1b[0m"
+            else
+                "\x1b[7mFollowing (G: go to the end, ^X or ^C: stop)\x1b[0m");
         } else if (p.eof and p.atBottom()) {
             try w.writeAll("\x1b[7m(END)\x1b[0m");
         } else try w.writeByte(':');
@@ -676,6 +690,20 @@ test "pager: scrolling, ends and fits" {
     try std.testing.expect(q.fits());
 }
 
+test "pager: a row that fills the window is not cleared after it is drawn" {
+    const gpa = std.testing.allocator;
+    for ([_]bool{ false, true }) |chop| {
+        var p = Pager.init(gpa, .{ .chop = chop }, 4, 10);
+        defer p.deinit();
+        _ = try p.append("abcdefghiZ\n");
+        p.finish();
+        var aw: Io.Writer.Allocating = .init(gpa);
+        defer aw.deinit();
+        try p.render(&aw.writer);
+        try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[KabcdefghiZ\x1b[0m\r\n") != null);
+    }
+}
+
 test "pager: long lines wrap into rows and scroll by row" {
     const gpa = std.testing.allocator;
     var p = Pager.init(gpa, .{}, 4, 10); // 3 body rows, 10 columns
@@ -737,13 +765,34 @@ test "pager: growing input and follow" {
     try std.testing.expect(p.follow);
     try std.testing.expect(try p.append("seven\n"));
     try std.testing.expectEqual(@as(usize, 4), p.top); // 7 lines, 3 body rows
-    _ = p.key(.{ .char = 'x' }); // any key ends following
+    // Scrolling back keeps following, and the view stays where it was put.
+    _ = p.key(.up);
+    try std.testing.expect(p.follow);
+    try std.testing.expectEqual(@as(usize, 3), p.top);
+    try std.testing.expect(!(try p.append("eight\n")));
+    try std.testing.expectEqual(@as(usize, 3), p.top);
+    // Back at the end, the view moves with the data again.
+    _ = p.key(.{ .char = 'G' });
+    try std.testing.expect(try p.append("nine\n"));
+    try std.testing.expectEqual(@as(usize, 6), p.top);
+    // A growing file is still followed at its present end; a stream is not.
+    p.growing = true;
+    p.finish();
+    try std.testing.expect(p.follow);
+    try std.testing.expectEqual(Action.redraw, p.key(.interrupt)); // ends following only
     try std.testing.expect(!p.follow);
+    _ = p.key(.{ .char = 'F' });
+    _ = p.key(.{ .char = 0x18 }); // ^X
+    try std.testing.expect(!p.follow);
+    _ = p.key(.{ .char = 'F' });
+    try std.testing.expectEqual(Action.quit, p.key(.{ .char = 'q' }));
+    p.follow = false;
+    p.growing = false;
     // A partial line keeps growing in place.
     _ = try p.append("par");
     _ = try p.append("tial\n");
-    try std.testing.expectEqual(@as(usize, 8), p.lineCount());
-    try std.testing.expectEqualStrings("partial", p.line(7));
+    try std.testing.expectEqual(@as(usize, 10), p.lineCount());
+    try std.testing.expectEqualStrings("partial", p.line(9));
 }
 
 test "pager: search ignores escape sequences, smart case, no wrap" {
