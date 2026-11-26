@@ -394,7 +394,11 @@ fd '-exec plus -o' a -type f -exec echo {} + -o -print
 fd '-exec plus depth' a -depth -type f -exec echo {} +
 fd '-exec plus two' a -type f -name '*.txt' -exec echo A {} + -exec echo B {} +
 fd '-exec output order' a -maxdepth 1 -print -exec echo X ';'
-fd '-exec stdin' a -maxdepth 1 -type f -exec cat {} ';'
+# The command of -exec reads find's standard input (it must not be empty here,
+# or a closed or replaced one would look the same).
+printf 'from standard input\n' > stdin.txt
+CMP_STDIN="$PWD/stdin.txt" run_cmp '-exec stdin' a -maxdepth 1 -type f -exec sh -c 'cat; echo "after $1"' x {} ';'
+rm -f stdin.txt
 fd '-exec in subdir' a -execdir pwd ';'
 fd '-execdir' a -type f -execdir echo {} ';'
 fd '-execdir +' a -type f -execdir echo {} +

@@ -70,7 +70,8 @@ run_x "not executable" in2 /etc/passwd
 run_x "directory command" in2 /tmp
 run_x "stdin /dev/null for child" in2 sh -c 'cat | wc -c'
 run_x "env passthrough" in2 -n1 sh -c 'echo $HOME_TEST'
-run_x "-P2 slot" in2 -P2 -n1 --process-slot-var=SLOT sh -c 'echo slot=$SLOT >/dev/null'
+# (One command at a time, for a fixed order; slots with -P2 are tested below.)
+run_x "--process-slot-var" in2 -P1 -n1 --process-slot-var=SLOT sh -c 'echo "slot=${SLOT-unset} $*"' x
 run_x "-t quoting" in3 -t printf '%s\n'
 run_x "--verbose" in2 --verbose -n2 echo
 run_x "--no-run-if-empty" empty --no-run-if-empty echo

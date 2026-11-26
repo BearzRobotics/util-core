@@ -24,6 +24,16 @@ trap 'chmod -R u+rwx "$W" 2>/dev/null; chmod -R u+rwx "$TEST_TMP" 2>/dev/null; r
 ln -s dir1 d2/loopback 2>/dev/null
 
 td() { d="$1"; shift; CMP_STDIN=/dev/null run_cmp "$d" "$@"; }
+# tree_o DESC ARG...: with -o, each writes a file of its own; the two files,
+# what is printed besides, and the status must agree.
+tree_o() {
+    d="$1"; shift
+    rm -f "$W/o.gnu" "$W/o.ours"
+    exp=$(LC_ALL="$CMP_LOCALE" gnu -o "$W/o.gnu" "$@" 2>&1; echo "status $?")
+    act=$(LC_ALL="$CMP_LOCALE" ours -o "$W/o.ours" "$@" 2>&1; echo "status $?")
+    if [ "$exp" = "$act" ] && [ -s "$W/o.gnu" ] && cmp -s "$W/o.gnu" "$W/o.ours"; then PASS=$((PASS + 1)); printf "PASS %s\n" "$d"
+    else FAIL=$((FAIL + 1)); printf "FAIL %s (%s / %s)\n" "$d" "$exp" "$act"; diff "$W/o.gnu" "$W/o.ours" | head -6; fi
+}
 
 for loc in C C.UTF-8; do
   CMP_LOCALE=$loc
@@ -53,7 +63,7 @@ for loc in C C.UTF-8; do
   td "$loc deep -L 3" -L 3 deep
   td "$loc deep -f" -f deep
   td "$loc deep -pugsD" -pugsD deep
-  td "$loc -o out" -o out.txt dir1
+  tree_o "$loc -o out" dir1
   td "$loc -o out missing dir" -o /nonexistent/out dir1
   td "$loc -- args" -- dir1
   td "$loc --version" --version
