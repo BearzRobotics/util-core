@@ -491,6 +491,30 @@ run_tree_t 'long path' "$SET; mkdir -p $(printf 'dddddddddd/%.0s' 1 2 3 4 5 6 7 
 run_tree_t 'many files' "$SET; mkdir many; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do : > many/f\$i; done" many -type f
 run_tree_t 'sorted many' "$SET; mkdir many; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do : > many/f\$i; done" many -type f -name 'f1*'
 
+# -execdir and -okdir refuse a PATH that would be searched inside the tree.
+# The planted "cat" must not run; stdout, status and the message are GNU's.
+mkdir -p "$W/planted/sub/bin"
+printf '#!/bin/sh\necho PLANTED\n' > "$W/planted/sub/cat"
+cp "$W/planted/sub/cat" "$W/planted/sub/bin/cat"; chmod +x "$W/planted/sub/cat" "$W/planted/sub/bin/cat"
+echo data > "$W/planted/sub/data"
+execdir_path_cmp() { # NAME PATH ACTION
+    exp=$(cd "$W/planted" && env PATH="$2" LC_ALL=C /usr/bin/find . -name data "$3" cat {} ';' </dev/null 2>"$W/gerr"; echo "status $?")
+    act=$(cd "$W/planted" && env PATH="$2" LC_ALL=C "$BIN_DIR/find" . -name data "$3" cat {} ';' </dev/null 2>"$W/oerr"; echo "status $?")
+    gerr=$(sed 's#^/usr/bin/find:#find:#' "$W/gerr"); oerr=$(sed 's#^[^ ]*find:#find:#' "$W/oerr")
+    if [ "$exp" = "$act" ] && [ "$gerr" = "$oerr" ]; then PASS=$((PASS + 1)); printf "PASS %s\n" "$1"
+    else FAIL=$((FAIL + 1)); printf "FAIL %s\n  GNU: %s %s\n  ours: %s %s\n" "$1" "$exp" "$gerr" "$act" "$oerr"; fi
+}
+for action in -execdir -okdir; do
+    execdir_path_cmp "$action with . in PATH" ".:/usr/bin:/bin" $action
+    execdir_path_cmp "$action with a relative PATH entry" "bin:/usr/bin:/bin" $action
+    execdir_path_cmp "$action with a leading colon" ":/usr/bin:/bin" $action
+    execdir_path_cmp "$action with a trailing colon" "/usr/bin:/bin:" $action
+    execdir_path_cmp "$action with a doubled colon" "/usr/bin::/bin" $action
+    execdir_path_cmp "$action with an empty PATH" "" $action
+done
+execdir_path_cmp "-execdir with an absolute PATH" "/usr/bin:/bin" -execdir
+execdir_path_cmp "-exec is not restricted" ".:/usr/bin:/bin" -exec
+
 help_cmp_find() {
     exp=$(LC_ALL=C /usr/bin/find --help | sed 's#/usr/bin/find#find#')
     act=$(ours --help | grep -v '^Actions (not in GNU):' | sed 's#^Usage: [^ ]*#Usage: find#')

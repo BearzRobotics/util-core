@@ -27,6 +27,7 @@ GNU findutils 4.10.0 (`/usr/bin/find --version` on the development machine). Con
 - Entries are visited in readdir order (fts without a comparison function); `-depth` visits directories after their contents.
 - If the expression has no action other than -prune or -quit, `-print` is added.
 - `-exec ... +` batches arguments (about 100 KB per command line) and runs the rest at the end; `-execdir` runs in the file's directory with a `./name` argument.
+- As GNU does, `-execdir` and `-okdir` are refused, before anything is searched, when PATH has an empty element, `.` or any other relative directory, since the program would be looked up inside the searched tree. An unset PATH is accepted. On Windows the system also looks for a bare program name in the directory the command runs in, which this check does not cover: give `-execdir` an absolute program path there.
 - Symbolic-link loops under -L are reported like GNU (`File system loop detected`).
 - The minute tests (-amin/-cmin/-mmin/-used) round up and the day tests round down, as GNU's pred_timewindow does.
 

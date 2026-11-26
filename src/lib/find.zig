@@ -820,6 +820,7 @@ const Parser = struct {
                 argv.append(st.gpa, x) catch return error.OutOfMemory;
             }
             if (!terminated) return fail(st, "missing argument to `{s}'", .{a});
+            if (n.dir) try checkExecDirPath(st, a);
             if (argv.items.len == 0) return fail(st, "invalid argument `;' to `{s}'", .{a});
             if (n.plus) {
                 var cnt: usize = 0;
@@ -833,6 +834,23 @@ const Parser = struct {
             return n;
         }
         return fail(st, "unknown predicate `{s}'", .{a});
+    }
+
+    /// -execdir and -okdir run the program from inside the directory being
+    /// searched, and PATH is searched there: an empty or relative entry would
+    /// run a program that anyone able to write in the tree put there. Refuse
+    /// such a PATH, as GNU find does, in its words.
+    fn checkExecDirPath(st: *State, action: []const u8) Error!void {
+        const path = st.env.getenv("PATH") orelse return;
+        var it = std.mem.splitScalar(u8, path, std.fs.path.delimiter);
+        while (it.next()) |dir| {
+            if (dir.len == 0 or std.mem.eql(u8, dir, ".")) {
+                return fail(st, "The current directory is included in the PATH environment variable, which is insecure in combination with the {s} action of find.  Please remove the current directory from your $PATH (that is, remove \".\", doubled colons, or leading or trailing colons)", .{action});
+            }
+            if (!std.fs.path.isAbsolute(dir)) {
+                return fail(st, "The relative path {s} is included in the PATH environment variable, which is insecure in combination with the {s} action of find.  Please remove that entry from $PATH", .{ try quoteInner(st, dir), action });
+            }
+        }
     }
 
     fn openOut(p: *Parser, name: []const u8) Error!*OutFile {
