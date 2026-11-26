@@ -607,6 +607,14 @@ pub const Copier = struct {
                         c.errPrint("will not overwrite just-created {f} with {f}", .{ quote.quoteA(dst_name), quote.quoteA(src_name) });
                         return false;
                     }
+                    // Cloning is not implemented, so --reflink=always cannot
+                    // copy file data. Say so while the destination is whole:
+                    // before it is backed up, removed or truncated.
+                    const copies_data = src_sb.isReg() or (x.copy_as_regular and !src_sb.isLink() and !src_sb.isDir());
+                    if (x.reflink == .always and x.data_copy_required and copies_data and !x.move_mode and !x.hard_link and !x.symbolic_link) {
+                        c.errno("failed to clone {f} from {f}", .{ quote.quoteA(dst_name), quote.quoteA(src_name) }, .OPNOTSUPP);
+                        return false;
+                    }
                     const srcbase = lastComponent(src_name);
                     if (x.backup_type != .none and !dotOrDotdot(srcbase) and (x.move_mode or !dst_sb.isDir())) {
                         if (x.backup_type != .numbered and c.sourceIsDstBackup(srcbase, src_sb, dst_name)) {
@@ -1047,7 +1055,9 @@ pub const Copier = struct {
         var dest_fd: sys.Handle = sys.invalid_handle;
         var dest_errno: E = .SUCCESS;
         if (!new_dst.*) {
-            const flags = sys.O.WRONLY | (if (data_copy_required) sys.O.TRUNC else 0);
+            // A clone that is going to fail must not truncate.
+            const truncate = data_copy_required and x.reflink != .always;
+            const flags = sys.O.WRONLY | (if (truncate) sys.O.TRUNC else 0);
             if (sys.openFd(drelname, flags, 0, &e)) |fd| {
                 dest_fd = fd;
             } else dest_errno = e;

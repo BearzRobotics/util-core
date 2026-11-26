@@ -71,7 +71,7 @@ See docs/compatibility/cp.md for details.
 
 - Only the C locale: names, quotes and messages are the English/ASCII ones.
 - SELinux contexts, ACLs and extended attributes are not copied (`--preserve=context` fails as on a kernel without SELinux; `-Z` and `--context` are accepted and ignored).
-- Reflink (`--reflink=always`) reports `failed to clone ... Operation not supported`; `auto` falls back to a normal copy. File data is copied with read/write rather than `copy_file_range`, so `--debug` states what GNU would report.
+- Reflink (`--reflink=always`) is not implemented: it reports `failed to clone ... Operation not supported` and leaves an existing destination unchanged, even on file systems where GNU can clone; `auto` falls back to a normal copy. File data is copied with read/write rather than `copy_file_range`, so `--debug` states what GNU would report.
 - Sparse files: holes are detected with SEEK_DATA/SEEK_HOLE and recreated; `--sparse=always` turns blocks of zeros into holes.
 - Reading a FIFO source blocks until a writer appears, exactly like GNU.
 

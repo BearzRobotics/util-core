@@ -297,4 +297,19 @@ else
     skip_test "cp -lf across devices (no second file system)"
 fi
 [ -z "$other" ] || rm -f "$other"
+
+# --reflink=always is not implemented: it must fail and change nothing. GNU
+# succeeds where the file system can clone, so only ours is checked.
+for o in "" -f --remove-destination -b --backup=numbered; do
+    d=$(mktemp -d); echo SRC > "$d/s"; echo PRECIOUS > "$d/d"
+    (cd "$d" && ours --reflink=always $o s d > "$TEST_TMP/reflink.out" 2>&1); rc=$?
+    if [ "$rc" -eq 1 ] && [ "$(cat "$d/d")" = PRECIOUS ] && [ "$(ls "$d" | tr '\n' ' ')" = "d s " ] &&
+        [ "$(cat "$TEST_TMP/reflink.out")" = "cp: failed to clone 'd' from 's': Operation not supported" ]; then
+        PASS=$((PASS + 1)); echo "PASS cp --reflink=always $o keeps an existing destination"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL cp --reflink=always $o keeps an existing destination (rc=$rc, $(cat "$TEST_TMP/reflink.out"))"
+    fi
+done
+run_tree "cp --reflink=always -n existing" "$SETUP" -n --reflink=always a b
+run_tree "cp --reflink=always --attributes-only" "$SETUP" --attributes-only --reflink=always a b
 cd /; print_summary
