@@ -447,4 +447,12 @@ for o in "-c -o cout" "-C -o cout" "-c -C" "-C -c" "-c -c" "-C -C" "--check=quie
 done
 run_cmp "the same -o twice" -o same -o same confl
 
+# Key positions beyond any line, in the obsolete syntax too.
+printf 'b 2\na 1\n' > hugekey; N=99999999999999999999
+for a in "+0 -$N.1" "+$N" "+0.$N" "+0 -1.$N" "+0 -$N" "-k$N" "-k1.$N,$N.$N"; do run_cmp "huge key $a" $a hugekey; done
+for a in "--debug +$N" "--debug +0 -$N.1"; do
+    if "$BIN_DIR/sort" $a hugekey >/dev/null 2>&1; then PASS=$((PASS + 1)); echo "PASS huge key $a"
+    else FAIL=$((FAIL + 1)); echo "FAIL huge key $a"; fi
+done
+
 print_summary

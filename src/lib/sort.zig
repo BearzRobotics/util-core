@@ -1081,7 +1081,7 @@ pub fn debugNotes(cfg: *const Options, obs: Observer) void {
             var po: [64]u8 = undefined;
             var pn: [64]u8 = undefined;
             const o1 = std.fmt.bufPrint(&po, "+{d}", .{k.obs_s}) catch "";
-            const n1 = std.fmt.bufPrint(&pn, "-k {d}", .{k.obs_s + 1}) catch "";
+            const n1 = std.fmt.bufPrint(&pn, "-k {d}", .{k.obs_s +| 1}) catch "";
             var ob: [96]u8 = undefined;
             var nb: [96]u8 = undefined;
             var ol: []const u8 = o1;

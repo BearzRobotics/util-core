@@ -544,7 +544,7 @@ fn parseObsolete(ctx: cli.Context, cfg: *Config, a: []const u8, args: []const []
                 return false;
             };
         }
-        key.obs_e = key.eword + @intFromBool(key.echar != 0);
+        key.obs_e = key.eword +| @intFromBool(key.echar != 0);
         key.obs_has_e = true;
         if (key.echar == 0 and key.eword != 0) key.eword -= 1;
         parseLetters(&t, &key.ord, .end);
