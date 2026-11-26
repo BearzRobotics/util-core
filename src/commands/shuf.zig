@@ -142,7 +142,11 @@ pub fn main(ctx: cli.Context) u8 {
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const env: shuf.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
     shuf.run(env, opts, &stdout.interface, .{ .context = @constCast(&ctx), .func = report }) catch |e| switch (e) {
-        error.Failed, error.OutOfMemory => return 1,
+        error.Failed => return 1, // already reported
+        error.OutOfMemory => {
+            cli.warn(ctx, "memory exhausted", .{});
+            return 1;
+        },
         error.WriteFailed => {
             if (outfile == null) cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
             cli.writeErrorWarn(ctx);

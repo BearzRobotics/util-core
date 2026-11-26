@@ -118,5 +118,8 @@ prop "-e permutes args"         sh -c "[ \$($O -e a b c d | sort | tr -d '\\n') 
 prop "two runs differ"          sh -c "[ \"\$($O n1000 | md5sum)\" != \"\$($O n1000 | md5sum)\" ]"
 prop "output file"              sh -c "$O -o pout n20 && sort -n pout | cmp - n20"
 prop "missing newline appended" sh -c "[ \$($O nonl | wc -c) = 18 ]"
+# Running out of memory is reported.
+run_cmp "-i too large for memory" -i 1-18446744073709551000
+
 print_summary
 [ "$FAIL" -eq 0 ]

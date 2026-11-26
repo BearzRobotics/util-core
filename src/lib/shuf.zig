@@ -301,7 +301,7 @@ pub fn run(env: Env, opts: Options, out_w: *Io.Writer, obs: Observer) Error!void
         var count: u64 = 0;
         const k: usize = @intCast(ahead);
         while (count < k) : (count += 1) {
-            const line = lr.next() catch return error.Failed;
+            const line = lr.next() catch |e| return reservoirError(obs, e);
             if (line) |l| {
                 try reservoir.append(gpa, try gpa.dupe(u8, l));
             } else break;
@@ -309,7 +309,7 @@ pub fn run(env: Env, opts: Options, out_w: *Io.Writer, obs: Observer) Error!void
         if (count == k) {
             while (true) {
                 const j = rng.choose(count + 1) catch return error.Failed;
-                const line = lr.next() catch return error.Failed;
+                const line = lr.next() catch |e| return reservoirError(obs, e);
                 const l = line orelse break;
                 if (j < k) {
                     gpa.free(reservoir.items[@intCast(j)]);
@@ -381,6 +381,14 @@ pub fn run(env: Env, opts: Options, out_w: *Io.Writer, obs: Observer) Error!void
 }
 
 /// Reads lines including their terminator, appending a missing final one.
+/// What a failure of the reservoir's reader means: only a failed read has
+/// not been reported yet.
+fn reservoirError(obs: Observer, e: anyerror) error{ OutOfMemory, Failed } {
+    if (e == error.OutOfMemory) return error.OutOfMemory;
+    obs.emit(.read_input);
+    return error.Failed;
+}
+
 const ReservoirReader = struct {
     io: Io,
     file: Io.File,
