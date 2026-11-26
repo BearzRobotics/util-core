@@ -2,10 +2,6 @@
 //! ln: thin wrapper over `util_core.ln` (decision 0004). Parses arguments the
 //! way GNU ln does, decides what the destination is, asks the -i question and
 //! words the diagnostics; links are made by src/lib/ln.zig.
-//!
-//! Same-file detection compares inode numbers only (std.Io.File.Stat has no
-//! device number), so two files on different devices that share an inode
-//! number are wrongly taken for one file.
 
 const std = @import("std");
 const cli = @import("../cli.zig");

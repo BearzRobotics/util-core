@@ -2,10 +2,6 @@
 //! ln library: make links between files.
 //! Reference: GNU coreutils manual "ln invocation" (9.7); POSIX.1-2024 ln.
 //!
-//! Same-file detection compares inode numbers only (std.Io.File.Stat has no
-//! device number), so two files on different devices that share an inode
-//! number are wrongly taken for one file.
-//!
 //! The caller decides which operands are sources and what the destination is
 //! (`Target`); this module creates the links, handles existing destinations
 //! and backups, and reports through the `Observer`.
@@ -104,7 +100,6 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
     const cwd = Io.Dir.cwd();
 
     // Source checks for hard links.
-    var src_stat: ?Io.File.Stat = null;
     if (!cfg.symbolic) {
         const st = cwd.statFile(env.io, src, .{ .follow_symlinks = cfg.logical }) catch |e| {
             observer.emit(.{ .cannot_access = .{ .path = src, .err = e } });
@@ -114,7 +109,6 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
             observer.emit(.{ .directory_source = src });
             return false;
         }
-        src_stat = st;
     }
 
     var made_backup: ?[]u8 = null;
@@ -125,16 +119,9 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
             observer.emit(.{ .exists = .{ .dest = dest, .symbolic = cfg.symbolic } });
             return false;
         }
-        if (src_stat == null) {
-            // Symbolic links: the source need not exist, but if it does, a
-            // destination that is the same file is refused.
-            src_stat = cwd.statFile(env.io, src, .{ .follow_symlinks = cfg.logical }) catch null;
-        }
-        if (src_stat) |ss| {
-            if (ss.inode == dst.inode and cfg.backup == .none) {
-                observer.emit(.{ .same_file = .{ .src = src, .dest = dest } });
-                return false;
-            }
+        if (replacingWouldDestroySource(cfg, src, dest)) {
+            observer.emit(.{ .same_file = .{ .src = src, .dest = dest } });
+            return false;
         }
         if (cfg.interactive) {
             if (!confirm.func(confirm.context, dest)) return false;
@@ -148,10 +135,6 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
             };
             made_backup = bname;
         } else {
-            if (src_stat) |ss| if (ss.inode == dst.inode) {
-                observer.emit(.{ .same_file = .{ .src = src, .dest = dest } });
-                return false;
-            };
             if (dst.kind == .directory) {
                 observer.emit(.{ .remove_failed = .{ .dest = dest, .err = error.IsDir } });
                 return false;
@@ -183,6 +166,31 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
     }
     if (cfg.verbose) observer.emit(.{ .linked = .{ .dest = dest, .src = target, .symbolic = cfg.symbolic, .backup = made_backup } });
     return true;
+}
+
+/// True when taking `dest` away could take the data of `src` with it: the
+/// refusal GNU calls "same file". With a backup only a hard link needs it (the
+/// backup keeps the data for a symbolic one).
+fn replacingWouldDestroySource(cfg: Options, src: []const u8, dest: []const u8) bool {
+    if (cfg.backup != .none and cfg.symbolic) return false;
+    // A symbolic link reaches the data through every link in `src`, so `src`
+    // is followed; a hard link is made to `src` itself unless -L is given.
+    var err: sys.E = .SUCCESS;
+    const source = sys.fileStat(src, cfg.symbolic or cfg.logical, &err) orelse return false;
+    const destination = sys.fileStat(dest, false, &err) orelse return false;
+    if (source.ino != destination.ino or source.dev_major != destination.dev_major or
+        source.dev_minor != destination.dev_minor) return false;
+    // Two names for one file are fine: the data stays under the other name.
+    return source.nlink == 1 or sameEntry(src, dest);
+}
+
+/// True when the two paths name one entry of one directory ("a" and "./a").
+fn sameEntry(a: []const u8, b: []const u8) bool {
+    if (!std.mem.eql(u8, baseName(a), baseName(b))) return false;
+    var err: sys.E = .SUCCESS;
+    const first = sys.fileStat(std.fs.path.dirnamePosix(a) orelse ".", true, &err) orelse return false;
+    const second = sys.fileStat(std.fs.path.dirnamePosix(b) orelse ".", true, &err) orelse return false;
+    return first.ino == second.ino and first.dev_major == second.dev_major and first.dev_minor == second.dev_minor;
 }
 
 fn backupName(env: Env, cfg: Options, dest: []const u8) ?[]u8 {

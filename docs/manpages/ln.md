@@ -68,9 +68,12 @@ Reference: GNU coreutils 9.7 (`/usr/bin/ln --version` on the development machine
 
 See docs/compatibility/ln.md for details.
 
+# DIFFERENCES FROM GNU
+
+- With -i and no backup, a destination that holds the source's data is refused ("'SRC' and 'DEST' are the same file", status 1), as it is with -f. GNU 9.7 asks and then destroys the data.
+
 # LIMITATIONS
 
-- Same-file detection compares inode numbers only (`std.Io.File.Stat` has no device number), so files on different devices with equal inode numbers would be taken for one file.
 - `--help` is shorter than GNU's.
 
 # SEE ALSO

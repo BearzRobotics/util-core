@@ -124,4 +124,34 @@ fi
 run_tree "-f replaces a hard link"  "$S" -f a b
 run_tree "-sf replaces"             "$S" -sf a b
 run_tree "-sf replaces in subdir"   "$S" -sf a d/c
+
+printf "\n[ Same file ]\n"
+# The destination is the only name of the data the source leads to.
+ONE='echo data > a; ln -s a l; ln -s l l2; mkdir d; echo data > d/b; ln -s d/b m'
+TWO='echo data > a; ln a h; ln -s a l'
+export TREE_CONTENT=1
+run_tree "-sf link to dest"          "$ONE" -sf l a
+run_tree "-sf link chain to dest"    "$ONE" -sf l2 a
+run_tree "-sf link into subdir"      "$ONE" -sf m d/b
+run_tree "-sfn link to dest"         "$ONE" -sfn l a
+run_tree "-sf same entry"            "$ONE" -sf ./a a
+run_tree "-sf same entry, two names" "$TWO" -sf ./a a
+run_tree "-sf other hard link"       "$TWO" -sf a h
+run_tree "-f other hard link"        "$TWO" -f a h
+run_tree "-sf link, data kept by h"  "$TWO" -sf l a
+run_tree "-Lf link to dest"          "$ONE" -Lf l a
+run_tree "-f onto own symlink"       "$ONE" -f a l
+run_tree "-sf onto own symlink"      "$ONE" -sf a l
+run_tree "-sfb link to dest"         "$ONE" -sfb l a
+run_tree "-b onto itself"            "$ONE" -b a a
+run_tree "-b onto other hard link"   "$TWO" -b a h
+unset TREE_CONTENT
+# -i: GNU 9.7 answers "yes" by destroying the data; we refuse as with -f.
+d=$(mktemp -d); echo data > "$d/a"; ln -s a "$d/l"
+out=$(cd "$d" && echo y | ours -si l a 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && [ "$(cat "$d/a")" = data ] && [ ! -L "$d/a" ]; then
+    PASS=$((PASS + 1)); echo "PASS -si link to dest is refused"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL -si link to dest is refused (rc=$rc $out)"
+fi
 print_summary

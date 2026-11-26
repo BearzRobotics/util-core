@@ -23,6 +23,7 @@ GNU coreutils 9.7 (`/usr/bin/ln --version` on the development machine, installed
 ## Supported behaviour
 
 - Operand forms and every diagnostic reproduce GNU 9.7; the 'same file' test is only made when the destination would be replaced (-f, -i or a backup), as GNU does.
+- With -i and no backup the 'same file' test is made as with -f. GNU 9.7 does not make it, so answering yes to `ln -si LINK FILE`, where LINK points to FILE, destroys FILE; here it is refused with status 1.
 
 ## Library
 
@@ -34,7 +35,6 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Known deviations and gaps
 
-- Same-file detection compares inode numbers only (`std.Io.File.Stat` has no device number), so files on different devices with equal inode numbers would be taken for one file.
 - `--help` is shorter than GNU's.
 
 ## Tests
