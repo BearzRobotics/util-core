@@ -46,20 +46,34 @@ run_tree "empty dir -r"            "$S" -r e
 run_tree "many files"              'mkdir t; i=0; while [ $i -lt 50 ]; do : > t/f$i; i=$((i+1)); done' -rv t
 
 printf "\n[ Protected names and root ]\n"
-for f in . .. ./ ../ d/. d/.. ./. d/./ /; do
-    run_tree "rm -r $f"            "$S" -r "$f"
-    run_tree "rm -rf $f"           "$S" -rf "$f"
-    run_tree "rm -d $f"            "$S" -d "$f"
-done
-run_tree "rm -r /."                "$S" -r /.
-run_tree "rm -r //"                "$S" -r //
-run_tree "rm -r /../"              "$S" -r /../
-run_tree "--no-preserve-root dot"  "$S" -r --no-preserve-root .
-run_tree "--preserve-root /"       "$S" -r --preserve-root /
-run_tree "--preserve-root=all /"   "$S" -r --preserve-root=all /
-run_tree "--preserve-root=bad"     "$S" -r --preserve-root=bad /
-run_tree "preserve-root, no -r"    "$S" /
-run_tree "rm /etc (no -r)"         "$S" /etc
+# These operands name "/" and parent directories, so the only thing between a
+# broken guard and the user's files must not be the guard under test. Both
+# programs run in a bwrap namespace where everything is read-only except the
+# case's own directory. Without a working bwrap the cases are skipped, never run
+# unprotected.
+BOX="bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all --die-with-parent"
+if $BOX true 2>/dev/null; then
+    gnu()  { $BOX --bind "$PWD" "$PWD" --chdir "$PWD" "${GNU_BIN:-/usr/bin}/$UTIL" "$@"; }
+    ours() { $BOX --bind "$PWD" "$PWD" --chdir "$PWD" "$BIN_DIR/$UTIL" "$@"; }
+    for f in . .. ./ ../ d/. d/.. ./. d/./ /; do
+        run_tree "rm -r $f"            "$S" -r "$f"
+        run_tree "rm -rf $f"           "$S" -rf "$f"
+        run_tree "rm -d $f"            "$S" -d "$f"
+    done
+    run_tree "rm -r /."                "$S" -r /.
+    run_tree "rm -r //"                "$S" -r //
+    run_tree "rm -r /../"              "$S" -r /../
+    run_tree "--no-preserve-root dot"  "$S" -r --no-preserve-root .
+    run_tree "--preserve-root /"       "$S" -r --preserve-root /
+    run_tree "--preserve-root=all /"   "$S" -r --preserve-root=all /
+    run_tree "--preserve-root=bad"     "$S" -r --preserve-root=bad /
+    run_tree "preserve-root, no -r"    "$S" /
+    run_tree "rm /etc (no -r)"         "$S" /etc
+    gnu()  { "${GNU_BIN:-/usr/bin}/$UTIL" "$@"; }
+    ours() { "$BIN_DIR/$UTIL" "$@"; }
+else
+    skip_test "protected names and root (needs a working bwrap)"
+fi
 
 printf "\n[ Interactive ]\n"
 for f in a empty sl ff ro d dang; do
