@@ -49,6 +49,9 @@ pub const Event = union(enum) {
     /// A symbolic-link loop under -L.
     loop: struct { path: []const u8, ancestor: []const u8 },
     delete_failed: struct { path: []const u8, text: []const u8 },
+    /// Writing the file of -fprint, -fprint0, -fprintf or -fls failed, so it
+    /// is incomplete.
+    output_failed: struct { path: []const u8, text: []const u8 },
     /// A -exec/-ok command could not be started.
     exec_failed: struct { program: []const u8, text: []const u8 },
     /// -printf %Z: this system has no security contexts.
@@ -212,6 +215,8 @@ const OutFile = struct {
     /// Opened by the expression (closed with it); fds 1 and 2 are not.
     owned: bool = false,
     buf: std.ArrayList(u8) = .empty,
+    /// Why some of the output is missing; reported at the end of the run.
+    failure: ?[]const u8 = null,
 };
 
 pub const Follow = enum { physical, command_line, logical };
@@ -1397,11 +1402,42 @@ fn flushFile(st: *State, o: *OutFile) void {
         if (o.fd == std.Io.File.stderr().handle) {
             // -fprint /dev/stderr goes to the caller's stderr writer.
             if (st.stderr) |w| {
-                w.writeAll(o.buf.items) catch {};
-                w.flush() catch {};
+                var written = true;
+                w.writeAll(o.buf.items) catch {
+                    written = false;
+                };
+                w.flush() catch {
+                    written = false;
+                };
+                if (!written) o.failure = "write error";
             }
-        } else _ = sys.writeAllFd(o.fd, o.buf.items);
+        } else if (o.failure == null) {
+            // Nothing more is written after a failure: a later success would
+            // leave a gap in the file.
+            if (sys.writeAllFd(o.fd, o.buf.items)) |e| o.failure = sys.errnoText(e);
+        }
         o.buf.clearRetainingCapacity();
+    }
+}
+
+/// Write what is left for each output file and report the ones that are
+/// incomplete.
+fn finishOutputs(st: *State) void {
+    for (st.outs.items) |o| {
+        flushFile(st, o);
+        if (o.owned and o.failure == null) {
+            // Some file systems (NFS, quotas) only report at close. The file
+            // stays open for `Expr.deinit`, so close a duplicate.
+            var err: LX.E = .SUCCESS;
+            if (sys.dupFd(o.fd, &err)) |copy| {
+                if (sys.closeFd(copy)) |e| o.failure = sys.errnoText(e);
+            } else if (err != .NOSYS) o.failure = sys.errnoText(err); // NOSYS: no dup here
+        }
+        if (o.failure) |text| {
+            st.observer.emit(.{ .output_failed = .{ .path = o.path, .text = text } });
+            st.exit_status = 1;
+            o.failure = null;
+        }
     }
 }
 
@@ -2269,7 +2305,7 @@ fn runWalk(st: *State, starts_in: []const []const u8) error{OutOfMemory}!Result 
     }
     for (st.execs.items) |n| flushBatch(st, n);
     flushOut(st);
-    for (st.outs.items) |o| flushFile(st, o);
+    finishOutputs(st);
     if (st.oom) return error.OutOfMemory;
     return .{ .exit_status = st.exit_status, .write_failed = st.write_failed };
 }

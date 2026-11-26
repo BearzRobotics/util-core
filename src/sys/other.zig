@@ -747,6 +747,17 @@ pub fn dup2(old: Handle, new: i32) ?E {
     return .NOSYS;
 }
 
+pub fn dupFd(fd: Handle, err: *E) ?Handle {
+    if (comptime is_libc_posix) {
+        const copy = c.dup(fd);
+        if (copy >= 0) return copy;
+        err.* = fromC(c.errno(copy));
+        return null;
+    }
+    err.* = .NOSYS;
+    return null;
+}
+
 pub fn fdOpen(fd: i32) bool {
     if (comptime is_libc_posix) return c.fcntl(fd, c.F.GETFD, @as(c_int, 0)) >= 0;
     return true;

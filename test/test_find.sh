@@ -428,6 +428,25 @@ for action in -ok -okdir; do
     else FAIL=$((FAIL + 1)); echo "FAIL $action commands cannot read the answers"; printf '  GNU: %s\n  ours: %s\n' "$exp" "$act"; fi
 done
 
+# A list that could not be written is an error, whichever action writes it.
+if [ -e /dev/full ]; then
+    run_cmp '-fprint write error' a -fprint /dev/full
+    run_cmp '-fprint0 write error' a -fprint0 /dev/full
+    run_cmp '-fprintf write error' a -fprintf /dev/full '%p\n'
+    run_cmp '-fls write error' a -maxdepth 0 -fls /dev/full
+    run_cmp 'write error, the walk goes on' a -maxdepth 1 -fprint /dev/full -print
+    run_cmp 'write error reported once' a -fprint /dev/full -fprint0 /dev/full
+    exp=$(gnu a -fprint /dev/stderr 2>/dev/full; echo "status $?")
+    act=$(ours a -fprint /dev/stderr 2>/dev/full; echo "status $?")
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS -fprint /dev/stderr write error"
+    else FAIL=$((FAIL + 1)); echo "FAIL -fprint /dev/stderr write error ($act, GNU $exp)"; fi
+    # Enough output to be written in several pieces, cut short by a size limit.
+    out=$( (trap '' XFSZ; ulimit -f 4; awk 'BEGIN { for (i = 0; i < 3000; i++) print "/dev/null" }' | xargs sh -c '"$0" "$@" -fprint cut.txt' "$BIN_DIR/find" 2>&1; ) ); rc=$?
+    if [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q "cut.txt.*: File too large"; then PASS=$((PASS + 1)); echo "PASS -fprint cut short is reported"
+    else FAIL=$((FAIL + 1)); echo "FAIL -fprint cut short is reported (rc=$rc $out)" | head -3; fi
+    rm -f cut.txt
+fi
+
 # ---- file system changes
 SET='mkdir -p a/b/c a/d e; printf x > a/f1; printf y > a/b/f2; : > a/b/c/f3; printf z > e/f4; ln -s a/f1 lnk; mkdir empty; ln -s ../e a/d/up; chmod 400 e/f4'
 run_tree_t() { d="$1"; s="$2"; shift 2; TREE_CONTENT=1 run_tree "$d" "$s" "$@"; }

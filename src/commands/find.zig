@@ -45,6 +45,7 @@ fn report(context: ?*anyopaque, ev: find.Event) void {
         .path_error => |e| cli.warn(ctx, "{f}: {s}", .{ u.q(e.path), e.text }),
         .loop => |e| cli.warn(ctx, "File system loop detected; {f} is part of the same file system loop as {f}.", .{ u.q(e.path), u.q(e.ancestor) }),
         .delete_failed => |e| cli.warn(ctx, "cannot delete {f}: {s}", .{ u.q(e.path), e.text }),
+        .output_failed => |e| cli.warn(ctx, "{f}: {s}", .{ u.q(e.path), e.text }),
         .exec_failed => |e| cli.warn(ctx, "{f}: {s}", .{ u.q(e.program), e.text }),
         .no_security_context => |p| cli.warn(ctx, "getfilecon failed: {f}: No data available", .{u.q(p)}),
         .warning => |t| cli.warn(ctx, "{s}", .{t}),

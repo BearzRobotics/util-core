@@ -551,6 +551,18 @@ pub fn dup2(old: Handle, new: i32) ?LX.E {
     return errOf(LX.dup2(old, new));
 }
 
+/// dup(2).
+pub fn dupFd(fd: Handle, err: *LX.E) ?Handle {
+    if (comptime !is_linux) return other.dupFd(fd, err);
+    const rc = LX.dup(fd);
+    const e = LX.errno(rc);
+    if (e != .SUCCESS) {
+        err.* = e;
+        return null;
+    }
+    return @intCast(rc);
+}
+
 /// True when descriptor `fd` is open (fcntl F_GETFD succeeds).
 pub fn fdOpen(fd: i32) bool {
     if (comptime !is_linux) return other.fdOpen(fd);
