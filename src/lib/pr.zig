@@ -74,6 +74,8 @@ pub const Event = union(enum) {
     read_failed: struct { name: []const u8, err: anyerror },
     start_page_exceeds: struct { page: u64, count: u64 },
     page_number_overflow,
+    /// Lines per page, columns and column width are too large to lay out.
+    integer_overflow,
 };
 pub const Observer = common.Observer(Event);
 
@@ -146,9 +148,9 @@ pub fn run(env: Env, opts: Options, files: []const []const u8, out_w: *Io.Writer
 
     var failed = false;
     if (files.len == 0) {
-        _ = pr.printFiles(&.{});
+        failed = !pr.printFiles(&.{});
     } else if (pr.parallel_files) {
-        _ = pr.printFiles(files);
+        failed = !pr.printFiles(files);
     } else {
         for (files) |f| {
             const one = [_][]const u8{f};
@@ -156,13 +158,13 @@ pub fn run(env: Env, opts: Options, files: []const []const u8, out_w: *Io.Writer
                 failed = true;
                 break;
             }
-            if (pr.read_failed or pr.out_of_memory) break;
+            if (pr.read_failed or pr.out_of_memory or pr.overflowed) break;
         }
     }
     pr.out.flush();
     if (pr.out_of_memory) return error.OutOfMemory;
     if (pr.out.failed) return error.WriteFailed;
-    return .{ .failed = failed or pr.failed_opens or pr.read_failed };
+    return .{ .failed = failed or pr.failed_opens or pr.read_failed or pr.overflowed };
 }
 
 fn openPath(io: Io, path: []const u8) !Io.File {
@@ -214,8 +216,9 @@ const Column = struct {
 fn tabWidth(c: i32, h: i32) i32 {
     return c - @mod(h, c);
 }
+/// Positions saturate: tab and number widths may be as large as an i32.
 fn posAfterTab(c: i32, h: i32) i32 {
-    return h + tabWidth(c, h);
+    return h +| tabWidth(c, h);
 }
 
 const Pr = struct {
@@ -264,6 +267,8 @@ const Pr = struct {
     failed_opens: bool = false,
     read_failed: bool = false,
     out_of_memory: bool = false,
+    /// The layout asked for cannot be built; nothing more is printed.
+    overflowed: bool = false,
     /// Takes what is formatted after a read error.
     discard: Io.Writer.Discarding = undefined,
     columns: i32 = 1,
@@ -295,7 +300,10 @@ const Pr = struct {
     date_text: []u8 = &.{},
     file_text: []const u8 = "",
     header_width_available: i32 = 0,
-    clump_buff: [64]u8 = undefined,
+    /// The form in which one input character is printed: `clump_buff`, or,
+    /// for an expanded tab of any width, that many spaces.
+    clump_buff: [4]u8 = undefined,
+    clump_is_spaces: bool = false,
     last_line: bool = false,
     now_sec: ?i64 = null,
     now_nsec: u32 = 0,
@@ -348,8 +356,8 @@ const Pr = struct {
         if (p.numbered_lines) {
             p.line_count = p.start_line_num;
             if (p.number_separator == '\t') {
-                p.number_width = p.chars_per_number + tabWidth(8, p.chars_per_number);
-            } else p.number_width = p.chars_per_number + 1;
+                p.number_width = p.chars_per_number +| tabWidth(8, p.chars_per_number);
+            } else p.number_width = p.chars_per_number +| 1;
             if (p.parallel_files) chars_used_by_number = p.number_width;
         }
         const sep_chars: i64 = @as(i64, p.columns - 1) * p.col_sep_length;
@@ -569,9 +577,9 @@ const Pr = struct {
         if (!p.truncate_lines) {
             h_next = anywhere;
         } else if (p.parallel_files and p.numbered_lines) {
-            h_next = h + p.chars_per_column + p.number_width;
-        } else h_next = h + p.chars_per_column;
-        h = h + p.col_sep_length;
+            h_next = h +| p.chars_per_column +| p.number_width;
+        } else h_next = h +| p.chars_per_column;
+        h = h +| p.col_sep_length;
         var i: i32 = 1;
         while (i < p.columns) : (i += 1) {
             const c = p.col(@intCast(i - 1));
@@ -588,8 +596,8 @@ const Pr = struct {
                 h = anywhere;
                 h_next = anywhere;
             } else {
-                h = h_next + p.col_sep_length;
-                h_next = h + p.chars_per_column;
+                h = h_next +| p.col_sep_length;
+                h_next = h +| p.chars_per_column;
             }
         }
         const last = p.col(@intCast(p.columns - 1));
@@ -619,7 +627,16 @@ const Pr = struct {
     }
 
     fn initStoreCols(p: *Pr) bool {
-        const total_lines: usize = @intCast(@as(i64, p.lines_per_body) * p.columns);
+        // Stored lines are indexed with i32. As in GNU, their total width,
+        // with one more byte per line, has to fit in one as well.
+        const wanted = @as(i64, p.lines_per_body) * p.columns;
+        const max = std.math.maxInt(i32);
+        if (wanted >= max or wanted * (@as(i64, p.chars_per_column) + 1) > max) {
+            p.obs.emit(.integer_overflow);
+            p.overflowed = true;
+            return false;
+        }
+        const total_lines: usize = @intCast(wanted);
         p.gpa.free(p.line_vector);
         p.gpa.free(p.end_vector);
         p.line_vector = &.{};
@@ -679,7 +696,7 @@ const Pr = struct {
         p.pad_vertically = false;
         var pv = false;
         var lines_left_on_page = p.lines_per_body;
-        if (p.double_space) lines_left_on_page *= 2;
+        if (p.double_space) lines_left_on_page *|= 2;
         while (lines_left_on_page > 0 and p.colsReadyToPrint() > 0) {
             p.output_position = 0;
             p.spaces_not_printed = 0;
@@ -731,7 +748,7 @@ const Pr = struct {
         }
         p.pad_vertically = pv;
         if (p.pad_vertically and p.extremities) {
-            p.padDown(@intCast(lines_left_on_page + lines_per_footer));
+            p.padDown(@intCast(lines_left_on_page +| lines_per_footer));
         } else if (p.keep_ff and p.print_a_ff) {
             p.putchar('\x0c');
             p.print_a_ff = false;
@@ -794,39 +811,43 @@ const Pr = struct {
         }
     }
 
+    fn emitSpaces(p: *Pr, c: *Column, count: i32) void {
+        var i = count;
+        while (i > 0 and !p.out_of_memory and !p.out.failed) : (i -= 1) p.emit(c, ' ');
+    }
+
+    /// The number right-aligned in `chars_per_number` columns, of which only
+    /// the last that many digits are kept.
     fn addLineNumber(p: *Pr, c: *Column) void {
-        var nb: [96]u8 = undefined;
         var raw: [32]u8 = undefined;
         const digits_s = std.fmt.bufPrint(&raw, "{d}", .{p.line_number}) catch unreachable;
         const w: usize = @intCast(p.chars_per_number);
-        const pad = if (digits_s.len < w) w - digits_s.len else 0;
-        @memset(nb[0..pad], ' ');
-        @memcpy(nb[pad .. pad + digits_s.len], digits_s);
-        const s = nb[0 .. pad + digits_s.len];
         p.line_number +%= 1;
-        const cut: usize = s.len - @as(usize, @intCast(p.chars_per_number));
-        for (s[cut..]) |ch| p.emit(c, ch);
+        if (digits_s.len < w) p.emitSpaces(c, @intCast(w - digits_s.len));
+        for (digits_s[digits_s.len -| w..]) |ch| p.emit(c, ch);
         if (p.columns > 1) {
             if (p.number_separator == '\t') {
-                var i = p.number_width - p.chars_per_number;
-                while (i > 0) : (i -= 1) p.emit(c, ' ');
+                p.emitSpaces(c, p.number_width - p.chars_per_number);
             } else p.emit(c, p.number_separator);
         } else {
             p.emit(c, p.number_separator);
             if (p.number_separator == '\t') p.output_position = posAfterTab(p.chars_per_output_tab, p.output_position);
         }
-        if (p.truncate_lines and !p.parallel_files) p.input_position += p.number_width;
+        if (p.truncate_lines and !p.parallel_files) p.input_position +|= p.number_width;
     }
 
     fn padAcrossTo(p: *Pr, position: i32) void {
-        var h = p.output_position;
         if (p.tabify_output) {
-            p.spaces_not_printed = position - p.output_position;
+            p.spaces_not_printed = position -| p.output_position;
         } else {
-            h += 1;
-            while (h <= position) : (h += 1) p.putchar(' ');
+            p.putSpaces(position -| p.output_position);
             p.output_position = position;
         }
+    }
+
+    fn putSpaces(p: *Pr, count: i32) void {
+        var i = count;
+        while (i > 0 and !p.out.failed) : (i -= 1) p.putchar(' ');
     }
 
     fn padDown(p: *Pr, lines: u32) void {
@@ -892,15 +913,14 @@ const Pr = struct {
 
     fn printWhiteSpace(p: *Pr) void {
         var h_old = p.output_position;
-        const goal = h_old + p.spaces_not_printed;
-        while (goal - h_old > 1) {
+        const goal = h_old +| p.spaces_not_printed;
+        while (goal -| h_old > 1) {
             const h_new = posAfterTab(p.chars_per_output_tab, h_old);
             if (h_new > goal) break;
             p.putchar(p.output_tab_char);
             h_old = h_new;
         }
-        h_old += 1;
-        while (h_old <= goal) : (h_old += 1) p.putchar(' ');
+        p.putSpaces(goal -| h_old);
         p.output_position = goal;
         p.spaces_not_printed = 0;
     }
@@ -913,7 +933,7 @@ const Pr = struct {
             while (p.separators_not_printed > 0) : (p.separators_not_printed -= 1) {
                 for (s[0..@intCast(p.col_sep_length)]) |ch| {
                     if (ch == ' ') {
-                        p.spaces_not_printed += 1;
+                        p.spaces_not_printed +|= 1;
                     } else {
                         if (p.spaces_not_printed > 0) p.printWhiteSpace();
                         p.putchar(ch);
@@ -928,12 +948,12 @@ const Pr = struct {
     fn printChar(p: *Pr, ch: u8) void {
         if (p.tabify_output) {
             if (ch == ' ') {
-                p.spaces_not_printed += 1;
+                p.spaces_not_printed +|= 1;
                 return;
             } else if (p.spaces_not_printed > 0) p.printWhiteSpace();
             if (!(ch >= 0x20 and ch < 0x7f)) {
                 if (ch == 8) p.output_position -= 1;
-            } else p.output_position += 1;
+            } else p.output_position +|= 1;
         }
         p.putchar(ch);
     }
@@ -1092,8 +1112,8 @@ const Pr = struct {
     }
 
     fn printClump(p: *Pr, c: *Column, n: i32) void {
-        var i: usize = 0;
-        while (i < @as(usize, @intCast(n))) : (i += 1) p.emit(c, p.clump_buff[i]);
+        if (p.clump_is_spaces) return p.emitSpaces(c, n);
+        for (p.clump_buff[0..@intCast(n)]) |ch| p.emit(c, ch);
     }
 
     fn printStored(p: *Pr, c: *Column) bool {
@@ -1119,26 +1139,22 @@ const Pr = struct {
         var k = first;
         while (k != last) : (k += 1) p.printChar(p.buff.items[k]);
         if (p.spaces_not_printed == 0) {
-            p.output_position = c.start_position + p.end_vector[line];
+            p.output_position = c.start_position +| p.end_vector[line];
             if (c.start_position - p.col_sep_length == p.chars_per_margin) p.output_position -= p.col_sep_length;
         }
         return true;
     }
 
     fn charToClump(p: *Pr, c: u8) i32 {
-        var n: usize = 0;
         var width: i32 = 0;
         var chars: i32 = 0;
         var chars_per_c: i32 = 8;
         if (c == p.input_tab_char) chars_per_c = p.chars_per_input_tab;
+        p.clump_is_spaces = false;
         if (c == p.input_tab_char or c == '\t') {
             width = tabWidth(chars_per_c, p.input_position);
             if (p.untabify_input) {
-                var i = width;
-                while (i > 0) : (i -= 1) {
-                    p.clump_buff[n] = ' ';
-                    n += 1;
-                }
+                p.clump_is_spaces = true;
                 chars = width;
             } else {
                 p.clump_buff[0] = c;
@@ -1179,7 +1195,7 @@ const Pr = struct {
             p.input_position = 0;
         } else if (width < 0 and p.input_position <= -width) {
             p.input_position = 0;
-        } else p.input_position += width;
+        } else p.input_position +|= width;
         return chars;
     }
 };

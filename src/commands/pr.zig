@@ -314,5 +314,6 @@ fn report(context: ?*anyopaque, ev: pr.Event) void {
         .read_failed => |e| cli.warn(ctx.*, "{f}: {s}", .{ cli.quote(e.name), cli.errText(e.err) }),
         .start_page_exceeds => |e| cli.warn(ctx.*, "starting page number {d} exceeds page count {d}", .{ e.page, e.count }),
         .page_number_overflow => cli.warn(ctx.*, "page number overflow", .{}),
+        .integer_overflow => cli.warn(ctx.*, "integer overflow", .{}),
     }
 }
