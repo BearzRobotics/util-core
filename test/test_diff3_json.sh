@@ -5,7 +5,7 @@ UTIL="diff3"
 . "$(dirname "$0")/testlib.sh"
 . "$(dirname "$0")/difflib.sh"
 [ -n "$DIFF_BIN_DIR" ] && BIN_DIR="$DIFF_BIN_DIR"
-if ! have_jq; then echo "SKIP: jq not installed"; exit 0; fi
+if ! have_jq; then echo "SKIP: jq not installed"; SUMMARY_DONE=1; exit 0; fi
 
 W="$(mktemp -d)"; cd "$W"
 printf 'a\nM\nc\nd\ne\nf\nmm\n' > mine; printf 'a\nb\nc\nd\ne\nf\n' > old; printf 'a\nb\nc\nY\ne\nf\n' > your

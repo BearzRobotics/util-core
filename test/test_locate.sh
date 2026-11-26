@@ -5,6 +5,7 @@ UTIL="locate"
 FU="${GNU_BIN:-$HOME/.cache/util-core/findutils/bin}"
 if [ ! -x "$FU/locate" ]; then
     echo "SKIP: GNU findutils not built; run tools/build-gnu-findutils.sh" >&2
+    SUMMARY_DONE=1
     exit 0
 fi
 GNU_BIN="$FU"; export GNU_BIN

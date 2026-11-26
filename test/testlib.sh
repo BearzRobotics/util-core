@@ -143,7 +143,19 @@ TEST_TMP="$(mktemp -d)"
 TMPDIR="$TEST_TMP"; export TMPDIR
 TMPDIR_CMP="$TEST_TMP/cmp"
 # Tests may leave read-only directories behind; make them removable first.
-trap 'chmod -R u+rwx "$TEST_TMP" 2>/dev/null; rm -rf "$TEST_TMP"' EXIT
+# A script that stops before print_summary has not run its cases, so it must not
+# report success. (A script that replaces this trap loses that check.)
+SUMMARY_DONE=
+testlib_exit() {
+    status=$?
+    chmod -R u+rwx "$TEST_TMP" 2>/dev/null; rm -rf "$TEST_TMP"
+    if [ -z "$SUMMARY_DONE" ] && [ "$status" -eq 0 ]; then
+        echo "FAIL the suite stopped before its summary" >&2
+        status=1
+    fi
+    exit "$status"
+}
+trap testlib_exit EXIT
 
 # run_tree DESC SETUP_CMD ARGS...
 # For commands that change the file system. SETUP_CMD (a shell snippet) runs in
@@ -203,6 +215,9 @@ print_summary() {
         fi
     fi
     printf "======================================\n"
+    SUMMARY_DONE=1
+    # The suites end with print_summary, so this is their exit status.
+    [ "$FAIL" -eq 0 ]
 }
 # help_cmp: ours --help must equal GNU's --help minus the "GNU coreutils online
 # help" footer (that footer names the GNU project, which we are not).
