@@ -421,4 +421,17 @@ run_cmp "debug -z records" --debug -z -k2 nul
 run_cmp "debug empty"      --debug empty
 CMP_STDIN=dbg2 run_cmp "debug stdin" --debug -k2
 
+# Merging many inputs costs the logarithm of their number per line (a time
+# limit: comparing every input for every line takes far longer). Equal lines
+# keep the order of the inputs.
+mkdir many; ( cd many
+awk 'BEGIN { for (i = 0; i < 20000; i++) { f = sprintf("f%05d", i); for (j = 0; j < 10; j++) printf "%06d %d\n", j * 1000 + i % 997, i > f; close(f); printf "%s%c", f, 0 } }' > list )
+for o in "" "-s -k1,1" "-u -k1,1"; do
+    exp=$(cd many && LC_ALL=C timeout 60 /usr/bin/sort -m $o --files0-from=list | cksum)
+    act=$(cd many && LC_ALL=C timeout 10 "$BIN_DIR/sort" -m $o --files0-from=list | cksum)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS merge of 20000 files $o"
+    else FAIL=$((FAIL + 1)); echo "FAIL merge of 20000 files $o"; fi
+done
+rm -rf many
+
 print_summary
