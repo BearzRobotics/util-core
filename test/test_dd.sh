@@ -140,6 +140,14 @@ secs=$(sed -n 's/^1 byte copied, \([0-9.]*\) s, .*/\1/p' e.o)
 if awk -v t="$secs" 'BEGIN { exit !(t >= 0.25 && t < 60) }'; then PASS=$((PASS + 1)); echo "PASS elapsed time is reported"
 else FAIL=$((FAIL + 1)); echo "FAIL elapsed time is reported"; cat e.o; fi
 
+# status=progress: about one line a second, however long a block takes. 22
+# blocks 117 ms apart run for at least 2.5 s.
+(i=0; while [ $i -lt 22 ]; do timeout 0.117 tail -f /dev/null; printf x; i=$((i + 1)); done) |
+    "$BIN_DIR/dd" status=progress of=/dev/null 2>e.o
+lines=$(tr '\r' '\n' < e.o | grep -c 'copied, [0-9]* s,')
+if [ "$lines" -ge 2 ] && [ "$lines" -le 4 ]; then PASS=$((PASS + 1)); echo "PASS status=progress once a second"
+else FAIL=$((FAIL + 1)); echo "FAIL status=progress once a second ($lines lines)"; tr '\r' '\n' < e.o; fi
+
 # Signals. dd reads a FIFO that the test feeds, so each step waits for the one
 # before it. (A shell starts background jobs with SIGINT ignored; env undoes it.)
 wait_for() { # wait_for COMMAND...: poll for up to 5 s

@@ -63,7 +63,7 @@ See docs/compatibility/dd.md for details.
 
 # LIMITATIONS
 
-- `status=progress` prints at most one update per second and may skip it for very short copies.
+- `status=progress` writes a line between blocks once at least a second has passed since the last one (as GNU does), so a shorter copy shows none, and none is written while a single read or write blocks.
 - O_DIRECT alignment and posix_fadvise (`nocache`) are not handled.
 - `iflag`/`oflag` flags that need an open file (`append`, `dsync`...) apply to files named with `if=`/`of=`; for standard streams only `fcntl` flags are set.
 

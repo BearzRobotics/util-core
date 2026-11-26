@@ -32,13 +32,13 @@ None. Behaviour that is not GNU's is listed under "Known deviations and gaps".
 
 ## Known deviations and gaps
 
-- `status=progress` prints at most one update per second and may skip it for very short copies.
+- `status=progress` follows dd.c: a line is written between blocks once at least a second has passed since the last one, so a copy shorter than that shows none, and none is written while a single read or write blocks.
 - O_DIRECT alignment and posix_fadvise (`nocache`) are not handled.
 - `iflag`/`oflag` flags that need an open file (`append`, `dsync`...) apply to files named with `if=`/`of=`; for standard streams only `fcntl` flags are set.
 
 ## Tests
 
-`sh test/test_dd.sh`: 1055 differential cases against GNU dd 9.7 (C locale) with the timing line masked.
+`sh test/test_dd.sh`: over 1000 differential cases against GNU dd 9.7 (C locale) with the timing line masked.
 
 ## Not yet done
 

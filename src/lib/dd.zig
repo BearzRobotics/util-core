@@ -766,10 +766,15 @@ fn ddCopy(d: *Job) Fail!u8 {
 
     var saved_byte: i32 = -1;
     var partread: usize = 0;
+    var last_progress_ns = d.start_ns;
     while (true) {
+        // As dd.c: between blocks, once a second has passed since the last line.
         if (d.status == STATUS_PROGRESS) {
             const now = nowNs(d);
-            if (now - d.start_ns >= 1_000_000_000 and @mod(@divTrunc(now - d.start_ns, 1_000_000), 1000) < 5) printXferStats(d, true);
+            if (now - last_progress_ns >= std.time.ns_per_s) {
+                printXferStats(d, true);
+                last_progress_ns = now;
+            }
         }
         if (d.r_partial + d.r_full >= d.max_records + @as(i64, @intFromBool(d.max_bytes != 0))) break;
         if (d.conv & C_SYNC != 0 and d.conv & C_NOERROR != 0) {
