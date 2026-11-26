@@ -124,6 +124,14 @@ if can_inject; then
 else
     skip_test "write and close failures (no strace)"
 fi
+# Names past PATH_MAX (4096) are recorded.
+( mkdir "$W/long" && cd "$W/long" || exit 1
+  name=$(printf 'd%.0s' $(seq 199)); i=0
+  while [ $i -lt 30 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done
+  : > leaf )
+ud 'paths longer than PATH_MAX' --localpaths="$W/long" $P
+"${GNU_BIN_RM:-/usr/bin}/rm" -rf "$W/long"
+
 # A directory that becomes a symbolic link between being examined and being
 # opened is not followed: its target's names must not enter the database.
 mkdir -p "$W/race/t/user" "$W/race/secret"; : > "$W/race/t/user/mine"; : > "$W/race/secret/topsecret-name"

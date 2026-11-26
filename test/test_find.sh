@@ -542,6 +542,26 @@ race_check "a link that replaced a directory is not followed" sh -c '! grep -q "
 race_check "the replaced directory is reported" sh -c '[ "$2" = 1 ] && grep -q "Not a directory" "$1"' _ "$W/race.out" "$st"
 rm -rf "$W/race"
 
+# Trees whose paths are longer than PATH_MAX (4096): find, test, list and
+# delete everything in them.
+make_long() { # DIR
+    ( mkdir "$1" && cd "$1" || exit 1
+      name=$(printf 'd%.0s' $(seq 199)); i=0
+      while [ $i -lt 30 ]; do mkdir "$name" && cd -P "$name" || exit 1; i=$((i + 1)); done
+      echo x > leaf; ln -s leaf link )
+}
+make_long "$W/long"
+for expr in '-printf %d_%y_%Y_%s_%l\n' '-name leaf -print' '-type f -newer /dev/null' '-empty -print' '-lname leaf -printf %f\n' '-readable -name l*'; do
+    exp=$(cd "$W" && /usr/bin/find long $expr 2>&1 | sort | cksum; )
+    act=$(cd "$W" && "$BIN_DIR/find" long $expr 2>&1 | sort | cksum)
+    race_check "past PATH_MAX: $expr" test "$exp" = "$act"
+done
+out=$(cd "$W" && "$BIN_DIR/find" long -name leaf -execdir cat {} ';' 2>&1)
+race_check "past PATH_MAX: -execdir" test "$out" = x
+out=$(cd "$W" && "$BIN_DIR/find" long -delete 2>&1)
+race_check "past PATH_MAX: -delete" sh -c '[ -z "$1" ] && [ ! -e "$2" ]' _ "$out" "$W/long"
+/usr/bin/rm -rf "$W/long"
+
 # -execdir runs in the directory that was searched, not in whatever the path
 # leads to by the time the command starts.
 for terminator in ';' '+'; do
