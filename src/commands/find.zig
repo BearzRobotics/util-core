@@ -53,21 +53,25 @@ fn report(context: ?*anyopaque, ev: find.Event) void {
 }
 
 /// -ok: print the question on stderr, read one line from standard input.
+/// The whole line is consumed however long it is, so that none of it can
+/// answer the next question; only its first byte decides.
 fn confirm(context: ?*anyopaque, prompt: []const u8) bool {
     _ = context;
     _ = sys.writeAllFd(std.Io.File.stderr().handle, prompt);
-    var line: [256]u8 = undefined;
-    var k: usize = 0;
+    var first: u8 = '\n';
+    var at_start = true;
     var err: LX.E = .SUCCESS;
-    while (k < line.len) {
+    while (true) {
+        // One byte at a time: what follows the line belongs to the next
+        // question, or to whoever reads standard input after find.
         var b: [1]u8 = undefined;
         const got = sys.readFd(std.Io.File.stdin().handle, &b, &err) orelse break;
         if (got == 0) break;
+        if (at_start) first = b[0];
+        at_start = false;
         if (b[0] == '\n') break;
-        line[k] = b[0];
-        k += 1;
     }
-    return !(k == 0 or (line[0] != 'y' and line[0] != 'Y'));
+    return first == 'y' or first == 'Y';
 }
 
 fn debugFlags(u: *const Ui, list: []const u8) void {

@@ -419,6 +419,11 @@ run_ok '-okdir yes' yes.txt a -type f -okdir echo {} ';'
 run_ok '-ok eof' /dev/null a -type f -ok echo {} ';'
 run_ok '-ok print' answers.txt a -maxdepth 1 -type f -ok echo {} ';' -print
 run_ok '-ok multi args' yes.txt a -maxdepth 1 -name f1.txt -ok echo a b {} c ';'
+# One line answers one question, however long the line is.
+{ printf 'n%.0s' $(seq 256); printf 'yes, still the first answer\n'; printf 'n\nn\nn\nn\nn\nn\nn\nn\n'; } > longno.txt
+{ printf 'y'; printf 'n%.0s' $(seq 255); printf 'y\nn\nn\nn\nn\nn\nn\nn\nn\n'; } > longyes.txt
+run_ok '-ok long refusal' longno.txt a -type f -ok echo RAN {} ';'
+run_ok '-ok long consent' longyes.txt a -type f -ok echo RAN {} ';'
 # The command must not read the answers meant for find. (Only standard output
 # and status are compared: GNU's command may complain about its input.)
 for action in -ok -okdir; do
