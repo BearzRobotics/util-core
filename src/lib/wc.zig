@@ -196,12 +196,12 @@ fn countInput(env: Env, in: Input, show: Show, buf: []u8, size_sum: *u64, min_wi
         if (st.kind == .file) size_sum.* +|= st.size else min_width.* = 7;
     } else |_| min_width.* = 7;
     var s: Scanner = .{ .lines_only = !show.words and !show.chars and !show.max_line };
-    // -c alone: a regular file's size is its byte count (what GNU does too).
-    // Size 0 may be a /proc-style file with real content, so read those.
+    // -c alone: a regular file's size is its byte count (what GNU does too),
+    // when the size can be trusted.
     const only_bytes = show.bytes and !show.lines and !show.words and !show.chars and !show.max_line;
     if (only_bytes and in.source == .path) {
         if (file.stat(env.io)) |st| {
-            if (st.kind == .file and st.size > 0) return .{ .bytes = st.size };
+            if (st.kind == .file and try common.sizeIsReal(env.io, file, st.size)) return .{ .bytes = st.size };
         } else |_| {}
     }
     while (true) {

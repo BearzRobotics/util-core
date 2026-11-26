@@ -60,4 +60,9 @@ for n in 65535 65536 65537 131072 131073; do
 done
 rm -rf "$W"
 
+# sysfs says one page for a file holding a few bytes.
+for f in /sys/kernel/mm/transparent_hugepage/enabled /sys/devices/system/cpu/online; do
+    [ -r "$f" ] && run_cmp "-c $f" -c "$f"
+done
+
 print_summary

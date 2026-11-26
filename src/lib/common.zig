@@ -8,6 +8,7 @@
 //! `Observer`, so the caller decides how to word and where to send them.
 
 const std = @import("std");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 /// What every library entry point needs from its host.
@@ -79,4 +80,16 @@ pub fn readChunk(io: Io, file: Io.File, buf: []u8) !usize {
         error.EndOfStream => 0,
         else => e,
     };
+}
+
+/// Whether the size of a regular file can be trusted. /proc reports size 0
+/// for files with contents, and sysfs one block (4096) for a few bytes; as in
+/// GNU only a size over a block is trusted, and then only if its last byte can
+/// be read. Reading such a short file through costs nothing.
+pub fn sizeIsReal(io: Io, file: Io.File, size: u64) !bool {
+    var e: std.os.linux.E = .SUCCESS;
+    const block: u64 = if (sys.fstatFd(file.handle, &e)) |st| st.blksize else 0;
+    if (size <= @max(block, 4096)) return false;
+    var last: [1]u8 = undefined;
+    return try file.readPositionalAll(io, &last, size - 1) == 1;
 }
