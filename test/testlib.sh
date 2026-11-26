@@ -221,6 +221,11 @@ print_summary() {
     # The suites end with print_summary, so this is their exit status.
     [ "$FAIL" -eq 0 ]
 }
+# For fault injection: true when strace can trace and inject here.
+can_inject() {
+    strace -o /dev/null -e trace=close -e inject=close:error=EIO:when=9999 /usr/bin/true > /dev/null 2>&1
+}
+
 # help_cmp: ours --help must equal GNU's --help minus the "GNU coreutils online
 # help" footer (that footer names the GNU project, which we are not).
 help_cmp() {

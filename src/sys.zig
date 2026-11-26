@@ -980,7 +980,37 @@ pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
 }
 
 /// One directory entry as the kernel returns it.
-pub const RawEntry = struct { name: []u8, dtype: u8 };
+pub const RawEntry = struct { name: []u8, dtype: u8, ino: u64 = 0 };
+
+/// Free a list returned by `readDirRaw` or `readDirNames`.
+pub fn freeDirEntries(gpa: std.mem.Allocator, entries: []RawEntry) void {
+    for (entries) |entry| gpa.free(entry.name);
+    gpa.free(entries);
+}
+
+/// `readDirRaw` without "." and "..". The list is complete or the call fails:
+/// a walk that copies or removes must never mistake a read error for the end
+/// of the directory.
+pub fn readDirNames(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEntry {
+    const all = readDirRaw(gpa, path, err) orelse return null;
+    var kept: usize = 0;
+    for (all) |entry| {
+        if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) {
+            gpa.free(entry.name);
+            continue;
+        }
+        all[kept] = entry;
+        kept += 1;
+    }
+    var list: std.ArrayList(RawEntry) = .fromOwnedSlice(all);
+    list.shrinkRetainingCapacity(kept);
+    return list.toOwnedSlice(gpa) catch {
+        for (list.items) |entry| gpa.free(entry.name);
+        list.deinit(gpa);
+        err.* = .NOMEM;
+        return null;
+    };
+}
 
 /// All entries of the directory `path` in readdir order, including "." and
 /// ".." (std.Io hides them). Names are allocated with `gpa`.
@@ -989,6 +1019,11 @@ pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEn
     const fd = openFd(path, O.RDONLY | O.DIRECTORY, 0, err) orelse return null;
     defer _ = closeFd(fd);
     var list: std.ArrayList(RawEntry) = .empty;
+    // Whatever has not been handed to the caller (every failure path).
+    defer {
+        for (list.items) |x| gpa.free(x.name);
+        list.deinit(gpa);
+    }
     var buf: [32768]u8 align(8) = undefined;
     while (true) {
         const rc = LX.syscall3(.getdents64, @bitCast(@as(isize, fd)), @intFromPtr(&buf), buf.len);
@@ -996,8 +1031,6 @@ pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEn
         if (e == .INTR) continue;
         if (e != .SUCCESS) {
             err.* = e;
-            for (list.items) |x| gpa.free(x.name);
-            list.deinit(gpa);
             return null;
         }
         if (rc == 0) break;
@@ -1010,14 +1043,19 @@ pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *LX.E) ?[]RawEn
                 err.* = .NOMEM;
                 return null;
             };
-            list.append(gpa, .{ .name = dup, .dtype = dtype }) catch {
+            const ino = std.mem.readInt(u64, buf[off..][0..8], .little);
+            list.append(gpa, .{ .name = dup, .dtype = dtype, .ino = ino }) catch {
+                gpa.free(dup);
                 err.* = .NOMEM;
                 return null;
             };
             off += reclen;
         }
     }
-    return list.toOwnedSlice(gpa) catch null;
+    return list.toOwnedSlice(gpa) catch {
+        err.* = .NOMEM;
+        return null;
+    };
 }
 
 pub fn closeFd(fd: Handle) ?LX.E {

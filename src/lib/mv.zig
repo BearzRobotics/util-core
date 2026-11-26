@@ -103,26 +103,16 @@ fn removeTree(c: *copy.Copier, path: []const u8, verbose: bool) bool {
     };
     var ok = true;
     if (st.isDir()) {
-        var dir = Io.Dir.cwd().openDir(env.io, path, .{ .iterate = true }) catch |err| {
-            c.errPrint("cannot remove {f}: {s}", .{ quote.quoteA(path), errtext.errText(err) });
+        const names = sys.readDirNames(env.gpa, path, &e) orelse {
+            c.errPrint("cannot remove {f}: {s}", .{ quote.quoteA(path), sys.errnoText(e) });
             return false;
         };
-        var names: std.ArrayList([]u8) = .empty;
-        defer {
-            for (names.items) |n| env.gpa.free(n);
-            names.deinit(env.gpa);
-        }
-        var it = dir.iterate();
-        while (it.next(env.io) catch null) |entry| {
-            const dup = env.gpa.dupe(u8, entry.name) catch break;
-            names.append(env.gpa, dup) catch {
-                env.gpa.free(dup);
-                break;
+        defer sys.freeDirEntries(env.gpa, names);
+        for (names) |n| {
+            const child = copy.joinName(env.gpa, path, n.name) catch {
+                c.errPrint("cannot remove {f}: {s}", .{ quote.quoteA(path), sys.errnoText(.NOMEM) });
+                return false;
             };
-        }
-        dir.close(env.io);
-        for (names.items) |n| {
-            const child = copy.joinName(env.gpa, path, n) catch continue;
             defer env.gpa.free(child);
             if (!removeTree(c, child, verbose)) ok = false;
         }

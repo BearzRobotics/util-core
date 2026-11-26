@@ -272,4 +272,20 @@ run_tree "cp -r symlink dest dir" "$SETUP; ln -s e z" -r d z
 run_tree "cp -r symlink dest dir/" "$SETUP; ln -s e z" -r d z/
 run_tree "cp dir symlink to dir dest" "$SETUP" a dl
 run_tree "cp onto symlink dir" "$SETUP" a dl/
+
+# A directory that cannot be read to its end must make the copy fail (strace
+# injects the read error). 3000 names need more than one read.
+for when in 1 2; do
+    d=$(mktemp -d); mkdir "$d/src"; (cd "$d/src" && seq 1 3000 | xargs touch)
+    if can_inject; then
+        (cd "$d" && strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=$when "$BIN_DIR/cp" -r src dst > out 2>&1); rc=$?
+        if [ "$rc" -eq 1 ] && [ "$(cat "$d/out")" = "cp: cannot access 'src': Input/output error" ]; then
+            PASS=$((PASS + 1)); echo "PASS cp -r reports read error $when"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL cp -r reports read error $when (rc=$rc: $(head -n 3 "$d/out"))"
+        fi
+    else
+        skip_test "cp -r reports read error $when (no strace)"
+    fi
+done
 cd /; print_summary

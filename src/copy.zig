@@ -181,6 +181,11 @@ pub const Copier = struct {
         c.emit(.{ .diag = t });
     }
 
+    fn outOfMemory(c: *Copier, name: []const u8) bool {
+        c.errno("cannot access {f}", .{quote.quoteA(name)}, .NOMEM);
+        return false;
+    }
+
     fn errno(c: *Copier, comptime fmt: []const u8, args: anytype, e: E) void {
         c.errPrint(fmt ++ ": {s}", args ++ .{sys.errnoText(e)});
     }
@@ -973,29 +978,16 @@ pub const Copier = struct {
 
     fn copyDir(c: *Copier, src_name: []const u8, dst_name: []const u8, new_dst: bool, src_sb: sys.FileStat, ancestors: []const DevIno, first_dir_created: *bool, copy_into_self: *bool) bool {
         const ctx = c.env;
-        var dir = Io.Dir.cwd().openDir(ctx.io, src_name, .{ .iterate = true }) catch |e| {
-            c.errPrint("cannot access {f}: {s}", .{ quote.quoteA(src_name), errtext.errText(e) });
+        var de: E = .SUCCESS;
+        const names = sys.readDirNames(ctx.gpa, src_name, &de) orelse {
+            c.errno("cannot access {f}", .{quote.quoteA(src_name)}, de);
             return false;
         };
-        const Ent = struct { name: []u8, ino: u64 };
-        var names: std.ArrayList(Ent) = .empty;
-        defer {
-            for (names.items) |n| ctx.gpa.free(n.name);
-            names.deinit(ctx.gpa);
-        }
-        var it = dir.iterate();
-        while (it.next(ctx.io) catch null) |entry| {
-            const dup = ctx.gpa.dupe(u8, entry.name) catch break;
-            names.append(ctx.gpa, .{ .name = dup, .ino = @intCast(entry.inode) }) catch {
-                ctx.gpa.free(dup);
-                break;
-            };
-        }
-        dir.close(ctx.io);
+        defer sys.freeDirEntries(ctx.gpa, names);
 
         // savedir(SAVEDIR_SORT_FASTREAD) orders the entries by inode number.
-        std.mem.sort(Ent, names.items, {}, struct {
-            fn lt(_: void, p: Ent, q: Ent) bool {
+        std.mem.sort(sys.RawEntry, names, {}, struct {
+            fn lt(_: void, p: sys.RawEntry, q: sys.RawEntry) bool {
                 return p.ino < q.ino;
             }
         }.lt);
@@ -1006,15 +998,16 @@ pub const Copier = struct {
 
         var anc: std.ArrayList(DevIno) = .empty;
         defer anc.deinit(ctx.gpa);
-        anc.appendSlice(ctx.gpa, ancestors) catch {};
-        anc.append(ctx.gpa, key(src_sb)) catch {};
+        // Without the full list a copy into itself would not be noticed.
+        anc.appendSlice(ctx.gpa, ancestors) catch return c.outOfMemory(src_name);
+        anc.append(ctx.gpa, key(src_sb)) catch return c.outOfMemory(src_name);
 
         var ok = true;
         var new_first_dir = false;
-        for (names.items) |n| {
-            const sname = joinName(c.gpa, src_name, n.name) catch continue;
+        for (names) |n| {
+            const sname = joinName(c.gpa, src_name, n.name) catch return c.outOfMemory(src_name);
             defer c.gpa.free(sname);
-            const dname = joinName(c.gpa, dst_name, n.name) catch continue;
+            const dname = joinName(c.gpa, dst_name, n.name) catch return c.outOfMemory(src_name);
             defer c.gpa.free(dname);
             var first_dir = first_dir_created.*;
             var local_self = false;

@@ -8,6 +8,7 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const rm = @import("../lib/rm.zig");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "force", "interactive", "one-file-system", "no-preserve-root", "preserve-root", "recursive", "dir", "verbose", "help", "version" };
@@ -145,6 +146,7 @@ fn report(context: ?*anyopaque, ev: rm.Event) void {
     switch (ev) {
         .removed => |r| st.out.print("{s} {f}\n", .{ if (r.dir) "removed directory" else "removed", cli.quoteA(r.path) }),
         .failed => |f| cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(f.path), cli.errText(f.err) }),
+        .unreadable => |u| cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(u.path), sys.errnoText(u.errno) }),
         .refuse_dot => |p| cli.warn(ctx, "refusing to remove '.' or '..' directory: skipping {f}", .{cli.quoteA(p)}),
         .refuse_root => |r| {
             cli.warn(ctx, "it is dangerous to operate recursively on {f}{s}", .{ cli.quoteA(r.path), if (r.literal) "" else " (same as '/')" });

@@ -101,4 +101,23 @@ run_tree "mv hardlink onto same file" "$SETUP; ln a h2" hard a
 run_tree "mv symlink onto referent" "$SETUP" l a
 run_tree "mv symlink onto hardlink" "$SETUP; ln a h2; ln -s a s2" s2 h2
 run_tree "mv dir with hardlinks" "$SETUP; ln d/f d/f2" d z
+
+# Between file systems: when the source cannot be read to its end, mv fails and
+# keeps the source (strace injects the read error).
+for when in 1 2; do
+    d=$(mktemp -d); mkdir "$d/src"; (cd "$d/src" && seq 1 3000 | xargs touch)
+    other=$(mktemp -d /dev/shm/mvtest.XXXXXX 2>/dev/null)
+    if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$d")" ] && can_inject; then
+        (cd "$d" && strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=$when "$BIN_DIR/mv" src "$other/dst" > out 2>&1); rc=$?
+        left=$(find "$d/src" -type f | wc -l)
+        if [ "$rc" -eq 1 ] && [ "$left" -eq 3000 ] && [ "$(cat "$d/out")" = "mv: cannot access 'src': Input/output error" ]; then
+            PASS=$((PASS + 1)); echo "PASS mv keeps the source after read error $when"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL mv keeps the source after read error $when (rc=$rc, $left left: $(head -n 3 "$d/out"))"
+        fi
+    else
+        skip_test "mv keeps the source after read error $when (needs strace and a second file system)"
+    fi
+    [ -z "$other" ] || rm -rf "$other"
+done
 cd /; print_summary

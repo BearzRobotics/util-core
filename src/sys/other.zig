@@ -1132,7 +1132,7 @@ pub fn readDirRaw(gpa: std.mem.Allocator, path: []const u8, err: *E) ?[]sys.RawE
             .unix_domain_socket => 12,
             else => 0,
         };
-        list.append(gpa, .{ .name = dup, .dtype = dtype }) catch return fail(gpa, &list, err);
+        list.append(gpa, .{ .name = dup, .dtype = dtype, .ino = @intCast(ent.inode) }) catch return fail(gpa, &list, err);
     }
     return list.toOwnedSlice(gpa) catch fail(gpa, &list, err);
 }

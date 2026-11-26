@@ -169,4 +169,17 @@ else
     echo "SKIP: unshare -rm is not available"
 fi
 rm -f "$yes_all" "$no_all" "$mixed"
+# A directory that cannot be listed is reported with the read error, and rm
+# fails. The case only ever names its own temporary directory.
+d=$(mktemp -d); mkdir "$d/src"; : > "$d/src/a"
+if can_inject; then
+    (cd "$d" && strace -o /dev/null -e trace=getdents64 -e inject=getdents64:error=EIO:when=1 "$BIN_DIR/rm" -r src > out 2>&1); rc=$?
+    if [ "$rc" -eq 1 ] && [ -f "$d/src/a" ] && [ "$(cat "$d/out")" = "rm: cannot remove 'src': Input/output error" ]; then
+        PASS=$((PASS + 1)); echo "PASS rm -r reports a read error"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL rm -r reports a read error (rc=$rc: $(head -n 3 "$d/out"))"
+    fi
+else
+    skip_test "rm -r reports a read error (no strace)"
+fi
 print_summary

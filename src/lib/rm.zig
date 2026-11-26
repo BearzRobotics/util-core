@@ -38,6 +38,8 @@ pub const Event = union(enum) {
     removed: struct { path: []const u8, dir: bool },
     /// Could not remove `path`.
     failed: struct { path: []const u8, err: anyerror },
+    /// The directory `path` could not be listed; nothing in it was touched.
+    unreadable: struct { path: []const u8, errno: sys.E },
     /// "." or ".." given as an operand with -r.
     refuse_dot: []const u8,
     /// An operand that is (or resolves to) "/" with preserve_root.
@@ -149,31 +151,21 @@ fn remove(st: *State, path: []const u8, is_arg: bool) bool {
         if (cfg.interactive == .always) {
             if (!st.confirm.ask(.{ .path = path, .kind = lst.kind, .size = lst.size, .action = .descend })) return false;
         }
-        var dir = cwd.openDir(env.io, path, .{ .iterate = true }) catch |e| {
-            st.observer.emit(.{ .failed = .{ .path = path, .err = e } });
+        var de: sys.E = .SUCCESS;
+        const names = sys.readDirNames(env.gpa, path, &de) orelse {
+            st.observer.emit(.{ .unreadable = .{ .path = path, .errno = de } });
             st.fail();
             return false;
         };
-        var names: std.ArrayList([]u8) = .empty;
-        defer {
-            for (names.items) |n| env.gpa.free(n);
-            names.deinit(env.gpa);
-        }
-        var it = dir.iterate();
-        while (it.next(env.io) catch null) |entry| {
-            const dup = env.gpa.dupe(u8, entry.name) catch break;
-            names.append(env.gpa, dup) catch {
-                env.gpa.free(dup);
-                break;
-            };
-        }
-        dir.close(env.io);
+        defer sys.freeDirEntries(env.gpa, names);
         var kept = false; // a child failed or was declined, so the directory cannot be empty
-        for (names.items) |n| {
-            const child = if (std.mem.endsWith(u8, path, "/"))
-                std.fmt.allocPrint(env.gpa, "{s}{s}", .{ path, n }) catch return false
-            else
-                std.fmt.allocPrint(env.gpa, "{s}/{s}", .{ path, n }) catch return false;
+        for (names) |n| {
+            const separator = if (std.mem.endsWith(u8, path, "/")) "" else "/";
+            const child = std.fmt.allocPrint(env.gpa, "{s}{s}{s}", .{ path, separator, n.name }) catch {
+                st.observer.emit(.{ .failed = .{ .path = path, .err = error.SystemResources } });
+                st.fail();
+                return false;
+            };
             defer env.gpa.free(child);
             if (!remove(st, child, false)) kept = true;
         }
