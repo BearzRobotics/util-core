@@ -97,10 +97,7 @@ fn giveBack(io: Io, file: Io.File, unread: u64) void {
 /// Copy the head of `file`. Returns how many bytes were read beyond what was
 /// output (to be given back to a seekable input).
 fn head(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, buf: []u8) !u64 {
-    if (cfg.skip_last) {
-        try headAllButLast(env, out, file, cfg, buf);
-        return 0;
-    }
+    if (cfg.skip_last) return headAllButLast(env, out, file, cfg, buf);
     var remaining = cfg.count;
     while (remaining > 0) {
         const n = try common.readChunk(env.io, file, buf);
@@ -132,15 +129,16 @@ fn head(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, buf: []u8) !
 }
 
 /// Everything except the last `count` bytes/lines. Holds back at most
-/// `count` items (plus one read chunk) in `pending`.
-fn headAllButLast(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, buf: []u8) !void {
+/// `count` items (plus one read chunk) in `pending`. Returns the number of
+/// bytes held back, which were read but not output.
+fn headAllButLast(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, buf: []u8) !u64 {
     var pending: std.ArrayList(u8) = .empty;
     defer pending.deinit(env.gpa);
     var start: usize = 0; // bytes before `start` are already written
     var delims: u64 = 0; // delimiters in pending[start..]
     while (true) {
         const n = try common.readChunk(env.io, file, buf);
-        if (n == 0) return;
+        if (n == 0) return pending.items.len - start;
         const chunk = buf[0..n];
         pending.appendSlice(env.gpa, chunk) catch return error.OutOfMemory;
         if (cfg.bytes) {
@@ -169,7 +167,7 @@ fn headAllButLast(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, bu
                 delims -= 1;
             }
         }
-        if (out.failed) return;
+        if (out.failed) return 0;
         // Compact so memory stays proportional to what is held back.
         if (start > 0 and start >= pending.items.len / 2) {
             const rest = pending.items.len - start;

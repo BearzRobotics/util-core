@@ -93,6 +93,19 @@ run_cmp "-n needs argument"      -n
 run_cmp "digit after other option" -q3 n25
 run_cmp "-- ends options"        -- -n
 
+# "All but the last N" leaves a seekable stdin just past the last byte output.
+printf 'a\nb\nc\nd\n' > off1; printf 'a\nb\nc' > off2
+awk 'BEGIN { for (i = 0; i < 40000; i++) print "line", i }' > off3
+for f in off1 off2 off3; do
+    for o in "-n -0" "-n -1" "-n -3" "-c -0" "-c -1" "-c -2" "-c -70000" "-n -39999"; do
+        case "$f $o" in "off1 -c -70000"|"off2 -c -70000"|"off1 -n -39999"|"off2 -n -39999"|"off2 -n -3") continue;; esac
+        exp=$( (/usr/bin/head $o; echo ==; cat) < $f | cksum)
+        act=$( ("$BIN_DIR/head" $o; echo ==; cat) < $f | cksum)
+        if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS offset after $o $f"
+        else FAIL=$((FAIL + 1)); echo "FAIL offset after $o $f"; fi
+    done
+done
+
 cd /
 rm -rf "$W"
 print_summary
