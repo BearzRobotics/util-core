@@ -168,12 +168,17 @@ run_tree() {
     description="$1"; setup="$2"; shift 2
     base="$(dirname "$TMPDIR_CMP")/tree"; chmod -R u+rwx "$base" 2>/dev/null; rm -rf "$base"; mkdir -p "$base/g" "$base/o"
     for x in g o; do (cd "$base/$x" && eval "$setup"); done
+    # An access time set by the command itself (install -C reads the file it
+    # compares) is the wall clock of that run, so the two runs cannot match.
+    # Anything this recent is shown as "now"; a copied, older time is compared.
+    # The margin covers file time stamps lagging the clock by a tick.
+    tree_start=$(($(date +%s) - 2))
     (umask "${TREE_UMASK:-022}"; cd "$base/g" && LC_ALL=C gnu "$@" < "${TREE_STDIN:-/dev/null}" > "$base/g.out" 2> "$base/g.err"; echo $? > "$base/g.rc")
     (umask "${TREE_UMASK:-022}"; cd "$base/o" && ours "$@" < "${TREE_STDIN:-/dev/null}" > "$base/o.out" 2> "$base/o.err"; echo $? > "$base/o.rc")
     # Trees are compared with symlink targets (%l); the two working directories
     # differ only in their last component, which is masked in the output.
     for x in g o; do
-        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort | awk '$1 ~ /^\.\/(z|e)(\/|$)/ { print } $1 !~ /^\.\/(z|e)(\/|$)/ { print $1, "-", $3 }'; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; true; } 2>/dev/null > "$base/$x.tree")
+        (cd "$base/$x" && { if [ -n "$TREE_TIMES" ]; then find . -type f -printf '%p %A@ %T@\n' | sort | awk -v start="$tree_start" '$2 + 0 >= start { $2 = "now" } $1 ~ /^\.\/(z|e)(\/|$)/ { print } $1 !~ /^\.\/(z|e)(\/|$)/ { print $1, "-", $3 }'; find . -type l -printf '%p %T@\n' | sort; fi; if [ -n "$TREE_OWNER" ]; then find . -printf '%p %y %m %l %u %g\n' | sort; else find . -printf '%p %y %m %l\n' | sort; fi; [ -n "$TREE_CONTENT" ] && find . -type f -exec cksum {} + | sort -k3; true; } 2>/dev/null > "$base/$x.tree")
         rel="${base#/}"
         norm_err < "$base/$x.err" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.err2"
         norm_err < "$base/$x.out" | sed "s#$base/$x#BASE#g; s#$rel/$x#BASE#g" > "$base/$x.out2"
