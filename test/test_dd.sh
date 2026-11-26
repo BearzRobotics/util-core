@@ -112,6 +112,27 @@ DD_IN=lines dd_cmp "unblock short cbs" conv=unblock cbs=2
 DD_IN=lines dd_cmp "block cbs=1" conv=block cbs=1
 DD_IN=lines dd_cmp "ebcdic cbs=0" conv=ebcdic cbs=0
 
+# Offsets that do not fit in a file offset are diagnosed, not computed.
+cp pre out; dd_cmp "skip= overflow" if=text skip=18014398509481984 bs=1024
+dd_cmp "skip= largest count" if=text skip=9223372036854775807
+dd_cmp "skip= largest count bs=1" if=text skip=9223372036854775807 bs=1
+cp pre out; dd_cmp "skip= overflow of=out" if=text of=out skip=18014398509481984 bs=1024
+DD_IN=text dd_cmp "skip= overflow stdin" skip=18014398509481984 bs=1024
+dd_cmp "skip= overflow /dev/zero" if=/dev/zero of=/dev/null skip=18014398509481984 bs=1024 count=2
+cp pre out; dd_cmp "seek= overflow" if=text of=out seek=18014398509481984 bs=1024
+cp pre out; dd_cmp "seek= largest count" if=text of=out seek=9223372036854775807
+dd_cmp "seek= overflow new file" if=text of=newfile seek=9223372036854775807
+[ ! -e newfile ] && { PASS=$((PASS + 1)); echo "PASS seek= overflow creates nothing"; } || { FAIL=$((FAIL + 1)); echo "FAIL seek= overflow creates nothing"; }
+cp pre out; dd_cmp "seek= overflow notrunc" if=text of=out seek=18014398509481984 bs=1024 conv=notrunc
+cp pre out; dd_cmp "seek= overflow stdout" if=text seek=18014398509481984 bs=1024
+for a in skip=18014398509481984 skip=9223372036854775807; do
+    printf abc | LC_ALL=C /usr/bin/dd $a bs=1024 > o.g 2> e.g; rg=$?
+    printf abc | "$BIN_DIR/dd" $a bs=1024 > o.o 2> e.o; ro=$?
+    if [ "$rg" = "$ro" ] && cmp -s o.g o.o && [ "$(norm_err < e.g | mask)" = "$(norm_err < e.o | mask)" ]; then
+        PASS=$((PASS + 1)); echo "PASS pipe $a"
+    else FAIL=$((FAIL + 1)); echo "FAIL pipe $a"; cat e.o; fi
+done
+
 # Signals. dd reads a FIFO that the test feeds, so each step waits for the one
 # before it. (A shell starts background jobs with SIGINT ignored; env undoes it.)
 wait_for() { # wait_for COMMAND...: poll for up to 5 s

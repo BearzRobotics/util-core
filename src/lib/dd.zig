@@ -606,22 +606,43 @@ fn swabBuffer(buf: []u8, nread: *usize, saved: *i32) []u8 {
     return buf[0..nread.*];
 }
 
+/// The size in bytes of `records` blocks plus `bytes`, or null when that is
+/// more than a file offset can hold.
+fn byteOffset(records: i64, blocksize: usize, bytes: i64) ?i64 {
+    const whole = std.math.mul(i64, records, @intCast(blocksize)) catch return null;
+    return std.math.add(i64, whole, bytes) catch null;
+}
+
+/// `input_offset` is negative once it is no longer known.
+fn advanceInputOffset(d: *Job, n: i64) void {
+    if (d.input_offset < 0) return;
+    d.input_offset = std.math.add(i64, d.input_offset, n) catch -1;
+}
+
 fn skipInput(d: *Job, records_in: i64, bytes: *i64) Fail!i64 {
     // Try lseek first.
     var records = records_in;
     var e: E = .SUCCESS;
-    const offset = records * @as(i64, @intCast(d.input_blocksize)) + bytes.*;
-    if (sys.seekFd(d.in_fd, offset, 1, &e) != null) {
-        if (sys.fstatFd(d.in_fd, &e)) |st| {
-            if (st.isReg() and st.size > 0 and d.input_offset >= 0 and @as(i64, @intCast(st.size)) - d.input_offset < offset) {
-                records = @divTrunc(offset - @as(i64, @intCast(st.size)), @as(i64, @intCast(d.input_blocksize)));
-                d.input_offset = @intCast(st.size);
-            } else {
-                records = 0;
-                d.input_offset += offset;
+    var seek_error: E = .OVERFLOW;
+    if (byteOffset(records, d.input_blocksize, bytes.*)) |offset| {
+        if (sys.seekFd(d.in_fd, offset, 1, &e) != null) {
+            if (sys.fstatFd(d.in_fd, &e)) |st| {
+                if (st.isReg() and st.size > 0 and d.input_offset >= 0 and @as(i64, @intCast(st.size)) - d.input_offset < offset) {
+                    records = @divTrunc(offset - @as(i64, @intCast(st.size)), @as(i64, @intCast(d.input_blocksize)));
+                    d.input_offset = @intCast(st.size);
+                } else {
+                    records = 0;
+                    advanceInputOffset(d, offset);
+                }
             }
+            return records;
         }
-        return records;
+        seek_error = e;
+    }
+    // A file that can seek, but not that far, cannot be skipped by reading.
+    if (sys.seekFd(d.in_fd, 0, 2, &e) != null) {
+        diagnose(d, seek_error, "{f}: cannot skip", .{quote.quote(d.input_file orelse "standard input")});
+        return quit(d);
     }
     // Read and discard.
     var remaining = records;
@@ -639,7 +660,7 @@ fn skipInput(d: *Job, records_in: i64, bytes: *i64) Fail!i64 {
         if (remaining > 0) {
             if (n == d.input_blocksize) remaining -= 1;
         } else bytes.* -= @intCast(n);
-        d.input_offset += @intCast(n);
+        advanceInputOffset(d, @intCast(n));
         if (remaining == 0 and bytes.* == 0) break;
     }
     return remaining;
@@ -704,18 +725,28 @@ fn ddCopy(d: *Job) Fail!u8 {
     }
 
     if (d.skip_records != 0 or d.skip_bytes != 0) {
-        const us_bytes = d.skip_records * @as(i64, @intCast(d.input_blocksize)) + d.skip_bytes;
+        const us_bytes = byteOffset(d.skip_records, d.input_blocksize, d.skip_bytes);
         const off0 = d.input_offset;
         var sb = d.skip_bytes;
         const us_blocks = try skipInput(d, d.skip_records, &sb);
-        if ((us_blocks != 0 or (d.input_offset >= 0 and us_bytes != d.input_offset - off0)) and d.status != STATUS_NONE) {
+        const short = d.input_offset >= 0 and (us_bytes == null or us_bytes.? != d.input_offset - off0);
+        if ((us_blocks != 0 or short) and d.status != STATUS_NONE) {
             warn(d, "{f}: cannot skip to specified offset", .{quote.quote(in_name)});
         }
     }
     if (d.seek_records != 0 or d.seek_bytes != 0) {
-        const off = d.seek_records * @as(i64, @intCast(d.output_blocksize)) + d.seek_bytes;
-        var se: E = .SUCCESS;
-        if (sys.seekFd(d.out_fd, off, 1, &se) == null) {
+        const wanted = byteOffset(d.seek_records, d.output_blocksize, d.seek_bytes);
+        var se: E = .OVERFLOW;
+        if (wanted == null or sys.seekFd(d.out_fd, wanted.?, 1, &se) == null) {
+            var end_error: E = .SUCCESS;
+            if (sys.seekFd(d.out_fd, 0, 2, &end_error) != null) {
+                diagnose(d, se, "{f}: cannot seek", .{quote.quote(out_name)});
+                return quit(d);
+            }
+            const off = wanted orelse {
+                warn(d, "{f}: cannot seek", .{quote.quote(out_name)});
+                return quit(d);
+            };
             // Not seekable: write zeros instead.
             const zeros = d.env.gpa.alloc(u8, d.output_blocksize) catch return 1;
             defer d.env.gpa.free(zeros);
@@ -750,7 +781,7 @@ fn ddCopy(d: *Job) Fail!u8 {
         const rd = if (d.fullblock) ireadFull(d, d.ibuf[0..want], &e) else iread(d, d.ibuf[0..want], &e);
         if (rd) |n| {
             if (n > 0) {
-                d.input_offset += @intCast(n);
+                advanceInputOffset(d, @intCast(n));
             } else break;
             nread = n;
         } else {
@@ -763,7 +794,7 @@ fn ddCopy(d: *Job) Fail!u8 {
                     diagnose(d, se, "{f}: cannot seek", .{quote.quote(in_name)});
                     exit_status = 1;
                 }
-                d.input_offset += @intCast(bad);
+                advanceInputOffset(d, @intCast(bad));
                 if (d.conv & C_SYNC != 0 and partread == 0) {
                     nread = 0;
                 } else continue;
@@ -874,7 +905,15 @@ pub fn run(d: *Job) u8 {
         if (d.conv & C_NOCREAT == 0) opts |= sys.O.CREAT;
         if (d.conv & C_EXCL != 0) opts |= sys.O.EXCL;
         if (!(d.seek_records != 0 or d.conv & C_NOTRUNC != 0)) opts |= sys.O.TRUNC;
-        const size: i64 = d.seek_records * @as(i64, @intCast(d.output_blocksize)) + d.seek_bytes;
+        // The length to truncate to, if that is going to happen (GNU checks
+        // that it exists before it touches the output).
+        var size: i64 = 0;
+        if (d.seek_records != 0 and d.conv & C_NOTRUNC == 0) {
+            size = byteOffset(d.seek_records, d.output_blocksize, d.seek_bytes) orelse {
+                warn(d, "offset too large: cannot truncate to a length of seek={d} ({d}-byte) blocks", .{ d.seek_records, d.output_blocksize });
+                return 1;
+            };
+        }
         var fd: ?sys.Handle = null;
         if (d.seek_records != 0) fd = openSignalled(d, outf, sys.O.RDWR | opts, &e);
         if (fd == null) fd = openSignalled(d, outf, sys.O.WRONLY | opts, &e);
