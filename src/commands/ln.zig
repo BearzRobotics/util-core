@@ -10,6 +10,7 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
 const ln = @import("../lib/ln.zig");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 const long_names = [_][]const u8{ "backup", "directory", "force", "interactive", "logical", "no-dereference", "physical", "relative", "symbolic", "suffix", "target-directory", "no-target-directory", "verbose", "help", "version" };
@@ -218,10 +219,14 @@ fn report(context: ?*anyopaque, ev: ln.Event) void {
         .same_file => |f| cli.warn(ctx.*, "{f} and {f} are the same file", .{ cli.quoteA(f.src), cli.quoteA(f.dest) }),
         .backup_failed => |f| cli.warn(ctx.*, "cannot backup {f}: {s}", .{ cli.quoteA(f.dest), cli.errText(f.err) }),
         .remove_failed => |f| cli.warn(ctx.*, "cannot remove {f}: {s}", .{ cli.quoteA(f.dest), cli.errText(f.err) }),
-        .link_failed => |f| if (f.symbolic)
-            cli.warn(ctx.*, "failed to create {s} {f}: {s}", .{ kindName(true), cli.quoteA(f.dest), cli.errText(f.err) })
+        // GNU names the target of a symbolic link only when it can be at fault.
+        .link_failed => |f| if (f.symbolic and (f.errno == .NAMETOOLONG or f.src.len == 0))
+            cli.warn(ctx.*, "failed to create {s} {f} -> {f}: {s}", .{ kindName(true), cli.quoteA(f.dest), cli.quoteA(f.src), sys.errnoText(f.errno) })
+        else if (f.symbolic)
+            cli.warn(ctx.*, "failed to create {s} {f}: {s}", .{ kindName(true), cli.quoteA(f.dest), sys.errnoText(f.errno) })
         else
-            cli.warn(ctx.*, "failed to create {s} {f} => {f}: {s}", .{ kindName(false), cli.quoteA(f.dest), cli.quoteA(f.src), cli.errText(f.err) }),
+            cli.warn(ctx.*, "failed to create {s} {f} => {f}: {s}", .{ kindName(false), cli.quoteA(f.dest), cli.quoteA(f.src), sys.errnoText(f.errno) }),
+        .unbackup_failed => |f| cli.warn(ctx.*, "cannot un-backup {f}: {s}", .{ cli.quoteA(f.dest), sys.errnoText(f.errno) }),
     }
 }
 

@@ -103,4 +103,25 @@ run_tree "empty dest"              "$S" a ''
 run_tree "-S missing arg"          "$S" a b -S
 run_tree "unreadable dest dir"     'echo A > a; mkdir d; chmod 500 d' a d/x
 run_tree "-d -F accepted"          "$S" -d -F a new
+
+printf "\n[ A link that cannot be made leaves the destination alone ]\n"
+LONG=$(awk 'BEGIN { while (n++ < 5000) printf "a" }')
+# (the symlink target is too long; GNU keeps b, and restores it after -b)
+run_tree "-sf failure keeps dest"   "$S" -sf "$LONG" b
+run_tree "-sfb failure restores"    "$S" -sfb "$LONG" b
+run_tree "-sb failure restores"     "$S" -sb "$LONG" b
+run_tree "-sf failure into dir"     "$S; echo D > d/x" -sf "$LONG" d/x
+# A hard link to another file system.
+other=$(mktemp /dev/shm/lntest.XXXXXX 2>/dev/null)
+if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$TEST_TMP")" ]; then
+    run_tree "-f across devices keeps dest"  "$S" -f "$other" b
+    run_tree "-fb across devices restores"   "$S" -f -b "$other" b
+    run_tree "-b across devices restores"    "$S" -b "$other" b
+else
+    skip_test "hard links across devices (no second file system)"
+fi
+[ -z "$other" ] || rm -f "$other"
+run_tree "-f replaces a hard link"  "$S" -f a b
+run_tree "-sf replaces"             "$S" -sf a b
+run_tree "-sf replaces in subdir"   "$S" -sf a d/c
 print_summary

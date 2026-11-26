@@ -15,6 +15,7 @@ const common = @import("lib/common.zig");
 const quote = @import("quote.zig");
 const errtext = @import("errtext.zig");
 const sys = @import("sys.zig");
+const replacelink = @import("replacelink.zig");
 const backup = @import("backup.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -334,24 +335,16 @@ pub const Copier = struct {
         const s = if (follow) stat(src, &e) else lstat(src, &e);
         const d = lstat(dst, &e);
         if (s != null and d != null and sameInode(s.?, d.?)) return null;
-        if (sys.unlinkPath(dst, false)) |ue| {
-            if (ue != .NOENT) return ue;
-        }
-        _ = c;
-        if (sys.linkPath(src, dst, follow)) |e2| return e2;
+        if (replacelink.replace(c.env.io, src, dst, .{ .hard = .{ .follow = follow } })) |e2| return e2;
         removed.* = true;
         return null;
     }
 
     fn forceSymlink(c: *Copier, target: []const u8, dst: []const u8, force: bool, removed: *bool) ?E {
-        _ = c;
         removed.* = false;
         const e1 = sys.symlinkPath(target, dst) orelse return null;
         if (e1 != .EXIST or !force) return e1;
-        if (sys.unlinkPath(dst, false)) |ue| {
-            if (ue != .NOENT) return ue;
-        }
-        if (sys.symlinkPath(target, dst)) |e2| return e2;
+        if (replacelink.replace(c.env.io, target, dst, .symbolic)) |e2| return e2;
         removed.* = true;
         return null;
     }

@@ -14,6 +14,8 @@ const std = @import("std");
 const Io = std.Io;
 const common = @import("common.zig");
 const paths = @import("../paths.zig");
+const sys = @import("../sys.zig");
+const replacelink = @import("../replacelink.zig");
 
 pub const Env = common.Env;
 
@@ -53,7 +55,9 @@ pub const Event = union(enum) {
     same_file: struct { src: []const u8, dest: []const u8 },
     backup_failed: struct { dest: []const u8, err: anyerror },
     remove_failed: struct { dest: []const u8, err: anyerror },
-    link_failed: struct { dest: []const u8, src: []const u8, symbolic: bool, err: anyerror },
+    link_failed: struct { dest: []const u8, src: []const u8, symbolic: bool, errno: sys.E },
+    /// After a failed link, the backup could not be renamed back to `dest`.
+    unbackup_failed: struct { dest: []const u8, errno: sys.E },
 };
 pub const Observer = common.Observer(Event);
 
@@ -114,6 +118,7 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
     }
 
     var made_backup: ?[]u8 = null;
+    var replacing = false; // -f or -i, without a backup
     defer if (made_backup) |b| env.gpa.free(b);
     if (exists(env, dest)) |dst| {
         if (!cfg.force and !cfg.interactive and cfg.backup == .none) {
@@ -147,33 +152,36 @@ pub fn link(env: Env, cfg: Options, src: []const u8, dest: []const u8, observer:
                 observer.emit(.{ .same_file = .{ .src = src, .dest = dest } });
                 return false;
             };
-            cwd.deleteFile(env.io, dest) catch |e| {
-                observer.emit(.{ .remove_failed = .{ .dest = dest, .err = e } });
+            if (dst.kind == .directory) {
+                observer.emit(.{ .remove_failed = .{ .dest = dest, .err = error.IsDir } });
                 return false;
-            };
+            }
+            replacing = true;
         }
     }
 
-    if (cfg.symbolic) {
-        var target: []const u8 = src;
-        var rel: ?[]u8 = null;
-        defer if (rel) |r| env.gpa.free(r);
-        if (cfg.relative) {
-            rel = relativeSymlinkTarget(env, src, dest);
-            if (rel) |r| target = r;
-        }
-        cwd.symLink(env.io, target, dest, .{}) catch |e| {
-            observer.emit(.{ .link_failed = .{ .dest = dest, .src = src, .symbolic = true, .err = e } });
-            return false;
-        };
-        if (cfg.verbose) observer.emit(.{ .linked = .{ .dest = dest, .src = target, .symbolic = true, .backup = made_backup } });
-    } else {
-        cwd.hardLink(src, cwd, dest, env.io, .{ .follow_symlinks = cfg.logical }) catch |e| {
-            observer.emit(.{ .link_failed = .{ .dest = dest, .src = src, .symbolic = false, .err = e } });
-            return false;
-        };
-        if (cfg.verbose) observer.emit(.{ .linked = .{ .dest = dest, .src = src, .symbolic = false, .backup = made_backup } });
+    var target: []const u8 = src;
+    var rel: ?[]u8 = null;
+    defer if (rel) |r| env.gpa.free(r);
+    if (cfg.symbolic and cfg.relative) {
+        rel = relativeSymlinkTarget(env, src, dest);
+        if (rel) |r| target = r;
     }
+    const kind: replacelink.Kind = if (cfg.symbolic) .symbolic else .{ .hard = .{ .follow = cfg.logical } };
+    const failure = if (replacing)
+        replacelink.replace(env.io, target, dest, kind)
+    else switch (kind) {
+        .symbolic => sys.symlinkPath(target, dest),
+        .hard => |h| sys.linkPath(target, dest, h.follow),
+    };
+    if (failure) |errno| {
+        observer.emit(.{ .link_failed = .{ .dest = dest, .src = src, .symbolic = cfg.symbolic, .errno = errno } });
+        if (made_backup) |b| {
+            if (sys.renamePath(b, dest, 0)) |re| observer.emit(.{ .unbackup_failed = .{ .dest = dest, .errno = re } });
+        }
+        return false;
+    }
+    if (cfg.verbose) observer.emit(.{ .linked = .{ .dest = dest, .src = target, .symbolic = cfg.symbolic, .backup = made_backup } });
     return true;
 }
 

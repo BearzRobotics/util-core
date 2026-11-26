@@ -288,4 +288,13 @@ for when in 1 2; do
         skip_test "cp -r reports read error $when (no strace)"
     fi
 done
+
+# cp -lf to another file system fails and keeps the destination.
+other=$(mktemp /dev/shm/cptest.XXXXXX 2>/dev/null)
+if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$TEST_TMP")" ]; then
+    TREE_CONTENT=1 run_tree "cp -lf across devices keeps dest" "$SETUP" -lf "$other" a
+else
+    skip_test "cp -lf across devices (no second file system)"
+fi
+[ -z "$other" ] || rm -f "$other"
 cd /; print_summary
