@@ -119,4 +119,32 @@ for u in 022 077 0277 0377; do
     TREE_UMASK=$u run_tree "setgid parent -p umask $u" "$SG" -p g/p1/p2/p3
     TREE_UMASK=$u run_tree "setgid parent -p -m 750 umask $u" "$SG" -p -m 750 g/p1/p2
 done
+
+# Another process may make the directory between the look and the mkdir (make -j
+# does this all the time). strace holds mkdir -p there while the test makes it.
+if can_inject; then
+    # race_mkdir NAME DIR: run `ours ...` and create DIR just before its mkdir.
+    for case in "a a" "p/q/r p/q/r" "p/q/r p/q" "-m700 a"; do
+        d="$TEST_TMP/race"; rm -rf "$d"; mkdir -p "$d/w"
+        case $case in
+            "-m700 a") args="-m 700 a"; made=a; n=1 ;;
+            "p/q/r p/q") args=p/q/r; made=p/q; n=2 ;;
+            "p/q/r p/q/r") args=p/q/r; made=p/q/r; n=3 ;;
+            *) args=a; made=a; n=1 ;;
+        esac
+        (cd "$d/w" && exec timeout 30 strace -o ../trace -e trace=mkdirat -e inject=mkdirat:delay_enter=2000000:when=$n "$BIN_DIR/mkdir" -p $args > ../out 2>&1) & pid=$!
+        tries=0
+        while [ "$(cat "$d/trace" 2>/dev/null | grep -c '^mkdirat')" -lt $((n - 1)) ] && [ $tries -lt 100 ]; do sleep 0.05; tries=$((tries + 1)); done
+        sleep 1
+        (umask 022; mkdir -p "$d/w/$made")
+        wait $pid; rc=$?
+        if [ "$rc" = 0 ] && [ ! -s "$d/out" ] && [ -d "$d/w/${args##* }" ] && grep -q EEXIST "$d/trace" && [ "$(stat -c %a "$d/w/$made")" = 755 ]; then
+            PASS=$((PASS + 1)); echo "PASS mkdir -p $args while $made appears"
+        else
+            FAIL=$((FAIL + 1)); echo "FAIL mkdir -p $args while $made appears (rc=$rc)"; cat "$d/out"
+        fi
+    done
+else
+    skip_test "concurrent mkdir -p (no usable strace)"
+fi
 print_summary

@@ -127,6 +127,13 @@ pub fn makeOne(env: Env, path: []const u8, options: Options, observer: Observer)
     };
     defer spot.close();
     if (sys.mkdirAt(spot.dir, spot.name, create_mode)) |e| {
+        // With -p it does not matter who made the directory, also when that
+        // happened after the look above. Its mode is left as it is.
+        if (options.parents and e == .EXIST) {
+            if (Io.Dir.cwd().statFile(io, path, .{})) |s| {
+                if (s.kind == .directory) return true;
+            } else |_| {}
+        }
         observer.emit(.{ .create_failed = .{ .path = path, .errno = e } });
         return false;
     }
