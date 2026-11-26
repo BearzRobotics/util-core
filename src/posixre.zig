@@ -215,7 +215,8 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                 try unicode.appendSetFlat(gpa, &fl, &set);
                 switch (n) {
                     'b' => try out.print(gpa, "(?:(?<={1s})(?!{0s})|(?<!{1s})(?={0s}))", .{ w.items, fl.items }),
-                    'B' => try out.print(gpa, "(?:(?<={1s})(?={0s})|(?<!{1s})(?!{0s}))", .{ w.items, fl.items }),
+                    // Only the second branch can hold inside a character.
+                    'B' => try out.print(gpa, "(?:(?<={1s})(?={0s})|(?<!{1s})(?!{0s}){2s})", .{ w.items, fl.items, unicode.not_inside_char }),
                     '<' => try out.print(gpa, "(?:(?<!{1s})(?={0s}))", .{ w.items, fl.items }),
                     else => try out.print(gpa, "(?:(?<={1s})(?!{0s}))", .{ w.items, fl.items }),
                 }

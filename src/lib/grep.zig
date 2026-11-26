@@ -885,7 +885,9 @@ pub const Matcher = struct {
             var wf: std.ArrayList(u8) = .empty;
             defer wf.deinit(gpa);
             try unicode.appendSetFlat(gpa, &wf, &set);
-            try src.print(gpa, "(?<!{s})(?:{s})(?!{s})", .{ wf.items, body, wg.items });
+            // An empty match must not be found inside a character; one that
+            // starts at a boundary also ends at one.
+            try src.print(gpa, "{s}(?<!{s})(?:{s})(?!{s})", .{ unicode.not_inside_char, wf.items, body, wg.items });
         } else if (options.word) {
             try src.print(gpa, "(?<![A-Za-z0-9_])(?:{s})(?![A-Za-z0-9_])", .{body});
         } else try src.appendSlice(gpa, body);

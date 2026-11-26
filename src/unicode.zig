@@ -317,6 +317,32 @@ pub fn appendSetFlat(gpa: std.mem.Allocator, out: *std.ArrayList(u8), set: *Set)
 /// Any one valid UTF-8 character.
 pub const any_char = "(?:[\\x00-\\x7f]|[\\xc2-\\xdf][\\x80-\\xbf]|[\\xe0-\\xef][\\x80-\\xbf][\\x80-\\xbf]|[\\xf0-\\xf4][\\x80-\\xbf][\\x80-\\xbf][\\x80-\\xbf])";
 
+/// An empty match anywhere but inside a valid UTF-8 character. The engine
+/// works on bytes, so an assertion that holds where no word character is on
+/// either side also holds between the bytes of a character without this.
+/// Positions among bytes that are not valid UTF-8 are left alone.
+pub const not_inside_char = "(?:(?![\\x80-\\xbf])|" ++
+    // After the first byte of two, three and four.
+    notAt("[\\xc2-\\xdf]", cont) ++
+    notAt("\\xe0", "[\\xa0-\\xbf]" ++ cont) ++
+    notAt("[\\xe1-\\xec\\xee\\xef]", cont ++ cont) ++
+    notAt("\\xed", "[\\x80-\\x9f]" ++ cont) ++
+    notAt("\\xf0", "[\\x90-\\xbf]" ++ cont ++ cont) ++
+    notAt("[\\xf1-\\xf3]", cont ++ cont ++ cont) ++
+    notAt("\\xf4", "[\\x80-\\x8f]" ++ cont ++ cont) ++
+    // After the second byte of three and four.
+    notAt("\\xe0[\\xa0-\\xbf]|[\\xe1-\\xec\\xee\\xef]" ++ cont ++ "|\\xed[\\x80-\\x9f]", cont) ++
+    notAt("\\xf0[\\x90-\\xbf]|[\\xf1-\\xf3]" ++ cont ++ "|\\xf4[\\x80-\\x8f]", cont ++ cont) ++
+    // After the third byte of four.
+    notAt("\\xf0[\\x90-\\xbf]" ++ cont ++ "|[\\xf1-\\xf3]" ++ cont ++ cont ++ "|\\xf4[\\x80-\\x8f]" ++ cont, cont) ++
+    ")";
+
+const cont = "[\\x80-\\xbf]";
+
+fn notAt(comptime before: []const u8, comptime after: []const u8) []const u8 {
+    return "(?!(?<=" ++ before ++ ")(?=" ++ after ++ "))";
+}
+
 test "decode and encode round trip" {
     var buf: [4]u8 = undefined;
     for ([_]u32{ 0x41, 0xe9, 0x20ac, 0x1f600 }) |cp| {

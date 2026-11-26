@@ -410,5 +410,16 @@ for o in --include --exclude; do
     else FAIL=$((FAIL + 1)); echo "FAIL $o with many stars"; fi
 done
 rm -rf stars stars.out
+# UTF-8: neither \B nor an empty -w match may be found inside a character.
+printf '\303\251\na\303\251\nab \303\251\n\342\202\254\na \303\251 b\n\360\235\224\270\n' > "$TEST_TMP/midchar"
+midchar() { CMP_LOCALE=C.UTF-8 CMP_STDIN="$TEST_TMP/midchar" run_cmp "UTF-8 characters stay whole: $*" -n "$@"; }
+midchar -E '\B'
+midchar -o -E '\B|a'
+midchar -w 'x*'
+midchar -w -e 'x*' -e zz
+midchar -w -E '()'
+midchar -w -e ''
+midchar -w -F -e '' -e zz
+midchar -P -w 'x*'
 help_cmp
 cd /; print_summary

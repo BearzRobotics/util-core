@@ -611,6 +611,11 @@ run_tree_t 'W' "$SET" -n 'N;W new' f
 run_tree_t 'w no name' "$SET" 'w' f
 
 # ---- UTF-8 locale (C.UTF-8) and alternation
+# No empty match inside a multibyte character: \B must not split one.
+printf '\303\211\na\303\251\n\303\251 \303\251\n\342\202\254a\n\360\235\224\270\n\355\237\277x\364\217\277\277\n\340\240\200\360\220\200\200\n. \251.\n' > midchar
+CMP_LOCALE=C.UTF-8 CMP_STDIN=midchar run_cmp 'UTF-8 \B keeps characters whole' 's/\B/X/g'
+CMP_LOCALE=C.UTF-8 CMP_STDIN=midchar run_cmp 'UTF-8 \B next to a repeat' 's/x*\B/X/g'
+
 printf 'héllo wörld ñ ÀÉÎ 日本語 😀 abc_1\nstraße İ\n' > u8
 printf '\377\376 abc \303 é\n' > u8bad
 printf 'abcd abcd foobarbaz ababc\n' > altin
