@@ -440,4 +440,11 @@ run_cmp "-g hex zero, large exponent" -g -s hexzero
 printf '0x0p99999\n1\n' > hexzero2
 run_cmp "-g hex zero before one" -g hexzero2
 
+# Options that cannot be combined, or given twice with different values.
+printf 'b\na\n' > confl
+for o in "-c -o cout" "-C -o cout" "-c -C" "-C -c" "-c -c" "-C -C" "--check=quiet -c" "--check --check=silent" "--check=quiet -C" "-o o1 -o o2" "-o o1 --output=o2" "-c -n -h -o cout"; do
+    run_cmp "conflict $o" $o confl
+done
+run_cmp "the same -o twice" -o same -o same confl
+
 print_summary

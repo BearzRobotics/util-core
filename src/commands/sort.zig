@@ -150,9 +150,9 @@ pub fn main(ctx: cli.Context) u8 {
                 14 => {
                     const v = value orelse "diagnose-first";
                     if (std.mem.eql(u8, v, "diagnose-first")) {
-                        cfg.check = .diagnose;
+                        if (!setCheck(ctx, &cfg, .diagnose)) return fail_status;
                     } else if (std.mem.eql(u8, v, "quiet") or std.mem.eql(u8, v, "silent")) {
-                        cfg.check = .quiet;
+                        if (!setCheck(ctx, &cfg, .quiet)) return fail_status;
                     } else {
                         cli.warn(ctx, "invalid argument '{s}' for '--check'\nValid arguments are:\n  - 'quiet', 'silent'\n  - 'diagnose-first'\nTry '{s} --help' for more information.", .{ v, ctx.name });
                         return 1;
@@ -165,7 +165,7 @@ pub fn main(ctx: cli.Context) u8 {
                     if (!addKey(ctx, &cfg, value.?)) return fail_status;
                 },
                 19 => cfg.merge = true,
-                20 => cfg.output = value.?,
+                20 => if (!setOutput(ctx, &cfg, value.?)) return fail_status,
                 21 => cfg.stable = true,
                 22 => {
                     if (!validBufferSize(ctx, value.?)) return fail_status;
@@ -200,7 +200,7 @@ pub fn main(ctx: cli.Context) u8 {
                 switch (c) {
                     'k' => if (!addKey(ctx, &cfg, value)) return fail_status,
                     't' => if (!setTab(ctx, &cfg, &tab_given, value)) return fail_status,
-                    'o' => cfg.output = value,
+                    'o' => if (!setOutput(ctx, &cfg, value)) return fail_status,
                     'S' => if (!validBufferSize(ctx, value)) return fail_status,
                     else => {}, // -T
                 }
@@ -211,8 +211,8 @@ pub fn main(ctx: cli.Context) u8 {
                 'r' => cfg.gkey.reverse = true,
                 'R' => setLetter(&cfg.gkey, 'R', .both),
                 'V' => setLetter(&cfg.gkey, 'V', .both),
-                'c' => cfg.check = .diagnose,
-                'C' => cfg.check = .quiet,
+                'c' => if (!setCheck(ctx, &cfg, .diagnose)) return fail_status,
+                'C' => if (!setCheck(ctx, &cfg, .quiet)) return fail_status,
                 'm' => cfg.merge = true,
                 's' => cfg.stable = true,
                 'u' => cfg.unique = true,
@@ -226,6 +226,11 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     if (!finishKeys(ctx, &cfg)) return fail_status;
+    // A check writes no output (--debug has messages of its own).
+    if (cfg.check != .none and cfg.output != null and !cfg.debug) {
+        cli.warn(ctx, "options '-{c}o' are incompatible", .{@as(u8, if (cfg.check == .quiet) 'C' else 'c')});
+        return fail_status;
+    }
 
     var opts: sort.Options = .{
         .gkey = cfg.gkey,
@@ -392,6 +397,25 @@ fn setLetter(o: *Ordering, c: u8, where: Where) void {
 fn unsupported(ctx: cli.Context, what: []const u8) u8 {
     cli.warn(ctx, "{s} is not implemented in this build", .{what});
     return fail_status;
+}
+
+/// -c and -C, in either spelling: both at once is an error.
+fn setCheck(ctx: cli.Context, cfg: *Config, mode: sort.Check) bool {
+    if (cfg.check != .none and cfg.check != mode) {
+        cli.warn(ctx, "options '-cC' are incompatible", .{});
+        return false;
+    }
+    cfg.check = mode;
+    return true;
+}
+
+fn setOutput(ctx: cli.Context, cfg: *Config, name: []const u8) bool {
+    if (cfg.output) |had| if (!std.mem.eql(u8, had, name)) {
+        cli.warn(ctx, "multiple output files specified", .{});
+        return false;
+    };
+    cfg.output = name;
+    return true;
 }
 
 fn setTab(ctx: cli.Context, cfg: *Config, given: *bool, arg: []const u8) bool {
