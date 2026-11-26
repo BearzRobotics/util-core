@@ -22,6 +22,7 @@ GNU coreutils 9.7 (`/usr/bin/rm --version` on the development machine, installed
 - Prompts read answers from standard input and follow GNU's wording (`descend into directory`, `remove regular empty file`, `remove write-protected ...`).
 - A directory whose contents could not all be removed (error or --one-file-system skip) is left in place without a further prompt; declined prompts do not block the parent's own prompt.
 - Exit status 0 when everything requested was removed (or missing with -f), 1 otherwise.
+- As GNU rm, a recursive removal works relative to the open directories: a directory is opened without following a symbolic link, checked to be the one that was examined, and its contents are examined and removed through that descriptor, so renaming things in the tree meanwhile cannot send rm outside it. Paths longer than PATH_MAX are removed. Unlike GNU, rm stops with `File name too long` below 10000 levels (4000 in a debug build) or 64 KiB of path. The same applies to the removal of the source by `mv` across file systems.
 
 ## Library
 

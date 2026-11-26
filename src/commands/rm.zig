@@ -145,7 +145,7 @@ fn report(context: ?*anyopaque, ev: rm.Event) void {
     const ctx = st.ctx;
     switch (ev) {
         .removed => |r| st.out.print("{s} {f}\n", .{ if (r.dir) "removed directory" else "removed", cli.quoteA(r.path) }),
-        .failed => |f| cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(f.path), cli.errText(f.err) }),
+        .failed => |f| cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(f.path), sys.errnoText(f.errno) }),
         .unreadable => |u| cli.warn(ctx, "cannot remove {f}: {s}", .{ cli.quoteA(u.path), sys.errnoText(u.errno) }),
         .refuse_dot => |p| cli.warn(ctx, "refusing to remove '.' or '..' directory: skipping {f}", .{cli.quoteA(p)}),
         .refuse_root => |r| {

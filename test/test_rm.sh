@@ -182,4 +182,28 @@ if can_inject; then
 else
     skip_test "rm -r reports a read error (no strace)"
 fi
+# A directory replaced by a symbolic link while rm is working must not lead it
+# outside the tree. The -i prompts hold rm still between examining 'tree/sub'
+# and opening it. Everything, the "victim" included, is in a new directory.
+d=$(mktemp -d); mkdir -p "$d/tree/sub" "$d/victim"; echo keep > "$d/victim/precious"; echo y > "$d/tree/sub/inner"
+mkfifo "$d/answers"
+(cd "$d" && exec timeout 30 "$BIN_DIR/rm" -ri tree < answers > out 2> err) & rm_pid=$!
+exec 7> "$d/answers"
+wait_for_prompt() {
+    tries=0
+    while ! grep -qF "$1" "$d/err" 2>/dev/null && [ "$tries" -lt 100 ]; do sleep 0.1; tries=$((tries + 1)); done
+}
+wait_for_prompt "descend into directory 'tree'?"
+echo y >&7
+wait_for_prompt "descend into directory 'tree/sub'?"
+mv "$d/tree/sub" "$d/sub.orig"; ln -s ../victim "$d/tree/sub"
+printf 'y\ny\ny\ny\ny\ny\n' >&7
+exec 7>&-
+wait "$rm_pid"; rc=$?
+if [ -f "$d/victim/precious" ] && [ "$rc" -eq 1 ] && ! grep -qF "tree/sub/precious" "$d/err"; then
+    PASS=$((PASS + 1)); echo "PASS rm -r does not follow a link that replaced a directory"
+else
+    FAIL=$((FAIL + 1)); echo "FAIL rm -r does not follow a link that replaced a directory (rc=$rc)"; cat "$d/err"; echo
+fi
+rm -rf "$d"
 print_summary

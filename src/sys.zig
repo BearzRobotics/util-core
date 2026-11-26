@@ -291,6 +291,9 @@ pub fn fileStat(path: []const u8, follow: bool, err: *E) ?FileStat {
     return fileStatAt(cwdFd(), path, follow, err);
 }
 
+// The `...At` functions are `noinline`: each puts a PATH_MAX buffer on the
+// stack, which must not become part of a recursive tree walker's frame.
+
 /// The handle that makes the `...At` functions resolve a relative path from
 /// the current directory.
 pub fn cwdFd() Handle {
@@ -298,7 +301,7 @@ pub fn cwdFd() Handle {
 }
 
 /// `fileStat` of `path` resolved from the open directory `dir`.
-pub fn fileStatAt(dir: Handle, path: []const u8, follow: bool, err: *E) ?FileStat {
+pub noinline fn fileStatAt(dir: Handle, path: []const u8, follow: bool, err: *E) ?FileStat {
     if (comptime !is_linux) return other.fileStatAt(dir, path, follow, err);
     var buf: [4097]u8 = undefined;
     if (path.len >= 4096) {
@@ -1021,7 +1024,7 @@ pub fn openFd(path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
 }
 
 /// `openFd` of `path` resolved from the open directory `dir`.
-pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
+pub noinline fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *LX.E) ?Handle {
     if (comptime !is_linux) return other.openFdAt(dir, path, flags, mode, err);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse {
@@ -1237,7 +1240,7 @@ pub fn unlinkPath(path: []const u8, removedir: bool) ?LX.E {
 }
 
 /// `unlinkPath` of `path` resolved from the open directory `dir`.
-pub fn unlinkAt(dir: Handle, path: []const u8, removedir: bool) ?LX.E {
+pub noinline fn unlinkAt(dir: Handle, path: []const u8, removedir: bool) ?LX.E {
     if (comptime !is_linux) return other.unlinkAt(dir, path, removedir);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;
@@ -1280,7 +1283,7 @@ pub fn readlinkPath(path: []const u8, buf: []u8, err: *LX.E) ?usize {
 }
 
 /// `readlinkPath` of `path` resolved from the open directory `dir`.
-pub fn readlinkAt(dir: Handle, path: []const u8, buf: []u8, err: *LX.E) ?usize {
+pub noinline fn readlinkAt(dir: Handle, path: []const u8, buf: []u8, err: *LX.E) ?usize {
     if (comptime !is_linux) return other.readlinkAt(dir, path, buf, err);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse {
@@ -1332,7 +1335,7 @@ pub fn accessPath(path: []const u8, mode: u32) ?LX.E {
 }
 
 /// `accessPath` of `path` resolved from the open directory `dir`.
-pub fn accessAt(dir: Handle, path: []const u8, mode: u32) ?LX.E {
+pub noinline fn accessAt(dir: Handle, path: []const u8, mode: u32) ?LX.E {
     if (comptime !is_linux) return other.accessAt(dir, path, mode);
     var b: [4097]u8 = undefined;
     const p = cstr(&b, path) orelse return .NAMETOOLONG;

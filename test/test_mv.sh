@@ -120,4 +120,29 @@ for when in 1 2; do
     fi
     [ -z "$other" ] || rm -rf "$other"
 done
+# While mv removes the source after copying to another file system, a directory
+# above the file being removed is replaced by a link to "victim". strace holds
+# mv after its first unlink long enough to make the swap.
+other=$(mktemp -d /dev/shm/mvtest.XXXXXX 2>/dev/null)
+d=$(mktemp -d)
+if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$d")" ] && can_inject; then
+    mkdir -p "$d/src/a/b" "$d/victim"
+    echo 1 > "$d/src/a/b/f1"; echo 2 > "$d/src/a/b/f2"; echo keep > "$d/victim/f1"; echo keep > "$d/victim/f2"
+    # The copy first clears the five destination names; the sixth unlinkat
+    # removes the first source file.
+    (cd "$d" && exec timeout 30 strace -o /dev/null -e trace=unlinkat -e inject=unlinkat:delay_exit=2000000:when=6 "$BIN_DIR/mv" src "$other/dst" > out 2>&1) & mv_pid=$!
+    tries=0
+    while [ -f "$d/src/a/b/f1" ] && [ -f "$d/src/a/b/f2" ] && [ "$tries" -lt 200 ]; do sleep 0.05; tries=$((tries + 1)); done
+    mv "$d/src/a/b" "$d/moved"; ln -s "$d/victim" "$d/src/a/b"
+    held=$(ls "$d/moved" | wc -l) # 1: mv was between the two files
+    wait "$mv_pid"
+    if [ "$held" -eq 1 ] && [ -f "$d/victim/f1" ] && [ -f "$d/victim/f2" ] && [ ! -e "$d/moved/f1" ] && [ ! -e "$d/moved/f2" ]; then
+        PASS=$((PASS + 1)); echo "PASS mv removes the source it listed, not a replacement"
+    else
+        FAIL=$((FAIL + 1)); echo "FAIL mv removes the source it listed, not a replacement"; cat "$d/out"; ls "$d/victim" "$d/moved"
+    fi
+else
+    skip_test "mv source removal race (needs strace and a second file system)"
+fi
+rm -rf "$d"; [ -z "$other" ] || rm -rf "$other"
 cd /; print_summary
