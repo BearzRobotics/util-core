@@ -174,6 +174,11 @@ fn outNum(out: *Sink, f: Flags, value: i128, base: u8, signed: bool) void {
 
 fn humanTime(s: *Ctx, sec: i64, nsec: u32, buf: *std.ArrayList(u8)) void {
     const tm = tzmod.localtime(&s.zone, sec);
+    // GNU shows the seconds when the year does not fit.
+    if (!tzmod.fitsStructTm(&tm)) {
+        buf.print(s.env.gpa, "{d}.{d:0>9}", .{ sec, nsec }) catch {};
+        return;
+    }
     strftime.format(buf, s.env.gpa, "%Y-%m-%d %H:%M:%S.%N %z", &tm, sec, nsec) catch {};
 }
 

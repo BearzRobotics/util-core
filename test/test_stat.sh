@@ -160,5 +160,8 @@ for f in "%${N}n" "%.${N}n" "%-${N}s|" "%${N}Y|" "[%.2147483648n]" "%0${N}a|" "[
 done
 run_cmp "huge field, -f" -f -c "%${N}b|" .
 
+# A year that struct tm cannot hold is shown as seconds (DISK-041).
+touch -d @-100000000000000000 ancient 2>/dev/null && run_cmp "year out of range" -c '%y|%Y' ancient
+
 print_summary
 [ "$FAIL" -eq 0 ]
