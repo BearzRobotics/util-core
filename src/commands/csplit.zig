@@ -4,6 +4,7 @@
 //! diagnostics; the splitting is in src/lib/csplit.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const posixre = @import("../posixre.zig");
@@ -94,9 +95,9 @@ pub fn main(ctx: cli.Context) u8 {
             'b' => opts.suffix_format = o.arg.?,
             'k' => opts.keep_files = true,
             'n' => {
-                const v = std.fmt.parseInt(i64, o.arg.?, 10) catch -1;
+                const v = numparse.parseInt(i64, o.arg.?, 10) catch -1;
                 if (v < 0 or v > std.math.maxInt(i32)) {
-                    const bad_syntax = std.fmt.parseInt(i64, o.arg.?, 10) catch null == null;
+                    const bad_syntax = numparse.parseInt(i64, o.arg.?, 10) catch null == null;
                     cli.warn(ctx, "invalid number: {f}{s}", .{ cli.quoteC(o.arg.?), if (bad_syntax) "" else ": Value too large for defined data type" });
                     return 1;
                 }
@@ -161,7 +162,7 @@ pub fn main(ctx: cli.Context) u8 {
                 };
             }
         } else {
-            const v = std.fmt.parseInt(i64, a, 10) catch {
+            const v = numparse.parseInt(i64, a, 10) catch {
                 cli.warn(ctx, "{f}: invalid pattern", .{cli.quoteC(a)});
                 return 1;
             };
@@ -192,9 +193,9 @@ pub fn main(ctx: cli.Context) u8 {
             if (std.mem.eql(u8, inner, "*")) {
                 c.repeat_forever = true;
             } else {
-                const v = std.fmt.parseInt(i64, inner, 10) catch -1;
+                const v = numparse.parseInt(i64, inner, 10) catch -1;
                 if (v < 0 or inner.len == 0 or inner[0] == '-' or inner[0] == '+') {
-                    cli.warn(ctx, "{f}}}: integer required between '{{' and '}}'", .{cli.quoteC(r)});
+                    cli.warn(ctx, "{f}}}: integer required between '{{' and '}}'", .{cli.quoteC(r[0 .. r.len - 1])});
                     return 1;
                 }
                 c.repeat = v;
@@ -239,5 +240,5 @@ fn parseSigned(text: []const u8) ?i64 {
     const digits = text[@intFromBool(signed)..];
     if (digits.len == 0) return null;
     for (digits) |c| if (!std.ascii.isDigit(c)) return null;
-    return std.fmt.parseInt(i64, text, 10) catch null;
+    return numparse.parseInt(i64, text, 10) catch null;
 }

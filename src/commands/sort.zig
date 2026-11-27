@@ -5,6 +5,7 @@
 //! engine and the sort/merge/check modes are in src/lib/sort.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const sort = @import("../lib/sort.zig");
 const Io = std.Io;
@@ -442,7 +443,7 @@ fn setTab(ctx: cli.Context, cfg: *Config, given: *bool, arg: []const u8) bool {
 }
 
 fn validParallel(ctx: cli.Context, arg: []const u8) bool {
-    const n = std.fmt.parseInt(usize, arg, 10) catch {
+    const n = numparse.parseInt(usize, arg, 10) catch {
         cli.warn(ctx, "invalid --parallel argument '{s}'", .{arg});
         return false;
     };
@@ -454,7 +455,7 @@ fn validParallel(ctx: cli.Context, arg: []const u8) bool {
 }
 
 fn validBatchSize(ctx: cli.Context, arg: []const u8) bool {
-    const n = std.fmt.parseInt(usize, arg, 10) catch {
+    const n = numparse.parseInt(usize, arg, 10) catch {
         cli.warn(ctx, "invalid --batch-size argument '{s}'", .{arg});
         return false;
     };

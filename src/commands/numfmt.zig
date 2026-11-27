@@ -4,6 +4,7 @@
 //! parsing, scaling and formatting are in src/lib/numfmt.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
@@ -122,7 +123,7 @@ pub fn main(ctx: cli.Context) u8 {
                 o.round = @fromBackingInt(@intCast(k));
             },
             1105 => {
-                const v = std.fmt.parseInt(i64, opt.arg.?, 10) catch |e| blk: {
+                const v = numparse.parseInt(i64, opt.arg.?, 10) catch |e| blk: {
                     if (e == error.Overflow) break :blk @as(i64, if (opt.arg.?[0] == '-') std.math.minInt(i64) else std.math.maxInt(i64));
                     cli.warn(ctx, "invalid padding value {f}", .{cli.quoteC(opt.arg.?)});
                     return 1;
@@ -159,7 +160,7 @@ pub fn main(ctx: cli.Context) u8 {
             1109 => o.debug = true,
             1110 => {
                 if (opt.arg) |a| {
-                    const v = std.fmt.parseInt(u64, a, 10) catch 0;
+                    const v = numparse.parseInt(u64, a, 10) catch 0;
                     if (v == 0) {
                         cli.warn(ctx, "invalid header value {f}", .{cli.quoteC(a)});
                         return 1;

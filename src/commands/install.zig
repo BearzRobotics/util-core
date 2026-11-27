@@ -6,6 +6,7 @@
 //! accepted and ignored.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const sys = @import("../sys.zig");
@@ -207,7 +208,7 @@ fn run(ctx: cli.Context, out: *cli.Out) u8 {
         if (db.userByName(on)) |u| {
             s.owner_id = u.uid;
         } else {
-            const v = std.fmt.parseInt(u32, on, 0) catch {
+            const v = numparse.parseInt(u32, on, 0) catch {
                 cli.warn(ctx, "invalid user {f}", .{cli.quoteA(on)});
                 return 1;
             };
@@ -218,7 +219,7 @@ fn run(ctx: cli.Context, out: *cli.Out) u8 {
         if (db.groupByName(gn)) |g| {
             s.group_id = g.gid;
         } else {
-            const v = std.fmt.parseInt(u32, gn, 0) catch {
+            const v = numparse.parseInt(u32, gn, 0) catch {
                 cli.warn(ctx, "invalid group {f}", .{cli.quoteA(gn)});
                 return 1;
             };

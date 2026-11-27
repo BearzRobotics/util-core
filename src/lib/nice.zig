@@ -9,6 +9,7 @@
 //! which failures of the change are only warnings.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 
 /// Adjustment used when none is given.
 pub const default_adjustment: i64 = 10;
@@ -33,7 +34,7 @@ pub fn obsoleteAdjustment(args: []const [:0]const u8) ?Obsolete {
 /// Parse an adjustment: an optionally signed decimal integer, saturating at
 /// the 32-bit range like GNU.
 pub fn parseAdjustment(text: []const u8) error{Invalid}!i64 {
-    return std.fmt.parseInt(i64, if (text.len > 0 and text[0] == '+') text[1..] else text, 10) catch |e| switch (e) {
+    return numparse.parseInt(i64, if (text.len > 0 and text[0] == '+') text[1..] else text, 10) catch |e| switch (e) {
         error.Overflow => if (text.len > 0 and text[0] == '-') std.math.minInt(i32) else std.math.maxInt(i32),
         else => error.Invalid,
     };

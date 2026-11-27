@@ -18,6 +18,7 @@
 //! `src/commands/timeout.zig`) and hands the ready `Watcher` to `supervise`.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
@@ -95,7 +96,7 @@ pub fn parseDuration(text: []const u8) ?u64 {
         else => {},
     }
     if (num.len == 0 or num[0] == '-') return null;
-    const v = std.fmt.parseFloat(f64, num) catch return null;
+    const v = numparse.parseFloat(f64, num) catch return null;
     if (std.math.isNan(v) or v < 0) return null;
     const ns = v * mult * 1e9;
     if (ns >= 1.8e19) return std.math.maxInt(u64);

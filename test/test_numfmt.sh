@@ -186,5 +186,10 @@ for o in --from-unit --to-unit; do
     done
 done
 
+# "1_0" is not 10: the digit separators of Zig source are refused (MISC-021).
+run_cmp "--padding=1_0" --padding=1_0 1
+run_cmp "--header=1_0" --header=1_0 1
+run_cmp "--from-unit=1_0" --from-unit=1_0 1
+
 print_summary
 [ "$FAIL" -eq 0 ]

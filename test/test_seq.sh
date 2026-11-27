@@ -129,4 +129,8 @@ run_cmp "step does not fit"       "0.${z50}0" 2 5
 run_cmp "long precision %f"       -f %.30000f 3
 run_cmp "long precision %e"       -f %.30000e 3
 
+# "1_0" is not 10: the digit separators of Zig source are refused (MISC-021).
+run_cmp "1_0" 1_0
+run_cmp "1 1_0 20" 1 1_0 20
+
 print_summary

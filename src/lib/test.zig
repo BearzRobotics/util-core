@@ -9,6 +9,7 @@
 //! ==, <, >, -nt, -ot, -ef and integers of any size.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
@@ -329,7 +330,7 @@ fn parseInt(text: []const u8) ?Int {
     if (std.mem.eql(u8, s, "0")) neg = false;
     var r: Int = .{ .neg = neg, .digits = s };
     if (s.len <= 36) {
-        const v = std.fmt.parseInt(i128, s, 10) catch 0;
+        const v = numparse.parseInt(i128, s, 10) catch 0;
         r.value = if (neg) -v else v;
     } else r.big = true;
     return r;

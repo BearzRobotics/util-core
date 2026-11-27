@@ -2,6 +2,7 @@
 //! nproc: thin wrapper over `util_core.nproc` (decision 0004).
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const cli = @import("../cli.zig");
 const lib = @import("../lib/nproc.zig");
@@ -45,7 +46,7 @@ pub fn main(ctx: cli.Context) u8 {
                     }
                     v = ctx.args[i];
                 }
-                opts.ignore = std.fmt.parseInt(usize, v, 10) catch {
+                opts.ignore = numparse.parseInt(usize, v, 10) catch {
                     cli.warn(ctx, "invalid number: {f}", .{cli.quoteC(v)});
                     return 1;
                 };

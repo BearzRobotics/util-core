@@ -10,6 +10,7 @@
 //! unpairable line has been seen.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const join = @import("../lib/join.zig");
 const Io = std.Io;
@@ -209,7 +210,7 @@ fn fileNumber(ctx: cli.Context, v: []const u8) ?u8 {
 }
 
 fn fieldNumber(ctx: cli.Context, v: []const u8) ?usize {
-    const n = std.fmt.parseInt(usize, v, 10) catch {
+    const n = numparse.parseInt(usize, v, 10) catch {
         cli.warn(ctx, "invalid field number: '{s}'", .{v});
         return null;
     };
@@ -246,7 +247,7 @@ fn parseOutput(ctx: cli.Context, cfg: *join.Options, out_spec: *std.ArrayList(jo
             continue;
         }
         if (item.len >= 2 and (item[0] == '1' or item[0] == '2') and item[1] == '.') {
-            const n = std.fmt.parseInt(usize, item[2..], 10) catch {
+            const n = numparse.parseInt(usize, item[2..], 10) catch {
                 cli.warn(ctx, "invalid field number: '{s}'", .{item[2..]});
                 return false;
             };

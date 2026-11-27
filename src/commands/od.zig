@@ -4,6 +4,7 @@
 //! od does and words the diagnostics; the formatting is in src/lib/od.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const od = @import("../lib/od.zig");
@@ -28,7 +29,7 @@ fn parseBytes(text: []const u8, allow_suffix: bool) ?u64 {
     var j = i;
     while (j < text.len and std.fmt.charToDigit(text[j], base) catch null != null) j += 1;
     if (j == i and base == 10) return null;
-    const v = std.fmt.parseInt(u64, text[i..j], base) catch if (j == i) @as(u64, 0) else return null;
+    const v = numparse.parseInt(u64, text[i..j], base) catch if (j == i) @as(u64, 0) else return null;
     const suffix = text[j..];
     if (suffix.len == 0) return v;
     if (!allow_suffix) return null;
@@ -258,7 +259,7 @@ fn oldOffset(text: []const u8) ?u64 {
     if (s.len > 0 and s[0] == '+') s = s[1..];
     if (s.len == 0) return null;
     if (s.len > 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X')) {
-        return std.fmt.parseInt(u64, s[2..], 16) catch null;
+        return numparse.parseInt(u64, s[2..], 16) catch null;
     }
     var mult: u64 = 1;
     if (s[s.len - 1] == 'b' or s[s.len - 1] == 'B') {
@@ -266,7 +267,7 @@ fn oldOffset(text: []const u8) ?u64 {
         s = s[0 .. s.len - 1];
     }
     if (s.len == 0) return null;
-    const v = std.fmt.parseInt(u64, s, 8) catch return null;
+    const v = numparse.parseInt(u64, s, 8) catch return null;
     return v *| mult;
 }
 

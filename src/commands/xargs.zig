@@ -5,6 +5,7 @@
 //! splitting, limits and process management are in src/lib/xargs.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const xargs = @import("../lib/xargs.zig");
@@ -18,7 +19,7 @@ fn usageFail(ctx: cli.Context) u8 {
 }
 
 fn parseNum(ctx: cli.Context, text: []const u8, opt: []const u8, min: i64, max: ?u64) ?u64 {
-    const v = std.fmt.parseInt(i64, text, 10) catch |e| {
+    const v = numparse.parseInt(i64, text, 10) catch |e| {
         if (e == error.Overflow and text.len > 0 and text[0] != '-') return std.math.maxInt(i64);
         cli.warn(ctx, "invalid number \"{s}\" for {s} option", .{ text, opt });
         return null;
@@ -176,7 +177,7 @@ pub fn main(ctx: cli.Context) u8 {
             'o' => o.open_tty = true,
             'r' => o.no_run_if_empty = true,
             's' => {
-                const v = std.fmt.parseInt(i64, opt.arg.?, 10) catch {
+                const v = numparse.parseInt(i64, opt.arg.?, 10) catch {
                     cli.warn(ctx, "invalid number \"{s}\" for -s option", .{opt.arg.?});
                     return usageFail(ctx);
                 };

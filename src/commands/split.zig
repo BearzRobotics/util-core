@@ -4,6 +4,7 @@
 //! suffix sequence and --filter handling are in src/lib/split.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const count_arg = @import("../count_arg.zig");
@@ -75,7 +76,7 @@ pub fn main(ctx: cli.Context) u8 {
         .bad => return 1,
         .opt => |o| switch (o.id) {
             'a' => {
-                const v = std.fmt.parseInt(usize, o.arg.?, 10) catch {
+                const v = numparse.parseInt(usize, o.arg.?, 10) catch {
                     cli.warn(ctx, "invalid suffix length: {f}", .{cli.quoteC(o.arg.?)});
                     return 1;
                 };
@@ -156,14 +157,14 @@ pub fn main(ctx: cli.Context) u8 {
             n_str = rest[i + 1 ..];
         }
         if (k_str) |ks| {
-            const kk = std.fmt.parseInt(u64, ks, 10) catch 0;
+            const kk = numparse.parseInt(u64, ks, 10) catch 0;
             if (kk == 0) {
                 cli.warn(ctx, "invalid chunk number: {f}", .{cli.quoteC(ks)});
                 return 1;
             }
             chunk_k = kk;
         }
-        const nn = std.fmt.parseInt(u64, n_str, 10) catch 0;
+        const nn = numparse.parseInt(u64, n_str, 10) catch 0;
         if (nn == 0) {
             cli.warn(ctx, "invalid number of chunks: {f}", .{cli.quoteC(n_str)});
             return 1;

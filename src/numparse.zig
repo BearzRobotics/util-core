@@ -6,6 +6,25 @@
 
 const std = @import("std");
 
+/// `std.fmt.parseInt` for a number the user wrote: it also takes the digit
+/// separators of Zig source ("1_0" for 10), which no C tool does.
+pub fn parseInt(comptime T: type, text: []const u8, base: u8) std.fmt.ParseIntError!T {
+    if (std.mem.indexOfScalar(u8, text, '_') != null) return error.InvalidCharacter;
+    return std.fmt.parseInt(T, text, base);
+}
+
+/// `std.fmt.parseFloat`, likewise without the separators.
+pub fn parseFloat(comptime T: type, text: []const u8) std.fmt.ParseFloatError!T {
+    if (std.mem.indexOfScalar(u8, text, '_') != null) return error.InvalidCharacter;
+    return std.fmt.parseFloat(T, text);
+}
+
+test "no digit separators" {
+    try std.testing.expectError(error.InvalidCharacter, parseInt(u32, "1_0", 10));
+    try std.testing.expectError(error.InvalidCharacter, parseFloat(f64, "1_0e-2"));
+    try std.testing.expectEqual(@as(u32, 10), try parseInt(u32, "10", 10));
+}
+
 pub const Parsed = struct { value: f80, len: usize };
 
 fn isSpace(c: u8) bool {

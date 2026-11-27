@@ -4,6 +4,7 @@
 //! streaming encoder/decoder are in src/lib/baseenc.zig.
 
 const std = @import("std");
+const numparse = @import("numparse.zig");
 const Io = std.Io;
 const cli = @import("cli.zig");
 const lib = @import("lib/baseenc.zig");
@@ -159,7 +160,7 @@ pub fn main(ctx: cli.Context, fixed: ?Kind) u8 {
 }
 
 fn parseWrap(ctx: cli.Context, text: []const u8) ?usize {
-    return std.fmt.parseInt(usize, text, 10) catch {
+    return numparse.parseInt(usize, text, 10) catch {
         cli.warn(ctx, "invalid wrap size: '{s}'", .{text});
         return null;
     };

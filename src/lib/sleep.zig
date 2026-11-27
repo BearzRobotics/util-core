@@ -6,6 +6,7 @@
 //! parsing in the current locale's decimal point.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 
@@ -39,7 +40,7 @@ pub fn parseInterval(text: []const u8) ?f64 {
         else => {},
     }
     if (body.len == 0 or body[0] == '+' and body.len == 1) return null;
-    const v = std.fmt.parseFloat(f64, body) catch return null;
+    const v = numparse.parseFloat(f64, body) catch return null;
     if (std.math.isNan(v) or v < 0) return null;
     return v * mult;
 }

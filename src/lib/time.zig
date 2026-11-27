@@ -11,6 +11,7 @@
 //! repeats `run` and returns statistics, `writeBenchmark` draws each result.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
@@ -790,9 +791,9 @@ pub fn parseParameterScan(arena: std.mem.Allocator, spec: []const u8) error{ Out
     const hi_s = it.next() orelse return error.Invalid;
     const step_s = it.next() orelse "1";
     if (name.len == 0 or it.next() != null) return error.Invalid;
-    const lo = std.fmt.parseFloat(f64, lo_s) catch return error.Invalid;
-    const hi = std.fmt.parseFloat(f64, hi_s) catch return error.Invalid;
-    const step = std.fmt.parseFloat(f64, step_s) catch return error.Invalid;
+    const lo = numparse.parseFloat(f64, lo_s) catch return error.Invalid;
+    const hi = numparse.parseFloat(f64, hi_s) catch return error.Invalid;
+    const step = numparse.parseFloat(f64, step_s) catch return error.Invalid;
     // Past 2^53 a float no longer counts in ones, and a step that does not
     // move the value would repeat it.
     const exact: f64 = 1 << 53;

@@ -17,6 +17,7 @@
 //! (chroot, mknod, signals on Windows, ...). See docs/portability.md.
 
 const std = @import("std");
+const numparse = @import("numparse.zig");
 const builtin = @import("builtin");
 const Io = std.Io;
 
@@ -495,7 +496,7 @@ pub fn signalName(n: u8, buf: *[16]u8) ?[]const u8 {
 pub fn signalNumber(text: []const u8) ?u8 {
     if (text.len == 0) return null;
     if (std.ascii.isDigit(text[0])) {
-        const n = std.fmt.parseInt(u8, text, 10) catch return null;
+        const n = numparse.parseInt(u8, text, 10) catch return null;
         return if (n <= 64) n else null;
     }
     var name = text;

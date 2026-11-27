@@ -4,6 +4,7 @@
 //! sorting, filtering and the XML/JSON forms are in src/lib/tree.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const sys = @import("../sys.zig");
@@ -111,7 +112,7 @@ pub fn main(ctx: cli.Context) u8 {
             'f' => o.full_path = true,
             'x' => o.xdev = true,
             'L' => {
-                const v = std.fmt.parseInt(i64, opt.arg.?, 10) catch {
+                const v = numparse.parseInt(i64, opt.arg.?, 10) catch {
                     cli.warn(ctx, "Invalid level, must be greater than 0.", .{});
                     return 1;
                 };
@@ -180,7 +181,7 @@ pub fn main(ctx: cli.Context) u8 {
             },
             2013 => o.icase = true,
             2014 => charset = opt.arg.?,
-            2015 => o.filelimit = std.fmt.parseInt(i64, opt.arg.?, 10) catch -1,
+            2015 => o.filelimit = numparse.parseInt(i64, opt.arg.?, 10) catch -1,
             2016 => {
                 o.timefmt = opt.arg.?;
                 o.date = true;

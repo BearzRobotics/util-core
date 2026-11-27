@@ -8,6 +8,7 @@
 //! every failure of this library to its own exit status).
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const posixre = @import("../posixre.zig");
@@ -266,7 +267,7 @@ const Parser = struct {
 
     fn intOf(p: *Parser, v: []const u8) Error!i128 {
         if (!isInt(v)) return p.fatal(.non_integer_argument);
-        return std.fmt.parseInt(i128, v, 10) catch if (v[0] == '-') std.math.minInt(i128) else std.math.maxInt(i128);
+        return numparse.parseInt(i128, v, 10) catch if (v[0] == '-') std.math.minInt(i128) else std.math.maxInt(i128);
     }
 
     fn arith(p: *Parser, op: u8, a: []const u8, b: []const u8) Error![]const u8 {

@@ -8,6 +8,7 @@
 //! arguments, words the diagnostics and chooses where the report goes.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const builtin = @import("builtin");
 const Io = std.Io;
 const cli = @import("../cli.zig");
@@ -125,14 +126,14 @@ pub fn main(ctx: cli.Context) u8 {
                 'h', getopt.help_id => return if (cli.writeStdout(ctx.io, help_text)) 0 else 125,
                 'V', getopt.version_id => return if (cli.printVersion(ctx)) 0 else 125,
                 o_duration => {
-                    const ms = std.fmt.parseInt(u64, o.arg.?, 10) catch {
+                    const ms = numparse.parseInt(u64, o.arg.?, 10) catch {
                         getopt.usageError(ctx, "invalid duration {f}: expected milliseconds", .{cli.quoteC(o.arg.?)});
                         return 125;
                     };
                     st.duration_ns = std.math.mul(u64, ms, std.time.ns_per_ms) catch std.math.maxInt(u64);
                 },
                 o_runs, o_min_runs, o_max_runs => {
-                    const n = std.fmt.parseInt(usize, o.arg.?, 10) catch 0;
+                    const n = numparse.parseInt(usize, o.arg.?, 10) catch 0;
                     if (n == 0) {
                         getopt.usageError(ctx, "invalid number of runs {f}", .{cli.quoteC(o.arg.?)});
                         return 125;
@@ -143,7 +144,7 @@ pub fn main(ctx: cli.Context) u8 {
                         else => st.max_runs = n,
                     }
                 },
-                o_warmup => st.warmup = std.fmt.parseInt(u32, o.arg.?, 10) catch {
+                o_warmup => st.warmup = numparse.parseInt(u32, o.arg.?, 10) catch {
                     getopt.usageError(ctx, "invalid warm-up count {f}", .{cli.quoteC(o.arg.?)});
                     return 125;
                 },

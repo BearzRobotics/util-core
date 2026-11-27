@@ -15,6 +15,7 @@
 //! A name "-" inside a checksum list refers to standard input (GNU).
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const hash = @import("../hash.zig");
@@ -524,7 +525,7 @@ fn parseTagged(o: Options, s: []const u8, ln: *Line, name_out: *[]const u8) bool
                 if (a == .blake2b) bits = 512;
                 found = true;
             } else if (a == .blake2b and std.mem.startsWith(u8, tag, "BLAKE2b-")) {
-                const n = std.fmt.parseInt(usize, tag["BLAKE2b-".len..], 10) catch return false;
+                const n = numparse.parseInt(usize, tag["BLAKE2b-".len..], 10) catch return false;
                 if (n == 0 or n > 512 or n % 8 != 0) return false;
                 algo = a;
                 bits = n;

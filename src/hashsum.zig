@@ -14,6 +14,7 @@
 //! (and the line starts with a backslash) unless -z is given.
 
 const std = @import("std");
+const numparse = @import("numparse.zig");
 const cli = @import("cli.zig");
 const hash = @import("hash.zig");
 const Io = std.Io;
@@ -289,12 +290,12 @@ fn setAlgo(ctx: cli.Context, cfg: *Config, v: []const u8) bool {
 
 fn setLength(ctx: cli.Context, cfg: *Config, v: []const u8) bool {
     // GNU validates the value only once it knows the algorithm accepts a length.
-    const bad = if (std.fmt.parseInt(u64, v, 10)) |b| b % 8 != 0 else |_| true;
+    const bad = if (numparse.parseInt(u64, v, 10)) |b| b % 8 != 0 else |_| true;
     if (bad and cfg.algo != .blake2b and !cfg.check) {
         cli.warn(ctx, "--length is only supported with --algorithm=blake2b", .{});
         return false;
     }
-    const bits = std.fmt.parseInt(u64, v, 10) catch {
+    const bits = numparse.parseInt(u64, v, 10) catch {
         cli.warn(ctx, "invalid length: '{s}'", .{v});
         return false;
     };

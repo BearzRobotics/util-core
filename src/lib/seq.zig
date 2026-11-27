@@ -16,6 +16,7 @@
 //! Not implemented: %a / %A in -f FORMAT.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const Sink = @import("sink.zig").Sink;
@@ -124,7 +125,7 @@ pub fn run(env: Env, options: Options, operands: []const []const u8, w: *Io.Writ
 /// inf/infinity/nan with a sign), or null.
 fn parseFloatArg(t: []const u8) ?f64 {
     if (t.len == 0) return null;
-    return std.fmt.parseFloat(f64, t) catch null;
+    return numparse.parseFloat(f64, t) catch null;
 }
 
 /// Parse `[+-]digits[.digits][e[+-]digits]` (at least one mantissa digit) or
@@ -158,7 +159,7 @@ fn parseDecimal(t: []const u8) ?Dec {
     var exp: i32 = 0;
     if (i < s.len) {
         if (s[i] != 'e' and s[i] != 'E') return null;
-        exp = std.fmt.parseInt(i32, s[i + 1 ..], 10) catch return null;
+        exp = numparse.parseInt(i32, s[i + 1 ..], 10) catch return null;
         if (@abs(exp) > 60) return null; // far outside i128 range; use the float path
     }
     return .{ .mant = if (neg) -mant else mant, .scale = frac - exp };
