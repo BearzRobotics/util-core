@@ -284,4 +284,13 @@ got=$(XDG_CONFIG_HOME="$TEST_TMP/vcfg" "$BIN_DIR/cat" --decorations=always --col
 if [ "$got" = "$(printf '\033[32m# hi\033[0m\nstatus 0')" ]; then PASS=$((PASS + 1)); echo "PASS a theme of 65541 rules"
 else FAIL=$((FAIL + 1)); echo "FAIL a theme of 65541 rules: $got"; fi
 
+# A name containing "writ" does not stand for a report of the write error (INFRA-013).
+if [ -c /dev/full ]; then
+    printf 'x\n' > "$TEST_TMP/some"
+    exp=$(cd "$TEST_TMP" && LC_ALL=C gnu nonexistent-rewrite some 2>&1 >/dev/full | sed 's|/usr/bin/||'; echo end)
+    act=$(cd "$TEST_TMP" && LC_ALL=C ours nonexistent-rewrite some 2>&1 >/dev/full; echo end)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS write error after a name with writ"
+    else FAIL=$((FAIL + 1)); echo "FAIL write error after a name with writ: $act"; fi
+fi
+
 print_summary

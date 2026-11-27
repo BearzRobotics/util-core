@@ -234,7 +234,9 @@ pub fn warn(ctx: Context, comptime fmt: []const u8, args: anytype) void {
         long = std.fmt.allocPrint(ctx.gpa, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
         break :blk long.?;
     };
-    if (std.mem.indexOf(u8, msg, "writ") != null) warned = true;
+    // Judged by our own wording, never by what was put into it: a file may be
+    // called "rewrite".
+    if (comptime std.mem.indexOf(u8, fmt, "writ") != null and std.mem.indexOf(u8, fmt, "write-protected") == null) warned = true;
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
 
