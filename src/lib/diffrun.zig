@@ -113,16 +113,24 @@ const Driver = struct {
             o.style != .ifdef and o.style != .side_by_side;
     }
 
-    noinline fn streamEqual(d: *Driver, p0: []const u8, p1: []const u8) !bool {
+    /// Whether the files hold the same bytes. On an error `failed` says which
+    /// of the two it was.
+    noinline fn streamEqual(d: *Driver, p0: []const u8, p1: []const u8, failed: *usize) !bool {
         const io = d.env.io;
+        failed.* = 0;
         const f0 = try Io.Dir.cwd().openFile(io, p0, .{});
         defer f0.close(io);
-        const f1 = try Io.Dir.cwd().openFile(io, p1, .{});
+        const f1 = f1: {
+            errdefer failed.* = 1;
+            break :f1 try Io.Dir.cwd().openFile(io, p1, .{});
+        };
         defer f1.close(io);
         var b0: [65536]u8 = undefined;
         var b1: [65536]u8 = undefined;
         while (true) {
+            failed.* = 0;
             const n0 = try common.readChunk(io, f0, &b0);
+            failed.* = 1;
             // Fill the second buffer to the same length.
             var n1: usize = 0;
             while (n1 < n0) {
@@ -453,8 +461,9 @@ const Driver = struct {
             // As GNU, a size of 0 is not believed: files in /proc report it
             // whatever they hold. Reading them costs little.
             const differ_in_size = infos[0].size != infos[1].size and infos[0].size != 0 and infos[1].size != 0;
-            const same = !differ_in_size and (d.streamEqual(real[0], real[1]) catch |e| {
-                d.fileError(real[0], e);
+            var failed: usize = 0;
+            const same = !differ_in_size and (d.streamEqual(real[0], real[1], &failed) catch |e| {
+                d.fileError(real[failed], e);
                 return;
             });
             if (same) {

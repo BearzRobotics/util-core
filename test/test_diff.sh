@@ -256,5 +256,13 @@ for o in "-U $B --label x --label y" "-C $B --label x --label y" "--horizon-line
 done
 for f in "%c'\\77777777777'" "%c'\\101'|" "%c'\\1011'|"; do run_cmp "line format $f" "--line-format=$f" "$TEST_TMP/big1" "$TEST_TMP/big2"; done
 
+# -q names the file that cannot be read (VIEW-011).
+printf 'abcd\n' > "$TEST_TMP/q1"; printf 'abce\n' > "$TEST_TMP/q2"; chmod 000 "$TEST_TMP/q2"
+if [ ! -r "$TEST_TMP/q2" ]; then
+    run_cmp "-q the second unreadable" -q "$TEST_TMP/q1" "$TEST_TMP/q2"
+    run_cmp "-q the first unreadable" -q "$TEST_TMP/q2" "$TEST_TMP/q1"
+fi
+chmod 600 "$TEST_TMP/q2"
+
 print_summary
 [ "$FAIL" -eq 0 ]
