@@ -134,5 +134,11 @@ for o in "--tabsize=99999999999999999999" "-s --tabsize=99999999999999999999" "-
     run_cmp "huge $o" $o "$TEST_TMP/big1" "$TEST_TMP/big2"
 done
 
+# A directory stands for the file of the same name in it, without -o too
+# (VIEW-017).
+mkdir sddir; cp i1 sddir/i2
+run_cmp "DIR FILE"               sddir i2
+run_cmp "FILE DIR"               i2 sddir
+
 print_summary
 [ "$FAIL" -eq 0 ]

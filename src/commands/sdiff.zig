@@ -262,10 +262,11 @@ pub fn main(ctx: cli.Context) u8 {
     // With -o the files are read as given (a directory operand means the file
     // of the same name in it); the comparison itself names them as typed.
     var fnames: [2][]const u8 = .{ ops[0], ops[1] };
-    if (output != null) {
+    {
         var is_dir: [2]bool = .{ false, false };
         for (0..2) |i| {
             if (std.mem.eql(u8, ops[i], "-")) {
+                if (output == null) continue;
                 cli.warn(ctx, "cannot interactively merge standard input", .{});
                 return 2;
             }
@@ -273,12 +274,16 @@ pub fn main(ctx: cli.Context) u8 {
                 is_dir[i] = st.kind == .directory;
             } else |_| {}
         }
-        if (is_dir[0] and is_dir[1]) {
+        if (is_dir[0] and is_dir[1] and output != null) {
             cli.warn(ctx, "both files to be compared are directories", .{});
             return 2;
         }
         for (0..2) |i| {
-            if (!is_dir[i]) continue;
+            if (!is_dir[i] or is_dir[1 - i]) continue;
+            if (std.mem.eql(u8, ops[1 - i], "-")) {
+                cli.writeStderr(ctx, "diff: cannot compare '-' to a directory", .{});
+                return 2;
+            }
             const base = std.fs.path.basename(ops[1 - i]);
             const dir = ops[i];
             const slash: []const u8 = if (dir.len > 0 and dir[dir.len - 1] != '/') "/" else "";
@@ -289,7 +294,7 @@ pub fn main(ctx: cli.Context) u8 {
     defer for (data) |m| gpa.free(m);
     for (0..2) |i| {
         data[i] = readAll(ctx, fnames[i]) catch |e| {
-            if (output != null) cli.warn(ctx, "{s}: {s}", .{ fnames[i], cli.errText(e) }) else cli.writeStderr(ctx, "diff: {s}: {s}", .{ ops[i], cli.errText(e) });
+            if (output != null) cli.warn(ctx, "{s}: {s}", .{ fnames[i], cli.errText(e) }) else cli.writeStderr(ctx, "diff: {s}: {s}", .{ fnames[i], cli.errText(e) });
             return 2;
         };
     }
