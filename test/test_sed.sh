@@ -799,4 +799,13 @@ stream_case "F and the last line of stdin"       'printf "a\nb\n" | "$S" -e F -e
 stream_case "r /dev/stdin from a file"           '"$S" "1r /dev/stdin" < five'
 stream_case "r /dev/stdin from a pipe"           'cat five | "$S" "1r /dev/stdin"'
 stream_case "a line longer than a read"          '{ head -c 300000 /dev/zero | tr "\0" a; echo; echo end; } | "$S" "s/a\{5\}/b/g" | cksum'
+# A script that cannot be read to its end is not run (REGX-026). GNU sed runs
+# what it got.
+echo a > "$TEST_TMP/rf"
+out=$( (ulimit -v 1000000; "$BIN_DIR/sed" -f /proc/self/mem "$TEST_TMP/rf") </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"read error on /proc/self/mem"*"status 4") PASS=$((PASS + 1)); echo "PASS sed -f read error" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL sed -f read error: $out" ;;
+esac
+
 cd /; print_summary

@@ -440,4 +440,11 @@ many=$(awk 'BEGIN { for (i = 0; i < 600; i++) printf "%s(w%d)+x", i ? "|" : "", 
 printf 'w5x\nw599x\nnone\n' > "$TEST_TMP/many"
 gd "600 alternatives with a group each" "$TEST_TMP/many" -E "$many"
 help_cmp
+# An exclusion list that cannot be read must not be taken for empty (REGX-026).
+out=$( (ulimit -v 1000000; "$BIN_DIR/grep" --exclude-from="$TEST_TMP" a /dev/null) </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"Is a directory"*"status 2") PASS=$((PASS + 1)); echo "PASS grep --exclude-from a directory" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL grep --exclude-from a directory: $out" ;;
+esac
+
 cd /; print_summary

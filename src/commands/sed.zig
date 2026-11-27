@@ -96,7 +96,14 @@ pub fn main(ctx: cli.Context) u8 {
                 };
                 var buf: [65536]u8 = undefined;
                 while (true) {
-                    const n = sys.readFd(fd, &buf, &err) orelse break;
+                    const n = sys.readFd(fd, &buf, &err) orelse {
+                        // A directory reads as an empty script, as in GNU. Any
+                        // other failure leaves part of the script, which could
+                        // do harm, above all with -i.
+                        if (err == .ISDIR) break;
+                        cli.warn(ctx, "read error on {s}: {s}", .{ name, sys.errnoText(err) });
+                        return 4;
+                    };
                     if (n == 0) break;
                     data.appendSlice(arena, buf[0..n]) catch return 4;
                 }
