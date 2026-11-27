@@ -273,4 +273,15 @@ for name in "$(printf 'n\033]0;T\007x')" "$(printf 'a\nb')" "$(printf 'c1\302\23
     CMP_LOCALE=C.UTF-8 run_cmp "missing name, UTF-8" "./$name"
 done
 
+# A capture index past any group, and a theme of more rules than 16 bits count,
+# used to crash the highlighted view (VIEW-019).
+mkdir -p "$TEST_TMP/vgr" "$TEST_TMP/vcfg/cat/themes"
+printf '%%YAML 1.2\n---\nname: Bad\nfile_extensions: [bad]\nscope: source.bad\ncontexts:\n  main:\n    - match: a\n      captures:\n        2147483648: keyword\n        4294967295: string\n' > "$TEST_TMP/vgr/Bad.sublime-syntax"
+printf 'aaa\n' > "$TEST_TMP/v.bad"; printf '# hi\n' > "$TEST_TMP/v.sh"
+check_ours "huge capture index" "aaa" --syntax-dir="$TEST_TMP/vgr" --decorations=always --color=always --theme=ansi -p "$TEST_TMP/v.bad"
+awk 'BEGIN { for (i = 0; i < 65540; i++) printf "a%d=1\n", i; print "comment=2" }' > "$TEST_TMP/vcfg/cat/themes/big.theme"
+got=$(XDG_CONFIG_HOME="$TEST_TMP/vcfg" "$BIN_DIR/cat" --decorations=always --color=always --theme=big -p "$TEST_TMP/v.sh" 2>&1; echo "status $?")
+if [ "$got" = "$(printf '\033[32m# hi\033[0m\nstatus 0')" ]; then PASS=$((PASS + 1)); echo "PASS a theme of 65541 rules"
+else FAIL=$((FAIL + 1)); echo "FAIL a theme of 65541 rules: $got"; fi
+
 print_summary

@@ -235,7 +235,7 @@ pub const Highlighter = struct {
         try h.points.append(gpa, ms);
         try h.points.append(gpa, me);
         for (rule.captures) |c| {
-            if (2 * c.index + 1 >= regs.len) continue;
+            if (c.index >= regs.len / 2) continue;
             const s = regs[2 * c.index];
             const e = regs[2 * c.index + 1];
             if (s == unset or e == unset or s >= e) continue;
@@ -250,7 +250,7 @@ pub const Highlighter = struct {
             if (p == prev) continue;
             h.scopes.shrinkRetainingCapacity(base_len);
             for (rule.captures) |c| {
-                if (2 * c.index + 1 >= regs.len) continue;
+                if (c.index >= regs.len / 2) continue;
                 const s = regs[2 * c.index];
                 const e = regs[2 * c.index + 1];
                 if (s == unset or e == unset) continue;
