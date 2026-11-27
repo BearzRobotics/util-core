@@ -423,6 +423,29 @@ fn printElem(out: *wsink.Sink, f: Fmt, e: []const u8) void {
     }
 }
 
+/// A value rounded to so many significant digits, trailing zeros dropped.
+const Decimal = struct {
+    digits: [32]u8,
+    len: usize,
+    exp: i32,
+
+    fn round(d: *Decimal, value: f80, places: usize) bool {
+        const gpa = std.heap.page_allocator;
+        // [-]d[.ddd]e+XX
+        const text = fmt_float.formatAllocLong(gpa, .{ .conv = 'e', .precision = places - 1 }, value) catch return false;
+        defer gpa.free(text);
+        const epos = std.mem.indexOfScalar(u8, text, 'e') orelse return false;
+        d.len = 0;
+        for (text[0..epos]) |c| if (std.ascii.isDigit(c)) {
+            d.digits[d.len] = c;
+            d.len += 1;
+        };
+        while (d.len > 1 and d.digits[d.len - 1] == '0') d.len -= 1;
+        d.exp = std.fmt.parseInt(i32, text[epos + 1 ..], 10) catch return false;
+        return true;
+    }
+};
+
 /// C `%g` of the shortest decimal that reads back as `v` (GNU od prints
 /// floating point values this way, with at most `prec` significant digits).
 fn shortestG(comptime T: type, v: T, dig: usize, buf: *[64]u8) []const u8 {
@@ -445,7 +468,21 @@ fn shortestG(comptime T: type, v: T, dig: usize, buf: *[64]u8) []const u8 {
             nd += 1;
         }
     }
-    const exp = std.fmt.parseInt(i32, sci[epos + 1 ..], 10) catch return "?";
+    var exp = std.fmt.parseInt(i32, sci[epos + 1 ..], 10) catch return "?";
+    // GNU prints with %g, which rounds correctly. Next to a power of two the
+    // shortest text that reads back need not be the correctly rounded one of
+    // that length; then that one does not read back, and GNU takes one digit
+    // more.
+    if (nd > dig) {
+        var exact: Decimal = undefined;
+        if (!exact.round(@floatCast(v), nd)) return "?";
+        if (exact.exp != exp or !std.mem.eql(u8, exact.digits[0..exact.len], digits[0..nd])) {
+            if (!exact.round(@floatCast(v), nd + 1)) return "?";
+            nd = exact.len;
+            @memcpy(digits[0..nd], exact.digits[0..nd]);
+            exp = exact.exp;
+        }
+    }
     var w: std.Io.Writer = .fixed(buf);
     if (neg) w.writeByte('-') catch {};
     if (nd == 1 and digits[0] == '0') {

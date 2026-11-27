@@ -17,6 +17,17 @@ printf '\0\0\0\0\0\0\370\177\0\0\0\0\0\0\370\377\0\0\0\0\0\0\360\177\0\0\0\0\0\0
 printf 'x' > one
 
 printf "\n[ Defaults and traditional formats ]\n"
+# Powers of two, where the shortest text that reads back is not always the one
+# GNU prints.
+printf '\200\017\000\153\200\154\200\217' > pow16
+printf '\000\000\200\017\000\000\000\153\000\000\200\154\000\000\200\217' > pow32
+printf '\000\000\000\000\000\000\140\000\000\000\000\000\000\000\020\001' > pow64
+printf '\000\000\000\000\000\000\000\200\117\000\000\000\000\000\000\000\000\000\000\000\000\000\000\200\152\000\000\000\000\000\000\000' > pow80
+run_cmp "-t fB powers of two" -t fB pow16
+run_cmp "-t fF powers of two" -t fF pow32
+run_cmp "-t fD powers of two" -t fD pow64
+run_cmp "-t fL powers of two" -t fL pow80
+
 for f in small rnd r64 one zeros dups strs empty; do
     run_cmp "default $f" $f
 done
