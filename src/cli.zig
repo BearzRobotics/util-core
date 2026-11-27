@@ -240,15 +240,19 @@ pub fn warn(ctx: Context, comptime fmt: []const u8, args: anytype) void {
 
 /// Print a line to stderr exactly as formatted (no command-name prefix).
 pub fn writeStderr(ctx: Context, comptime fmt: []const u8, args: anytype) void {
-    var buf: [512]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, fmt ++ "\n", args) catch return;
-    Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
+    writeStderrNoNl(ctx, fmt ++ "\n", args);
 }
 
 /// Write to stderr exactly as formatted, without a trailing newline.
 pub fn writeStderrNoNl(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     var buf: [1024]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    var long: ?[]u8 = null;
+    defer if (long) |l| ctx.gpa.free(l);
+    // A long name must not make a message, least of all a question, vanish.
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch blk: {
+        long = std.fmt.allocPrint(ctx.gpa, fmt, args) catch return;
+        break :blk long.?;
+    };
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
 

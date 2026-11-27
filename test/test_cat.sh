@@ -247,6 +247,9 @@ if command -v git >/dev/null 2>&1; then
     rm -rf "$H"
 fi
 
+# A message longer than any buffer is still printed (INFRA-010).
+run_cmp "a 9000 byte name" "$(head -c 9000 /dev/zero | tr '\0' x)"
+
 # Names in messages are quoted, as GNU does, so that none reaches the terminal
 # as it is (VIEW-007).
 for name in "$(printf 'n\033]0;T\007x')" "$(printf 'a\nb')" "$(printf 'c1\302\233z')" "$(printf 'bad\233')" "$(printf 'caf\303\251 x')" "it's" 'sp ace' 'a:b'; do
