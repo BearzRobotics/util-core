@@ -20,6 +20,7 @@
 //! = position; r R ^L redraw; h help line; q Q ^C quit.
 
 const std = @import("std");
+const unicode = @import("../unicode.zig");
 const Io = std.Io;
 
 pub const Key = union(enum) {
@@ -218,13 +219,32 @@ pub const Pager = struct {
         return p.text.items[a..b];
     }
 
-    /// Display width of one byte at column `col` (0 for the continuation
-    /// bytes of a UTF-8 character).
-    fn byteWidth(_: *const Pager, b: u8, col: usize) usize {
-        if (b == '\t') return tab_stop - col % tab_stop;
-        if (b >= 0x80) return if (b >= 0xc0) 1 else 0;
-        if (b < 0x20 or b == 0x7f) return 2; // ^X
-        return 1;
+    /// One thing to show: a byte, or a whole UTF-8 character.
+    const Unit = struct {
+        len: usize,
+        width: usize,
+        form: enum {
+            text,
+            tab,
+            /// ^X
+            caret,
+            /// <U+009B>: a C1 control, which a terminal would obey.
+            code,
+            /// <9B>: a byte that is not part of any UTF-8 character.
+            byte,
+        },
+    };
+
+    /// What starts at `s[0]`, shown at column `col`.
+    fn unitAt(s: []const u8, col: usize) Unit {
+        const b = s[0];
+        if (b == '\t') return .{ .len = 1, .width = tab_stop - col % tab_stop, .form = .tab };
+        if (b < 0x20 or b == 0x7f) return .{ .len = 1, .width = 2, .form = .caret };
+        if (b < 0x80) return .{ .len = 1, .width = 1, .form = .text };
+        const d = unicode.decode(s, 0);
+        if (!d.valid) return .{ .len = 1, .width = "<9B>".len, .form = .byte };
+        if (d.cp < 0xa0) return .{ .len = d.len, .width = "<U+009B>".len, .form = .code };
+        return .{ .len = d.len, .width = 1, .form = .text };
     }
 
     /// Length in bytes of an escape sequence at the start of `s` (0 if none).
@@ -248,10 +268,10 @@ pub const Pager = struct {
                     continue;
                 }
             }
-            const w = p.byteWidth(ln[i], col);
-            if (col + w > width and col > 0) break;
-            col += w;
-            i += 1;
+            const u = unitAt(ln[i..], col);
+            if (col + u.width > width and col > 0) break;
+            col += u.width;
+            i += u.len;
         }
         return i;
     }
@@ -540,7 +560,8 @@ pub const Pager = struct {
     }
 
     /// Write bytes [start, end) of `ln` as one screen row: tabs expanded,
-    /// control characters as ^X unless `raw`, clipped at the row width.
+    /// control characters as ^X (C1 controls as <U+009B>, bytes that are not
+    /// UTF-8 as <9B>), colours passed with `raw`, clipped at the row width.
     fn emitRow(p: *const Pager, w: *Io.Writer, ln: []const u8, start: usize, end: usize) Io.Writer.Error!void {
         const width = p.textCols();
         var col: usize = 0;
@@ -554,19 +575,23 @@ pub const Pager = struct {
                     continue;
                 }
             }
-            const b = ln[i];
-            const cw = p.byteWidth(b, col);
-            if (col + cw > width and cw > 0) {
+            const u = unitAt(ln[i..], col);
+            if (col + u.width > width) {
                 if (p.opts.chop) break; // clipped
             }
-            if (b == '\t') {
-                try w.splatByteAll(' ', cw);
-            } else if (b < 0x20 or b == 0x7f) {
-                try w.writeByte('^');
-                try w.writeByte(if (b == 0x7f) '?' else b + '@');
-            } else try w.writeByte(b);
-            col += cw;
-            i += 1;
+            const b = ln[i];
+            switch (u.form) {
+                .text => try w.writeAll(ln[i .. i + u.len]),
+                .tab => try w.splatByteAll(' ', u.width),
+                .caret => {
+                    try w.writeByte('^');
+                    try w.writeByte(if (b == 0x7f) '?' else b + '@');
+                },
+                .code => try w.print("<U+{X:0>4}>", .{unicode.decode(ln[i..], 0).cp}),
+                .byte => try w.print("<{X:0>2}>", .{b}),
+            }
+            col += u.width;
+            i += u.len;
         }
     }
 
@@ -641,6 +666,43 @@ pub const Pager = struct {
         try w.writeAll("\x1b[?7h\x1b[?1049l");
     }
 };
+
+/// How many bytes at the end of `s` begin a UTF-8 character that `s` does not
+/// finish. Input shown a piece at a time keeps them for the next piece.
+pub fn partialTail(s: []const u8) usize {
+    var n: usize = 1;
+    while (n <= @min(s.len, 3)) : (n += 1) {
+        const b = s[s.len - n];
+        if (b & 0xc0 == 0x80) continue;
+        const need: usize = if (b >= 0xc2 and b <= 0xdf) 2 else if (b >= 0xe0 and b <= 0xef) 3 else if (b >= 0xf0 and b <= 0xf4) 4 else 0;
+        return if (need > n) n else 0;
+    }
+    return 0;
+}
+
+test "pager: C1 controls and stray bytes are shown, not sent" {
+    const gpa = std.testing.allocator;
+    for ([_]bool{ false, true }) |raw| {
+        var p = Pager.init(gpa, .{ .raw = raw }, 5, 80);
+        defer p.deinit();
+        _ = try p.append("a\xc2\x9b2J c\x9b d\xe2\x82 \xc0\xaf \xc3\xa9\xc2\xa0\n");
+        var aw: Io.Writer.Allocating = .init(gpa);
+        defer aw.deinit();
+        try p.print(&aw.writer);
+        try std.testing.expectEqualStrings("a<U+009B>2J c<9B> d<E2><82> <C0><AF> \xc3\xa9\xc2\xa0\n", aw.written());
+    }
+    // The replacement text takes its own width when lines wrap.
+    var p = Pager.init(gpa, .{}, 5, 10);
+    defer p.deinit();
+    _ = try p.append("ab\xc2\x9bcd\n");
+    try std.testing.expectEqual(@as(usize, 2), p.rowsOf(0));
+}
+
+test "partial UTF-8 at the end" {
+    for ([_]struct { []const u8, usize }{ .{ "", 0 }, .{ "a", 0 }, .{ "a\xc3", 1 }, .{ "a\xc3\xa9", 0 }, .{ "\xe2\x82", 2 }, .{ "\xf0\x9f\x98", 3 }, .{ "\xf0\x9f\x98\x80", 0 }, .{ "\x80\x80\x80", 0 }, .{ "\xff", 0 } }) |c| {
+        try std.testing.expectEqual(c[1], partialTail(c[0]));
+    }
+}
 
 test "key parser: sequences and plain keys" {
     var p: KeyParser = .{};

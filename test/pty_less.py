@@ -160,6 +160,16 @@ check('less -F -N: lines are numbered', st == 0 and '     2 ' in visible(out) an
 out, st, _ = session([cat, '-p', '--color=never', hostile], [])
 check('cat: a short file is written as it is', st == 0 and 'hi\x1b]0;OWNED\x07\x1b[2J' in out)
 
+# C1 controls and bytes that are not UTF-8 are shown: a terminal would obey
+# U+009B as it does ESC [.
+c1 = os.path.join(tmp, 'pty_c1.txt')
+with open(c1, 'wb') as f:
+    f.write(b'a\xc2\x9b2Jb c\x9bd caf\xc3\xa9\n')
+for flags in [[], ['-R'], ['-F'], ['-F', '-R']]:
+    out, st, _ = session([less, *flags, c1], [] if '-F' in flags else [(b'q', 0.5)])
+    check('less %s: C1 controls are shown, not sent' % ' '.join(flags),
+          st == 0 and 'a<U+009B>2Jb c<9B>d caf\u00e9' in out and '\x9b' not in out)
+
 # cat: a long file is paged, a short one is not
 out, st, _ = session([cat, big], [(b'q', 0.5)])
 check("cat: long view is paged and quits with q", '\x1b[?1049h' in out and st == 0)

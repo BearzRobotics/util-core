@@ -121,12 +121,19 @@ fn copyAll(ctx: cli.Context, inputs: []const Input, status: u8, visible: bool) u
     var out = Io.File.stdout().writerStreaming(ctx.io, &obuf);
     var buf: [65536]u8 = undefined;
     for (inputs) |in| {
+        // The start of a character that the last read cut off.
+        var held: usize = 0;
         while (true) {
-            const n = in.file.readStreaming(ctx.io, &.{&buf}) catch break;
+            const n = in.file.readStreaming(ctx.io, &.{buf[held..]}) catch break;
             if (n == 0) break;
-            writeCopy(ctx.gpa, &out.interface, buf[0..n], visible) catch
+            const have = held + n;
+            held = if (visible) pager.partialTail(buf[0..have]) else 0;
+            writeCopy(ctx.gpa, &out.interface, buf[0 .. have - held], visible) catch
                 return copyFailed(out.err, status);
+            std.mem.copyForwards(u8, buf[0..held], buf[have - held .. have]);
         }
+        writeCopy(ctx.gpa, &out.interface, buf[0..held], visible) catch
+            return copyFailed(out.err, status);
     }
     out.interface.flush() catch return copyFailed(out.err, status);
     return status;

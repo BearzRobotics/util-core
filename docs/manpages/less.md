@@ -19,7 +19,7 @@ It is a small implementation, built into util-core so that paging works on every
 : Quit at once, printing the text, if it fits on one screen. The terminal is not touched until the text is longer than that, so what is typed meanwhile is left for others. The text is shown as the pager would show it: without `-R`, control characters appear as `^X` and are not sent to the terminal.
 
 -R, --RAW-CONTROL-CHARS, -r
-: Pass colour escape sequences through. Without it, control characters are shown as `^X`.
+: Pass colour escape sequences through. Without it, control characters are shown as `^X`. With or without it, the control characters U+0080 to U+009F are shown as `<U+009B>` and bytes that are not part of a UTF-8 character as `<9B>`; valid UTF-8 is passed in every locale.
 
 -S, --chop-long-lines
 : Cut long lines at the screen edge instead of wrapping.
