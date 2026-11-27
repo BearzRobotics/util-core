@@ -621,8 +621,10 @@ pub fn parseUnit(text: []const u8) ?u64 {
             }
         }
     }
-    const total = v * mult;
-    if (!ok or total == 0 or total > std.math.maxInt(u64)) return null;
+    if (!ok) return null;
+    // Up to 2^64 times up to 1024^10: more than even a u128 holds.
+    const total = std.math.mul(u128, v, mult) catch return null;
+    if (total == 0 or total > std.math.maxInt(u64)) return null;
     return @intCast(total);
 }
 
