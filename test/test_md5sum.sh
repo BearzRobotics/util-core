@@ -14,4 +14,11 @@ list='d41d8cd98f00b204e9800998ecf8427e  -'
 g=$(echo "$list" | LC_ALL=C "${GNU_BIN:-/usr/bin}/md5sum" -c -w 2>&1; echo "status $?")
 n=$(echo "$list" | LC_ALL=C "$BIN_DIR/md5sum" -c -w 2>&1; echo "status $?")
 if [ "$g" = "$n" ]; then PASS=$((PASS + 1)); echo "PASS - in a list on stdin"; else FAIL=$((FAIL + 1)); printf 'FAIL - in a list on stdin\n%s\n---\n%s\n' "$g" "$n"; fi
+# A list with CR LF line ends, as written on Windows.
+echo hi > "$TEST_TMP/good"
+(cd "$TEST_TMP" && printf '%s  good\r\n# c\r\n\r\n%s *good\r\nMD5 (good) = %s\r\n' \
+    $(for i in 1 2 3; do md5sum good | cut -d' ' -f1; done) > crlf)
+g=$(cd "$TEST_TMP" && LC_ALL=C "${GNU_BIN:-/usr/bin}/md5sum" -c -w crlf 2>&1; echo "status $?")
+n=$(cd "$TEST_TMP" && LC_ALL=C "$BIN_DIR/md5sum" -c -w crlf 2>&1; echo "status $?")
+if [ "$g" = "$n" ]; then PASS=$((PASS + 1)); echo "PASS CR LF list"; else FAIL=$((FAIL + 1)); printf 'FAIL CR LF list\n%s\n---\n%s\n' "$g" "$n"; fi
 print_summary

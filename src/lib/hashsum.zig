@@ -374,9 +374,12 @@ fn checkOne(env: Env, o: Options, out: *Io.Writer, list: Io.File, list_name: []c
         while (pos < text.len) {
             const nl = std.mem.indexOfScalarPos(u8, text, pos, '\n');
             const end = nl orelse text.len;
-            const raw = text[pos..end];
+            var raw = text[pos..end];
             pos = if (nl) |k| k + 1 else text.len;
             lineno += 1;
+            // A list written on Windows ends its lines with CR LF. A name that
+            // really ends in CR is written escaped, as "\r".
+            if (std.mem.endsWith(u8, raw, "\r")) raw = raw[0 .. raw.len - 1];
             if (raw.len == 0 or raw[0] == '#') continue;
             var entry = parseLine(env.gpa, o, raw, &name_buf);
             // As in GNU, a list on standard input cannot name it: checking
