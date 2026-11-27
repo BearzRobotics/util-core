@@ -447,4 +447,12 @@ case $out in
 *) FAIL=$((FAIL + 1)); echo "FAIL grep --exclude-from a directory: $out" ;;
 esac
 
+# --max-columns-preview does not cut a character in two (REGX-029).
+for cut in 1 2 3 4; do
+    out=$(printf '\303\251\303\251\303\251 foo\n' | LC_ALL=C.UTF-8 "$BIN_DIR/grep" --max-columns=$cut --max-columns-preview foo)
+    want=$(printf '\303\251\303\251' | head -c $((cut / 2 * 2)))' [... omitted end of long line]'
+    if [ "$out" = "$want" ]; then PASS=$((PASS + 1)); echo "PASS preview cut at $cut"
+    else FAIL=$((FAIL + 1)); echo "FAIL preview cut at $cut: $out"; fi
+done
+
 cd /; print_summary

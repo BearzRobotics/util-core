@@ -1631,6 +1631,17 @@ fn encFail(g: *G, text: []const u8) bool {
     return false;
 }
 
+/// `cut`, moved back to the start of the UTF-8 character it falls inside.
+/// Bytes that are not part of a whole character are cut where asked.
+fn characterStart(text: []const u8, cut: usize) usize {
+    var start = cut;
+    while (start > 0 and cut - start < 3 and text[start] & 0xc0 == 0x80) start -= 1;
+    const len = std.unicode.utf8ByteSequenceLength(text[start]) catch return cut;
+    if (start + len <= cut or start + len > text.len) return cut;
+    if (!std.unicode.utf8ValidateSlice(text[start .. start + len])) return cut;
+    return start;
+}
+
 fn prline(g: *G, text: []const u8, no: u64, off: u64, sep: u8) Err!bool {
     const o = &g.o;
     if (o.json) {
@@ -1641,7 +1652,7 @@ fn prline(g: *G, text: []const u8, no: u64, off: u64, sep: u8) Err!bool {
     if (!o.only) try printLineHead(g, no, off, text.len, sep);
     if (!o.only and o.max_columns > 0 and text.len + 1 > o.max_columns) {
         if (o.max_columns_preview) {
-            try emit(g, text[0..o.max_columns]);
+            try emit(g, text[0..characterStart(text, o.max_columns)]);
             try emit(g, " [... omitted end of long line]");
         } else try emit(g, if (sep == ':') "[Omitted long matching line]" else "[Omitted long context line]");
         try emitByte(g, g.eol);
