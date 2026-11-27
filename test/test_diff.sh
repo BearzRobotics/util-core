@@ -186,6 +186,19 @@ for o in -r -rq -rN -ru "-r --no-dereference"; do
     done
 done
 
+# A tree as deep as a path can be does not exhaust the stack (VIEW-014). It is
+# built a level at a time, for the whole path is near PATH_MAX.
+for side in deepA deepB; do
+    ( cd "$TEST_TMP" && mkdir $side && cd $side && i=0 && while [ $i -lt 1850 ]; do mkdir a && cd -P a || exit 1; i=$((i + 1)); done && echo $side > f ) 2>/dev/null
+done
+for o in -r -rq -ruN; do
+    exp=$( cd "$TEST_TMP" && ulimit -s 8192 && LC_ALL=C gnu $o deepA deepB 2>&1 | cksum; echo )
+    act=$( cd "$TEST_TMP" && ulimit -s 8192 && LC_ALL=C ours $o deepA deepB 2>&1 | cksum; echo )
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $o 1850 levels"
+    else FAIL=$((FAIL + 1)); echo "FAIL $o 1850 levels: GNU $exp, ours $act"; fi
+done
+/usr/bin/rm -rf "$TEST_TMP/deepA" "$TEST_TMP/deepB"
+
 # -N, -P: an operand that is not there is empty.
 printf 'q\n' > "$TEST_TMP/there"; mkdir -p "$TEST_TMP/dirthere/sub"; echo z > "$TEST_TMP/dirthere/file"
 for o in -N -P -Nq -uN -cN -ruN --unidirectional-new-file; do
@@ -193,8 +206,8 @@ for o in -N -P -Nq -uN -cN -ruN --unidirectional-new-file; do
         a=$TEST_TMP/${pair% *}; b=$TEST_TMP/${pair#* }
         run_cmp "$o missing operand: $pair" $o "$a" "$b"
     done
-    # (Not -u: standard input is dated now.)
-    case $o in *u*) ;; *) CMP_STDIN="$TEST_TMP/there" run_cmp "$o missing operand: - nofile" $o - "$TEST_TMP/nofile" ;; esac
+    # (Not -u or -c: standard input is dated now.)
+    case $o in *[uc]*) ;; *) CMP_STDIN="$TEST_TMP/there" run_cmp "$o missing operand: - nofile" $o - "$TEST_TMP/nofile" ;; esac
 done
 
 # -N without -r: a subdirectory on one side only (VIEW-012).
