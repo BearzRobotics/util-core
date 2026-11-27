@@ -31,6 +31,7 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdi
     os.close(r_in)
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
     out = bytearray()
+    last_output = [0.0]
     def drain(t):
         end = time.time() + t
         while time.time() < end:
@@ -43,7 +44,22 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdi
                 if not d:
                     return
                 out.extend(d)
+                last_output[0] = time.time()
+    def settle(quiet=0.3, limit=10.0):
+        """Read until nothing has arrived for `quiet` seconds."""
+        end = time.time() + limit
+        while time.time() < end and time.time() - last_output[0] < quiet:
+            drain(0.05)
     drain(0.3)
+    # A key sent before the pager has taken the terminal is thrown away when
+    # it does, so on a busy machine a fixed delay is not enough (MISC-039).
+    # Wait for the program to show something and then be done. (A program
+    # reading the terminal itself may have nothing to show first.)
+    if not tty_stdin and any(keys for keys, _ in steps):
+        end = time.time() + 10
+        while not out and time.time() < end:
+            drain(0.05)
+        settle()
     if stdin_feed is not None:
         for chunk in stdin_feed:
             os.write(w_in, chunk)
@@ -56,8 +72,11 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdi
         if keys:
             os.write(master, keys)
         drain(wait)
+        if not tty_stdin:
+            settle()
     status = None
-    end = time.time() + 3
+    # No cost when the program ends as it should.
+    end = time.time() + 15
     while time.time() < end:
         try:
             wpid, st = os.waitpid(pid, os.WNOHANG)
@@ -252,11 +271,13 @@ for label, argv in [('cat', [cat]), ('cat -', [cat, '-']), ('cat /dev/tty', [cat
 prompt = os.path.join(tmp, 'pty_prompt.sh')
 with open(prompt, 'w') as f:
     f.write('printf "Password: " > /dev/tty\nIFS= read -r pw < /dev/tty\necho "producer got [$pw]"\n')
-out, st, _ = session(['/bin/sh', '-c', 'sh "%s" | "%s"' % (prompt, cat)], [(b'hunter2\r', 0.8)], tty_stdin=True)
+# (A named theme: by default cat asks the terminal for its background colour,
+# and what is typed while it does is lost. These two look at the pager.)
+out, st, _ = session(['/bin/sh', '-c', 'sh "%s" | "%s" --theme=ansi' % (prompt, cat)], [(b'hunter2\r', 0.8)], tty_stdin=True)
 check('cat: a prompt earlier in the pipeline gets the keyboard', st == 0 and 'producer got [hunter2]' in out)
 
 # What is typed while a short output is produced stays for the next reader.
-for label, command in [('cat', '"%s"' % cat), ('less -F', '"%s" -F' % less)]:
+for label, command in [('cat', '"%s" --theme=ansi' % cat), ('less -F', '"%s" -F' % less)]:
     out, st, _ = session(['/bin/sh', '-c', '{ sleep 1; echo short; } | %s; IFS= read -r x; echo "next got [$x]"' % command],
                          [(b'typed ahead\r', 1.5)], tty_stdin=True)
     check('%s: input typed ahead is not consumed' % label, st == 0 and 'next got [typed ahead]' in out)

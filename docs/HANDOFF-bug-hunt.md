@@ -101,6 +101,10 @@ printf '\n## Status\n\nFixed in %s.\n' HASH >> docs/bugs/ID-*.md
   byte matching. The first and last need work in regex-zig.
 - backups: in a directory that may not be listed, --backup=existing makes a
   simple backup over an older one, as GNU does (FSOP-029).
+- cat's query of the terminal background (theme auto) opens and closes the
+  terminal with TCSAFLUSH: what the user had typed ahead is lost, and so is
+  what arrives while it waits. Found with test/pty_less.py on one loaded CPU.
+  Not in the audit.
 - head: when `-n -N` writes nothing we leave stdin where it was (documented).
 
 ## The release, at the end
