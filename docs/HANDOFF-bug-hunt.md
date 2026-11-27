@@ -22,20 +22,25 @@ functionality, and assume the logic is wrong until it is proven good.
 
 ## State
 
-- Branch `bug-fixes`; the last fix is `42bdd30` (echo, basename, dirname tests).
-- `main` is at `8b435a0`, behind `bug-fixes`. It has the pr width
-  fix, regex-zig 0.5.0, the less fixes and the less docs. Merge the rest with
-  the release, as `git merge --no-ff -F MSGFILE bug-fixes`
-  (`git merge -F -` does not read standard input).
-- All TEXT-* reports are done, and MISC-003, 004 and 005.
-- 103 report files have no Status section (19 medium, the rest low),
-  as of 42bdd30. Some may be fixed already: reproduce each one first.
+- Branch `bug-fixes`; the last fix is `07a9a74` (date format flags).
+- `main` is at `8b435a0`, behind `bug-fixes`. Merge with the release, as
+  `git merge --no-ff -F MSGFILE bug-fixes` (`git merge -F -` does not read
+  standard input).
+- All TEXT-*, high and medium reports are done. 66 report files have no Status
+  section, all low, as of 07a9a74. Some may be fixed already or be duplicates
+  (DISK-006/040, FSOP-022/031, MISC-007/041, MISC-021/DISK-039): reproduce
+  each one first.
+- Next: the other crash reports (MISC-037, VIEW-015, VIEW-019), then the rest.
 
-### Done 2026-11-27
+### CI
 
-pr streams its input (a3a515f). MISC-006 (fec5e91, `test/test_sigpipe.sh`),
-MISC-008, 010, 016, 018, 020, 022-025, 028, 031 and 038 are done. Next:
-the other unmarked reports (INFRA, REGX, VIEW medium, then low severity).
+`ci.yml` now runs the differential suites in an Ubuntu 26.04 container
+(`scripts/suites-container.sh`; allow-list in `scripts/run-suites.sh`, which
+fails on an unlisted suite), and `release.yml` needs CI to pass. A push cancels
+the branch's previous run and the suite job takes about 20 minutes, so watch
+the last one (`gh run watch`). The container uses mawk, so suites that make
+random cases with awk try other values there than here: that has found real
+bugs.
 
 ## How to work
 
@@ -56,10 +61,7 @@ printf '\n## Status\n\nFixed in %s.\n' HASH >> docs/bugs/ID-*.md
 - Reports are in `docs/bugs/` (ignored by git). The README table is ordered by
   severity but lists only 241 of the 265 files, so find open ones with
   `grep -L '^## Status' docs/bugs/[A-Z]*-[0-9]*.md`.
-- Open medium first, then low.
-- These come before the old TEXT range in the table and are still open:
-  INFRA-003/004/006/012 and MISC-003..038 where unmarked. DISK-020's Status
-  says "Still open".
+- Duplicates and reports that an earlier fix covers get a Status naming it.
 - A deliberate difference from GNU goes in the man page,
   `docs/compatibility/<cmd>.md` and `docs/compatibility/extensions.md`.
   Clearer diagnostics than GNU's are welcome if documented.
@@ -89,6 +91,16 @@ printf '\n## Status\n\nFixed in %s.\n' HASH >> docs/bugs/ID-*.md
   -2147483647); `'-4294967296 minutes -'` in EST5EDT differs around DST.
 - Windows and macOS cross-builds were last checked at fec5e91; later commits
   change shared code.
+- `tree --du` (and `--prune` with `-P`) lists each subtree once per level
+  above it. Since FSOP-033 it finishes 1500 levels, but 2040 take over 60 s on a
+  busy machine, where tree 2.3.1 is quick. Not in the audit.
+- Quoting (`quotearg.zig`, `quote.zig`) knows the C locale only (except cat's
+  diagnostics): in UTF-8, stat %N and others escape what GNU prints.
+- grep -P in UTF-8: `\w` leaves out non-decimal numbers, `\h \v` are ASCII,
+  `\R \X \N \K` are missing, and a variable-width look-behind falls back to
+  byte matching. The first and last need work in regex-zig.
+- backups: in a directory that may not be listed, --backup=existing makes a
+  simple backup over an older one, as GNU does (FSOP-029).
 - head: when `-n -N` writes nothing we leave stdin where it was (documented).
 
 ## The release, at the end
