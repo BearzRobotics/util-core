@@ -447,6 +447,10 @@ for o in "-c -o cout" "-C -o cout" "-c -C" "-C -c" "-c -c" "-C -C" "--check=quie
 done
 run_cmp "the same -o twice" -o same -o same confl
 
+# The disorder report is longer than 256 bytes here (INFRA-012).
+long=$(printf '%0200d' 0); mkdir "$long"; printf 'b\na\n' > "$long/$long"
+run_cmp "-c long file name" -c "$long/$long"
+
 # Key positions beyond any line, in the obsolete syntax too.
 printf 'b 2\na 1\n' > hugekey; N=99999999999999999999
 for a in "+0 -$N.1" "+$N" "+0.$N" "+0 -1.$N" "+0 -$N" "-k$N" "-k1.$N,$N.$N"; do run_cmp "huge key $a" $a hugekey; done

@@ -321,14 +321,33 @@ pub const Out = struct {
         o.write(&.{byte});
     }
 
+    /// Formatted text of any length.
     pub fn print(o: *Out, comptime fmt: []const u8, args: anytype) void {
-        var tmp: [256]u8 = undefined;
-        const s = std.fmt.bufPrint(&tmp, fmt, args) catch {
-            o.failed = true;
-            return;
-        };
-        o.write(s);
+        var staging: [256]u8 = undefined;
+        var f: Formatter = .{ .out = o, .writer = .{ .vtable = &.{ .drain = Formatter.drain }, .buffer = &staging } };
+        // `drain` takes everything; a real failure is recorded in `failed`.
+        f.writer.print(fmt, args) catch {};
+        o.write(f.writer.buffered());
     }
+
+    /// Feeds what does not fit the staging buffer on to `out`.
+    const Formatter = struct {
+        out: *Out,
+        writer: Io.Writer,
+
+        fn drain(w: *Io.Writer, data: []const []const u8, splat: usize) Io.Writer.Error!usize {
+            const f: *Formatter = @fieldParentPtr("writer", w);
+            f.out.write(w.buffered());
+            w.end = 0;
+            var taken: usize = 0;
+            for (data, 0..) |bytes, i| {
+                const times = if (i == data.len - 1) splat else 1;
+                for (0..times) |_| f.out.write(bytes);
+                taken += bytes.len * times;
+            }
+            return taken;
+        }
+    };
 
     pub fn flush(o: *Out) void {
         if (o.failed or o.len == 0) return;

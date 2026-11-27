@@ -19,6 +19,11 @@ for f in a empty sl sd dang ff ro "sp ace" nofile e d d/f d/sub; do
     run_tree "rm -rv $f"           "$S" -rv "$f"
 done
 run_tree "several"                 "$S" a b empty
+# A -v line longer than 256 bytes once ended all later output (INFRA-012).
+long=$(printf '%0200d' 0)
+long_setup="mkdir $long; touch $long/$long short"
+run_tree "-v long path"            "$long_setup" -v "$long/$long" short
+run_tree "-rv long path"           "$long_setup" -rv "$long" short
 run_tree "several with missing"    "$S" a nofile b
 run_tree "several -f missing"      "$S" -f a nofile b
 run_tree "-R"                      "$S" -R d
