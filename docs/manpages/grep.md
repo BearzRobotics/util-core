@@ -144,7 +144,8 @@ See docs/compatibility/grep.md for details.
 
 # LIMITATIONS
 
-- `-P` uses the Perl dialect of regex-zig, not PCRE2: features such as recursion, conditionals and Unicode properties are missing and error messages differ (`invalid Perl regular expression`).
+- `-P` uses the Perl dialect of regex-zig, not PCRE2: features such as recursion, conditionals, `\R`, `\X`, `\N` and `\K` are missing and error messages differ (`invalid Perl regular expression`).
+- `-P` in a UTF-8 locale matches characters: `\w`, `\s`, `\b`, classes, `\p{..}`, `\x{..}` and `-i` are Unicode-aware, and `\d` is ASCII, as in GNU. Three differences remain. `\w` leaves out numbers that are not decimal digits (`²`, `½`). `\h` and `\v` are ASCII only. A look-behind must have a fixed width in bytes: `(?<=\w)`, `(?<!\w)` and `-w` are handled, but a pattern with another one of variable width, such as `(?<=\s)`, is matched byte by byte instead, where `\w`, `\s` and `\b` know only ASCII.
 - With four or more patterns the lines are selected by one lazily built DFA over all of them; `-o`, colours and `--replace` still try each pattern, and the first such use compiles every pattern separately. Patterns with back-references fall back to one search per pattern.
 - Binary detection looks at each 96 KiB read rather than at GNU's buffer boundaries, so a NUL byte appearing far into a large file may switch to binary mode at a slightly different line.
 - UTF-8 character classes use Unicode 16 tables and may differ from glibc's C.UTF-8 for rare code points; other locales are treated as C.

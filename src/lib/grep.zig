@@ -464,7 +464,9 @@ pub const Matcher = struct {
     fn buildPre(m: *Matcher, options: Options) void {
         if (m.staged.items.len == 0) return;
         const gpa = m.gpa;
-        const ao: scan.Opts = .{ .icase = options.icase, .utf8 = options.utf8, .eol = if (options.null_data) 0 else '\n' };
+        const native = m.staged.items[0].native;
+        for (m.staged.items) |st| if (st.native != native) return;
+        const ao: scan.Opts = .{ .icase = options.icase, .utf8 = options.utf8, .native = native, .eol = if (options.null_data) 0 else '\n' };
         var all_scan = true;
         var all_exact = !options.word and !options.line;
         var first: scan.Info = .{};
@@ -522,7 +524,7 @@ pub const Matcher = struct {
         var lim = posixre.big_limits;
         lim.max_dfa_cache = 16 << 20;
         const re = gpa.create(regex.Regex) catch return;
-        re.* = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = lim, .engine = .dfa }, null) catch {
+        re.* = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .utf8 = native, .ignore_case = options.icase, .limits = lim, .engine = .dfa }, null) catch {
             gpa.destroy(re);
             return;
         };
@@ -792,15 +794,16 @@ pub const Matcher = struct {
         var src: std.ArrayList(u8) = .empty;
         defer src.deinit(m.gpa);
         src.appendSlice(m.gpa, "(?s)") catch return;
+        const native = m.staged.items[0].native;
         for (m.staged.items, 0..) |st, i| {
-            if (hasBackref(st.inner)) return;
+            if (hasBackref(st.inner) or st.native != native) return;
             if (i > 0) src.append(m.gpa, '|') catch return;
             src.appendSlice(m.gpa, "(?:") catch return;
             src.appendSlice(m.gpa, st.inner) catch return;
             src.append(m.gpa, ')') catch return;
         }
         const re = m.gpa.create(regex.Regex) catch return;
-        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = if (small) small_set_limits else set_limits, .engine = if (small) .dfa else .auto }, null) catch {
+        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .utf8 = native, .ignore_case = options.icase, .limits = if (small) small_set_limits else set_limits, .engine = if (small) .dfa else .auto }, null) catch {
             m.gpa.destroy(re);
             return;
         };
@@ -865,8 +868,38 @@ pub const Matcher = struct {
         }
     }
 
+    /// Stage a -P pattern for the regex package's UTF-8 mode. False when that
+    /// mode refuses it (a look-behind of variable width, say): the byte
+    /// translation then stands, where \\w and \\b know only ASCII.
+    fn stageNative(m: *Matcher, options: Options, pat: []const u8) Error!bool {
+        const gpa = m.gpa;
+        const body = try perlNative(gpa, pat);
+        errdefer gpa.free(body);
+        const inner = if (options.line)
+            try std.fmt.allocPrint(gpa, "\\A(?:{s})\\z", .{body})
+        else if (options.word)
+            try std.fmt.allocPrint(gpa, "{s}(?:{s})(?!\\w)", .{ no_word_before, body })
+        else
+            try gpa.dupe(u8, body);
+        errdefer gpa.free(inner);
+        const src = try std.fmt.allocPrint(gpa, "(?s){s}", .{inner});
+        defer gpa.free(src);
+        var re = regex.Regex.compile(gpa, src, .{ .dialect = .perl, .utf8 = true, .ignore_case = options.icase, .limits = posixre.big_limits }, null) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                gpa.free(inner);
+                gpa.free(body);
+                return false;
+            },
+        };
+        re.deinit(gpa);
+        try m.staged.append(gpa, .{ .pat = pat, .body = body, .inner = inner, .flags = .{}, .native = true });
+        return true;
+    }
+
     fn stage(m: *Matcher, options: Options, pat: []const u8, observer: Observer, diag: *CompileError) Error!void {
         const gpa = m.gpa;
+        if (options.syntax == .perl and options.utf8 and try m.stageNative(options, pat)) return;
         var flags: posixre.Flags = .{};
         const body = try m.translate(options, pat, &flags, observer, diag);
         errdefer gpa.free(body);
@@ -921,7 +954,7 @@ pub const Matcher = struct {
         try src.appendSlice(gpa, "(?s)");
         try src.appendSlice(gpa, st.inner);
         var rd: regex.Diagnostic = .{};
-        const re = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = posixre.big_limits }, &rd) catch {
+        const re = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .utf8 = st.native, .ignore_case = options.icase, .limits = posixre.big_limits }, &rd) catch {
             diag.* = .{ .kind = if (options.syntax == .perl) .invalid_perl else .syntax, .pattern = st.pat, .extended = options.syntax == .extended, .detail = rd.message, .offset = rd.pos -| 4 };
             return error.BadPattern;
         };
@@ -1132,7 +1165,77 @@ fn hasUpper(keys: []const u8, syntax: Syntax) bool {
     return false;
 }
 
-const Staged = struct { pat: []const u8, body: []u8, inner: []u8, flags: posixre.Flags };
+const Staged = struct {
+    pat: []const u8,
+    body: []u8,
+    inner: []u8,
+    flags: posixre.Flags,
+    /// The source is for the regex package's UTF-8 mode (code points, not
+    /// bytes).
+    native: bool = false,
+};
+
+/// -P in a UTF-8 locale: `pat` as source for the regex package's UTF-8 mode,
+/// where it differs from PCRE2 as GNU grep sets it up. \d and \D mean ASCII
+/// digits only. A look-behind cannot be of variable width, so the two common
+/// ones on a word character are written with \b, \B and a look-ahead.
+fn perlNative(gpa: std.mem.Allocator, pat: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    var in_class = false;
+    var i: usize = 0;
+    while (i < pat.len) {
+        const rest = pat[i..];
+        if (rest[0] == '\\' and rest.len > 1) {
+            if (rest[1] == 'Q') {
+                const end = if (std.mem.indexOf(u8, rest, "\\E")) |e| e + 2 else rest.len;
+                try out.appendSlice(gpa, rest[0..end]);
+                i += end;
+                continue;
+            }
+            try out.appendSlice(gpa, switch (rest[1]) {
+                'd' => if (in_class) "0-9" else "[0-9]",
+                'D' => if (in_class) "\\x00-\\x2f\\x3a-\\x{10ffff}" else "[^0-9]",
+                else => rest[0..2],
+            });
+            i += 2;
+            continue;
+        }
+        if (in_class) {
+            // [:name:] and a ']' straight after the opening do not close.
+            if (std.mem.startsWith(u8, rest, "[:")) {
+                if (std.mem.indexOfPos(u8, rest, 2, ":]")) |e| {
+                    try out.appendSlice(gpa, rest[0 .. e + 2]);
+                    i += e + 2;
+                    continue;
+                }
+            }
+            if (rest[0] == ']') in_class = false;
+        } else if (std.mem.startsWith(u8, rest, "(?<=\\w)")) {
+            try out.appendSlice(gpa, "(?:\\b(?!\\w)|\\B(?=\\w))");
+            i += "(?<=\\w)".len;
+            continue;
+        } else if (std.mem.startsWith(u8, rest, "(?<!\\w)")) {
+            try out.appendSlice(gpa, no_word_before);
+            i += "(?<!\\w)".len;
+            continue;
+        } else if (rest[0] == '[') {
+            in_class = true;
+            var n: usize = 1;
+            if (n < rest.len and rest[n] == '^') n += 1;
+            if (n < rest.len and rest[n] == ']') n += 1;
+            try out.appendSlice(gpa, rest[0..n]);
+            i += n;
+            continue;
+        }
+        try out.append(gpa, rest[0]);
+        i += 1;
+    }
+    return try out.toOwnedSlice(gpa);
+}
+
+/// `(?<!\w)` without a look-behind, which would need a fixed width.
+const no_word_before = "(?:\\b(?=\\w)|\\B(?!\\w))";
 
 /// A back-reference (\1..\9, \k<..>, (?P=..)) would be renumbered when
 /// patterns are joined.

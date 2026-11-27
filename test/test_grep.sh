@@ -246,6 +246,14 @@ gd 'utf8 -F -i' u8 -Fi 'É' u8
 gd 'utf8 -w' u8 -w 'caf' u8
 gd 'utf8 -wo' u8 -wo '\w*' u8
 gd 'utf8 -P .' u8 -Po '.' u8
+# -P in UTF-8 matches characters, not bytes (REGX-032).
+printf 'é\naéa\ncafé\ncaf é\nÉ_1 x\n\302\240x\n\331\243 5\n中文\néé ab\nplain\n' > "$TEST_TMP/p8"
+for opts in -o -c -ow -x -oi -vn; do
+    for pat in '\B' '\bé' 'é\b' '\bcaf\b' '^\w$' '\w+' '\W' '\s' '\S+' '\d' '\D' '[\w ]+' '[^\w]' '[\D]' '[é]' '[^é]+' '[à-ü]' \
+        '\p{L}+' '\x{e9}' '\xe9' '(?i)É' 'é?x' 'é+ ' 'aé{0,1}a' '(?:é|ab)' '(?<=\w)é' '(?<!\w)é' '(?<=é)_' 'caf.' '[[:alpha:]]+'; do
+        CMP_LOCALE=C.UTF-8 CMP_STDIN="$TEST_TMP/p8" run_cmp "utf8 -P $opts '$pat'" $opts -P -e "$pat"
+    done
+done
 gd 'utf8 binary bad' u8 '' u8
 gd 'utf8 binary bad -c' u8 -c '' u8
 gd 'utf8 binary bad -a' u8 -a match u8
