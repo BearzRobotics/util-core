@@ -469,7 +469,7 @@ fn printResult(out: *Io.Writer, o: Options, name: []const u8, verdict: []const u
 
 /// Parse one line of a checksum list in any of the three formats.
 fn parseLine(gpa: std.mem.Allocator, o: Options, raw: []const u8, name_buf: *std.ArrayList(u8)) ?Line {
-    var s = raw;
+    var s = std.mem.trimStart(u8, raw, " \t");
     var escaped = false;
     if (s.len > 0 and s[0] == '\\') {
         escaped = true;
@@ -512,8 +512,11 @@ fn parseLine(gpa: std.mem.Allocator, o: Options, raw: []const u8, name_buf: *std
 /// "TAG (NAME) = DIGEST", with the tag of the selected algorithm (any known
 /// algorithm for cksum) and "BLAKE2b-BITS" for shortened BLAKE2b digests.
 fn parseTagged(o: Options, s: []const u8, ln: *Line, name_out: *[]const u8) bool {
-    const paren = std.mem.indexOf(u8, s, " (") orelse return false;
-    const tag = s[0..paren];
+    // "TAG (", or "TAG(" as OpenSSL writes it.
+    const end = std.mem.indexOfAny(u8, s, " (") orelse return false;
+    const open = end + @intFromBool(s[end] == ' ');
+    if (open >= s.len or s[open] != '(') return false;
+    const tag = s[0..end];
     var algo: hash.Algo = undefined;
     var bits: ?usize = null;
     var found = false;
@@ -535,10 +538,12 @@ fn parseTagged(o: Options, s: []const u8, ln: *Line, name_out: *[]const u8) bool
     }
     if (!found) return false;
     if (o.standalone() and algo != o.algo) return false;
-    const rest = s[paren + 2 ..];
-    const close = std.mem.lastIndexOf(u8, rest, ") = ") orelse return false;
+    const rest = s[open + 1 ..];
+    const close = std.mem.lastIndexOfScalar(u8, rest, ')') orelse return false;
     const name = rest[0..close];
-    const digest_text = rest[close + 4 ..];
+    var after = std.mem.trimStart(u8, rest[close + 1 ..], " \t");
+    if (after.len == 0 or after[0] != '=') return false;
+    const digest_text = std.mem.trimStart(u8, after[1..], " \t");
     ln.algo = algo;
     if (!decodeDigest(digest_text, algo, bits, ln)) return false;
     ln.binary = true;

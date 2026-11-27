@@ -21,4 +21,17 @@ echo hi > "$TEST_TMP/good"
 g=$(cd "$TEST_TMP" && LC_ALL=C "${GNU_BIN:-/usr/bin}/md5sum" -c -w crlf 2>&1; echo "status $?")
 n=$(cd "$TEST_TMP" && LC_ALL=C "$BIN_DIR/md5sum" -c -w crlf 2>&1; echo "status $?")
 if [ "$g" = "$n" ]; then PASS=$((PASS + 1)); echo "PASS CR LF list"; else FAIL=$((FAIL + 1)); printf 'FAIL CR LF list\n%s\n---\n%s\n' "$g" "$n"; fi
+# Leading blanks, and tagged lines written as OpenSSL does (MISC-029).
+printf 'b\n' > "$TEST_TMP/tagged"
+sum=$(/usr/bin/md5sum < "$TEST_TMP/tagged" | cut -d' ' -f1)
+for form in '   %s  tagged' '\t%s  tagged' 'MD5(tagged)= %s' 'MD5(tagged)=%s' 'MD5 (tagged)\t=  %s' \
+    '  MD5 (tagged) = %s' 'MD5  (tagged) = %s' 'MD5 (tagged) = %s ' 'MD5 (tagged) %s'; do
+    # shellcheck disable=SC2059
+    printf "$form\n" "$sum" > "$TEST_TMP/tagged.sums"
+    g=$(cd "$TEST_TMP" && LC_ALL=C /usr/bin/md5sum -c tagged.sums 2>/dev/null; echo $?)
+    n=$(cd "$TEST_TMP" && LC_ALL=C "$BIN_DIR/md5sum" -c tagged.sums 2>/dev/null; echo $?)
+    if [ "$g" = "$n" ]; then PASS=$((PASS + 1)); echo "PASS check line '$form'"
+    else FAIL=$((FAIL + 1)); printf 'FAIL check line %s\n%s\n---\n%s\n' "$form" "$g" "$n"; fi
+done
+
 print_summary
