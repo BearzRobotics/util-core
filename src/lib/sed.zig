@@ -1543,10 +1543,12 @@ const Exec = struct {
         const dir_end = std.mem.lastIndexOfScalar(u8, name, '/');
         const dir = if (dir_end) |d| name[0 .. d + 1] else "./";
         var err: LX.E = .SUCCESS;
-        const pid: u32 = @intCast(LX.getpid());
         var attempt: u32 = 0;
         while (attempt < 100) : (attempt += 1) {
-            const tmp = std.fmt.allocPrint(e.ar(), "{s}sed{x:0>6}", .{ dir, (pid *% 2654435761 +% attempt *% 40503) & 0xffffff }) catch return error.OutOfMemory;
+            // Random, so that nobody can take all the names in advance.
+            var random: [4]u8 = undefined;
+            e.s.env.io.random(&random);
+            const tmp = std.fmt.allocPrint(e.ar(), "{s}sed{x:0>6}", .{ dir, std.mem.readInt(u32, &random, .little) & 0xffffff }) catch return error.OutOfMemory;
             const fd = sys.openFd(tmp, sys.O.WRONLY | sys.O.CREAT | sys.O.EXCL, 0o600, &err) orelse {
                 if (err == .EXIST) continue;
                 e.s.obs.emit(.{ .temp_open_failed = .{ .path = tmp, .errno = err } });
@@ -1560,6 +1562,8 @@ const Exec = struct {
             e.in_place_target = name;
             return true;
         }
+        e.s.obs.emit(.{ .temp_open_failed = .{ .path = dir, .errno = .EXIST } });
+        e.s.exit_code = 4;
         return false;
     }
 
