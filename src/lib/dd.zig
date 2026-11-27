@@ -737,29 +737,10 @@ fn ddCopy(d: *Job) Fail!u8 {
         const wanted = byteOffset(d.seek_records, d.output_blocksize, d.seek_bytes);
         var se: E = .OVERFLOW;
         if (wanted == null or sys.seekFd(d.out_fd, wanted.?, 1, &se) == null) {
-            var end_error: E = .SUCCESS;
-            if (sys.seekFd(d.out_fd, 0, 2, &end_error) != null) {
-                diagnose(d, se, "{f}: cannot seek", .{quote.quote(out_name)});
-                return quit(d);
-            }
-            const off = wanted orelse {
-                warn(d, "{f}: cannot seek", .{quote.quote(out_name)});
-                return quit(d);
-            };
-            // Not seekable: write zeros instead.
-            const zeros = d.env.gpa.alloc(u8, d.output_blocksize) catch return 1;
-            defer d.env.gpa.free(zeros);
-            @memset(zeros, 0);
-            var remaining = off;
-            while (remaining > 0) {
-                processSignals(d);
-                const n: usize = @intCast(@min(remaining, @as(i64, @intCast(zeros.len))));
-                if (sys.writeAllFd(d.out_fd, zeros[0..n])) |we| {
-                    diagnose(d, we, "writing to {f}", .{quote.quoteA(out_name)});
-                    return quit(d);
-                }
-                remaining -= @intCast(n);
-            }
+            // As GNU, an output that cannot seek is an error: padding it with
+            // zeros instead would send them to whatever reads it.
+            diagnose(d, se, "{f}: cannot seek", .{quote.quote(out_name)});
+            return quit(d);
         }
     }
     if (d.max_records == 0 and d.max_bytes == 0) return exit_status;

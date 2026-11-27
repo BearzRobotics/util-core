@@ -186,4 +186,13 @@ else
 fi
 rm -f fifo sigout sigerr
 trap - PIPE
+# seek= on an output that cannot seek is an error, and nothing is written
+# (DISK-006). The output is a pipe here.
+for a in "bs=4 seek=1" "bs=4 oseek=1" "bs=4 seek=1 conv=notrunc" "bs=4 seek=1B oflag=seek_bytes" "bs=4 seek=1 count=0" "bs=4 seek=99999999999999" "bs=4 seek=0"; do
+    exp=$(printf 'abc\n' | { LC_ALL=C gnu $a status=noxfer 2>"$TEST_TMP/dd.err"; echo "status $?" >>"$TEST_TMP/dd.err"; } | od -c; sed 's|/usr/bin/||' "$TEST_TMP/dd.err")
+    act=$(printf 'abc\n' | { LC_ALL=C ours $a status=noxfer 2>"$TEST_TMP/dd.err"; echo "status $?" >>"$TEST_TMP/dd.err"; } | od -c; cat "$TEST_TMP/dd.err")
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS to a pipe: $a"
+    else FAIL=$((FAIL + 1)); echo "FAIL to a pipe: $a"; printf '     GNU : %s\n     OURS: %s\n' "$exp" "$act"; fi
+done
+
 cd /; print_summary
