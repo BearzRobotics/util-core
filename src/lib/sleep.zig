@@ -44,21 +44,25 @@ pub fn parseInterval(text: []const u8) ?f64 {
     return v * mult;
 }
 
-/// Waits `opts.seconds`. A finite wait is done in one call; infinity (or a
-/// time too large to represent) sleeps in long slices forever. Fails only
-/// when the wait itself fails (for example cancellation).
+/// The longest single wait. Systems limit a wait in different ways (a
+/// timespec's i64 seconds, a count of 100 ns units); this is within them all.
+const slice_s = std.math.maxInt(i32);
+
+/// Waits `opts.seconds`, in slices when that is long; infinity (or a time too
+/// large to count in nanoseconds) waits forever. Fails only when the wait
+/// itself fails (for example cancellation).
 pub fn run(env: Env, opts: Options) Io.Cancelable!void {
-    const total = opts.seconds;
     const max_ns: f64 = @floatFromInt(std.math.maxInt(i96));
-    const ns = total * std.time.ns_per_s;
-    const forever = std.math.isInf(total) or ns >= max_ns;
+    const ns = opts.seconds * std.time.ns_per_s;
+    const forever = !(ns < max_ns);
+    var left: i96 = if (forever) 0 else @intFromFloat(ns);
+    const slice_ns = @as(i96, slice_s) * std.time.ns_per_s;
     while (true) {
-        const d: Io.Duration = if (forever)
-            .fromSeconds(std.math.maxInt(i32))
-        else
-            .fromNanoseconds(@intFromFloat(ns));
-        try Io.sleep(env.io, d, .awake);
-        if (!forever) return;
+        const d: i96 = if (forever) slice_ns else @min(left, slice_ns);
+        try Io.sleep(env.io, .fromNanoseconds(d), .awake);
+        if (forever) continue;
+        left -= d;
+        if (left <= 0) return;
     }
 }
 
