@@ -97,10 +97,16 @@ pub fn main(ctx: cli.Context) u8 {
     if (ui == null) return copyAll(ctx, inputs.items, status, tty_out and !opts.raw);
     defer ui.?.deinit();
 
+    var unread: ?struct { name: []const u8, err: anyerror } = null;
     var buf: [65536]u8 = undefined;
     feed: for (inputs.items) |in| {
         while (true) {
-            const n = in.file.readStreaming(ctx.io, &.{&buf}) catch break;
+            const n = cli.readChunk(ctx.io, in.file, &buf) catch |e| {
+                // (Said after the pager has gone: it has the screen.)
+                if (unread == null) unread = .{ .name = in.name, .err = e };
+                status = 1;
+                break;
+            };
             if (n == 0) break;
             ui.?.feed(buf[0..n]) catch break :feed;
         }
@@ -110,13 +116,15 @@ pub fn main(ctx: cli.Context) u8 {
     const last = inputs.items[inputs.items.len - 1].file;
     const regular = if (last.stat(ctx.io)) |st| st.kind == .file else |_| false;
     _ = ui.?.finishGrowing(quit_if_one, if (regular) last else null);
+    if (unread) |u| cli.warn(ctx, "{f}: {s}", .{ cli.Visible{ .name = u.name }, cli.errText(u.err) });
     return status;
 }
 
 /// No terminal to page on: behave like cat. With `visible` (the output is a
 /// terminal all the same, and -R was not given) control characters are shown
 /// as the pager shows them.
-fn copyAll(ctx: cli.Context, inputs: []const Input, status: u8, visible: bool) u8 {
+fn copyAll(ctx: cli.Context, inputs: []const Input, status_in: u8, visible: bool) u8 {
+    var status = status_in;
     var obuf: [8192]u8 = undefined;
     var out = Io.File.stdout().writerStreaming(ctx.io, &obuf);
     var buf: [65536]u8 = undefined;
@@ -124,7 +132,11 @@ fn copyAll(ctx: cli.Context, inputs: []const Input, status: u8, visible: bool) u
         // The start of a character that the last read cut off.
         var held: usize = 0;
         while (true) {
-            const n = in.file.readStreaming(ctx.io, &.{buf[held..]}) catch break;
+            const n = cli.readChunk(ctx.io, in.file, buf[held..]) catch |e| {
+                cli.warn(ctx, "{f}: {s}", .{ cli.Visible{ .name = in.name }, cli.errText(e) });
+                status = 1;
+                break;
+            };
             if (n == 0) break;
             const have = held + n;
             held = if (visible) pager.partialTail(buf[0..have]) else 0;

@@ -37,5 +37,17 @@ if command -v python3 >/dev/null 2>&1; then
 else
     SKIP=$((SKIP+1)); echo "SKIP pseudo-terminal session (no python3)"
 fi
+# A read error is not the end of the file (VIEW-027).
+out=$( (ulimit -v 1000000; "$BIN_DIR/less" "$TEST_TMP") </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"Is a directory"*"status 1") PASS=$((PASS + 1)); echo "PASS less of a directory" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL less of a directory: $out" ;;
+esac
+out=$( (ulimit -v 1000000; "$BIN_DIR/less" /proc/self/mem) </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"Input/output error"*"status 1") PASS=$((PASS + 1)); echo "PASS less read error" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL less read error: $out" ;;
+esac
+
 print_summary
 [ "$FAIL" -eq 0 ]

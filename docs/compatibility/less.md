@@ -20,6 +20,7 @@ Scrolling, searching and quitting work while following; GNU less has to be inter
 
 ## Known deviations and gaps
 
+- A file that cannot be read is reported, with status 1, where GNU less names a directory and exits 0.
 - Search is plain text (smart case with `-i`), not a regular expression, and does not wrap past the end.
 - `:n`, `:p`, `v`, marks, numeric prefixes, `-P` prompts, `+CMD` and the `LESS` variable are not implemented.
 - Several files are one concatenated text.
