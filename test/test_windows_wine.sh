@@ -162,7 +162,10 @@ while IFS= read -r line; do
     rm -rf "$TMP/lw"
     cp -r "$TMP/lin-fix" "$TMP/lw"
     printf '===T %d\n' "$i" >> "$LOUT"
-    (cd "$TMP/lw" && PATH="$LINUX_BIN:$PATH" sh -c "$line" 2>/dev/null </dev/null; echo "status=$?") >> "$LOUT"
+    # printf and test are built into the shell, which PATH does not override:
+    # name the Linux builds of those, which are what Windows is compared with.
+    (cd "$TMP/lw" && PATH="$LINUX_BIN:$PATH" LINUX_BIN="$LINUX_BIN" sh -c 'printf() { "$LINUX_BIN/printf" "$@"; }; test() { "$LINUX_BIN/test" "$@"; }
+'"$line" 2>/dev/null </dev/null; echo "status=$?") >> "$LOUT"
 done < "$TMP/tests"
 
 # ---- Windows side (wine): one batch file
