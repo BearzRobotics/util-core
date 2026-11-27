@@ -29,6 +29,9 @@ pub const Options = struct {
     name: []const u8 = "target",
     /// Do not print the "saved failing input" line (for the engine's own tests).
     quiet: bool = false,
+    /// Save failing inputs here instead of under $FUZZ_FINDINGS, so that the
+    /// engine's own tests leave the real findings alone.
+    findings: ?std.Io.Dir = null,
 };
 
 const dictionary = [_][]const u8{
@@ -104,16 +107,21 @@ fn mutate(rng: std.Random, gpa: std.mem.Allocator, corpus: []const []const u8, b
     if (buf.items.len > max_len) buf.shrinkRetainingCapacity(max_len);
 }
 
-fn save(name: []const u8, input: []const u8, quiet: bool) void {
-    const dir = envStr("FUZZ_FINDINGS") orelse std.heap.page_allocator.dupe(u8, "fuzz-findings") catch return;
-    defer std.heap.page_allocator.free(dir);
+fn save(options: Options, input: []const u8) void {
     var path: [512]u8 = undefined;
     const h = std.hash.Wyhash.hash(0, input);
-    const p = std.fmt.bufPrint(&path, "{s}/{s}-{x}.bin", .{ dir, name, h }) catch return;
     const io = std.testing.io;
+    if (options.findings) |dir| {
+        const file = std.fmt.bufPrint(&path, "{s}-{x}.bin", .{ options.name, h }) catch return;
+        dir.writeFile(io, .{ .sub_path = file, .data = input }) catch {};
+        return;
+    }
+    const dir = envStr("FUZZ_FINDINGS") orelse std.heap.page_allocator.dupe(u8, "fuzz-findings") catch return;
+    defer std.heap.page_allocator.free(dir);
+    const p = std.fmt.bufPrint(&path, "{s}/{s}-{x}.bin", .{ dir, options.name, h }) catch return;
     std.Io.Dir.cwd().createDirPath(io, dir) catch {};
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = input }) catch {};
-    if (!quiet) std.debug.print("fuzz: saved failing input ({d} bytes) to {s}\n", .{ input.len, p });
+    if (!options.quiet) std.debug.print("fuzz: saved failing input ({d} bytes) to {s}\n", .{ input.len, p });
 }
 
 fn publishCurrent(input: []const u8) void {
@@ -141,7 +149,7 @@ pub fn fuzz(
         if (publish != null) publishCurrent(entry);
         var smith: std.testing.Smith = .{ .in = entry };
         testOne(ctx, &smith) catch |e| {
-            save(options.name, entry, options.quiet);
+            save(options, entry);
             return e;
         };
     }
@@ -160,7 +168,7 @@ pub fn fuzz(
         if (publish != null) publishCurrent(buf.items);
         var smith: std.testing.Smith = .{ .in = buf.items };
         testOne(ctx, &smith) catch |e| {
-            save(options.name, buf.items, options.quiet);
+            save(options, buf.items);
             return e;
         };
     }
@@ -189,6 +197,11 @@ test "engine: a failing target saves its input and reports the error" {
             if (n >= 3 and std.mem.eql(u8, raw[0..3], "bug")) return error.Found;
         }
     }.run;
-    try std.testing.expectError(error.Found, fuzz({}, failing, .{ .corpus = &.{"bugs"}, .quiet = true }));
-    std.Io.Dir.cwd().deleteTree(std.testing.io, "fuzz-findings") catch {};
+    // Into a directory of the test's own: nothing else is written or removed.
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try std.testing.expectError(error.Found, fuzz({}, failing, .{ .corpus = &.{"bugs"}, .quiet = true, .findings = tmp.dir }));
+    var it = tmp.dir.iterate();
+    const saved = (try it.next(std.testing.io)) orelse return error.NothingSaved;
+    try std.testing.expect(std.mem.startsWith(u8, saved.name, "target-"));
 }
