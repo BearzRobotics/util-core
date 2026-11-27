@@ -179,4 +179,9 @@ for o in "" "-q" "-N" "-Q" "-f" "-F" "-p" "-qQ"; do
     CMP_LOCALE=C.UTF-8 td "unprintable characters $o" $o --noreport d
     CMP_LOCALE=C td "unprintable characters, C locale $o" $o --noreport d
 done
+# Entries that cannot be examined leave nothing behind on standard error (FIND-031).
+mkdir -p "$W/nostat/sub" && touch "$W/nostat/sub/a" "$W/nostat/sub/b" && chmod 600 "$W/nostat/sub"
+CMP_LOCALE=C td 'a directory without search permission' "$W/nostat"
+chmod 700 "$W/nostat/sub"
+
 cd /; print_summary

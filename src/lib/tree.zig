@@ -469,7 +469,10 @@ noinline fn listDir(t: *T, level: *dirat.Level, path: []const u8, err: *LX.E) ?[
             continue;
         }
         var e2: LX.E = .SUCCESS;
-        const lst = sys.fileStatAt(level.fd, r.name, false, &e2) orelse continue;
+        const lst = sys.fileStatAt(level.fd, r.name, false, &e2) orelse {
+            t.gpa.free(child);
+            continue;
+        };
         var st: ?sys.FileStat = lst;
         var is_dir = lst.isDir();
         var target: ?[]const u8 = null;
@@ -485,6 +488,8 @@ noinline fn listDir(t: *T, level: *dirat.Level, path: []const u8, err: *LX.E) ?[
         }
         const name = t.gpa.dupe(u8, r.name) catch {
             t.nomem();
+            t.gpa.free(child);
+            if (target) |tg| t.gpa.free(tg);
             continue;
         };
         list.append(t.gpa, .{ .name = name, .path = child, .lst = lst, .st = st, .is_dir = is_dir, .target = target, .at = level }) catch t.nomem();
