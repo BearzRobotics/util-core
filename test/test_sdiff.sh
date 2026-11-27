@@ -107,5 +107,26 @@ done
 GENPASS=$((PASS - START)); GENFAILS=$((FAIL - F0))
 printf "\nGenerated pairs: %d/%d agree with GNU sdiff\n" "$GENPASS" "$((GENPASS + GENFAILS))"
 
+# The copy given to the editor is private, and a signal does not leave it
+# behind (VIEW-016). Interrupt is the editor's: sdiff goes on, as GNU does.
+mkdir "$TEST_TMP/ed"; printf 'a\n' > "$TEST_TMP/s1"; printf 'b\n' > "$TEST_TMP/s2"
+for sig in none INT HUP QUIT TERM; do
+    cat > "$TEST_TMP/editor.sh" <<EOT
+#!/bin/sh
+stat -c %a "\$1" > "$TEST_TMP/mode"
+[ $sig = none ] || kill -$sig \$PPID
+EOT
+    chmod +x "$TEST_TMP/editor.sh"
+    for who in gnu ours; do
+        rm -f "$TEST_TMP/mode"
+        # (In a subshell: its report of a death by signal is not wanted.)
+        (printf 'eb\nq\n' | (umask 022; EDITOR="$TEST_TMP/editor.sh" TMPDIR="$TEST_TMP/ed" $who -o "$TEST_TMP/merged" "$TEST_TMP/s1" "$TEST_TMP/s2")) >/dev/null 2>&1
+        eval "got_$who=\"status $? mode $(cat "$TEST_TMP/mode") left $(ls "$TEST_TMP/ed" | wc -l)\""
+        rm -f "$TEST_TMP/ed/"*
+    done
+    if [ "$got_gnu" = "$got_ours" ]; then PASS=$((PASS + 1)); echo "PASS editor copy, signal $sig"
+    else FAIL=$((FAIL + 1)); echo "FAIL editor copy, signal $sig: GNU $got_gnu, ours $got_ours"; fi
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]

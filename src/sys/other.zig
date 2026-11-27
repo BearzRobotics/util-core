@@ -270,9 +270,18 @@ fn catchList() [7]u8 {
 }
 
 pub fn catchSignals() void {
+    catchWhere(false);
+}
+
+pub fn catchTerminationSignals() void {
+    catchWhere(true);
+}
+
+fn catchWhere(termination_only: bool) void {
     if (comptime !is_libc_posix) return;
     const list = catchList();
     for (list, 0..) |num, i| {
+        if (termination_only and (num == sys.signo.PIPE or num == sys.signo.ALRM or num == sys.signo.TSTP)) continue;
         const sg: c.SIG = @enumFromInt(num);
         var old: c.Sigaction = undefined;
         if (c.sigaction(sg, null, &old) != 0) continue;

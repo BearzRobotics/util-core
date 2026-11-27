@@ -5,6 +5,7 @@
 const std = @import("std");
 const Io = std.Io;
 const cli = @import("../cli.zig");
+const sys = @import("../sys.zig");
 const getopt = @import("../getopt.zig");
 const diff3 = @import("../lib/diff3.zig");
 const diffcore = @import("../lib/diffcore.zig");
@@ -92,6 +93,18 @@ fn readAll(ctx: cli.Context, path: []const u8) ![]u8 {
     }
     return list.toOwnedSlice(gpa);
 }
+
+const Copies = struct {
+    io: Io,
+    paths: [3]?[]const u8 = .{ null, null, null },
+
+    fn remove(c: *Copies) void {
+        for (&c.paths) |*slot| {
+            if (slot.*) |path| Io.Dir.cwd().deleteFile(c.io, path) catch {};
+            slot.* = null;
+        }
+    }
+};
 
 pub fn main(ctx: cli.Context) u8 {
     const gpa = ctx.gpa;
@@ -213,33 +226,38 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     var ext: Ext = .{ .ctx = ctx, .program = program, .text = text, .strip_cr = strip_cr, .common_middle = letter != null or merge, .paths = .{ ops[0], ops[1], ops[2] } };
-    var tmp_paths: [3]?[]u8 = .{ null, null, null };
-    defer for (tmp_paths) |tp| if (tp) |pth| {
-        Io.Dir.cwd().deleteFile(ctx.io, pth) catch {};
-        gpa.free(pth);
-    };
+    // Copies for the program to read are removed as soon as it is done, and
+    // also before a signal ends this process.
+    var tmp_arena = std.heap.ArenaAllocator.init(gpa);
+    defer tmp_arena.deinit();
+    var copies: Copies = .{ .io = ctx.io };
+    defer copies.remove();
     if (external) {
+        sys.catchTerminationSignals();
         // Standard input was consumed above: hand the program a copy.
         for (0..3) |i| {
             if (!std.mem.eql(u8, ops[i], "-")) continue;
-            const dir = cli.getenv(ctx, "TMPDIR") orelse "/tmp";
-            const stamp: i96 = Io.Timestamp.now(ctx.io, .real).nanoseconds;
-            const pth = std.fmt.allocPrint(gpa, "{s}/diff3.{x}", .{ dir, @as(u64, @truncate(@as(u96, @bitCast(stamp)))) }) catch return 2;
-            tmp_paths[i] = pth;
-            const f = Io.Dir.cwd().createFile(ctx.io, pth, .{ .exclusive = true }) catch |e| {
-                cli.warn(ctx, "{s}: {s}", .{ pth, cli.errText(e) });
+            const env: subprog.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+            const pth = subprog.privateCopy(env, tmp_arena.allocator(), cli.getenv(ctx, "TMPDIR"), "diff3", data[i]) catch |e| {
+                cli.warn(ctx, "cannot create a temporary file: {s}", .{cli.errText(e)});
                 return 2;
             };
-            defer f.close(ctx.io);
-            f.writeStreamingAll(ctx.io, data[i]) catch return 2;
+            copies.paths[i] = pth;
             ext.paths[i] = pth;
         }
     }
-    var res = diff3.merge3(gpa, data[0], data[1], data[2], .{
+    const merged = diff3.merge3(gpa, data[0], data[1], data[2], .{
         .strip_trailing_cr = strip_cr,
         .common_middle = letter != null or merge,
         .external = if (external) .{ .context = &ext, .func = Ext.run } else null,
-    }) catch |e| {
+    });
+    copies.remove();
+    if (external) {
+        const caught = sys.takeCaughtSignal();
+        sys.restoreCaughtSignals();
+        if (caught) |sig| sys.deliverCaughtSignal(sig);
+    }
+    var res = merged catch |e| {
         if (ext.failed) return 2;
         if (e == error.InvalidEdits) {
             cli.warn(ctx, "diff failed: the comparison program's output does not match the files", .{});

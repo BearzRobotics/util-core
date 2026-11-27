@@ -1718,6 +1718,14 @@ pub fn catchSignals() void {
     for (0..catch_signals.len) |i| catchOne(i);
 }
 
+/// As `catchSignals`, for SIGHUP, SIGINT, SIGQUIT and SIGTERM alone: for a
+/// caller that waits for a child and must tidy up before it dies. SIGTSTP is
+/// left alone, so that the two stop together.
+pub fn catchTerminationSignals() void {
+    if (comptime !is_linux) return other.catchTerminationSignals();
+    for ([_]usize{ 0, 1, 3, 4 }) |i| catchOne(i);
+}
+
 /// Put back the actions that were in place before `catchSignals`.
 pub fn restoreCaughtSignals() void {
     if (comptime !is_linux) return other.restoreCaughtSignals();

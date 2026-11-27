@@ -4,6 +4,7 @@
 //! find and xargs start commands.
 
 const std = @import("std");
+const mktemp = @import("mktemp.zig");
 const builtin = @import("builtin");
 const Io = std.Io;
 const common = @import("common.zig");
@@ -100,6 +101,26 @@ pub fn capture(env: Env, argv: []const []const u8) !Run {
 
 /// Run `argv` with all three standard streams inherited (what `exec` would
 /// do); returns the exit status as `capture` does.
+/// Write `bytes` to a new file NAME.XXXXXXXXXX in $TMPDIR (or /tmp) that
+/// only its owner can read, for a program that has to be given a file. Returns
+/// the path, owned by `arena`; the caller deletes the file.
+pub fn privateCopy(env: Env, arena: std.mem.Allocator, tmpdir: ?[]const u8, name: []const u8, bytes: []const u8) ![]const u8 {
+    const template = try std.fmt.allocPrint(arena, "{s}.XXXXXXXXXX", .{name});
+    const plan = switch (try mktemp.prepare(arena, .{ .template = template, .use_tmpdir = true }, tmpdir)) {
+        .ok => |plan| plan,
+        .bad => return error.InvalidArgument,
+    };
+    const path = switch (try mktemp.create(.{ .io = env.io, .gpa = env.gpa, .environ = env.environ }, arena, plan)) {
+        .name => |path| path,
+        .failed => |e| return e,
+    };
+    errdefer Io.Dir.cwd().deleteFile(env.io, path) catch {};
+    const f = try Io.Dir.cwd().openFile(env.io, path, .{ .mode = .write_only });
+    defer f.close(env.io);
+    try f.writeStreamingAll(env.io, bytes);
+    return path;
+}
+
 pub fn inherit(env: Env, argv: []const []const u8) u32 {
     var child = spawn(env, .{ .argv = argv }) catch |e| return spawnStatus(e);
     const term = child.wait(env.io) catch return abnormal;

@@ -5,6 +5,7 @@
 const std = @import("std");
 const Io = std.Io;
 const cli = @import("../cli.zig");
+const sys = @import("../sys.zig");
 const getopt = @import("../getopt.zig");
 const sdiff = @import("../lib/sdiff.zig");
 const diff = @import("../lib/diff.zig");
@@ -66,17 +67,23 @@ fn runEditor(context: ?*anyopaque, gpa: std.mem.Allocator, text: []const u8) ?[]
     const ec: *EditCtx = @ptrCast(@alignCast(context.?));
     const ctx = ec.ctx.*;
     const editor = cli.getenv(ctx, "EDITOR") orelse "ed";
-    const tmpdir = cli.getenv(ctx, "TMPDIR") orelse "/tmp";
-    const stamp: i96 = Io.Timestamp.now(ctx.io, .real).nanoseconds;
-    const path = std.fmt.allocPrint(gpa, "{s}/sdiff.{x}", .{ tmpdir, @as(u64, @truncate(@as(u96, @bitCast(stamp)))) }) catch return null;
-    defer gpa.free(path);
-    {
-        const f = Io.Dir.cwd().createFile(ctx.io, path, .{ .exclusive = true }) catch return null;
-        defer f.close(ctx.io);
-        f.writeStreamingAll(ctx.io, text) catch return null;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const env: subprog.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+    // As GNU: a signal that ends sdiff waits until the copy is gone. SIGINT
+    // does not end it here, for Ctrl-C belongs to the editor.
+    sys.catchTerminationSignals();
+    defer {
+        const caught = sys.takeCaughtSignal();
+        sys.restoreCaughtSignals();
+        if (caught) |sig| if (sig != sys.signo.INT) sys.deliverCaughtSignal(sig);
     }
+    const path = subprog.privateCopy(env, arena.allocator(), cli.getenv(ctx, "TMPDIR"), "sdiff", text) catch |e| {
+        cli.warn(ctx, "cannot create a temporary file: {s}", .{cli.errText(e)});
+        return null;
+    };
     defer Io.Dir.cwd().deleteFile(ctx.io, path) catch {};
-    const status = subprog.inherit(.{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ }, &.{ editor, path });
+    const status = subprog.inherit(env, &.{ editor, path });
     if (status != 0) {
         var eb: [512]u8 = undefined;
         cli.warn(ctx, "{s}", .{subprog.describe(&eb, editor, status)});
