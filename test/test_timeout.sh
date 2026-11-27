@@ -173,5 +173,10 @@ rm -f "$TEST_TMP/nohup.out"
 if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
 else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
 
+# An inherited "ignore SIGCHLD" does not lose the status (MISC-011).
+"$BIN_DIR/env" --ignore-signal=CHLD "$BIN_DIR/timeout" 3 sh -c 'exit 7'; st=$?
+if [ "$st" = 7 ]; then PASS=$((PASS + 1)); echo "PASS SIGCHLD ignored"
+else FAIL=$((FAIL + 1)); echo "FAIL SIGCHLD ignored: status $st"; fi
+
 print_summary
 [ "$FAIL" -eq 0 ]

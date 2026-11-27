@@ -69,6 +69,10 @@ pub fn main(ctx: cli.Context) u8 {
     // A command that reads the terminal from our group stops the whole group;
     // we must keep running to enforce the limit. It starts with the default
     // actions, as under GNU.
+    //
+    // Were SIGCHLD ignored, the kernel would reap the command itself and its
+    // exit status would be lost.
+    if (sys.signalNumber("CHLD")) |chld| _ = sys.setSignal(chld, .default);
     sys.catchTerminalStops();
     const spawned = timeout.spawn(env, command);
     sys.ignoreTerminalStops();
