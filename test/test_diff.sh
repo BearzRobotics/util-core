@@ -176,5 +176,18 @@ if command -v bwrap > /dev/null && [ "$(two_fs 'stat -c %i "$1/m1/f" "$1/m2/f" |
 else
     skip_test "equal inodes on two file systems (needs bwrap and matching inode numbers)"
 fi
+# Standard input that is the other file, partly read already (VIEW-009): its
+# contents differ from the file's. (The last case also skips back into step.)
+printf 'xx\nabc\n' > "$TEST_TMP/pos"
+for args in '- pos' 'pos -' '- -' '-s - pos'; do
+    case $args in -s*) [ diff = cmp ] || continue ;; esac
+    for start in 0 3; do
+        exp=$( cd "$TEST_TMP" && { [ $start = 0 ] || dd bs=1 count=$start of=/dev/null status=none; LC_ALL=C gnu $args 2>&1; echo "status $?"; } < pos )
+        act=$( cd "$TEST_TMP" && { [ $start = 0 ] || dd bs=1 count=$start of=/dev/null status=none; LC_ALL=C ours $args 2>&1; echo "status $?"; } < pos )
+        if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS stdin from $start: $args"
+        else FAIL=$((FAIL + 1)); echo "FAIL stdin from $start: $args"; echo "     GNU : $exp"; echo "     OURS: $act"; fi
+    done
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]

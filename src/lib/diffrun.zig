@@ -91,6 +91,9 @@ const Driver = struct {
     /// Whether the two names lead to one file. `statPath` has no device
     /// number, so equal inode numbers are only a hint until this.
     fn sameFile(d: *Driver, real: [2][]const u8, infos: [2]Info) bool {
+        // Standard input that has been partly read is not what the other name
+        // holds. (Twice standard input is the same from wherever it is.)
+        if (infos[0].stdin != infos[1].stdin and sys.filePosition(Io.File.stdin().handle) != 0) return false;
         var ids: [2]sys.FileStat = undefined;
         for (&ids, real, infos) |*id, path, info| {
             var e: std.os.linux.E = .SUCCESS;
