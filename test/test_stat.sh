@@ -152,5 +152,13 @@ for qs in literal shell shell-always shell-escape shell-escape-always c c-maybe 
     else FAIL=$((FAIL + 1)); echo "FAIL %N QUOTING_STYLE=$qs"; fi
 done
 
+# Widths and precisions past INT_MAX: the directive prints nothing, as GNU's
+# printf fails; they used to crash (DISK-028).
+N=99999999999999999999
+for f in "%${N}n" "%.${N}n" "%-${N}s|" "%${N}Y|" "[%.2147483648n]" "%0${N}a|" "[%.${N}A]" "%+${N}i|" "%.100000Y" "%100000.3X|" "%100000n|" "%-100000s|" "%0100000a|"; do
+    run_cmp "huge field $f" -c "$f" file
+done
+run_cmp "huge field, -f" -f -c "%${N}b|" .
+
 print_summary
 [ "$FAIL" -eq 0 ]
