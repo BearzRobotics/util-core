@@ -50,5 +50,13 @@ rm -f "$TEST_TMP/nohup.out"
 if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
 else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
 
+# The -N forms may stand wherever an option may (MISC-015).
+run_cmp "-n then -N"             -n 3 -5 nice
+run_cmp "-N then -n"             -5 -n 3 nice
+run_cmp "-N twice"               -3 -4 nice
+run_cmp "-+N"                    -+5 nice
+run_cmp "two signs"              -n +-5 nice
+run_cmp "-N after --"            -n 2 -- -5
+
 print_summary
 [ "$FAIL" -eq 0 ]
