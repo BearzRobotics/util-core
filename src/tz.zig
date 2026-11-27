@@ -471,24 +471,31 @@ fn parseTzif(gpa: std.mem.Allocator, data: []const u8) ?Zone {
     return z;
 }
 
-fn readWhole(gpa: std.mem.Allocator, io: Io, path: []const u8) ?[]u8 {
+/// Far more than any real zone file needs.
+const max_zone_file = 1 << 20;
+
+/// The contents of a zone file, or null when `path` cannot be one. TZ, and a
+/// TZ="..." inside a date string, may name anything: only a regular file of
+/// modest size that starts as TZif does is read.
+fn readZoneFile(gpa: std.mem.Allocator, io: Io, path: []const u8) ?[]u8 {
+    // Asked before opening: opening a FIFO waits for a writer.
+    const info = Io.Dir.cwd().statFile(io, path, .{}) catch return null;
+    if (info.kind != .file or info.size > max_zone_file) return null;
     const f = Io.Dir.cwd().openFile(io, path, .{}) catch return null;
     defer f.close(io);
     var list: std.ArrayList(u8) = .empty;
+    defer list.deinit(gpa);
     var buf: [8192]u8 = undefined;
     while (true) {
         const n = f.readStreaming(io, &.{&buf}) catch |e| switch (e) {
             error.EndOfStream => 0,
-            else => {
-                list.deinit(gpa);
-                return null;
-            },
+            else => return null,
         };
         if (n == 0) break;
-        list.appendSlice(gpa, buf[0..n]) catch {
-            list.deinit(gpa);
-            return null;
-        };
+        list.appendSlice(gpa, buf[0..n]) catch return null;
+        // Some files report no size and have no end.
+        if (list.items.len > max_zone_file) return null;
+        if (list.items.len >= 4 and !std.mem.startsWith(u8, list.items, "TZif")) return null;
     }
     return list.toOwnedSlice(gpa) catch null;
 }
@@ -512,7 +519,7 @@ pub fn load(gpa: std.mem.Allocator, io: Io, tz: ?[]const u8) Zone {
 }
 
 fn loadFile(gpa: std.mem.Allocator, io: Io, path: []const u8) ?Zone {
-    const data = readWhole(gpa, io, path) orelse return null;
+    const data = readZoneFile(gpa, io, path) orelse return null;
     defer gpa.free(data);
     return parseTzif(gpa, data);
 }

@@ -140,5 +140,12 @@ done
 for z in AAA0BBB,J99999,J1 AAA0BBB,M300.1.1,M1.1.1; do
     if TZ=$z "$BIN_DIR/date" -d @0 >/dev/null 2>&1; then PASS=$((PASS + 1)); echo "PASS TZ=$z"; else FAIL=$((FAIL + 1)); echo "FAIL TZ=$z"; fi
 done
+# A zone file has to be one: TZ, also in a date string, may name anything.
+mkfifo "$TEST_TMP/tzfifo"
+for z in /dev/zero "$TEST_TMP/tzfifo" /proc/self/mem; do
+    n=$( (ulimit -v 500000; TZ=$z timeout 5 "$BIN_DIR/date" -d @0 +%s 2>&1) )
+    m=$( (ulimit -v 500000; timeout 5 "$BIN_DIR/date" -u -d "TZ=\"$z\" 1970-01-01" +%s 2>&1) )
+    if [ "$n,$m" = "0,0" ]; then PASS=$((PASS + 1)); echo "PASS zone file $z"; else FAIL=$((FAIL + 1)); echo "FAIL zone file $z: $n, $m"; fi
+done
 print_summary
 [ "$FAIL" -eq 0 ]
