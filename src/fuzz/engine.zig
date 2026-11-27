@@ -12,6 +12,12 @@
 //!     gets some exploration and the run stays fast.
 //!   campaign (`tools/fuzz.sh`): FUZZ_ITERATIONS mutations per target from FUZZ_SEED.
 //!
+//! A target gets the input with one call, `smith.slice(&buffer)`, where the buffer
+//! holds `Options.max_len` bytes, and receives it byte for byte; one that needs
+//! several values cuts them out of that. (`Smith.in` is read as a four-byte length
+//! and then that many bytes, so the engine puts the length in front.) Corpus entries
+//! and saved findings are the bytes the target receives.
+//!
 //! A target that returns an error has found a bug: the input is saved to
 //! `$FUZZ_FINDINGS/<target>-<hash>.bin` (default `fuzz-findings/`) and the test fails. A
 //! crash or hang cannot be caught in-process, so before every run the input is written
@@ -23,8 +29,12 @@ const limits = @import("limits.zig");
 
 pub const Options = struct {
     corpus: []const []const u8 = &.{},
-    /// Longest generated input.
+    /// Longest input. It must not exceed the buffer the target reads it into:
+    /// `Smith.slice` turns a longer one into an empty one.
     max_len: usize = 2048,
+    /// Mutations to run instead of what the environment asks for (for the
+    /// engine's own tests).
+    iterations: ?u64 = null,
     /// Names the target in saved findings (default: "target"); also salts the mutation seed.
     name: []const u8 = "target",
     /// Do not print the "saved failing input" line (for the engine's own tests).
@@ -130,6 +140,21 @@ fn publishCurrent(input: []const u8) void {
     std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = input }) catch {};
 }
 
+/// Hand `input` to the target in the form `Smith.slice` reads.
+fn run(
+    gpa: std.mem.Allocator,
+    ctx: anytype,
+    comptime testOne: fn (@TypeOf(ctx), *std.testing.Smith) anyerror!void,
+    input: []const u8,
+) anyerror!void {
+    const framed = try gpa.alloc(u8, 4 + input.len);
+    defer gpa.free(framed);
+    std.mem.writeInt(u32, framed[0..4], @intCast(input.len), .little);
+    @memcpy(framed[4..], input);
+    var smith: std.testing.Smith = .{ .in = framed };
+    try testOne(ctx, &smith);
+}
+
 /// Drop-in for `std.testing.fuzz`: `testOne(ctx, smith)` must not crash, hang, leak or
 /// return an error for any input.
 pub fn fuzz(
@@ -139,24 +164,22 @@ pub fn fuzz(
 ) anyerror!void {
     const gpa = std.heap.page_allocator;
     const campaign = envInt("FUZZ_ITERATIONS", 0);
-    const iterations = if (campaign > 0) campaign else envInt("FUZZ_REGRESSION", 64);
+    const iterations = options.iterations orelse if (campaign > 0) campaign else envInt("FUZZ_REGRESSION", 64);
     const seed = envInt("FUZZ_SEED", 0x5eed_c0de);
     const publish = envStr("FUZZ_CURRENT");
     defer if (publish) |p| gpa.free(p);
 
     // Corpus entries first, exactly once each.
     for (options.corpus) |entry| {
+        // It would reach the target as nothing at all.
+        if (entry.len > options.max_len) return error.CorpusEntryTooLong;
         if (publish != null) publishCurrent(entry);
-        var smith: std.testing.Smith = .{ .in = entry };
-        testOne(ctx, &smith) catch |e| {
+        run(gpa, ctx, testOne, entry) catch |e| {
             save(options, entry);
             return e;
         };
     }
-    if (options.corpus.len == 0) {
-        var smith: std.testing.Smith = .{ .in = "" };
-        try testOne(ctx, &smith);
-    }
+    if (options.corpus.len == 0) try run(gpa, ctx, testOne, "");
 
     var prng = std.Random.DefaultPrng.init(seed ^ std.hash.Wyhash.hash(0, options.name));
     const rng = prng.random();
@@ -166,27 +189,54 @@ pub fn fuzz(
     while (i < iterations) : (i += 1) {
         try mutate(rng, gpa, options.corpus, &buf, options.max_len);
         if (publish != null) publishCurrent(buf.items);
-        var smith: std.testing.Smith = .{ .in = buf.items };
-        testOne(ctx, &smith) catch |e| {
+        run(gpa, ctx, testOne, buf.items) catch |e| {
             save(options, buf.items);
             return e;
         };
     }
 }
 
-fn exampleTarget(_: void, smith: *std.testing.Smith) anyerror!void {
+fn exampleTarget(refused: *usize, smith: *std.testing.Smith) anyerror!void {
     var c: limits.Capped = .{};
     const a = c.allocator();
     var raw: [64]u8 = undefined;
     const n = smith.slice(&raw);
     // A "width" taken from the input: a huge value must be refused, not allocated.
     const want: usize = if (n >= 2) @as(usize, raw[0]) << 40 | raw[1] else n;
-    const out = a.alloc(u8, want) catch return;
+    const out = a.alloc(u8, want) catch {
+        refused.* += 1;
+        return;
+    };
     defer a.free(out);
 }
 
 test "engine: runs corpus and mutations, and the cap turns a memory bomb into an error" {
-    try fuzz({}, exampleTarget, .{ .corpus = &.{ "", "ab", "\xff\xff\xff" } });
+    var refused: usize = 0;
+    try fuzz(&refused, exampleTarget, .{ .corpus = &.{ "", "ab", "\xff\xff\xff" }, .max_len = 64, .iterations = 0 });
+    // "ab" and the 0xff bytes both ask for terabytes.
+    try std.testing.expectEqual(@as(usize, 2), refused);
+    try fuzz(&refused, exampleTarget, .{ .corpus = &.{ "", "ab", "\xff\xff\xff" }, .max_len = 64 });
+}
+
+test "engine: the target receives each input byte for byte" {
+    // The empty one, ones shorter than a length prefix, and one as long as
+    // the buffer.
+    const full: [32]u8 = @splat('x');
+    const corpus = [_][]const u8{ "", "a b", "it's", "\x00\xff\n", "\"$`\\", &full };
+    const Seen = struct {
+        want: []const []const u8,
+        at: usize = 0,
+        fn target(seen: *@This(), smith: *std.testing.Smith) anyerror!void {
+            var raw: [32]u8 = undefined;
+            const n = smith.slice(&raw);
+            if (seen.at < seen.want.len) try std.testing.expectEqualStrings(seen.want[seen.at], raw[0..n]);
+            seen.at += 1;
+        }
+    };
+    var seen: Seen = .{ .want = &corpus };
+    try fuzz(&seen, Seen.target, .{ .corpus = &corpus, .max_len = 32, .iterations = 0 });
+    try std.testing.expectEqual(corpus.len, seen.at);
+    try std.testing.expectError(error.CorpusEntryTooLong, fuzz(&seen, Seen.target, .{ .corpus = &.{full ++ "y"}, .max_len = 32 }));
 }
 
 test "engine: a failing target saves its input and reports the error" {
@@ -200,8 +250,10 @@ test "engine: a failing target saves its input and reports the error" {
     // Into a directory of the test's own: nothing else is written or removed.
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
-    try std.testing.expectError(error.Found, fuzz({}, failing, .{ .corpus = &.{"bugs"}, .quiet = true, .findings = tmp.dir }));
+    // The corpus entry alone must fail, with no help from mutation.
+    try std.testing.expectError(error.Found, fuzz({}, failing, .{ .corpus = &.{"bugs"}, .max_len = 8, .iterations = 0, .quiet = true, .findings = tmp.dir }));
     var it = tmp.dir.iterate();
     const saved = (try it.next(std.testing.io)) orelse return error.NothingSaved;
-    try std.testing.expect(std.mem.startsWith(u8, saved.name, "target-"));
+    var back: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("bugs", try tmp.dir.readFile(std.testing.io, saved.name, &back));
 }
