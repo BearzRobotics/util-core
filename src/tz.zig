@@ -303,7 +303,18 @@ fn parseName(s: []const u8, i: *usize) ?[]const u8 {
     return s[st..i.*];
 }
 
-fn parseOffset(s: []const u8, i: *usize) ?i32 {
+/// A run of digits, or null when there is none. This is environment input: a
+/// number too large to hold stays large.
+fn parseNumber(s: []const u8, i: *usize) ?u32 {
+    const start = i.*;
+    var v: u32 = 0;
+    while (i.* < s.len and std.ascii.isDigit(s[i.*])) : (i.* += 1) v = v *| 10 +| (s[i.*] - '0');
+    return if (i.* == start) null else v;
+}
+
+/// hh[:mm[:ss]] with a sign, in seconds. As in glibc, minutes and seconds
+/// stop at 59 and hours at `max_hours`.
+fn parseOffset(s: []const u8, i: *usize, max_hours: u32) ?i32 {
     var neg = false;
     if (i.* < s.len and (s[i.*] == '+' or s[i.*] == '-')) {
         neg = s[i.*] == '-';
@@ -312,17 +323,11 @@ fn parseOffset(s: []const u8, i: *usize) ?i32 {
     var parts: [3]i32 = .{ 0, 0, 0 };
     var n: usize = 0;
     while (n < 3) {
-        const st = i.*;
-        var v: i32 = 0;
-        while (i.* < s.len and std.ascii.isDigit(s[i.*])) {
-            v = v * 10 + @as(i32, s[i.*] - '0');
-            i.* += 1;
-        }
-        if (i.* == st) {
+        const v = parseNumber(s, i) orelse {
             if (n == 0) return null;
             break;
-        }
-        parts[n] = v;
+        };
+        parts[n] = @intCast(@min(v, if (n == 0) max_hours else 59));
         n += 1;
         if (i.* < s.len and s[i.*] == ':') i.* += 1 else break;
     }
@@ -335,38 +340,28 @@ fn parseRuleSpec(s: []const u8, i: *usize) ?RuleSpec {
     if (i.* >= s.len) return null;
     if (s[i.*] == 'M') {
         i.* += 1;
-        var v: [3]u16 = undefined;
+        var v: [3]u32 = undefined;
         for (0..3) |k| {
-            var x: u16 = 0;
-            const st = i.*;
-            while (i.* < s.len and std.ascii.isDigit(s[i.*])) {
-                x = x * 10 + (s[i.*] - '0');
-                i.* += 1;
-            }
-            if (st == i.*) return null;
-            v[k] = x;
+            v[k] = parseNumber(s, i) orelse return null;
             if (k < 2) {
                 if (i.* >= s.len or s[i.*] != '.') return null;
                 i.* += 1;
             }
         }
-        r = .{ .kind = .mwd, .m = @intCast(v[0]), .w = @intCast(v[1]), .d = v[2] };
-        if (r.m < 1 or r.m > 12 or r.w < 1 or r.w > 5 or r.d > 6) return null;
+        if (v[0] < 1 or v[0] > 12 or v[1] < 1 or v[1] > 5 or v[2] > 6) return null;
+        r = .{ .kind = .mwd, .m = @intCast(v[0]), .w = @intCast(v[1]), .d = @intCast(v[2]) };
     } else {
         const j = s[i.*] == 'J';
         if (j) i.* += 1;
-        var x: u16 = 0;
-        const st = i.*;
-        while (i.* < s.len and std.ascii.isDigit(s[i.*])) {
-            x = x * 10 + (s[i.*] - '0');
-            i.* += 1;
-        }
-        if (st == i.*) return null;
-        r = .{ .kind = if (j) .julian1 else .julian0, .d = x };
+        const x = parseNumber(s, i) orelse return null;
+        // Jn is day 1 to 365; plain n is day 0 to 365.
+        if (x > 365 or (j and x == 0)) return null;
+        r = .{ .kind = if (j) .julian1 else .julian0, .d = @intCast(x) };
     }
     if (i.* < s.len and s[i.*] == '/') {
         i.* += 1;
-        r.time = parseOffset(s, i) orelse return null;
+        // RFC 8536 allows a transition up to a week from its day.
+        r.time = parseOffset(s, i, 24 * 7) orelse return null;
     }
     return r;
 }
@@ -375,12 +370,12 @@ fn parseRuleSpec(s: []const u8, i: *usize) ?RuleSpec {
 pub fn parsePosix(s: []const u8) ?Rule {
     var i: usize = 0;
     const std_name = parseName(s, &i) orelse return null;
-    const std_off = parseOffset(s, &i) orelse return null;
+    const std_off = parseOffset(s, &i, 24) orelse return null;
     var r: Rule = .{ .std = mkType(-std_off, false, std_name) };
     if (i >= s.len) return r;
     const dst_name = parseName(s, &i) orelse return null;
     var dst_off = std_off - 3600;
-    if (i < s.len and s[i] != ',') dst_off = parseOffset(s, &i) orelse return null;
+    if (i < s.len and s[i] != ',') dst_off = parseOffset(s, &i, 24) orelse return null;
     r.dst = mkType(-dst_off, true, dst_name);
     if (i < s.len and s[i] == ',') {
         i += 1;
@@ -534,4 +529,14 @@ test "any i64 time can be broken down" {
     }
     const tm = breakdown(0, 0);
     try t.expect(fitsStructTm(&tm));
+}
+
+test "posix TZ numbers beyond any clock" {
+    const t = std.testing;
+    try t.expectEqual(@as(i32, -24 * 3600), parsePosix("AAA99999999999999999999").?.std.utoff);
+    try t.expectEqual(@as(i32, -(3600 + 59 * 60 + 59)), parsePosix("AAA1:99:99").?.std.utoff);
+    for ([_][]const u8{ "AAA0BBB,J99999,J1", "AAA0BBB,J0,J1", "AAA0BBB,366,J1", "AAA0BBB,M300.1.1,M1.1.1", "AAA0BBB,M1.999999999999.1,J1" }) |text| {
+        try t.expect(parsePosix(text) == null);
+    }
+    try t.expectEqual(@as(i32, 24 * 7 * 3600), parsePosix("AAA0BBB,J1/99999999999999,J2").?.start.time);
 }

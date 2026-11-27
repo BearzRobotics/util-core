@@ -131,5 +131,14 @@ if [ "$n" = "$g" ]; then PASS=$((PASS + 1)); echo "PASS endless input"; else FAI
 first=$( (echo '@0'; sleep 3) | timeout 2 "$BIN_DIR/date" -u -f - 2>/dev/null | head -n 1)
 if [ -n "$first" ]; then PASS=$((PASS + 1)); echo "PASS a line is answered before the input ends"; else FAIL=$((FAIL + 1)); echo "FAIL no output before the end of input"; fi
 
+# TZ numbers beyond any clock are limited, as in glibc; they used to crash.
+for z in AAA99999999999 AAA999999 AAA25 AAA-25 AAA1:99 AAA1:00:99 AAA0BBB,J1/167,J200; do
+    n=$(TZ=$z "$BIN_DIR/date" -d @15000000 '+%F %T %z %Z' 2>&1)
+    g=$(TZ=$z LC_ALL=C "${GNU_BIN:-/usr/bin}/date" -d @15000000 '+%F %T %z %Z' 2>&1)
+    if [ "$n" = "$g" ]; then PASS=$((PASS + 1)); echo "PASS TZ=$z"; else FAIL=$((FAIL + 1)); echo "FAIL TZ=$z: GNU $g, ours $n"; fi
+done
+for z in AAA0BBB,J99999,J1 AAA0BBB,M300.1.1,M1.1.1; do
+    if TZ=$z "$BIN_DIR/date" -d @0 >/dev/null 2>&1; then PASS=$((PASS + 1)); echo "PASS TZ=$z"; else FAIL=$((FAIL + 1)); echo "FAIL TZ=$z"; fi
+done
 print_summary
 [ "$FAIL" -eq 0 ]
