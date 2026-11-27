@@ -235,7 +235,7 @@ const Parser = struct {
         } else {
             const m = @mulWithOverflow(s.value, 60);
             if (m[1] != 0) return false;
-            n_minutes = if (s.negative) m[0] - mm else m[0] + mm;
+            n_minutes = if (s.negative) m[0] -| mm else m[0] +| mm;
         }
         if (n_minutes < -24 * 60 or n_minutes > 24 * 60) return false;
         p.time_zone = n_minutes * 60;
@@ -504,8 +504,8 @@ const Parser = struct {
             // tMONTH tSNUMBER tSNUMBER  (JUN-17-1992)
             p.pos += 3;
             p.month = m.value;
-            p.day = -a.ti.value;
-            p.year.value = -b.ti.value;
+            p.day = 0 -| a.ti.value;
+            p.year.value = 0 -| b.ti.value;
             p.year.digits = b.ti.digits;
             p.dates_seen += 1;
             return true;
@@ -573,7 +573,7 @@ const Parser = struct {
                     // 17-JUN-1992
                     p.day = u.ti.value;
                     p.month = t1.value;
-                    p.year.value = -t2.ti.value;
+                    p.year.value = 0 -| t2.ti.value;
                     p.year.digits = t2.ti.digits;
                     p.pos += 1;
                 } else if (t2.kind == .unumber) {
@@ -591,8 +591,8 @@ const Parser = struct {
                 if (t2.kind == .snumber) {
                     // iso_8601_date, optionally followed by 'T' iso_8601_time
                     p.year = u.ti;
-                    p.month = -t1.ti.value;
-                    p.day = -t2.ti.value;
+                    p.month = 0 -| t1.ti.value;
+                    p.day = 0 -| t2.ti.value;
                     p.pos += 3;
                     if (isCh(p.peek(0), 'T') and p.peek(1).kind == .unumber) {
                         p.pos += 1;
@@ -752,6 +752,10 @@ fn lex(gpa: std.mem.Allocator, text: []const u8, local: []const LocalZone) ![]To
                 }
                 while (p < text.len and std.ascii.isDigit(text[p])) p += 1;
                 if (sign < 0 and ns != 0) {
+                    if (s == std.math.minInt(i64)) {
+                        try toks.append(gpa, .{ .kind = .bad });
+                        return toks.toOwnedSlice(gpa);
+                    }
                     s -= 1;
                     ns = 1000000000 - ns;
                 }
@@ -808,6 +812,14 @@ fn lex(gpa: std.mem.Allocator, text: []const u8, local: []const LocalZone) ![]To
 // ------------------------------------------------------------ evaluation
 
 const BrokenDown = struct { year: i64, mon: i64, mday: i64, hour: i64, min: i64, sec: i64, isdst: i8 };
+
+/// Whether the fields fit the ints of struct tm, as gnulib requires. Within
+/// that, the calendar arithmetic cannot overflow; the text can ask for far more.
+fn fitsTm(fields: [6]i64) bool {
+    if (std.math.cast(i32, fields[0] -| 1900) == null) return false;
+    for (fields[1..]) |v| if (std.math.cast(i32, v) == null) return false;
+    return true;
+}
 
 fn toHour(h: i64, meridian: i32) i64 {
     return switch (meridian) {
@@ -919,7 +931,7 @@ pub fn parse(gpa: std.mem.Allocator, io: Io, text_in: []const u8, now: Timespec,
     populate(&local, 0, cur);
     var q: i64 = 1;
     while (q <= 3) : (q += 1) {
-        const probe = now.sec + q * 90 * 86400;
+        const probe = now.sec +| q * 90 * 86400;
         const ptm = tz.localtime(zone, probe);
         if (!local[0].valid or @as(i32, @intFromBool(ptm.isdst)) != local[0].isdst) {
             populate(&local, 1, ptm);
@@ -989,6 +1001,7 @@ pub fn parse(gpa: std.mem.Allocator, io: Io, text_in: []const u8, now: Timespec,
     if (ps.dates_seen | ps.days_seen | ps.times_seen != 0) tm.isdst = -1;
     if (ps.local_zones_seen != 0) tm.isdst = @intCast(ps.local_isdst);
     const tm0 = tm;
+    if (!fitsTm(.{ tm.year, tm.mon, tm.mday, tm.hour, tm.min, tm.sec })) return null;
 
     var start = tz.mktimeIsdst(zone, tm.year, tm.mon, tm.mday, tm.hour, tm.min, tm.sec, tm.isdst);
     var norm = tz.localtime(zone, start);
@@ -1023,8 +1036,9 @@ pub fn parse(gpa: std.mem.Allocator, io: Io, text_in: []const u8, now: Timespec,
         const day_ordinal = ps.day_ordinal - @as(i64, @intFromBool(ps.day_ordinal > 0 and wday != ps.day_number));
         const m = @mulWithOverflow(day_ordinal, 7);
         if (m[1] != 0) return null;
-        const dayincr = m[0] + @mod(ps.day_number - wday + 7, 7);
-        tm.mday += dayincr;
+        const dayincr = m[0] +| @mod(ps.day_number - wday + 7, 7);
+        tm.mday +|= dayincr;
+        if (!fitsTm(.{ tm.year, tm.mon, tm.mday, tm.hour, tm.min, tm.sec })) return null;
         start = tz.mktimeIsdst(zone, tm.year, tm.mon, tm.mday, tm.hour, tm.min, tm.sec, -1);
         norm = tz.localtime(zone, start);
         tm = .{ .year = norm.year, .mon = @as(i64, norm.mon) - 1, .mday = norm.mday, .hour = norm.hour, .min = norm.min, .sec = norm.sec, .isdst = @intFromBool(norm.isdst) };
@@ -1036,6 +1050,7 @@ pub fn parse(gpa: std.mem.Allocator, io: Io, text_in: []const u8, now: Timespec,
         const mo = @addWithOverflow(tm.mon, ps.rel.month);
         const d = @addWithOverflow(tm.mday, ps.rel.day);
         if (y[1] != 0 or mo[1] != 0 or d[1] != 0) return null;
+        if (!fitsTm(.{ y[0], mo[0], d[0], tm0.hour, tm0.min, tm0.sec })) return null;
         start = tz.mktimeIsdst(zone, y[0], mo[0], d[0], tm0.hour, tm0.min, tm0.sec, tm0.isdst);
         norm = tz.localtime(zone, start);
     }

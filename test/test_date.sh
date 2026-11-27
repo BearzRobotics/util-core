@@ -147,5 +147,11 @@ for z in /dev/zero "$TEST_TMP/tzfifo" /proc/self/mem; do
     m=$( (ulimit -v 500000; timeout 5 "$BIN_DIR/date" -u -d "TZ=\"$z\" 1970-01-01" +%s 2>&1) )
     if [ "$n,$m" = "0,0" ]; then PASS=$((PASS + 1)); echo "PASS zone file $z"; else FAIL=$((FAIL + 1)); echo "FAIL zone file $z: $n, $m"; fi
 done
+# Numbers no calendar can hold: refused as invalid, where these used to crash.
+for d in '99999999999999999-01-01' '9999999999999999 years' '12:00 +1:9223372036854775807' \
+    'jun -9223372036854775808 -1' '2000-01-01 9223372036854775807 months' '-9223372036854775808.5 seconds' \
+    '2147485548-01-01' '2000-01-01 2147483648 days' '9223372036854775807 monday' '@-9223372036854775808.5'; do
+    run_cmp "huge: $d" -u -d "$d"
+done
 print_summary
 [ "$FAIL" -eq 0 ]
