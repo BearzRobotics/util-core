@@ -558,19 +558,21 @@ fn fmtUnsigned(st: *State, v: u64, conv: u8, sp: Spec) void {
         else => std.fmt.bufPrint(&digits, "{d}", .{v}) catch unreachable,
     };
     var prefix: []const u8 = "";
-    var t = text;
     if (sp.alt and v != 0) {
         if (conv == 'x') prefix = "0x";
         if (conv == 'X') prefix = "0X";
     }
-    var oct_pad = false;
-    if (sp.alt and conv == 'o') oct_pad = true;
-    // "#o" forces a leading zero unless the digits already start with one.
-    if (oct_pad and !(t.len > 0 and t[0] == '0' and v == 0) and !(sp.precision != null and sp.precision.? > t.len)) {
-        prefix = "0";
+    // "#o" forces a leading zero unless the output starts with one anyway: as
+    // padding to the precision, or as the digit of 0, which precision 0 drops.
+    if (sp.alt and conv == 'o') {
+        const precision = sp.precision;
+        const starts_with_zero = if (v == 0)
+            precision == null or precision.? > 0
+        else
+            precision != null and precision.? > text.len;
+        if (!starts_with_zero) prefix = "0";
     }
-    if (conv == 'u' or conv == 'x' or conv == 'X' or conv == 'o') t = text;
-    emitNumber(st, "", prefix, t, sp, v == 0);
+    emitNumber(st, "", prefix, text, sp, v == 0);
 }
 
 /// Sign, prefix and digits with precision (minimum digits) and width.
