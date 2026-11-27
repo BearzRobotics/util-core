@@ -41,7 +41,7 @@ pub fn parseAdjustment(text: []const u8) error{Invalid}!i64 {
 
 /// The niceness to request: `current + delta`, clamped to -20..19.
 pub fn targetNice(current: i32, delta: i64) i32 {
-    return @intCast(std.math.clamp(@as(i64, current) + delta, -20, 19));
+    return @intCast(std.math.clamp(@as(i64, current) +| delta, -20, 19));
 }
 
 /// Failure to set the niceness is only a warning for these errors (the
@@ -57,4 +57,6 @@ test "adjustments" {
     try std.testing.expectEqual(@as(i64, std.math.maxInt(i32)), try parseAdjustment("99999999999999999999"));
     try std.testing.expectEqual(@as(i32, 19), targetNice(5, 100));
     try std.testing.expectEqual(@as(i32, -20), targetNice(5, -100));
+    try std.testing.expectEqual(@as(i32, 19), targetNice(5, std.math.maxInt(i64)));
+    try std.testing.expectEqual(@as(i32, -20), targetNice(-5, std.math.minInt(i64)));
 }
