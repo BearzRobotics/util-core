@@ -152,6 +152,11 @@ pub const Pager = struct {
     pattern: std.ArrayList(u8) = .empty,
     message: []const u8 = "",
     msg_buf: [256]u8 = undefined,
+    /// Where counting the rows of a line, and finding a row of it to draw, got
+    /// to: so that a line that is still growing is not walked from its start
+    /// again each time.
+    counted: ?RowMark = null,
+    drawn: ?RowMark = null,
     /// A line without its escape sequences, for searching.
     stripped: std.ArrayList(u8) = .empty,
     /// A search could not look at a line for want of memory.
@@ -257,7 +262,8 @@ pub const Pager = struct {
     /// through (0 if there is none): a colour or style, ESC [ ... m, or an
     /// OSC 8 hyperlink. Anything else could move the cursor, erase, or make
     /// the terminal answer, and is shown as text.
-    fn escLen(s: []const u8) usize {
+    fn escLen(rest: []const u8) usize {
+        const s = rest[0..@min(rest.len, max_escape)];
         if (s.len < 3 or s[0] != 0x1b) return 0;
         if (s[1] == '[') {
             var k: usize = 2;
@@ -272,6 +278,9 @@ pub const Pager = struct {
         return if (s[k] == 0x1b and k + 1 < s.len and s[k + 1] == '\\') k + 2 else 0;
     }
 
+    /// Longer than this is not taken for an escape sequence. It bounds how far
+    /// back text that is added to a line can change what is already there.
+    const max_escape = 4096;
     const link_start = "]8;";
     const link_end = "\x1b]8;;\x1b\\";
 
@@ -301,18 +310,38 @@ pub const Pager = struct {
         return i;
     }
 
+    /// Row `row` of line `line` starts at byte `at`.
+    const RowMark = struct { line: usize, row: usize, at: usize };
+
+    /// Whether more text added to `ln` can no longer move a row start at `at`.
+    fn settled(p: *const Pager, ln: []const u8, at: usize) bool {
+        // At the end there may be part of a character, a CR that goes when its
+        // newline comes, or with `raw` the start of an escape sequence.
+        const open_end: usize = if (p.opts.raw) max_escape else 4;
+        return ln.len >= open_end and at <= ln.len - open_end;
+    }
+
+    /// The start of row `want` of line `i`, or of its last row if it has fewer:
+    /// the row found, and the offset. `mark` is where to go on from.
+    fn findRow(p: *const Pager, mark: *?RowMark, i: usize, want: usize) RowMark {
+        const ln = p.line(i);
+        var here: RowMark = .{ .line = i, .row = 0, .at = 0 };
+        if (mark.*) |m| if (m.line == i and m.row <= want) {
+            here = m;
+        };
+        while (here.row < want) {
+            const e = p.rowEnd(ln, here.at);
+            if (e >= ln.len) break;
+            here = .{ .line = i, .row = here.row + 1, .at = e };
+            if (p.settled(ln, e)) mark.* = here;
+        }
+        return here;
+    }
+
     fn rowsOf(p: *Pager, i: usize) usize {
         if (p.opts.chop) return 1;
         if (p.rowc.items[i] != 0) return p.rowc.items[i];
-        const ln = p.line(i);
-        var n: usize = 1;
-        var at: usize = 0;
-        while (true) {
-            const e = p.rowEnd(ln, at);
-            if (e >= ln.len) break;
-            at = e;
-            n += 1;
-        }
+        const n = p.findRow(&p.counted, i, std.math.maxInt(usize)).row + 1;
         p.rowc.items[i] = @intCast(n);
         return n;
     }
@@ -394,6 +423,8 @@ pub const Pager = struct {
         if (nc != p.cols) {
             p.cols = nc;
             @memset(p.rowc.items, 0);
+            p.counted = null;
+            p.drawn = null;
             p.sub = 0;
         }
         if (p.atBottom()) p.toBottom();
@@ -679,9 +710,7 @@ pub const Pager = struct {
             if (have) {
                 const ln = p.line(pos.line);
                 // Where does this screen row start and end inside the line?
-                var start: usize = 0;
-                var k: usize = 0;
-                while (k < pos.sub and !p.opts.chop) : (k += 1) start = p.rowEnd(ln, start);
+                const start = if (p.opts.chop) 0 else p.findRow(&p.drawn, pos.line, pos.sub).at;
                 const end = if (p.opts.chop) ln.len else p.rowEnd(ln, start);
                 if (p.opts.numbers) {
                     if (pos.sub == 0) try w.print("\x1b[90m{d: >6} \x1b[0m", .{pos.line + 1}) else try w.splatByteAll(' ', number_cols);
@@ -803,6 +832,39 @@ test "pager: search looks at the whole of a long line" {
         _ = p.key(.enter);
         try std.testing.expectEqual(@as(usize, 20), p.top);
         try std.testing.expectEqualStrings("", p.message);
+    }
+}
+
+test "pager: a line fed in pieces wraps as one fed at once" {
+    const gpa = std.testing.allocator;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    // Characters of every width, sequences, and some that only look like one
+    // until more has come.
+    const parts = [_][]const u8{ "a", "bc ", "\t", "\x01", "\xc3\xa9", "\xe2\x82\xac", "\xc2\x9b", "\xff", "\r", "\x1b[31m", "\x1b[0m", "\x1b]8;;http://x/\x07", "\x1b]8;;\x07", "\x1b[2J", "\x1b[31", "long plain text " };
+    var prng = std.Random.DefaultPrng.init(7);
+    const random = prng.random();
+    while (text.items.len < 40000) try text.appendSlice(gpa, parts[random.uintLessThan(usize, parts.len)]);
+    for ([_]bool{ false, true }) |raw| {
+        var whole = Pager.init(gpa, .{ .raw = raw }, 6, 13);
+        defer whole.deinit();
+        _ = try whole.append(text.items);
+        var pieces = Pager.init(gpa, .{ .raw = raw }, 6, 13);
+        defer pieces.deinit();
+        var at: usize = 0;
+        while (at < text.items.len) {
+            const n = @min(1 + random.uintLessThan(usize, 700), text.items.len - at);
+            _ = try pieces.append(text.items[at..][0..n]);
+            at += n;
+            const rows = pieces.rowsOf(0);
+            // The same count as from the start.
+            var fresh: ?Pager.RowMark = null;
+            try std.testing.expectEqual(pieces.findRow(&fresh, 0, std.math.maxInt(usize)).row + 1, rows);
+            var from_start: ?Pager.RowMark = null;
+            const wanted = random.uintLessThan(usize, rows);
+            try std.testing.expectEqual(pieces.findRow(&from_start, 0, wanted).at, pieces.findRow(&pieces.drawn, 0, wanted).at);
+        }
+        try std.testing.expectEqual(whole.rowsOf(0), pieces.rowsOf(0));
     }
 }
 
