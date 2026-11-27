@@ -36,6 +36,12 @@ pub const Event = union(enum) {
     number_out_of_range: []const u8,
     /// A character constant ('A) followed by more characters; the extra text.
     char_constant_extra: []const u8,
+    /// The argument of a "*" width or precision beyond a C int (fatal).
+    invalid_width: []const u8,
+    invalid_precision: []const u8,
+    /// A conversion asked for more than C can print at once; it was left out.
+    /// Sent once, at the end.
+    field_too_wide,
 };
 pub const Observer = common.Observer(Event);
 
@@ -61,6 +67,11 @@ const State = struct {
     stop: bool = false, // \c seen
     used_any: bool = false,
     oom: bool = false,
+    too_wide: bool = false,
+
+    fn peekArg(s: *const State) []const u8 {
+        return if (s.next < s.args.len) s.args[s.next] else "";
+    }
 
     fn nextArg(s: *State) ?[]const u8 {
         s.used_any = true;
@@ -97,6 +108,10 @@ pub fn run(env: Env, format: []const u8, args: []const []const u8, w: *Io.Writer
     }
     out.flush();
     if (out.failed) return error.WriteFailed;
+    if (st.too_wide) {
+        observer.emit(.field_too_wide);
+        st.status = 1;
+    }
     result.status = st.status;
     return result;
 }
@@ -216,6 +231,9 @@ fn escape(st: *State, s: []const u8, i: usize, in_b: bool) ?usize {
     return 2;
 }
 
+/// C's printf counts what it prints in an int: no field can reach this.
+const field_limit = std.math.maxInt(i32);
+
 const Spec = struct {
     left: bool = false,
     plus: bool = false,
@@ -249,11 +267,14 @@ fn conversion(st: *State, f: []const u8, i: usize) ?usize {
     // Width.
     if (j < f.len and f[j] == '*') {
         j += 1;
+        const text = st.peekArg();
         const w = intArg(st, true);
-        if (w < 0) {
-            sp.left = true;
-            sp.width = @intCast(-w);
-        } else sp.width = @intCast(w);
+        if (w < std.math.minInt(i32) or w > std.math.maxInt(i32)) {
+            st.observer.emit(.{ .invalid_width = text });
+            return null;
+        }
+        if (w < 0) sp.left = true;
+        sp.width = @intCast(@abs(w));
     } else {
         while (j < f.len and std.ascii.isDigit(f[j])) : (j += 1) sp.width = sp.width *| 10 +| (f[j] - '0');
     }
@@ -262,7 +283,12 @@ fn conversion(st: *State, f: []const u8, i: usize) ?usize {
         j += 1;
         if (j < f.len and f[j] == '*') {
             j += 1;
+            const text = st.peekArg();
             const p = intArg(st, true);
+            if (p > std.math.maxInt(i32)) {
+                st.observer.emit(.{ .invalid_precision = text });
+                return null;
+            }
             sp.precision = if (p < 0) null else @intCast(p);
         } else {
             var p: usize = 0;
@@ -279,6 +305,14 @@ fn conversion(st: *State, f: []const u8, i: usize) ?usize {
     const conv = f[j];
     j += 1;
     if (!flagsAllowed(conv, sp)) return invalidSpec(st, f[i..j]);
+    // The precision of %s only limits what is taken from the argument.
+    if (std.mem.indexOfScalar(u8, "diouxXeEfFgGaAcs", conv) != null and
+        (sp.width >= field_limit or (conv != 's' and (sp.precision orelse 0) >= field_limit)))
+    {
+        _ = st.nextArg();
+        st.too_wide = true;
+        return j - i;
+    }
     switch (conv) {
         '%' => {
             if (j - i != 2) {
@@ -571,6 +605,10 @@ fn hexFloat(st: *State, v: f80, upper: bool, sp: Spec) void {
     const x = if (upper) "0X" else "0x";
     const pch: u8 = if (upper) 'P' else 'p';
     var body: []const u8 = undefined;
+    // Zeros of the precision beyond the digits there are, and what follows.
+    var zeros: usize = 0;
+    var tail: []const u8 = "";
+    var tail_buf: [16]u8 = undefined;
     if (std.math.isNan(v)) {
         body = if (upper) "NAN" else "nan";
     } else if (std.math.isInf(v)) {
@@ -581,8 +619,8 @@ fn hexFloat(st: *State, v: f80, upper: bool, sp: Spec) void {
         w.writeByte('0') catch {};
         const p = sp.precision orelse 0;
         if (p > 0 or sp.alt) w.writeByte('.') catch {};
-        for (0..@min(p, 100)) |_| w.writeByte('0') catch {};
-        w.print("{c}+0", .{pch}) catch {};
+        zeros = p;
+        tail = std.fmt.bufPrint(&tail_buf, "{c}+0", .{pch}) catch unreachable;
         body = w.buffered();
     } else {
         const bits: u80 = @bitCast(@abs(v));
@@ -638,15 +676,15 @@ fn hexFloat(st: *State, v: f80, upper: bool, sp: Spec) void {
         const extra = if (sp.precision) |p| (if (p > 15) p - 15 else 0) else 0;
         if (dl > 0 or extra > 0 or sp.alt) w.writeByte('.') catch {};
         w.writeAll(digs[0..dl]) catch {};
-        for (0..@min(extra, 60)) |_| w.writeByte('0') catch {};
-        w.print("{c}{s}{d}", .{ pch, if (exp < 0) "-" else "+", @abs(exp) }) catch {};
+        zeros = extra;
+        tail = std.fmt.bufPrint(&tail_buf, "{c}{s}{d}", .{ pch, if (exp < 0) "-" else "+", @abs(exp) }) catch unreachable;
         body = w.buffered();
     }
-    padHex(st, sign, body, sp);
+    padHex(st, sign, body, zeros, tail, sp);
 }
 
-fn padHex(st: *State, sign: []const u8, body: []const u8, sp: Spec) void {
-    const len = sign.len + body.len;
+fn padHex(st: *State, sign: []const u8, body: []const u8, zeros: usize, tail: []const u8, sp: Spec) void {
+    const len = sign.len + body.len +| zeros +| tail.len;
     const fill = if (sp.width > len) sp.width - len else 0;
     const finite = body.len > 1 and body[0] == '0';
     if (!sp.left and !(sp.zero and finite)) for (0..fill) |_| st.out.writeByte(' ');
@@ -657,5 +695,7 @@ fn padHex(st: *State, sign: []const u8, body: []const u8, sp: Spec) void {
         for (0..fill) |_| st.out.writeByte('0');
         st.out.write(body[2..]);
     } else st.out.write(body);
+    for (0..zeros) |_| st.out.writeByte('0');
+    st.out.write(tail);
     if (sp.left) for (0..fill) |_| st.out.writeByte(' ');
 }

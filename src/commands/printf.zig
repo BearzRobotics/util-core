@@ -28,8 +28,10 @@ pub fn main(ctx: cli.Context) u8 {
         .context = @constCast(&ctx),
         .func = report,
     }) catch |e| switch (e) {
-        // GNU prints nothing here; the status is simply 1.
-        error.OutOfMemory => return 1,
+        error.OutOfMemory => {
+            cli.warn(ctx, "memory exhausted", .{});
+            return 1;
+        },
         error.WriteFailed => {
             cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
             cli.writeErrorWarn(ctx);
@@ -53,6 +55,9 @@ fn report(context: ?*anyopaque, ev: printf.Event) void {
         .not_numeric => |t| cli.warn(ctx.*, "{f}: expected a numeric value", .{cli.quoteC(t)}),
         .partial_number => |t| cli.warn(ctx.*, "{f}: value not completely converted", .{cli.quoteC(t)}),
         .number_out_of_range => |t| cli.warn(ctx.*, "{f}: Numerical result out of range", .{cli.quoteC(t)}),
+        .invalid_width => |t| cli.warn(ctx.*, "invalid field width: {f}", .{cli.quoteC(t)}),
+        .invalid_precision => |t| cli.warn(ctx.*, "invalid precision: {f}", .{cli.quoteC(t)}),
+        .field_too_wide => cli.warn(ctx.*, "write error: field width or precision too large", .{}),
         .char_constant_extra => |rest| {
             var buf: [4400]u8 = undefined;
             const line = std.fmt.bufPrint(&buf, "{s}: warning: {s}: character(s) following character constant have been ignored\n", .{ ctx.name, rest }) catch return;

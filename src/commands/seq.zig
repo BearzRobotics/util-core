@@ -118,6 +118,7 @@ fn report(context: ?*anyopaque, ev: seq.Event) void {
         .invalid_argument => |t| cli.warn(ctx.*, "invalid floating point argument: '{s}'\nTry '{s} --help' for more information.", .{ t, ctx.name }),
         .not_a_number => |t| cli.warn(ctx.*, "invalid 'not-a-number' argument: '{s}'\nTry '{s} --help' for more information.", .{ t, ctx.name }),
         .zero_increment => |t| cli.warn(ctx.*, "invalid Zero increment value: '{s}'\nTry '{s} --help' for more information.", .{ t, ctx.name }),
+        .format_too_wide => cli.warn(ctx.*, "write error: Value too large for defined data type", .{}),
         .format_ends_in_percent => |f| cli.warn(ctx.*, "format '{s}' ends in %", .{f}),
         .format_too_many_directives => |f| cli.warn(ctx.*, "format '{s}' has too many % directives", .{f}),
         .format_no_directive => |f| cli.warn(ctx.*, "format '{s}' has no % directive", .{f}),

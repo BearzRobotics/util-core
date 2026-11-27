@@ -45,6 +45,7 @@ See docs/compatibility/printf.md for details.
 - `--help`/`--version` print util-core text (GNU prints its argv[0] path).
 - Multibyte characters are bytes (C locale).
 - `1e400` and other values beyond x87 range are `inf` only past f80, as in GNU.
+- A width or precision of 2147483647 or more cannot be printed, as in C: the conversion is left out and the status is 1. The diagnostic gives the reason (`write error: field width or precision too large`; GNU: `write error`). Running out of memory is reported as `memory exhausted`.
 
 # SEE ALSO
 

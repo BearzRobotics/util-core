@@ -110,5 +110,11 @@ r=$(ours 1 3000000 | md5sum); g=$(gnu 1 3000000 | md5sum)
 [ "$r" = "$g" ] && { PASS=$((PASS+1)); echo "PASS 3000000 numbers identical"; } || { FAIL=$((FAIL+1)); echo "FAIL 3000000 numbers differ"; }
 r=$(ours -s: -9999 7 99999 | md5sum); g=$(gnu -s: -9999 7 99999 | md5sum)
 [ "$r" = "$g" ] && { PASS=$((PASS+1)); echo "PASS step 7 across zero identical"; } || { FAIL=$((FAIL+1)); echo "FAIL step 7 across zero differ"; }
+for f in '%99999999999999999999f' '%.99999999999999999999f' 'x%.2147483647e'; do
+    run_test_exit "too wide $f" -f "$f" 2
+    [ -z "$(ours -f "$f" 2 2>/dev/null)" ] && { PASS=$((PASS+1)); echo "PASS no output for $f"; } || { FAIL=$((FAIL+1)); echo "FAIL output for $f"; }
+done
+run_cmp "long precision %f"       -f %.30000f 3
+run_cmp "long precision %e"       -f %.30000e 3
 
 print_summary

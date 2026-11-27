@@ -47,6 +47,8 @@ pub const Options = struct {
 
 /// A problem that stops the run before any number is produced.
 pub const Event = union(enum) {
+    /// A width or precision beyond what C can print.
+    format_too_wide,
     /// An operand is not a floating-point number.
     invalid_argument: []const u8,
     /// An operand is NaN.
@@ -380,6 +382,10 @@ fn parseFormat(observer: Observer, f: []const u8) ?Parsed {
         prefix_end = i + 1;
         i += 1;
     }
+    if (found) |d| if (d.spec.width >= std.math.maxInt(i32) or (d.spec.precision orelse 0) >= std.math.maxInt(i32)) {
+        observer.emit(.format_too_wide);
+        return null;
+    };
     var p = found orelse {
         observer.emit(.{ .format_no_directive = f });
         return null;
