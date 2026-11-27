@@ -224,14 +224,8 @@ fn spawnText(e: anyerror) []const u8 {
 }
 
 fn runOne(ctx: cli.Context, env: time.Env, command: []const []const u8, fmt: []const u8, out_path: ?[]const u8, append: bool, quiet: bool) u8 {
-    var m: time.Measurement = time.run(env, command, .{}) catch |e| blk: {
-        cli.warn(ctx, "cannot run {s}: {s}", .{ command[0], spawnText(e) });
-        // GNU still prints the summary, with the shell's 127 / 126 status.
-        break :blk .{ .result = .{ .exited = if (e == error.FileNotFound) 127 else 126 } };
-    };
-    // A command that was not even started used no time at all.
-    if (m.result == .none) m.result = .{ .exited = 1 };
-
+    // As GNU, the report file is opened first: when it cannot be, the command
+    // is not run.
     var file: ?Io.File = null;
     defer if (file) |f| f.close(ctx.io);
     if (out_path) |path| {
@@ -243,6 +237,14 @@ fn runOne(ctx: cli.Context, env: time.Env, command: []const []const u8, fmt: []c
             return 125;
         };
     }
+    var m: time.Measurement = time.run(env, command, .{}) catch |e| blk: {
+        cli.warn(ctx, "cannot run {s}: {s}", .{ command[0], spawnText(e) });
+        // GNU still prints the summary, with the shell's 127 / 126 status.
+        break :blk .{ .result = .{ .exited = if (e == error.FileNotFound) 127 else 126 } };
+    };
+    // A command that was not even started used no time at all.
+    if (m.result == .none) m.result = .{ .exited = 1 };
+
     var buf: [4096]u8 = undefined;
     var fw = (file orelse Io.File.stderr()).writerStreaming(ctx.io, &buf);
     const w = &fw.interface;

@@ -130,5 +130,10 @@ rm -f "$TEST_TMP/nohup.out"
 if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
 else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
 
+# A report file that cannot be opened stops the command being run (MISC-035).
+out=$("$BIN_DIR/time" -o "$TEST_TMP/nosuch/report" "$BIN_DIR/echo" ran 2>/dev/null; echo "status $?")
+if [ "$out" = "status 125" ]; then PASS=$((PASS + 1)); echo "PASS -o unwritable: not run"
+else FAIL=$((FAIL + 1)); echo "FAIL -o unwritable: $out"; fi
+
 print_summary
 [ "$FAIL" -eq 0 ]
