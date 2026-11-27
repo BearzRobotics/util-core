@@ -273,4 +273,8 @@ for t in -8E -9223372036854775808 -9223372036854775807 8E 9223372036854775807 -9
     run_cmp "threshold $t" -t $t thr
 done
 
+# -X - reads the patterns from standard input (DISK-024).
+printf 'f1\n' > "$TEST_TMP/patterns"
+CMP_STDIN="$TEST_TMP/patterns" run_cmp "-X - from stdin" -X - -a $N
+
 cd /; print_summary
