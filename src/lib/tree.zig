@@ -337,11 +337,11 @@ fn putInfo(t: *T, e: *const Entry) void {
     }.go;
     if (o.inodes) {
         sep(t, &first);
-        putFmt(t, "{d}", .{s.ino});
+        putFmt(t, "{d: >7}", .{s.ino});
     }
     if (o.device) {
         sep(t, &first);
-        putFmt(t, "{d}", .{(@as(u64, s.dev_major) << 8) | s.dev_minor});
+        putFmt(t, "{d: >3}", .{(@as(u64, s.dev_major) << 8) | s.dev_minor});
     }
     if (o.perms) {
         sep(t, &first);

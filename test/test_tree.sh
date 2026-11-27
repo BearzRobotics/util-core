@@ -95,6 +95,11 @@ done
 unset LS_COLORS
 CMP_LOCALE=C td 'LS_COLORS unset -C' tree -C -a
 CMP_LOCALE=C td 'NO_COLOR' tree -C -n
+# Short inode and device numbers are padded; sysfs has them everywhere.
+if [ -d /sys/kernel ]; then
+    CMP_LOCALE=C td 'short inode numbers' --inodes --device -d -L 1 /sys
+    CMP_LOCALE=C td 'short inode numbers, -p' --inodes -p -d -L 1 /sys
+fi
 
 # Whether to colour and with which table, from the environment.
 mkdir "$W/ext"; for e in tar gz zip jpg mp3 wav exe bat txt Tar 7z; do : > "$W/ext/f.$e"; done

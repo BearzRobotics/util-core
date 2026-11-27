@@ -18,7 +18,8 @@ FILES="file empty big dir lnk dangling dlnk fifo hard /dev/null /dev/zero /dev/t
 export TZ=UTC
 
 printf "\n[ Default and terse ]\n"
-for f in file empty big dir lnk dangling dlnk fifo hard /dev/null /dev/zero / /proc sock "we ird" "q'uote"; do
+# /proc/sys, not /proc: the link count of /proc follows the running processes.
+for f in file empty big dir lnk dangling dlnk fifo hard /dev/null /dev/zero / /proc/sys sock "we ird" "q'uote"; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     run_cmp "default $f"     "$f"
     run_cmp "-L $f"          -L "$f"
