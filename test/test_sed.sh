@@ -808,4 +808,13 @@ case $out in
 *) FAIL=$((FAIL + 1)); echo "FAIL sed -f read error: $out" ;;
 esac
 
+# R and F use the -z delimiter, and R adds none to a last line that has none
+# (REGX-027).
+printf 'r1\0r2\0' > "$TEST_TMP/rz"; printf 'x1\0x2' > "$TEST_TMP/rz-open"; printf 'p\nq' > "$TEST_TMP/rn-open"
+printf '1\0002\0003\0' > "$TEST_TMP/three-z"; printf '1\n2\n3\n' > "$TEST_TMP/three"
+CMP_STDIN="$TEST_TMP/three-z" run_cmp "-z R" -z "R $TEST_TMP/rz"
+CMP_STDIN="$TEST_TMP/three-z" run_cmp "-z R, open last line" -z "R $TEST_TMP/rz-open"
+CMP_STDIN="$TEST_TMP/three" run_cmp "R, open last line" "R $TEST_TMP/rn-open"
+CMP_STDIN="$TEST_TMP/three-z" run_cmp "-z F" -z F
+
 cd /; print_summary

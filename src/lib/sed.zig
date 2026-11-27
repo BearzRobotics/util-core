@@ -1744,7 +1744,6 @@ const Exec = struct {
                 'R' => {
                     try e.missingNl(e.cur_out);
                     try e.emit(e.cur_out, a.text);
-                    try e.emit(e.cur_out, &.{'\n'});
                 },
                 else => {},
             }
@@ -2290,7 +2289,7 @@ const Exec = struct {
                 'F' => {
                     try e.missingNl(e.cur_out);
                     try e.emit(e.cur_out, e.in.name);
-                    try e.emit(e.cur_out, "\n");
+                    try e.emit(e.cur_out, &.{e.delim});
                 },
                 'g' => {
                     e.ps.clearRetainingCapacity();
@@ -2374,9 +2373,10 @@ const Exec = struct {
                     const rf = &e.r_files.items[found.?];
                     if (rf.pos < rf.data.len) {
                         const rest = rf.data[rf.pos..];
-                        const nl = std.mem.indexOfScalar(u8, rest, '\n');
-                        const line = if (nl) |k| rest[0..k] else rest;
-                        rf.pos += line.len + @as(usize, if (nl != null) 1 else 0);
+                        const nl = std.mem.indexOfScalar(u8, rest, e.delim);
+                        // With its delimiter, if the file gives it one.
+                        const line = if (nl) |k| rest[0 .. k + 1] else rest;
+                        rf.pos += line.len;
                         e.append_q.append(e.gpa, .{ .kind = 'R', .text = line }) catch return error.OutOfMemory;
                     }
                 },
