@@ -18,6 +18,7 @@
 //! `src/commands/timeout.zig`) and hands the ready `Watcher` to `supervise`.
 
 const std = @import("std");
+const subprog = @import("subprog.zig");
 const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
@@ -124,7 +125,8 @@ fn writtenAsZero(num: []const u8) bool {
 /// Start the command. The caller makes itself a group leader first unless
 /// --foreground.
 pub fn spawn(env: Env, command: []const []const u8) std.process.SpawnError!std.process.Child {
-    return std.process.spawn(env.io, .{ .argv = command });
+    // (As execvp: a script without a "#!" line goes to the shell.)
+    return subprog.spawn(env, .{ .argv = command });
 }
 
 /// Exit status when the command cannot be started.

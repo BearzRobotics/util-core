@@ -165,5 +165,13 @@ for c in "USR1 -s USR1 3" "TERM -s USR2 3" "ALRM 3" "ALRM -s USR1 3" "ALRM --pre
     if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS signal $c"
     else FAIL=$((FAIL + 1)); echo "FAIL signal $c: GNU [$exp] ours [$act]"; fi
 done
+# As execvp, a script without a "#!" line is run by the shell (MISC-007).
+printf 'echo no-shebang "$@"; exit 3\n' > "$TEST_TMP/nsh"; chmod +x "$TEST_TMP/nsh"
+exp=$(cd "$TEST_TMP" && LC_ALL=C gnu 3 ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+act=$(cd "$TEST_TMP" && LC_ALL=C ours 3 ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+rm -f "$TEST_TMP/nohup.out"
+if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
+else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
+
 print_summary
 [ "$FAIL" -eq 0 ]

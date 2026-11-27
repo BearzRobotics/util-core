@@ -11,6 +11,7 @@
 //! repeats `run` and returns statistics, `writeBenchmark` draws each result.
 
 const std = @import("std");
+const subprog = @import("subprog.zig");
 const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
@@ -74,7 +75,7 @@ pub fn run(env: Env, argv: []const []const u8, opts: RunOptions) std.process.Spa
     var perf: sys.Perf = if (opts.perf) sys.Perf.open() else .{};
     defer perf.close();
     const t0 = nowNs(env.io);
-    var child = try std.process.spawn(env.io, .{
+    var child = try subprog.spawn(env, .{
         .argv = argv,
         .stdin = opts.stdin,
         .stdout = opts.stdout,

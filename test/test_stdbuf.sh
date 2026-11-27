@@ -34,5 +34,13 @@ run_cmp "exit status"          -oL sh -c 'exit 5'
 run_cmp "pipe line buffering"  -oL sh -c 'printf a; printf b'
 # Behaviour: a stdio program writing to a pipe flushes per line with -oL.
 run_cmp "awk -oL"              -oL awk 'BEGIN{print "x"}'
+# As execvp, a script without a "#!" line is run by the shell (MISC-007).
+printf 'echo no-shebang "$@"; exit 3\n' > "$TEST_TMP/nsh"; chmod +x "$TEST_TMP/nsh"
+exp=$(cd "$TEST_TMP" && LC_ALL=C gnu -oL ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+act=$(cd "$TEST_TMP" && LC_ALL=C ours -oL ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+rm -f "$TEST_TMP/nohup.out"
+if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
+else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
+
 print_summary
 [ "$FAIL" -eq 0 ]
