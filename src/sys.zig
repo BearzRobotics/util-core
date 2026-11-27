@@ -1605,6 +1605,14 @@ pub noinline fn accessAt(dir: Handle, path: []const u8, mode: u32) ?LX.E {
     return errOf(LX.syscall4(.faccessat2, @bitCast(@as(isize, dir)), @intFromPtr(p), mode, 0x200));
 }
 
+/// A duplicate of `fd`, above the standard streams, that a program started
+/// from here does not inherit. Null when there is none (or on Windows).
+pub fn dupCloexec(fd: Handle) ?Handle {
+    if (comptime !is_linux) return other.dupCloexec(fd);
+    const rc = LX.fcntl(fd, LX.F.DUPFD_CLOEXEC, 3);
+    return if (LX.errno(rc) == .SUCCESS) @intCast(rc) else null;
+}
+
 /// lseek(2): whence 0/1/2 or SEEK_DATA 3 / SEEK_HOLE 4.
 pub fn seekFd(fd: Handle, off: i64, whence: u32, err: *LX.E) ?i64 {
     if (comptime !is_linux) return other.seekFd(fd, off, whence, err);

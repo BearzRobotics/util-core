@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const cli = @import("cli.zig");
+const sys = @import("sys.zig");
 const Io = std.Io;
 
 /// Find `prog` the way execvp does. A name containing '/' is used as is;
@@ -47,10 +48,21 @@ pub fn exec(ctx: cli.Context, prog: []const u8, argv: []const []const u8, env: ?
 }
 
 pub fn execStyled(ctx: cli.Context, prog: []const u8, argv: []const []const u8, env: ?*const std.process.Environ.Map, style: Style) u8 {
+    return execReporting(ctx, prog, argv, env, style, null);
+}
+
+/// `execStyled` in nohup's style for a caller that has redirected standard
+/// error: a failure is reported on `terminal`, the stream it had before.
+pub fn execRestoring(ctx: cli.Context, prog: []const u8, argv: []const []const u8, terminal: ?sys.Handle) u8 {
+    return execReporting(ctx, prog, argv, null, .run, terminal);
+}
+
+fn execReporting(ctx: cli.Context, prog: []const u8, argv: []const []const u8, env: ?*const std.process.Environ.Map, style: Style, terminal: ?sys.Handle) u8 {
     var arena = std.heap.ArenaAllocator.init(ctx.gpa);
     defer arena.deinit();
     var denied = false;
     const path = resolve(ctx, arena.allocator(), env orelse ctx.environ, prog, &denied) orelse {
+        if (terminal) |fd| _ = sys.dup2(fd, 2);
         report(ctx, style, prog, if (denied) "Permission denied" else "No such file or directory");
         return if (denied) 126 else 127;
     };
@@ -74,6 +86,7 @@ pub fn execStyled(ctx: cli.Context, prog: []const u8, argv: []const []const u8, 
         error.SystemResources, error.OutOfMemory => "Cannot allocate memory",
         else => @errorName(err),
     };
+    if (terminal) |fd| _ = sys.dup2(fd, 2);
     report(ctx, style, prog, text);
     return if (err == error.FileNotFound) 127 else 126;
 }

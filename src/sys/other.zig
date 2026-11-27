@@ -882,6 +882,12 @@ pub fn dup2(old: Handle, new: i32) ?E {
     return .NOSYS;
 }
 
+pub fn dupCloexec(fd: Handle) ?Handle {
+    if (comptime !is_libc_posix) return null;
+    const rc = c.fcntl(fd, c.F.DUPFD_CLOEXEC, @as(c_int, 3));
+    return if (rc >= 0) rc else null;
+}
+
 pub fn dupFd(fd: Handle, err: *E) ?Handle {
     if (comptime is_libc_posix) {
         const copy = c.dup(fd);

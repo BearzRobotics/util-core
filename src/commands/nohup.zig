@@ -91,11 +91,15 @@ pub fn main(ctx: cli.Context) u8 {
             .appending_output => cli.warn(ctx, "appending output to {f}", .{cli.quoteA(shown)}),
         }
     }
+    var saved_stderr: ?sys.Handle = null;
     if (plan.redirect_stderr) {
         if (plan.stderr_notice) |n| switch (n) {
             .ignoring_input_and_redirecting_stderr => cli.warn(ctx, "ignoring input and redirecting stderr to stdout", .{}),
             .redirecting_stderr => cli.warn(ctx, "redirecting stderr to stdout", .{}),
         };
+        // As GNU, the terminal is kept to say there that the command could
+        // not be run.
+        saved_stderr = sys.dupCloexec(2);
         _ = sys.dup2(Io.File.stdout().handle, 2);
     }
 
@@ -103,5 +107,5 @@ pub fn main(ctx: cli.Context) u8 {
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(ctx.gpa);
     for (args) |a| argv.append(ctx.gpa, a) catch return 125;
-    return exec.execStyled(ctx, args[0], argv.items, null, .run);
+    return exec.execRestoring(ctx, args[0], argv.items, saved_stderr);
 }
