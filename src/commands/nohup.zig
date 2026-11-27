@@ -65,6 +65,9 @@ pub fn main(ctx: cli.Context) u8 {
     if (plan.redirect_stdout) {
         var buf: [4096]u8 = undefined;
         var shown: []const u8 = nohup.output_name;
+        // The file is to be 0600 whatever the umask, as GNU makes it; the
+        // command gets the umask back.
+        const mask = sys.setUmask(0o177);
         const file = sys.openAppendMode(nohup.output_name, 0o600) catch |e1| blk: {
             const p = nohup.homeOutputPath(cli.getenv(ctx, "HOME"), &buf);
             if (p) |path| {
@@ -80,6 +83,7 @@ pub fn main(ctx: cli.Context) u8 {
             cli.warn(ctx, "failed to open {f}: {s}", .{ cli.quoteA(nohup.output_name), cli.errText(e1) });
             return 125;
         };
+        _ = sys.setUmask(mask);
         _ = sys.dup2(file.handle, 1);
         if (file.handle != Io.File.stdout().handle) file.close(ctx.io);
         switch (plan.stdout_notice) {

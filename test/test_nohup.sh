@@ -61,5 +61,17 @@ rm -f "$TEST_TMP/nohup.out"
 if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
 else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
 
+# nohup.out is 0600 whatever the umask, and the command keeps the umask
+# (MISC-013). nohup only writes the file when standard output is a terminal.
+if command -v script >/dev/null 2>&1; then
+    for mask in 000 277 777; do
+        rm -rf "$TEST_TMP/nh" && mkdir "$TEST_TMP/nh"
+        (cd "$TEST_TMP/nh" && umask $mask && script -qec "$BIN_DIR/nohup sh -c umask" /dev/null >/dev/null 2>&1)
+        got="$(stat -c %a "$TEST_TMP/nh/nohup.out" 2>/dev/null) $(cat "$TEST_TMP/nh/nohup.out" 2>/dev/null)"
+        if [ "$got" = "600 0$mask" ]; then PASS=$((PASS + 1)); echo "PASS nohup.out under umask $mask"
+        else FAIL=$((FAIL + 1)); echo "FAIL nohup.out under umask $mask: $got"; fi
+    done
+fi
+
 print_summary
 [ "$FAIL" -eq 0 ]
