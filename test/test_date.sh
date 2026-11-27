@@ -174,5 +174,17 @@ status 1" ]; then PASS=$((PASS + 1)); echo "PASS out of memory $f"
     else FAIL=$((FAIL + 1)); echo "FAIL out of memory $f: $out"; fi
 done
 
+# Flags, widths and modifiers as GNU has them (MISC-034).
+for f in '%P%^P%#P' '%-5N' '%_5N' '%-2N' '%12N' '%+12F' '%12F' '%_12F' '%-F' '%^14F' '%4:q' '%10:q' '%::::z' '%5:Y' '%OF' '%5%' '%-%' \
+    '%+e' '%+3y' '%+3C' '%+5a' '%#a' '%^#p' '%#Z' '%-D' '%_D' '%12D' '%-12T' '%_30R' '%5n|' '%05t|' '%1H' '%_+d' '%+_d' \
+    '%3Oy' '%20Oz' '%25OG' '%+20Ey' '%24EC' '%+19Og' '%14Od' '%#15Eb' '%Ec' '%Ex' '%5Q'; do
+    for when in '2024-03-05 04:05:06.007008009' '@0' '1899-01-02' '0005-06-07' '12345-01-02'; do
+        TZ=EST5 run_cmp "format $f $when" -d "$when" "+$f|"
+    done
+done
+for f in '%Y' '%C' '%y' '%G' '%g' '%F' '%c' '%x' '%D' '%+6Y' '%_6Y' '%10F'; do
+    for when in '@-62198755200' '@-100000000000'; do TZ=UTC0 run_cmp "before year 0, $f $when" -d "$when" "+$f"; done
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]
