@@ -267,4 +267,13 @@ else
     FAIL=$((FAIL + 1)); echo "FAIL rm -r does not follow a link that replaced a directory (rc=$rc)"; cat "$d/err"; echo
 fi
 rm -rf "$d"
+# A directory that cannot be read goes if it is empty, but not with -i
+# (FSOP-017).
+unread='mkdir -p e/empty; chmod 000 e/empty'
+run_tree "-rf unreadable empty"    "$unread" -rf e
+run_tree "-r unreadable empty"     "$unread" -r e
+run_tree "-rv unreadable empty"    "$unread" -rv e
+run_tree "-d unreadable empty"     "$unread" -d e/empty
+TREE_STDIN="$yes_all" run_tree "-ri unreadable empty" "$unread" -ri e
+
 print_summary

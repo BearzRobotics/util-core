@@ -179,8 +179,11 @@ fn remove(st: *State, parent: ?*dirat.Level, name: []const u8, path: []const u8,
         if (cfg.interactive == .always) {
             if (!st.confirm.ask(.{ .path = path, .kind = .directory, .size = lst.size, .action = .descend })) return false;
         }
-        if (!removeContents(st, file, lst)) return false; // GNU leaves the directory without asking again
-        return removeEmptyDir(st, file, lst);
+        return switch (removeContents(st, file, lst)) {
+            .empty => removeEmptyDir(st, file, lst),
+            .gone => true,
+            .kept => false, // GNU leaves the directory without asking again
+        };
     }
 
     // Anything that is not a directory.
@@ -200,16 +203,35 @@ fn remove(st: *State, parent: ?*dirat.Level, name: []const u8, path: []const u8,
     return true;
 }
 
-/// Remove everything in the directory `dir`. False when something is left (a
-/// failure or a declined prompt), so that the directory cannot be removed.
+const Contents = enum {
+    /// The directory is to be removed now.
+    empty,
+    /// It could not be entered, but was empty and has been removed.
+    gone,
+    /// Something is left: a failure or a declined prompt.
+    kept,
+};
+
+/// Remove everything in the directory `dir`.
 /// On return `dir.parent` is open again, or a failure has been reported.
-fn removeContents(st: *State, dir: Target, seen: sys.FileStat) bool {
+fn removeContents(st: *State, dir: Target, seen: sys.FileStat) Contents {
     const env = st.env;
     var level: dirat.Level = undefined;
     if (dirat.enter(&level, dir.parent, dir.name, .{ .expect = seen, .same_device = st.opts.one_file_system })) |e| {
+        // A directory that cannot be read can be removed if it is empty. As
+        // GNU, not with -i, which has promised to look into it.
+        if (e == .ACCES and st.opts.interactive != .always) {
+            if (st.opts.interactive == .default and st.opts.stdin_tty and !writable(dir)) {
+                if (!st.confirm.ask(.{ .path = dir.path, .kind = .directory, .size = seen.size, .action = .remove, .write_protected = true })) return .kept;
+            }
+            if (sys.unlinkAt(dirat.fdOf(dir.parent), dir.name, true) == null) {
+                if (st.opts.verbose) st.observer.emit(.{ .removed = .{ .path = dir.path, .dir = true } });
+                return .gone;
+            }
+        }
         st.observer.emit(.{ .unreadable = .{ .path = dir.path, .errno = e } });
         st.fail();
-        return false;
+        return .kept;
     }
     var kept = false;
     var de: sys.E = .SUCCESS;
@@ -234,9 +256,10 @@ fn removeContents(st: *State, dir: Target, seen: sys.FileStat) bool {
     }
     if (dirat.leave(&level)) |e| {
         // The way back is gone: someone moved this directory meanwhile.
-        return failed(st, dir.path, e);
+        _ = failed(st, dir.path, e);
+        return .kept;
     }
-    return !kept;
+    return if (kept) .kept else .empty;
 }
 
 fn kindOf(mode: u32) Io.File.Kind {
