@@ -11,6 +11,9 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -40,7 +43,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [test, build]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

@@ -3,14 +3,18 @@ name: ci
 on:
   push:
   pull_request:
+  # release.yml publishes only after all of this passes.
+  workflow_call:
 
 permissions:
   contents: read
 
 # A newer push to the same branch replaces the run still waiting or in progress.
 # main keeps every run.
+# The workflow name keeps the run that release.yml calls apart from the one the
+# same tag starts here.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -23,6 +27,22 @@ jobs:
           version: 0.17.1
       - run: zig build
       - run: zig build test
+
+  suites:
+    # The differential tests against GNU, in a container that has the versions
+    # they are written against. See scripts/suites-container.sh.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - run: zig build -Doptimize=ReleaseSafe
+      - name: Differential suites
+        run: >
+          docker run --rm --tmpfs /tmp:exec,mode=1777 --security-opt apparmor=unconfined
+          -v "$PWD:/src:ro" ubuntu:26.04 sh /src/scripts/suites-container.sh
 
   modes:
     runs-on: ubuntu-latest

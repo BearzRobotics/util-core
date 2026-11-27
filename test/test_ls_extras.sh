@@ -17,7 +17,7 @@ W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT; cd "$W" || exit 1
 
 # ---- out of memory: status 2 and a clear message, no crash --------------------
 mkdir many
-awk 'BEGIN { for (i = 0; i < 40000; i++) printf "f%06d\0", i }' | (cd many && xargs -0 touch)
+awk 'BEGIN { for (i = 0; i < 40000; i++) printf "f%06d\n", i }' | (cd many && xargs touch)
 ( ulimit -v 6000 2>/dev/null || exit 77
   "$BIN/ls" many >out.txt 2>err.txt; echo $? >rc.txt )
 if [ "$(cat rc.txt 2>/dev/null)" = 77 ] || [ ! -s rc.txt ]; then
@@ -50,7 +50,7 @@ fi
 
 # ---- a signal resets the colour ----------------------------------------------
 mkdir bigc
-awk 'BEGIN { for (i = 0; i < 20000; i++) printf "file%06d.c\0", i }' | (cd bigc && xargs -0 touch)
+awk 'BEGIN { for (i = 0; i < 20000; i++) printf "file%06d.c\n", i }' | (cd bigc && xargs touch)
 rm -f pid out
 { LS_COLORS='di=01;34:*.c=31' sh -c "echo \$\$ > pid; exec '$BIN/ls' --color=always -1 bigc" 2>/dev/null | { sleep 2; cat > out; }; } &
 bgjob=$!
