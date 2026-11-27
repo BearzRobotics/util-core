@@ -160,5 +160,19 @@ for d in '99999999999999999-01-01' '9999999999999999 years' '12:00 +1:9223372036
     '2147485548-01-01' '2000-01-01 2147483648 days' '9223372036854775807 monday' '@-9223372036854775808.5'; do
     run_cmp "huge: $d" -u -d "$d"
 done
+# Field widths past any number used to overflow (MISC-026). With - they do not
+# show; otherwise the field needs gigabytes, which under a memory limit must be
+# said and not be a crash.
+N=99999999999999999999
+for f in "%-${N}d|" "%-${N}Y|" "%-${N}a|" "%-${N}z|" "%100000Y|" "%100000a|" "%100000N|" "%100000z|"; do
+    TZ=UTC0 run_cmp "huge width $f" -d @0 "+$f"
+done
+for f in "%${N}Y" "%${N}a" "%${N}N" "%${N}z" "%${N}F" "%2147483648Y"; do
+    out=$( (ulimit -v 300000; TZ=UTC0 timeout 20 "$BIN_DIR/date" -d @0 "+$f" 2>&1 >/dev/null); echo "status $?" )
+    if [ "$out" = "date: memory exhausted
+status 1" ]; then PASS=$((PASS + 1)); echo "PASS out of memory $f"
+    else FAIL=$((FAIL + 1)); echo "FAIL out of memory $f: $out"; fi
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]

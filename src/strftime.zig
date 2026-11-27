@@ -166,7 +166,8 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
             if (fmt[i] != '^' and fmt[i] != '#') zone_pad = if (fmt[i] == '+') .default else pad;
         }
         var width: ?usize = null;
-        while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) width = (width orelse 0) * 10 + (fmt[i] - '0');
+        // As GNU, no field is wider than INT_MAX.
+        while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) width = @min((width orelse 0) *| 10 +| (fmt[i] - '0'), std.math.maxInt(i32));
         while (i < fmt.len and fmt[i] == ':') : (i += 1) colons += 1;
         if (i < fmt.len and (fmt[i] == 'E' or fmt[i] == 'O')) i += 1;
         if (i >= fmt.len) {
@@ -241,6 +242,15 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
             else => try padLiteral(out, gpa, fmt[start..i], width, pad),
         }
     }
+}
+
+test "a width too large to read is cut, not an overflow" {
+    var tm = tz.breakdown(0, 0);
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    // Only with - is such a field short enough to look at.
+    try format(&out, std.testing.allocator, "%-99999999999999999999d|", &tm, 0, 0);
+    try std.testing.expectEqualStrings("1|", out.items);
 }
 
 test "format basics" {

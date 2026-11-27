@@ -259,7 +259,7 @@ pub fn main(ctx: cli.Context) u8 {
     }
     d.show(&stdout.interface, when) catch |e| switch (e) {
         error.FormatFailed => ok = false,
-        error.OutOfMemory => ok = false,
+        error.OutOfMemory => return dateOom(ctx),
         error.WriteFailed => return writeFailed(&stdout),
     };
     if (!cli.flushWriter(&stdout)) return 1;
