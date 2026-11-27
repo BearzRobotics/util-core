@@ -194,4 +194,15 @@ run_tree "-fb link to dest"                 'echo data > a; ln -s a l' -fb l a
 run_tree "-f link to another file"          'echo data > a; echo b > b; ln -s b l' -f l a
 run_tree "-f dangling link"                 'echo data > a; ln -s nowhere l' -f l a
 unset TREE_CONTENT
+# One line of standard input answers one -i question (FSOP-018).
+for answers in 'n\ny\n' 'y\nn\n' 'nnnnnnnn\ny\n' 'yes\nyes\n' 'n' ''; do
+    for who in gnu ours; do
+        rm -rf "$TEST_TMP/ans" && mkdir -p "$TEST_TMP/ans/d" && ( cd "$TEST_TMP/ans" && echo x > x && echo y > y && echo old > d/x && echo old > d/y )
+        out=$( cd "$TEST_TMP/ans" && printf "$answers" | LC_ALL=C $who -i x y d/ > ../ans.out 2>&1; echo "status $?"; sed 's|/usr/bin/ln:|ln:|g' ../ans.out; cat "$TEST_TMP/ans/d/x" "$TEST_TMP/ans/d/y" )
+        eval "got_$who=\$out"
+    done
+    if [ "$got_gnu" = "$got_ours" ]; then PASS=$((PASS + 1)); echo "PASS -i answers '$answers'"
+    else FAIL=$((FAIL + 1)); echo "FAIL -i answers '$answers'"; printf '     GNU : %s\n     OURS: %s\n' "$got_gnu" "$got_ours"; fi
+done
+
 print_summary

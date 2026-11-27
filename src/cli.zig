@@ -256,6 +256,22 @@ pub fn writeStderrNoNl(ctx: Context, comptime fmt: []const u8, args: anytype) vo
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
 
+/// Read the answer to one question from `file`: yes when the line begins with
+/// y or Y. The whole line is consumed however long it is, so that none of it
+/// can answer the next question, and nothing past it, which belongs to that
+/// question or to whoever reads the file next. No answer, or an error, is no.
+pub fn readYes(io: Io, file: Io.File) bool {
+    var first: ?u8 = null;
+    while (true) {
+        var b: [1]u8 = undefined;
+        const n = readChunk(io, file, &b) catch return false;
+        if (n == 0) break;
+        if (first == null) first = b[0];
+        if (b[0] == '\n') break;
+    }
+    return first == 'y' or first == 'Y';
+}
+
 /// Print an informational line `<name>: <message>\n` to stdout (used by the
 /// -v/--verbose options of mkdir, rmdir, ...). Best effort.
 pub fn say(ctx: Context, comptime fmt: []const u8, args: anytype) void {

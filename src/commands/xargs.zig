@@ -81,9 +81,7 @@ fn confirm(context: ?*anyopaque, line: []const u8) xargs.Answer {
     const text = std.fmt.allocPrint(gpa, "{s} ?...", .{line}) catch return .abort;
     defer gpa.free(text);
     tty.writeStreamingAll(ctx.io, text) catch {};
-    var ans: [64]u8 = undefined;
-    const n = cli.readChunk(ctx.io, tty, &ans) catch 0;
-    return if (n > 0 and (ans[0] == 'y' or ans[0] == 'Y')) .yes else .no;
+    return if (cli.readYes(ctx.io, tty)) .yes else .no;
 }
 
 pub fn main(ctx: cli.Context) u8 {

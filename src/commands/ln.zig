@@ -233,24 +233,16 @@ fn kindName(symbolic: bool) []const u8 {
     return if (symbolic) "symbolic link" else "hard link";
 }
 
-/// The -i question: "ln: replace 'dest'? " on stderr, one chunk of stdin as the answer.
+/// The -i question: "ln: replace 'dest'? " on stderr, a line of stdin as the answer.
 fn confirm(context: ?*anyopaque, dest: []const u8) bool {
     const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
-    var pbuf: [4200]u8 = undefined;
-    const prompt = std.fmt.bufPrint(&pbuf, "{s}: replace {f}? ", .{ ctx.name, cli.quoteA(dest) }) catch "";
-    Io.File.stderr().writeStreamingAll(ctx.io, prompt) catch {};
-    return answerYes(ctx.*);
+    cli.writeStderrNoNl(ctx.*, "{s}: replace {f}? ", .{ ctx.name, cli.quoteA(dest) });
+    return cli.readYes(ctx.io, Io.File.stdin());
 }
 
 fn isDir(ctx: cli.Context, path: []const u8, follow: bool) bool {
     const st = Io.Dir.cwd().statFile(ctx.io, path, .{ .follow_symlinks = follow }) catch return false;
     return st.kind == .directory;
-}
-
-fn answerYes(ctx: cli.Context) bool {
-    var b: [128]u8 = undefined;
-    const n = cli.readChunk(ctx.io, Io.File.stdin(), &b) catch return false;
-    return n > 0 and (b[0] == 'y' or b[0] == 'Y');
 }
 
 fn help(ctx: cli.Context) u8 {

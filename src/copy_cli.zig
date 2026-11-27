@@ -36,15 +36,5 @@ fn confirm(context: ?*anyopaque, p: copy.Prompt) bool {
         .unwritable => cli.writeStderrNoNl(ctx, "{s}: unwritable {f} (mode {o:0>4}, {s}); try anyway? ", .{ ctx.name, cli.quoteA(p.path), p.mode, &p.perms }),
         .overwrite => cli.writeStderrNoNl(ctx, "{s}: overwrite {f}? ", .{ ctx.name, cli.quoteA(p.path) }),
     }
-    // Read one line from stdin; "y" or "Y" first byte means yes.
-    const stdin = Io.File.stdin();
-    var first: ?u8 = null;
-    var buf: [1]u8 = undefined;
-    while (true) {
-        const n = cli.readChunk(ctx.io, stdin, &buf) catch return false;
-        if (n == 0) break;
-        if (first == null) first = buf[0];
-        if (buf[0] == '\n') break;
-    }
-    return first != null and (first.? == 'y' or first.? == 'Y');
+    return cli.readYes(ctx.io, Io.File.stdin());
 }
