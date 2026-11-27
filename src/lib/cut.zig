@@ -9,7 +9,6 @@
 const std = @import("std");
 const Io = std.Io;
 const common = @import("common.zig");
-const lines = @import("../lines.zig");
 const stickyout = @import("stickyout.zig");
 
 pub const Env = common.Env;
@@ -159,6 +158,15 @@ pub fn run(env: Env, options: Options, inputs: []const Input, writer: *Io.Writer
 
     var out = stickyout.Out.init(writer);
     var result: Result = .{};
+    var cutter: Cutter = .{
+        .options = &options,
+        .ranges = ranges.items,
+        .between = if (odelim_given) odelim else null,
+        .odelim = odelim,
+        .out = &out,
+    };
+    defer cutter.held.deinit(env.gpa);
+    var buf: [65536]u8 = undefined;
     for (inputs) |in| {
         const name = in.name orelse "-";
         const opened = in.open(env.io) catch |e| {
@@ -167,20 +175,19 @@ pub fn run(env: Env, options: Options, inputs: []const Input, writer: *Io.Writer
             continue;
         };
         defer opened.close(env.io);
-        var reader = lines.LineReader.init(env.gpa, env.io, opened.file, options.line_delimiter);
-        defer reader.deinit();
-        while (reader.next() catch |e| {
-            out.flush();
-            observer.emit(.{ .name = name, .err = e });
-            result.failed = true;
-            break;
-        }) |line| {
-            if (options.mode == .bytes) {
-                cutBytes(&out, line.text, ranges.items, if (odelim_given) odelim else null);
-            } else if (!cutFields(&out, line.text, ranges.items, field_delim, odelim, options.only_delimited)) continue;
-            out.writeByte(options.line_delimiter);
+        cutter.startLine();
+        while (true) {
+            const n = common.readChunk(env.io, opened.file, &buf) catch |e| {
+                out.flush();
+                observer.emit(.{ .name = name, .err = e });
+                result.failed = true;
+                break;
+            };
+            if (n == 0) break;
+            try cutter.feed(env.gpa, buf[0..n]);
             if (out.failed) break;
         }
+        cutter.endInput();
         if (out.failed) break;
     }
     try out.finish();
@@ -205,44 +212,117 @@ fn invert(gpa: std.mem.Allocator, ranges: *std.ArrayList(Range)) !void {
     ranges.* = out;
 }
 
-/// Write the selected bytes of `line`; `between` goes between separate ranges.
-fn cutBytes(out: *stickyout.Out, line: []const u8, ranges: []const Range, between: ?[]const u8) void {
-    var printed_any = false;
-    for (ranges) |r| {
-        if (r.lo > line.len) break;
-        const hi = @min(r.hi, line.len);
-        if (printed_any) if (between) |b| out.write(b);
-        out.write(line[r.lo - 1 .. hi]);
-        printed_any = true;
-    }
-}
+/// Cuts lines as their pieces arrive, so that a line of any length takes no
+/// memory. The one thing held is a first field that may or may not be printed,
+/// until the line shows whether it has a delimiter (as in GNU).
+const Cutter = struct {
+    options: *const Options,
+    ranges: []const Range,
+    /// Bytes mode: what goes between separate ranges.
+    between: ?[]const u8,
+    /// Fields mode: what goes between printed fields.
+    odelim: []const u8,
+    out: *stickyout.Out,
 
-/// Write the selected fields. Returns false when the line is suppressed.
-fn cutFields(out: *stickyout.Out, line: []const u8, ranges: []const Range, delim: u8, odelim: []const u8, only_delimited: bool) bool {
-    if (std.mem.indexOfScalar(u8, line, delim) == null) {
-        if (only_delimited) return false;
-        out.write(line);
-        return true;
+    /// The current line has had some bytes.
+    started: bool = false,
+    /// Bytes mode: bytes of the line seen so far.
+    pos: usize = 0,
+    /// The first range that may still select something in this line.
+    ri: usize = 0,
+    printed_any: bool = false,
+    /// Fields mode: the number of the current field.
+    field: usize = 1,
+    held: std.ArrayList(u8) = .empty,
+
+    fn startLine(c: *Cutter) void {
+        c.started = false;
+        c.pos = 0;
+        c.ri = 0;
+        c.printed_any = false;
+        c.field = 1;
+        c.held.clearRetainingCapacity();
     }
-    var field: usize = 1;
-    var start: usize = 0;
-    var ri: usize = 0;
-    var printed_any = false;
-    while (true) {
-        const end = std.mem.indexOfScalarPos(u8, line, start, delim) orelse line.len;
-        while (ri < ranges.len and ranges[ri].hi < field) ri += 1;
-        if (ri < ranges.len and ranges[ri].lo <= field) {
-            if (printed_any) out.write(odelim);
-            out.write(line[start..end]);
-            printed_any = true;
+
+    fn feed(c: *Cutter, gpa: std.mem.Allocator, chunk: []const u8) error{OutOfMemory}!void {
+        var rest = chunk;
+        while (rest.len > 0) {
+            const nl = std.mem.indexOfScalar(u8, rest, c.options.line_delimiter);
+            const piece = rest[0 .. nl orelse rest.len];
+            c.started = true;
+            if (c.options.mode == .bytes) c.bytes(piece) else try c.fields(gpa, piece);
+            if (nl == null) return;
+            c.endLine();
+            if (c.out.failed) return;
+            rest = rest[piece.len + 1 ..];
         }
-        if (end >= line.len) break;
-        start = end + 1;
-        field += 1;
-        if (ri >= ranges.len) break;
     }
-    return true;
-}
+
+    /// An input that does not end with the line delimiter still has a last line.
+    fn endInput(c: *Cutter) void {
+        if (c.started) c.endLine();
+    }
+
+    fn endLine(c: *Cutter) void {
+        defer c.startLine();
+        if (c.options.mode == .fields and c.field == 1) {
+            // No delimiter in the line: all of it is printed, or none.
+            if (c.options.only_delimited) return;
+            c.out.write(c.held.items);
+        }
+        c.out.writeByte(c.options.line_delimiter);
+    }
+
+    fn bytes(c: *Cutter, piece: []const u8) void {
+        const first = c.pos + 1;
+        const last = c.pos + piece.len;
+        c.pos = last;
+        while (c.ri < c.ranges.len and c.ranges[c.ri].lo <= last) {
+            const r = c.ranges[c.ri];
+            const lo = @max(r.lo, first);
+            const hi = @min(r.hi, last);
+            if (lo == r.lo and c.printed_any) if (c.between) |b| c.out.write(b);
+            if (hi >= lo) {
+                c.out.write(piece[lo - first .. hi - first + 1]);
+                c.printed_any = true;
+            }
+            if (r.hi > last) break;
+            c.ri += 1;
+        }
+    }
+
+    fn selected(c: *Cutter) bool {
+        while (c.ri < c.ranges.len and c.ranges[c.ri].hi < c.field) c.ri += 1;
+        return c.ri < c.ranges.len and c.ranges[c.ri].lo <= c.field;
+    }
+
+    fn fields(c: *Cutter, gpa: std.mem.Allocator, piece: []const u8) error{OutOfMemory}!void {
+        var rest = piece;
+        while (true) {
+            const end = std.mem.indexOfScalar(u8, rest, c.options.delimiter);
+            const part = rest[0 .. end orelse rest.len];
+            if (c.field == 1) {
+                // Printed whatever follows, when it is selected and
+                // undelimited lines are not suppressed.
+                if (c.selected() and !c.options.only_delimited) c.out.write(part) else try c.held.appendSlice(gpa, part);
+            } else if (c.selected()) c.out.write(part);
+            if (end == null) return;
+            if (c.field == 1) {
+                if (c.selected()) {
+                    c.out.write(c.held.items); // empty unless it had to wait
+                    c.printed_any = true;
+                }
+                c.held.clearRetainingCapacity();
+            }
+            c.field += 1;
+            if (c.selected()) {
+                if (c.printed_any) c.out.write(c.odelim);
+                c.printed_any = true;
+            }
+            rest = rest[part.len + 1 ..];
+        }
+    }
+};
 
 test "invert complements merged ranges" {
     const t = std.testing;
