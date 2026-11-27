@@ -317,7 +317,11 @@ fn doWipeFd(ctx: *Ctx, rng: *Rng, fd: sys.Handle, qname: []const u8, o: Options)
         warn(ctx, "{s}: invalid file type", .{qname});
         return false;
     }
-    const passarray = ctx.gpa.alloc(i32, @intCast(o.n_iterations)) catch return false;
+    const passarray = ctx.gpa.alloc(i32, @intCast(o.n_iterations)) catch {
+        // The one thing to know here is that nothing was overwritten.
+        warn(ctx, "{s}: memory exhausted", .{qname});
+        return false;
+    };
     defer ctx.gpa.free(passarray);
     var size: i64 = o.size;
     var i_size: i64 = 0;
@@ -392,7 +396,10 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
     const slash = std.mem.lastIndexOfScalar(u8, oldname, '/');
     const dir: []const u8 = if (slash) |s| (if (s == 0) "/" else oldname[0..s]) else ".";
     const base_off = if (slash) |s| s + 1 else 0;
-    var cur = ctx.gpa.dupe(u8, oldname) catch return false;
+    var cur = ctx.gpa.dupe(u8, oldname) catch {
+        warn(ctx, "{s}: memory exhausted", .{qoldname});
+        return false;
+    };
     defer ctx.gpa.free(cur);
     var dir_fd: sys.Handle = sys.invalid_handle;
     var e: E = .SUCCESS;
@@ -403,7 +410,10 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
         var len = cur.len - base_off;
         var warned = false;
         while (len != 0) : (len -= 1) {
-            const next = ctx.gpa.dupe(u8, cur[0 .. base_off + len]) catch return false;
+            const next = ctx.gpa.dupe(u8, cur[0 .. base_off + len]) catch {
+                warn(ctx, "{s}: memory exhausted", .{qoldname});
+                return false;
+            };
             defer ctx.gpa.free(next);
             @memset(next[base_off..], nameset[0]);
             var rename_ok = false;
@@ -428,7 +438,10 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
                     first = false;
                 }
                 ctx.gpa.free(cur);
-                cur = ctx.gpa.dupe(u8, next) catch return false;
+                cur = ctx.gpa.dupe(u8, next) catch {
+                    warn(ctx, "{s}: memory exhausted", .{qoldname});
+                    return false;
+                };
             }
         }
     }
