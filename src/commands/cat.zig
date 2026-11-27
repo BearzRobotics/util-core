@@ -18,6 +18,7 @@
 const std = @import("std");
 const Io = std.Io;
 const cli = @import("../cli.zig");
+const fu = @import("../lib/fu_common.zig");
 const sys = @import("../sys.zig");
 const syntax = @import("../syntax/root.zig");
 const cat = @import("../lib/cat.zig");
@@ -352,7 +353,10 @@ const Pager = struct {
 
 fn report(context: ?*anyopaque, ev: cat.Event) void {
     const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
-    cli.warn(ctx.*, "{s}: {s}", .{ ev.name, cli.errText(ev.err) });
+    var name = cli.quote(ev.name);
+    const env: cat.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    name.utf8 = fu.localeIsUtf8(env);
+    cli.warn(ctx.*, "{f}: {s}", .{ name, cli.errText(ev.err) });
 }
 
 /// A directory under the user's cat configuration ($XDG_CONFIG_HOME/cat or
@@ -409,7 +413,7 @@ fn loadUserTheme(ctx: cli.Context, name: []const u8) ?[]syntax.theme.Rule {
     const text = Io.Dir.cwd().readFileAlloc(ctx.io, full, ctx.gpa, .limited(1 << 20)) catch return null;
     defer ctx.gpa.free(text);
     const parsed = syntax.theme.parse(ctx.gpa, text) catch return null;
-    if (parsed == null) cli.warn(ctx, "{s}: malformed theme file", .{full});
+    if (parsed == null) cli.warn(ctx, "{f}: malformed theme file", .{cli.quote(full)});
     return parsed;
 }
 

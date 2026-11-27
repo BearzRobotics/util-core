@@ -84,7 +84,7 @@ pub fn main(ctx: cli.Context) u8 {
             continue;
         }
         const f = Io.Dir.cwd().openFile(ctx.io, name, .{}) catch |e| {
-            cli.warn(ctx, "{s}: {s}", .{ name, cli.errText(e) });
+            cli.warn(ctx, "{f}: {s}", .{ cli.Visible{ .name = name }, cli.errText(e) });
             status = 1;
             continue;
         };

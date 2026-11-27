@@ -247,4 +247,11 @@ if command -v git >/dev/null 2>&1; then
     rm -rf "$H"
 fi
 
+# Names in messages are quoted, as GNU does, so that none reaches the terminal
+# as it is (VIEW-007).
+for name in "$(printf 'n\033]0;T\007x')" "$(printf 'a\nb')" "$(printf 'c1\302\233z')" "$(printf 'bad\233')" "$(printf 'caf\303\251 x')" "it's" 'sp ace' 'a:b'; do
+    CMP_LOCALE=C run_cmp "missing name, C" "./$name"
+    CMP_LOCALE=C.UTF-8 run_cmp "missing name, UTF-8" "./$name"
+done
+
 print_summary

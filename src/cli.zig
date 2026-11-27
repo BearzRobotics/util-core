@@ -262,6 +262,7 @@ pub fn say(ctx: Context, comptime fmt: []const u8, args: anytype) void {
 const quote_impl = @import("quote.zig");
 pub const Quoted = quote_impl.Quoted;
 pub const QuotedC = quote_impl.QuotedC;
+pub const Visible = quote_impl.Visible;
 pub const quote = quote_impl.quote;
 pub const quoteA = quote_impl.quoteA;
 pub const quoteC = quote_impl.quoteC;

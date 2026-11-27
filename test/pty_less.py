@@ -180,6 +180,23 @@ for flags in [['-R'], ['-r'], ['-F', '-R']]:
           st == 0 and 'x^[[6ny^[[2;1Hz^[[3Jw \x1b[32mgreen' in out
           and not any(s in out for s in ('\x1b[6n', '\x1b[2;1H', '\x1b[3J')))
 
+# A file name is shown, not sent: in the header of cat's view and in less's
+# position line.
+evil = os.path.join(tmp, 'n\x1b]0;PWN\x07\nforged')
+with open(evil, 'w') as f:
+    f.write('x\n')
+out, st, _ = session([cat, '--decorations=always', '--paging=never', '--color=never', evil], [])
+check('cat: the header shows control characters of a name', st == 0 and 'n^[]0;PWN^G^Jforged' in out and '\x1b]0;' not in out)
+named = os.path.join(tmp, 'n\x1b]0;T\x07.t')
+with open(named, 'w') as f:
+    f.write(''.join('line %d\n' % i for i in range(100)))
+# From its own directory: only a short name is put in that line.
+out, st, _ = session(['/bin/sh', '-c', 'cd "$1" && exec "$2" "$3"', 'sh', tmp, os.path.abspath(less), os.path.basename(named)],
+                     [(b'=', 0.5), (b'q', 0.5)])
+check('less: = does not send control characters of a name', st == 0 and 'n^[]0;T^G.tline 1/' in out and '\x1b]0;' not in out)
+os.remove(evil)
+os.remove(named)
+
 # cat: a long file is paged, a short one is not
 out, st, _ = session([cat, big], [(b'q', 0.5)])
 check("cat: long view is paged and quits with q", '\x1b[?1049h' in out and st == 0)

@@ -21,6 +21,7 @@
 
 const std = @import("std");
 const unicode = @import("../unicode.zig");
+const quote = @import("../quote.zig");
 const Io = std.Io;
 
 pub const Key = union(enum) {
@@ -150,7 +151,7 @@ pub const Pager = struct {
     input: std.ArrayList(u8) = .empty,
     pattern: std.ArrayList(u8) = .empty,
     message: []const u8 = "",
-    msg_buf: [96]u8 = undefined,
+    msg_buf: [256]u8 = undefined,
     name: []const u8 = "",
 
     pub fn init(gpa: std.mem.Allocator, opts: Options, rows: usize, cols: usize) Pager {
@@ -447,8 +448,8 @@ pub const Pager = struct {
                 },
                 'n' => p.findNext(p.forward),
                 'N' => p.findNext(!p.forward),
-                '=' => p.message = std.fmt.bufPrint(&p.msg_buf, "{s}line {d}/{d}{s}", .{
-                    if (p.name.len > 0 and p.name.len < 40) p.name else "",
+                '=' => p.message = std.fmt.bufPrint(&p.msg_buf, "{f}line {d}/{d}{s}", .{
+                    quote.Visible{ .name = if (p.name.len < 40) p.name else "" },
                     p.top + 1,
                     p.lineCount(),
                     if (p.eof) "" else "+",
