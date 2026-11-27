@@ -113,7 +113,7 @@ pub fn run(env: Env, options: Options, operands: []const []const u8, w: *Io.Writ
     const ok = if (options.format == null and decs[0] != null and decs[1] != null and decs[2] != null)
         decimalPath(env, observer, &out, decs[0].?, decs[1].?, decs[2].?, sep, options.equal_width)
     else
-        floatPath(env, observer, &out, vals, options.format, sep, options.equal_width);
+        floatPath(env, observer, &out, vals, options.format, null, sep, options.equal_width);
     const done = try ok;
     out.flush();
     if (out.failed) return error.WriteFailed;
@@ -173,6 +173,8 @@ fn pow10(n: u32) ?i128 {
 
 /// `d` as a mantissa at the common scale `s`.
 fn rescale(d: Dec, s: i32) ?i128 {
+    // Zero fits at any scale, even one beyond every power of ten here.
+    if (d.mant == 0) return 0;
     const shift: u32 = @intCast(s - d.scale);
     return std.math.mul(i128, d.mant, pow10(shift) orelse return null) catch null;
 }
@@ -192,13 +194,19 @@ fn decimalPath(env: Env, observer: Observer, out: *Sink, first: Dec, step: Dec, 
     // STEP have at most `prec` meaningful digits, so dropping extra ones is exact.
     const drop = pow10(shown_scale - prec).?;
 
+    // Room for one number: the point and all `prec` places, or the 39 digits
+    // an i128 can have, with a sign. There is no limit to `prec`.
+    const room = @max(prec, 39) + 42;
+    const bufs = try env.gpa.alloc(u8, 2 * room);
+    defer env.gpa.free(bufs);
+    const b1 = bufs[0..room];
+    const b2 = bufs[room..];
+
     var width: usize = 0;
     if (equal_width) {
-        var b1: [64]u8 = undefined;
-        var b2: [64]u8 = undefined;
         // LAST is formatted as an operand even when it is never reached.
-        const lw = if (last.inf != 0) 0 else fmtDec(&b2, @divTrunc(l, drop), prec, 0).len;
-        width = @max(fmtDec(&b1, @divTrunc(f, drop), prec, 0).len, lw);
+        const lw = if (last.inf != 0) 0 else fmtDec(b2, @divTrunc(l, drop), prec, 0).len;
+        width = @max(fmtDec(b1, @divTrunc(f, drop), prec, 0).len, lw);
     }
 
     if (prec == 0 and width == 0 and last.inf == 0 and st != 0 and fitsI64(f) and fitsI64(l) and fitsI64(st)) {
@@ -207,12 +215,11 @@ fn decimalPath(env: Env, observer: Observer, out: *Sink, first: Dec, step: Dec, 
     }
 
     var x = f;
-    var buf: [64]u8 = undefined;
     var first_item = true;
     while (if (st > 0) x <= l else x >= l) {
         if (!first_item) out.write(sep);
         first_item = false;
-        out.write(fmtDec(&buf, @divTrunc(x, drop), prec, width));
+        out.write(fmtDec(b1, @divTrunc(x, drop), prec, width));
         if (out.failed) return true;
         x = std.math.add(i128, x, st) catch break;
     }
@@ -277,34 +284,32 @@ fn formatI64(buf: *[24]u8, v: i64) []const u8 {
 }
 
 /// Format `v` (scaled by 10^prec) with `prec` decimals, zero padded to `width`.
+/// `buf` must have room for the result (see decimalPath).
 fn fmtDec(buf: []u8, v: i128, prec: u32, width: usize) []const u8 {
-    var tmp: [48]u8 = undefined;
+    var tmp: [39]u8 = undefined;
     var n: usize = 0;
     var m: u128 = @abs(v);
-    while (m > 0 or n <= prec) {
+    while (m > 0) : (m /= 10) {
         tmp[n] = @intCast('0' + m % 10);
-        m /= 10;
         n += 1;
     }
-    // tmp holds digits least-significant first: insert the point before `prec` digits.
+    // At least one digit before the point; zeros make up what `v` lacks.
+    const count = @max(n, @as(usize, prec) + 1);
     var len: usize = 0;
     const neg = v < 0;
-    var total = n + @intFromBool(prec > 0) + @intFromBool(neg);
-    if (total > buf.len) total = buf.len;
+    const total = count + @intFromBool(prec > 0) + @intFromBool(neg);
     const pad = if (width > total) width - total else 0;
     if (neg) {
         buf[len] = '-';
         len += 1;
     }
-    var k: usize = 0;
-    while (k < pad) : (k += 1) {
-        buf[len] = '0';
-        len += 1;
-    }
-    var d = n;
+    @memset(buf[len..][0..pad], '0');
+    len += pad;
+    // tmp holds digits least-significant first: insert the point before `prec` digits.
+    var d = count;
     while (d > 0) {
         d -= 1;
-        buf[len] = tmp[d];
+        buf[len] = if (d < n) tmp[d] else '0';
         len += 1;
         if (prec > 0 and d == prec) {
             buf[len] = '.';
@@ -320,7 +325,10 @@ fn decToFloat(d: Dec) f64 {
 }
 
 fn floatFallback(env: Env, observer: Observer, out: *Sink, first: Dec, step: Dec, last: Dec, sep: []const u8, equal_width: bool) Error!bool {
-    return floatPath(env, observer, out, .{ decToFloat(first), decToFloat(step), decToFloat(last) }, null, sep, equal_width);
+    // As in GNU, decimal operands keep their places even when printed as
+    // floating point.
+    const prec = @max(first.precision(), step.precision());
+    return floatPath(env, observer, out, .{ decToFloat(first), decToFloat(step), decToFloat(last) }, null, prec, sep, equal_width);
 }
 
 const Parsed = struct { prefix: []const u8, spec: ff.Spec, suffix: []const u8 };
@@ -403,7 +411,7 @@ fn writeLiteral(out: *Sink, text: []const u8) void {
     }
 }
 
-fn floatPath(env: Env, observer: Observer, out: *Sink, v: [3]f64, format: ?[]const u8, sep: []const u8, equal_width: bool) Error!bool {
+fn floatPath(env: Env, observer: Observer, out: *Sink, v: [3]f64, format: ?[]const u8, places: ?usize, sep: []const u8, equal_width: bool) Error!bool {
     const first = v[0];
     const step = v[1];
     const last = v[2];
@@ -411,15 +419,17 @@ fn floatPath(env: Env, observer: Observer, out: *Sink, v: [3]f64, format: ?[]con
     if (format) |f| {
         parsed = parseFormat(observer, f) orelse return false;
     } else {
-        parsed = .{ .prefix = "", .spec = .{ .conv = 'g' }, .suffix = "" };
+        const plain: ff.Spec = if (places) |n| .{ .conv = 'f', .precision = n } else .{ .conv = 'g' };
+        parsed = .{ .prefix = "", .spec = plain, .suffix = "" };
         if (equal_width) {
-            // Zero-pad to the widest of FIRST and LAST formatted with %g.
+            // Zero-pad to the widest of FIRST and LAST as formatted.
             parsed.spec.zero = true;
-            const w1 = ff.formatAlloc(env.gpa, .{ .conv = 'g' }, first) catch return error.OutOfMemory;
+            const w1 = ff.formatAlloc(env.gpa, plain, first) catch return error.OutOfMemory;
             defer env.gpa.free(w1);
-            const w2 = ff.formatAlloc(env.gpa, .{ .conv = 'g' }, last) catch return error.OutOfMemory;
+            const w2 = ff.formatAlloc(env.gpa, plain, last) catch return error.OutOfMemory;
             defer env.gpa.free(w2);
-            parsed.spec.width = @max(w1.len, w2.len);
+            // An infinite LAST has no width to match.
+            parsed.spec.width = if (std.math.isInf(last)) w1.len else @max(w1.len, w2.len);
         }
     }
     var k: u64 = 0;

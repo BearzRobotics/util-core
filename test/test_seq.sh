@@ -114,6 +114,18 @@ for f in '%99999999999999999999f' '%.99999999999999999999f' 'x%.2147483647e'; do
     run_test_exit "too wide $f" -f "$f" 2
     [ -z "$(ours -f "$f" 2 2>/dev/null)" ] && { PASS=$((PASS+1)); echo "PASS no output for $f"; } || { FAIL=$((FAIL+1)); echo "FAIL output for $f"; }
 done
+z=0000000000
+z50=$z$z$z$z$z
+run_cmp "50 places"               1e-50 1e-50 3e-50
+run_cmp "50 places -w"            -w 1e-50 1e-50 3e-50
+run_cmp "50 places, negative -w"  -w -3e-50 1e-50 1e-50
+run_cmp "151 places"              "0.$z50$z50${z50}1" "0.$z50$z50${z50}1" "0.$z50$z50${z50}3"
+run_cmp "zero with 51 places"     "0.${z50}0" 1
+run_cmp "zero, 51 places -w"      -w "0.${z50}0" 3
+run_cmp "LAST with 50 places"     0 1 "2.$z50"
+run_cmp "LAST tiny"               0 1 1e-50
+run_cmp "step does not fit"       "0.${z50}0" 2 5
+
 run_cmp "long precision %f"       -f %.30000f 3
 run_cmp "long precision %e"       -f %.30000e 3
 

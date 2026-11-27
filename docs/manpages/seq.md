@@ -48,7 +48,7 @@ See docs/compatibility/seq.md for details.
 # LIMITATIONS
 
 - The -f / hex / non-decimal path uses double precision; GNU uses long double, so values beyond 2^53 or not exactly representable can differ in the last digits.
-- Decimal operands whose exact value does not fit in 128 bits fall back to the double path.
+- Decimal operands whose exact value does not fit in 128 bits fall back to the double path. They are still printed with the decimal places of FIRST and INCREMENT, as in GNU, but the digits are those of a double.
 - %a / %A in a format are rejected; locale decimal points and thousands separators are not supported (C locale only).
 - An option that follows a number-like operand is still parsed as an option (GNU stops option parsing at the first negative-number operand).
 - `--help` text is shorter than GNU's; ASCII quotes in diagnostics.
