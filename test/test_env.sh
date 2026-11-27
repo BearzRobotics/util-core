@@ -94,5 +94,11 @@ run_cmp "default KILL"             --default-signal=KILL true
 run_cmp "ignored seen by child"    --ignore-signal=INT sh -c 'trap'
 run_cmp "list nothing"             --list-signal-handling true
 
+# Not signals env can act on: 0 used to crash it.
+for o in block ignore default; do
+    for sig in 0 00 INT,0 32 33; do
+        run_cmp "--$o-signal=$sig" --$o-signal=$sig true
+    done
+done
 print_summary
 [ "$FAIL" -eq 0 ]
