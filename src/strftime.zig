@@ -99,6 +99,41 @@ fn caseText(out: *std.ArrayList(u8), gpa: std.mem.Allocator, text: []const u8, u
     try writePadded(out, gpa, tmp[0..n], width orelse 0, pc);
 }
 
+/// %z with up to three colons. As GNU: the offset is one number (hhmm, h:mm,
+/// h:mm:ss) in a field whose width, sign included, defaults to that of the
+/// full form. - drops the
+/// padding, _ puts blanks before the sign, otherwise zeros follow it.
+fn zoneOffset(out: *std.ArrayList(u8), gpa: std.mem.Allocator, tm: *const tz.Tm, colons: usize, width: ?usize, pad: Pad) !void {
+    const off = tm.gmtoff;
+    // The zone "-00" stands for an unknown offset.
+    const negative = off < 0 or (off == 0 and std.mem.startsWith(u8, tm.zoneName(), "-"));
+    const a: u32 = @abs(off);
+    const hh = a / 3600;
+    const mm = (a % 3600) / 60;
+    const ss = a % 60;
+    // %:::z shows no more than it has to.
+    const form: usize = if (colons < 3) colons else if (ss != 0) 2 else if (mm != 0) 1 else 3;
+    var buf: [32]u8 = undefined;
+    const text = switch (form) {
+        0 => std.fmt.bufPrint(&buf, "{d}", .{hh * 100 + mm}),
+        1 => std.fmt.bufPrint(&buf, "{d}:{d:0>2}", .{ hh, mm }),
+        2 => std.fmt.bufPrint(&buf, "{d}:{d:0>2}:{d:0>2}", .{ hh, mm, ss }),
+        else => std.fmt.bufPrint(&buf, "{d}", .{hh}),
+    } catch unreachable;
+    const least: usize = switch (form) {
+        0 => 5,
+        1 => 6,
+        2 => 9,
+        else => 3,
+    };
+    const len = 1 + text.len;
+    const field = if (pad == .none) len else @max(len, width orelse least);
+    if (pad == .space) try out.appendNTimes(gpa, ' ', field - len);
+    try out.append(gpa, if (negative) '-' else '+');
+    if (pad != .space) try out.appendNTimes(gpa, '0', field - len);
+    try out.appendSlice(gpa, text);
+}
+
 /// Append the formatted time. `epoch` and `nsec` feed %s and %N.
 pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, tm: *const tz.Tm, epoch: i64, nsec: u32) std.mem.Allocator.Error!void {
     var i: usize = 0;
@@ -116,6 +151,8 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
         var swap = false;
         var plus = false;
         var colons: usize = 0;
+        // The last of _ - 0 + decides how %z is padded.
+        var zone_pad: Pad = .default;
         while (i < fmt.len) : (i += 1) {
             switch (fmt[i]) {
                 '_' => pad = .space,
@@ -126,6 +163,7 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
                 '+' => plus = true,
                 else => break,
             }
+            if (fmt[i] != '^' and fmt[i] != '#') zone_pad = if (fmt[i] == '+') .default else pad;
         }
         var width: ?usize = null;
         while (i < fmt.len and std.ascii.isDigit(fmt[i])) : (i += 1) width = (width orelse 0) * 10 + (fmt[i] - '0');
@@ -199,39 +237,7 @@ pub fn format(out: *std.ArrayList(u8), gpa: std.mem.Allocator, fmt: []const u8, 
                 try out.appendSlice(gpa, buf[0..w]);
                 if ((width orelse 0) > 9) try out.appendNTimes(gpa, '0', width.? - 9);
             },
-            'z' => {
-                const off = tm.gmtoff;
-                const sign: u8 = if (off < 0) '-' else '+';
-                const a: u32 = @abs(off);
-                const hh = a / 3600;
-                const mm = (a % 3600) / 60;
-                const ss = a % 60;
-                var tmp: [40]u8 = undefined;
-                // The - and _ flags drop the zero that pads the hours.
-                const hs: []const u8 = if (pad == .none or pad == .space) std.fmt.bufPrint(tmp[32..], "{d}", .{hh}) catch unreachable else std.fmt.bufPrint(tmp[32..], "{d:0>2}", .{hh}) catch unreachable;
-                const s = switch (colons) {
-                    0 => std.fmt.bufPrint(&tmp, "{c}{s}{d:0>2}", .{ sign, hs, mm }),
-                    1 => std.fmt.bufPrint(&tmp, "{c}{s}:{d:0>2}", .{ sign, hs, mm }),
-                    2 => std.fmt.bufPrint(&tmp, "{c}{s}:{d:0>2}:{d:0>2}", .{ sign, hs, mm, ss }),
-                    else => if (ss != 0)
-                        std.fmt.bufPrint(&tmp, "{c}{s}:{d:0>2}:{d:0>2}", .{ sign, hs, mm, ss })
-                    else if (mm != 0)
-                        std.fmt.bufPrint(&tmp, "{c}{s}:{d:0>2}", .{ sign, hs, mm })
-                    else
-                        std.fmt.bufPrint(&tmp, "{c}{s}", .{ sign, hs }),
-                } catch unreachable;
-                const w = width orelse 0;
-                if (s.len < w and pad != .none) {
-                    if (pad == .space) {
-                        try out.appendNTimes(gpa, ' ', w - s.len);
-                        try out.appendSlice(gpa, s);
-                    } else {
-                        try out.append(gpa, s[0]);
-                        try out.appendNTimes(gpa, '0', w - s.len);
-                        try out.appendSlice(gpa, s[1..]);
-                    }
-                } else try out.appendSlice(gpa, s);
-            },
+            'z' => try zoneOffset(out, gpa, tm, colons, width, zone_pad),
             else => try padLiteral(out, gpa, fmt[start..i], width, pad),
         }
     }

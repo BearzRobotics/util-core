@@ -30,6 +30,13 @@ for f in %a %A %b %B %c %C %d %D %e %F %g %G %h %H %I %j %k %l %m %M %n %N %p %P
         TZ=America/New_York run_cmp "fmt $f @$e NY" -d @$e "+$f"
     done
 done
+# %z with its flags and widths, in zones named here: the machine's own would
+# decide what the cases above cover. <-00> is an unknown offset, printed "-".
+for tzv in UTC0 '<-00>0' EST5 Asia/Kolkata XXX0:30 XXX-0:00:30; do
+    for f in %z %-z %_z %0z %+z %_+z %+_z %1z %7z %-10z %_10z %010z %:z %-:z %_:z %_8::z %-::z %_:::z %:::z %6:::z; do
+        TZ=$tzv run_cmp "zone $f $tzv" -d @0 "+$f|"
+    done
+done
 run_cmp "-u"                  -u -d @$E1
 run_cmp "--utc"               --utc -d @$E1
 run_cmp "--universal"         --universal -d @$E1
