@@ -29,12 +29,12 @@ if command -v script >/dev/null 2>&1; then
         for x in g o; do
             mkdir -p "$D/$x"; rm -rf "$D/$x"/*
             if [ $x = g ]; then bin="$GNU_BIN_DIR/nohup"; else bin="$BIN_DIR/nohup"; fi
-            (cd "$D/$x" && HOME="$D/$x" script -qec "sh -c \"$(printf '%s' "$shell" | sed "s#NOHUP#$bin#g")\"" /dev/null | sed "s#$bin#nohup#g; s#$D/$x#D#g" > ../$x.out; ls -A > ../$x.ls; [ -f nohup.out ] && { wc -c < nohup.out > ../$x.sz; stat -c %a nohup.out >> ../$x.sz; } || echo none > ../$x.sz)
+            (cd "$D/$x" && HOME="$D/$x" script -qec "sh -c \"$(printf '%s' "$shell" | sed "s#NOHUP#$bin#g")\"" /dev/null | sed "s#$bin#nohup#g; s#$D/$x#D#g" > ../$x.out; ls -A > ../$x.ls; [ -f nohup.out ] && { sed "s#$bin#nohup#g; s#$D/$x#D#g" nohup.out > ../$x.sz; stat -c %a nohup.out >> ../$x.sz; } || echo none > ../$x.sz)
         done
         if cmp -s "$D/g.out" "$D/o.out" && cmp -s "$D/g.ls" "$D/o.ls" && cmp -s "$D/g.sz" "$D/o.sz"; then
             PASS=$((PASS + 1)); printf "PASS %s\n" "$desc"
         else
-            FAIL=$((FAIL + 1)); printf "FAIL %s\n" "$desc"; diff "$D/g.out" "$D/o.out" | head -5; diff "$D/g.ls" "$D/o.ls" | head -3
+            FAIL=$((FAIL + 1)); printf "FAIL %s\n" "$desc"; diff "$D/g.out" "$D/o.out" | head -5; diff "$D/g.ls" "$D/o.ls" | head -3; diff "$D/g.sz" "$D/o.sz" | head -3
         fi
     }
     GNU_BIN_DIR="${GNU_BIN:-/usr/bin}"
