@@ -33,6 +33,7 @@ None added by util-core: tree is not a GNU program and its own options (`-J`, `-
 
 ## Known deviations and gaps
 
+- Output that cannot be written (a full disk, with or without `-o`) is reported as `tree: write error: ...` with status 1; tree 2.3.1 is silent and exits 0.
 - Not implemented: `-H` (HTML), `--fromfile`, `--fromtabfile`, `--gitignore`, `--info`, `--hyperlink`, `--compress`, `--condense`, `-R`, `--opt-toggle`, ACL and SELinux display.
 - The multi-root JSON/XML output reproduces tree's separators only for the cases covered by the tests; a symbolic link to the start directory in -J output lacks tree's empty `contents` array.
 - With `--du -l` and links that lead into each other, which link is followed and which is `recursive, not followed` depends on the order of the walk. tree 2.3.1 takes the order in which the file system returns the names; ours takes the order of the listing, so the result is the same everywhere. The total is not affected.
