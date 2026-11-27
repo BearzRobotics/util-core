@@ -61,6 +61,8 @@ const Driver = struct {
     status: u8 = 0,
     dir_mode: bool = false,
     json_first: bool = true,
+    /// The directories now being compared, outermost first, each side's own.
+    open_dirs: std.ArrayList([2]?sys.FileStat) = .empty,
 
     fn raise(d: *Driver, st: u8) void {
         if (st > d.status) d.status = st;
@@ -364,6 +366,23 @@ const Driver = struct {
     fn compareDirs(d: *Driver, nested: bool, real: [2][]const u8, disp: [2][]const u8, only: ?usize) anyerror!void {
         const gpa = d.env.gpa;
         const o = d.options;
+        // A link can lead back into a directory that is being compared; the
+        // walk would never end. Each side is checked against its own.
+        var ids: [2]?sys.FileStat = .{ null, null };
+        for (&ids, real, 0..) |*id, path, f| {
+            if (only != null and only.? != f) continue;
+            var e: std.os.linux.E = .SUCCESS;
+            id.* = sys.fileStat(path, true, &e);
+            const here = id.* orelse continue;
+            for (d.open_dirs.items) |above| if (above[f]) |a| if (sys.isSameFile(a, here)) {
+                const text = try std.fmt.allocPrint(gpa, "{s}: recursive directory loop", .{disp[if (only == 1) 1 else 0]});
+                defer gpa.free(text);
+                d.fatal(text);
+                return;
+            };
+        }
+        try d.open_dirs.append(gpa, ids);
+        defer _ = d.open_dirs.pop();
         var lists: [2]std.ArrayList([]u8) = .{ .empty, .empty };
         defer for (&lists) |*l| {
             for (l.items) |n| gpa.free(n);
@@ -559,6 +578,7 @@ pub fn run(env: Env, options: Options, name0: []const u8, name1: []const u8, w: 
     };
     defer d.zone.deinit();
     defer d.matchers.deinit();
+    defer d.open_dirs.deinit(env.gpa);
     try d.compareFiles(false, .{ name0, name1 }, .{ name0, name1 }, null);
     if (options.json) {
         if (d.dir_mode) try w.writeAll(if (d.json_first) "[]\n" else "\n]\n") else try w.writeByte('\n');

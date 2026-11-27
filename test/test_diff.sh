@@ -176,6 +176,16 @@ if command -v bwrap > /dev/null && [ "$(two_fs 'stat -c %i "$1/m1/f" "$1/m2/f" |
 else
     skip_test "equal inodes on two file systems (needs bwrap and matching inode numbers)"
 fi
+# Links that lead back into the tree end the walk (VIEW-013).
+mkdir -p "$TEST_TMP/loopA" "$TEST_TMP/loopB" "$TEST_TMP/upA/s" "$TEST_TMP/upB/s"
+for d in loopA loopB; do ln -s . "$TEST_TMP/$d/a"; ln -s . "$TEST_TMP/$d/b"; done
+ln -s .. "$TEST_TMP/upA/s/up"; ln -s .. "$TEST_TMP/upB/s/up"
+for o in -r -rq -rN -ru "-r --no-dereference"; do
+    for pair in "loopA loopB" "upA upB" "loopA upB" "loopA nothing"; do
+        run_cmp "$o loop: $pair" $o "$TEST_TMP/${pair% *}" "$TEST_TMP/${pair#* }"
+    done
+done
+
 # -N, -P: an operand that is not there is empty.
 printf 'q\n' > "$TEST_TMP/there"; mkdir -p "$TEST_TMP/dirthere/sub"; echo z > "$TEST_TMP/dirthere/file"
 for o in -N -P -Nq -uN -cN -ruN --unidirectional-new-file; do
