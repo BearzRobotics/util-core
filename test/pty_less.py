@@ -75,6 +75,11 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdi
 def visible(s):
     return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', s)
 
+def screen(s):
+    """The rows of the last frame that was drawn, without the status row."""
+    frame = s.split('\x1b[H')[-1].split('\x1b[?1049l')[0]
+    return [visible(r).rstrip('\r ') for r in frame.split('\r\n')[:-1]]
+
 less = os.path.join(BIN, 'less')
 cat = os.path.join(BIN, 'cat')
 tmp = os.environ.get('TMPDIR', '/tmp')
@@ -97,9 +102,12 @@ check("less: space scrolls a screen (row 25 appears)", 'row 25' in out)
 check("less: G reaches the end (row 199 and (END))", 'row 199' in out and '(END)' in out)
 check("less: q exits with status 0", st == 0)
 
-# Search
-out, st, _ = session([less, big], [(b'/row 150', 0.1), (b'\r', 0.4), (b'q', 0.5)])
-check("less: / search jumps to the match", 'row 150' in out)
+# Search. The typed pattern shows on the status row, so only the text rows of
+# the last frame tell whether the view moved (VIEW-028).
+out, st, _ = session([less, big], [(b'/150 x', 0.2), (b'\r', 0.5), (b'q', 0.5)])
+check("less: / search puts the match at the top", screen(out)[:2] == ['row 150 xxx', 'row 151 xxxx'])
+out, st, _ = session([less, big], [(b'G', 0.3), (b'?w 42', 0.2), (b'\r', 0.5), (b'q', 0.5)])
+check("less: ? searches backwards", screen(out)[:2] == ['row 42', 'row 43 x'])
 
 # Wrapping versus chopping
 out, st, _ = session([less, long_line], [(b'q', 0.5)], cols=40)
