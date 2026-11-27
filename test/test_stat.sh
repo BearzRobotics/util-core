@@ -141,5 +141,16 @@ for style in shell-escape-always c escape shell literal; do
     QUOTING_STYLE=$style run_cmp "%N long link target $style" --printf '%N|END\n' longlink
 done
 /usr/bin/rm -rf long longlink
+# %N in every quoting style, as GNU; no style but literal and shell may pass a
+# control character on (DISK-030). C locale: the quoting knows no other.
+mkdir "$TEST_TMP/quoting"
+for n in a 'a b' "it's" 'q"q' "$(printf 'a\033]0;pwn\007b')" "$(printf 'n\nl')" 'back\slash' '#h' '{' 'a{b}' 'x:y' "'" "$(printf "b|\033'![")"; do : > "$TEST_TMP/quoting/$n"; done
+for qs in literal shell shell-always shell-escape shell-escape-always c c-maybe escape locale clocale; do
+    exp=$(cd "$TEST_TMP/quoting" && LC_ALL=C QUOTING_STYLE=$qs gnu -c %N -- * | od -c)
+    act=$(cd "$TEST_TMP/quoting" && LC_ALL=C QUOTING_STYLE=$qs ours -c %N -- * | od -c)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS %N QUOTING_STYLE=$qs"
+    else FAIL=$((FAIL + 1)); echo "FAIL %N QUOTING_STYLE=$qs"; fi
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]

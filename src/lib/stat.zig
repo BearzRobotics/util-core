@@ -11,6 +11,7 @@
 //! are in src/commands/stat.zig.
 
 const std = @import("std");
+const quotearg = @import("../quotearg.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const Sink = @import("sink.zig").Sink;
@@ -19,7 +20,6 @@ const tzmod = @import("../tz.zig");
 const strftime = @import("../strftime.zig");
 const userdb = @import("../userdb.zig");
 const fileinfo = @import("../fileinfo.zig");
-const Quoted = @import("../quote.zig").Quoted;
 
 pub const Env = common.Env;
 
@@ -275,38 +275,18 @@ fn outStrPad(out: *Sink, f: Flags, text: []const u8) void {
     padStr(out, ff, text);
 }
 
-/// Write `name` in the QUOTING_STYLE in use. Escaping can make it several
+/// Write `name` in the QUOTING_STYLE in use, as gnulib quotearg (the port ls
+/// uses, which knows the C locale only). Escaping can make a name several
 /// times as long, so the writer must not have a fixed size.
-fn quoteName(s: *Ctx, name: []const u8, w: *Io.Writer) Io.Writer.Error!void {
-    const st = s.quoting;
-    if (std.mem.eql(u8, st, "literal")) return try w.writeAll(name);
-    if (std.mem.eql(u8, st, "c") or std.mem.eql(u8, st, "clocale") or std.mem.eql(u8, st, "escape")) {
-        const quoted = !std.mem.eql(u8, st, "escape");
-        if (quoted) try w.writeByte('"');
-        for (name) |ch| switch (ch) {
-            '\\' => try w.writeAll("\\\\"),
-            '"' => if (quoted) try w.writeAll("\\\"") else try w.writeByte('"'),
-            7 => try w.writeAll("\\a"),
-            8 => try w.writeAll("\\b"),
-            9 => try w.writeAll("\\t"),
-            10 => try w.writeAll("\\n"),
-            11 => try w.writeAll("\\v"),
-            12 => try w.writeAll("\\f"),
-            13 => try w.writeAll("\\r"),
-            ' ' => if (quoted) try w.writeByte(' ') else try w.writeAll("\\ "),
-            else => if (ch < 0x20 or ch >= 0x7f) try w.print("\\{o:0>3}", .{ch}) else try w.writeByte(ch),
-        };
-        if (quoted) try w.writeByte('"');
-    } else if (std.mem.eql(u8, st, "shell") or std.mem.eql(u8, st, "shell-always") or std.mem.eql(u8, st, "locale")) {
-        const needs = std.mem.eql(u8, st, "shell-always") or std.mem.eql(u8, st, "locale") or std.mem.indexOfAny(u8, name, " \t\n'\"\\$`!&|;<>()*?[]{}~#^=") != null or name.len == 0;
-        if (needs) {
-            try w.writeByte('\'');
-            for (name) |ch| if (ch == '\'') try w.writeAll("'\\''") else try w.writeByte(ch);
-            try w.writeByte('\'');
-        } else try w.writeAll(name);
-    } else {
-        try (Quoted{ .name = name, .always = std.mem.eql(u8, st, "shell-escape-always") }).format(w);
+fn quoteName(s: *Ctx, name: []const u8, w: *Io.Writer) (Io.Writer.Error || std.mem.Allocator.Error)!void {
+    var style: quotearg.Style = .shell_escape_always;
+    for (quotearg.style_names, quotearg.style_values) |known, value| {
+        if (std.mem.eql(u8, known, s.quoting)) style = value;
     }
+    var quoted: std.ArrayList(u8) = .empty;
+    defer quoted.deinit(s.env.gpa);
+    try quotearg.quote(&quoted, s.env.gpa, name, style, null);
+    try w.writeAll(quoted.items);
 }
 
 fn printStat(s: *Ctx, spec: []const u8, mod: u8, m: u8, filename: []const u8, st: *const sys.FileStat, follow: bool) bool {
