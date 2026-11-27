@@ -129,7 +129,8 @@ const Driver = struct {
                 n1 += k;
             }
             if (n0 != n1 or !std.mem.eql(u8, b0[0..n0], b1[0..n1])) return false;
-            if (n0 == 0) return true;
+            // The first has ended; so must the second.
+            if (n0 == 0) return try common.readChunk(io, f1, &b1) == 0;
         }
     }
 
@@ -395,7 +396,10 @@ const Driver = struct {
         {
             // Only the answer is wanted: differing sizes settle it, otherwise
             // compare in blocks and stop at the first difference.
-            const same = infos[0].size == infos[1].size and (d.streamEqual(real[0], real[1]) catch |e| {
+            // As GNU, a size of 0 is not believed: files in /proc report it
+            // whatever they hold. Reading them costs little.
+            const differ_in_size = infos[0].size != infos[1].size and infos[0].size != 0 and infos[1].size != 0;
+            const same = !differ_in_size and (d.streamEqual(real[0], real[1]) catch |e| {
                 d.fileError(real[0], e);
                 return;
             });

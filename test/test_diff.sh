@@ -176,6 +176,21 @@ if command -v bwrap > /dev/null && [ "$(two_fs 'stat -c %i "$1/m1/f" "$1/m2/f" |
 else
     skip_test "equal inodes on two file systems (needs bwrap and matching inode numbers)"
 fi
+# -q must not go by sizes that files do not have (VIEW-010).
+for f in /proc/version /proc/filesystems /sys/kernel/mm/transparent_hugepage/enabled; do
+    [ -r "$f" ] || continue
+    cat "$f" > "$TEST_TMP/copy"; { cat "$f"; echo more; } > "$TEST_TMP/longer"; head -c 5 "$f" > "$TEST_TMP/shorter"
+    for other in copy longer shorter; do
+        run_cmp "-q $f $other" -q "$f" "$TEST_TMP/$other"
+        run_cmp "-q $other $f" -q "$TEST_TMP/$other" "$f"
+        run_cmp "-qs $f $other" -qs "$f" "$TEST_TMP/$other"
+    done
+done
+: > "$TEST_TMP/empty"; printf 'x\n' > "$TEST_TMP/one"; head -c 4096 /dev/zero > "$TEST_TMP/page"; { cat "$TEST_TMP/page"; echo; } > "$TEST_TMP/page1"
+for a in "empty one" "one empty" "page page1" "page1 page" "page page" "empty empty"; do
+    run_cmp "-q sizes $a" -q "$TEST_TMP/${a% *}" "$TEST_TMP/${a#* }"
+done
+
 # Standard input that is the other file, partly read already (VIEW-009): its
 # contents differ from the file's. (The last case also skips back into step.)
 printf 'xx\nabc\n' > "$TEST_TMP/pos"
