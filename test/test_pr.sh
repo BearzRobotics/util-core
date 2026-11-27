@@ -292,5 +292,44 @@ for o in "-e2147483647" "-n:2147483647" "-n2147483647" "-i2147483647 -o200 -e100
     if [ "$g" = "$u" ]; then PASS=$((PASS + 1)); echo "PASS huge $o"
     else FAIL=$((FAIL + 1)); echo "FAIL huge $o: GNU $g, ours $u"; fi
 done
+# Input is printed as it is read, in little memory, so it may be endless.
+stream_case() { # DESC ARGS...: the start of the output of endless input
+    d="$1"; shift
+    g=$(yes | (ulimit -v 200000; LC_ALL=C timeout 10 "${GNU_BIN:-/usr/bin}/pr" "$@" 2>&1) | sed 1,5d | head -c 4000 | cksum)
+    u=$(yes | (ulimit -v 200000; LC_ALL=C timeout 10 "$BIN_DIR/pr" "$@" 2>&1) | sed 1,5d | head -c 4000 | cksum)
+    if [ "$g" = "$u" ]; then PASS=$((PASS + 1)); echo "PASS $d"
+    else FAIL=$((FAIL + 1)); echo "FAIL $d: GNU $g, ours $u"; fi
+}
+for o in "" "-t" "-t -2" "-t -a -3" "-t -J -2" "-t -n" "-m"; do
+    stream_case "endless lines $o" $o -
+done
+stream_case "endless file" -t /dev/stdin
+for o in "" "-t" "-t -a -2"; do
+    n=$( (ulimit -v 200000; timeout 10 "$BIN_DIR/pr" $o /dev/zero 2>/dev/null) | head -c 100000 | wc -c)
+    if [ "$n" -eq 100000 ]; then PASS=$((PASS + 1)); echo "PASS endless line $o"
+    else FAIL=$((FAIL + 1)); echo "FAIL endless line $o: $n bytes"; fi
+done
+# "-" twice side by side: one input, read in turn.
+seq 7 > "$TEST_TMP/seven"
+run_cmp_stdin() { # DESC ARGS...: seven lines on standard input
+    d="$1"; shift
+    g=$(LC_ALL=C "${GNU_BIN:-/usr/bin}/pr" "$@" < "$TEST_TMP/seven" | cksum)
+    u=$(LC_ALL=C "$BIN_DIR/pr" "$@" < "$TEST_TMP/seven" | cksum)
+    if [ "$g" = "$u" ]; then PASS=$((PASS + 1)); echo "PASS $d"
+    else FAIL=$((FAIL + 1)); echo "FAIL $d: GNU $g, ours $u"; fi
+}
+run_cmp_stdin "-m - -" -m -t - -
+run_cmp_stdin "-m - FILE -" -m -t - "$TEST_TMP/seven" -
+run_cmp_stdin "- -" -t - -
+# Each file is closed once printed, however many are named.
+many=""
+i=0
+while [ $i -lt 100 ]; do many="$many $TEST_TMP/seven"; i=$((i + 1)); done
+for o in "-t" "-t -l1 +2"; do
+    g=$( (ulimit -n 20; LC_ALL=C "${GNU_BIN:-/usr/bin}/pr" $o $many 2>&1) | cksum)
+    u=$( (ulimit -n 20; LC_ALL=C "$BIN_DIR/pr" $o $many 2>&1) | cksum)
+    if [ "$g" = "$u" ]; then PASS=$((PASS + 1)); echo "PASS many files $o"
+    else FAIL=$((FAIL + 1)); echo "FAIL many files $o: GNU $g, ours $u"; fi
+done
 print_summary
 [ "$FAIL" -eq 0 ]
