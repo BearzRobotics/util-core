@@ -15,7 +15,7 @@ tree 2.3.1 by Steve Baker, Thomas Moore, Francesc Rocher, Florian Sesser and Kyo
 - `-p, -u, -g, -s, -h, --si, --du, -D, --timefmt FMT, -F, --inodes, --device`: Per-entry information and classification characters.
 - `-v, -t, -c, -U, -r, --sort=KEY, --dirsfirst, --filesfirst`: Sorting (name, version, size, mtime, ctime, none).
 - `-q, -N, -Q`: Replace unprintable characters, print raw, or quote names.
-- `-i, -A, -S, -n, -C, --charset=NAME, --noreport`: Indentation, line-drawing character sets, colours (LS_COLORS), report line.
+- `-i, -A, -S, -n, -C, --charset=NAME, --noreport`: Indentation, line-drawing character sets, colours, report line. Colour is chosen as tree does: never without `$TERM`; `-C` always; otherwise not with `-n` or a non-empty `$NO_COLOR`, and only on a terminal (or with `$CLICOLOR_FORCE`) when there is a table or `$CLICOLOR` is set. The table is `$TREE_COLORS`, else `$LS_COLORS`; when that is empty and colour is wanted, tree's built-in one.
 - `-X, -J`: XML and JSON output.
 - `-o FILE`: Write the listing to FILE.
 - `--version, --help`: Print version or the option summary.

@@ -54,7 +54,20 @@ List contents of directories in a tree-like format.
 
 # ENVIRONMENT
 
-none (locale variables are ignored; behaviour is that of the C locale)
+LC_ALL, LC_CTYPE, LANG
+: A UTF-8 locale selects box-drawing characters and decides which characters of a name are printable.
+
+TZ
+: The time zone of dates.
+
+TERM
+: Without it nothing is coloured, even with `-C`.
+
+TREE_COLORS, LS_COLORS
+: The colour table; the first that is set is used. When it is empty and colour is wanted, tree's built-in table is used.
+
+NO_COLOR, CLICOLOR, CLICOLOR_FORCE
+: Without `-C`, a non-empty NO_COLOR turns colour off. Colour otherwise needs a table (CLICOLOR provides the built-in one) and a terminal (CLICOLOR_FORCE does without).
 
 # STANDARD STREAMS
 

@@ -5,6 +5,9 @@ ORACLE_OK=1  # tree is not a GNU program; the reference is Steve Baker's tree 2.
 . "$(dirname "$0")/testlib.sh"
 W="$(mktemp -d)"; cd "$W"
 export TZ=UTC
+# The colour variables would otherwise be whatever this machine has.
+export TERM=xterm
+unset LS_COLORS TREE_COLORS NO_COLOR CLICOLOR CLICOLOR_FORCE
 set -f
 mkdir t && cd t
 mkdir -p dir1/sub .hid emptyd d2/x/y/z deep/a/b/c/d/e
@@ -92,6 +95,19 @@ done
 unset LS_COLORS
 CMP_LOCALE=C td 'LS_COLORS unset -C' tree -C -a
 CMP_LOCALE=C td 'NO_COLOR' tree -C -n
+
+# Whether to colour and with which table, from the environment.
+mkdir "$W/ext"; for e in tar gz zip jpg mp3 wav exe bat txt Tar 7z; do : > "$W/ext/f.$e"; done
+ln -s nowhere "$W/ext/orphan"
+for spec in '' TERM= CLICOLOR=1 CLICOLOR_FORCE=1 CLICOLOR_FORCE= 'NO_COLOR=1 CLICOLOR_FORCE=1' LS_COLORS= LS_COLORS=di=33 \
+    'LS_COLORS=di=33 TREE_COLORS=di=32' 'LS_COLORS=di=33 TREE_COLORS=' LS_COLORS=no=36 LS_COLORS=no=36:mi=31; do
+    for v in $spec; do export "$v"; done
+    for o in -C -a '-n -C' '-C -n' -n; do CMP_LOCALE=C td "color env '$spec' $o" $o "$W/ext"; done
+    unset LS_COLORS TREE_COLORS NO_COLOR CLICOLOR CLICOLOR_FORCE; export TERM=xterm
+done
+unset TERM
+CMP_LOCALE=C td 'no TERM, -C' -C "$W/ext"
+export TERM=xterm
 help_cmp_tree() {
     exp=$(LC_ALL=C /usr/bin/tree --help 2>&1)
     act=$(ours --help 2>&1)

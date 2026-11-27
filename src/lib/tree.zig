@@ -957,19 +957,39 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
 
 // --------------------------------------------------------------- options
 
-fn parseColors(t: *T) void {
-    const ls_colors = t.env.getenv("LS_COLORS") orelse return;
-    if (ls_colors.len == 0) {
-        t.colors.fi = "00";
-        t.colors.tw = "";
-        t.colors.ow = "";
-        t.colors.st = "";
-        t.colors.su = "";
-        t.colors.sg = "";
-        return;
+/// The table of the environment: $TREE_COLORS when set, else $LS_COLORS; null
+/// when that is unset or empty.
+pub fn colorSpec(env: Env) ?[]const u8 {
+    const spec = env.getenv("TREE_COLORS") orelse env.getenv("LS_COLORS") orelse return null;
+    return if (spec.len > 0) spec else null;
+}
+
+/// GNU tree's own table, used when colour is wanted and the environment has
+/// none. In pieces: the plain entries, then the extensions by colour.
+const builtin_colors = ":no=00:rs=0:fi=00:di=01;34:ln=01;36:pi=40;33:so=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:ex=01;32" ++
+    extensionColors("01;32", "bat BAT btm BTM cmd CMD com COM dll DLL exe EXE") ++
+    extensionColors("01;31", "arj bz2 deb gz lzh rpm tar taz tb2 tbz2 tbz tgz tz2 z Z zip ZIP zoo") ++
+    extensionColors("01;35", "asf ASF avi AVI bmp BMP flac FLAC gif GIF jpg JPG jpeg JPEG m2a M2a m2v M2V mov MOV mp3 MP3 mpeg MPEG mpg MPG ogg OGG ppm rm RM tga TGA tif TIF wav WAV wmv WMV xbm xpm");
+
+fn extensionColors(comptime code: []const u8, comptime names: []const u8) []const u8 {
+    comptime {
+        @setEvalBranchQuota(20000);
+        var out: []const u8 = "";
+        var it = std.mem.tokenizeScalar(u8, names, ' ');
+        while (it.next()) |name| out = out ++ ":*." ++ name ++ "=" ++ code;
+        return out;
     }
+}
+
+fn parseColors(t: *T) void {
+    const ls_colors = colorSpec(t.env) orelse builtin_colors;
     t.colors = .{ .di = "", .ln = "", .pi = "", .so = "", .bd = "", .cd = "", .or_ = "", .mi = "", .su = "", .sg = "", .tw = "", .ow = "", .st = "", .ex = "" };
     var it = std.mem.splitScalar(u8, ls_colors, ':');
+    // The target of a broken link takes "mi", else "no".
+    var no: []const u8 = "";
+    defer if (t.colors.mi.len == 0) {
+        t.colors.mi = no;
+    };
     while (it.next()) |item| {
         const eq = std.mem.indexOfScalar(u8, item, '=') orelse continue;
         const k = item[0..eq];
@@ -980,7 +1000,7 @@ fn parseColors(t: *T) void {
             if (!std.ascii.isDigit(ch) and ch != ';') plain = false;
         }
         if (!plain) continue;
-        if (std.mem.eql(u8, k, "fi")) c.fi = v else if (std.mem.eql(u8, k, "di")) c.di = v else if (std.mem.eql(u8, k, "ln")) c.ln = v else if (std.mem.eql(u8, k, "pi")) c.pi = v else if (std.mem.eql(u8, k, "so")) c.so = v else if (std.mem.eql(u8, k, "bd")) c.bd = v else if (std.mem.eql(u8, k, "cd")) c.cd = v else if (std.mem.eql(u8, k, "or")) c.or_ = v else if (std.mem.eql(u8, k, "mi")) c.mi = v else if (std.mem.eql(u8, k, "su")) c.su = v else if (std.mem.eql(u8, k, "sg")) c.sg = v else if (std.mem.eql(u8, k, "tw")) c.tw = v else if (std.mem.eql(u8, k, "ow")) c.ow = v else if (std.mem.eql(u8, k, "st")) c.st = v else if (std.mem.eql(u8, k, "ex")) c.ex = v else if (k.len > 1 and k[0] == '*') {
+        if (std.mem.eql(u8, k, "no")) no = v else if (std.mem.eql(u8, k, "fi")) c.fi = v else if (std.mem.eql(u8, k, "di")) c.di = v else if (std.mem.eql(u8, k, "ln")) c.ln = v else if (std.mem.eql(u8, k, "pi")) c.pi = v else if (std.mem.eql(u8, k, "so")) c.so = v else if (std.mem.eql(u8, k, "bd")) c.bd = v else if (std.mem.eql(u8, k, "cd")) c.cd = v else if (std.mem.eql(u8, k, "or")) c.or_ = v else if (std.mem.eql(u8, k, "mi")) c.mi = v else if (std.mem.eql(u8, k, "su")) c.su = v else if (std.mem.eql(u8, k, "sg")) c.sg = v else if (std.mem.eql(u8, k, "tw")) c.tw = v else if (std.mem.eql(u8, k, "ow")) c.ow = v else if (std.mem.eql(u8, k, "st")) c.st = v else if (std.mem.eql(u8, k, "ex")) c.ex = v else if (k.len > 1 and k[0] == '*') {
             c.ext.append(t.gpa, .{ .suffix = k[1..], .code = v }) catch {};
         }
     }

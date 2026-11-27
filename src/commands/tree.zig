@@ -21,6 +21,20 @@ fn oom(ctx: cli.Context) u8 {
     return 2;
 }
 
+/// Whether to colour, as GNU decides it: never without $TERM. -C always does;
+/// else -n and $NO_COLOR forbid it, and it takes a terminal (or
+/// $CLICOLOR_FORCE) and a table, which $CLICOLOR also provides.
+fn wantColor(ctx: cli.Context, forced: bool, forbidden: bool) bool {
+    if (cli.getenv(ctx, "TERM") == null) return false;
+    if (forced) return true;
+    if (forbidden) return false;
+    if (cli.getenv(ctx, "NO_COLOR")) |v| if (v.len > 0) return false;
+    const clicolor_force = cli.getenv(ctx, "CLICOLOR_FORCE") != null;
+    if (!clicolor_force and !(Io.File.stdout().isTty(ctx.io) catch false)) return false;
+    const env: tree.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    return clicolor_force or cli.getenv(ctx, "CLICOLOR") != null or tree.colorSpec(env) != null;
+}
+
 pub fn main(ctx: cli.Context) u8 {
     const env: tree.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
     var o: tree.Options = .{};
@@ -70,7 +84,8 @@ pub fn main(ctx: cli.Context) u8 {
     });
     defer p.deinit();
     p.silent = true;
-    var force_no_color = false;
+    var no_color = false;
+    var color_forced = false;
     while (true) switch (p.next()) {
         .done => break,
         .bad => {
@@ -130,8 +145,8 @@ pub fn main(ctx: cli.Context) u8 {
             'i' => o.no_indent = true,
             'A' => o.ansi = true,
             'S' => o.cp437 = true,
-            'n' => force_no_color = true,
-            'C' => o.color = true,
+            'n' => no_color = true,
+            'C' => color_forced = true,
             'X' => o.mode = .xml,
             'J' => o.mode = .json,
             'T', 'H', 'R' => {},
@@ -186,7 +201,7 @@ pub fn main(ctx: cli.Context) u8 {
         o.use_utf8_lines = std.ascii.eqlIgnoreCase(cs, "utf-8") or std.ascii.eqlIgnoreCase(cs, "utf8");
         o.entity_lines = !o.use_utf8_lines and !std.ascii.eqlIgnoreCase(cs, "ascii") and !std.ascii.eqlIgnoreCase(cs, "us-ascii");
     }
-    if (force_no_color) o.color = false;
+    o.color = wantColor(ctx, color_forced, no_color);
     o.patterns = patterns.items;
     o.ignores = ignores.items;
 
