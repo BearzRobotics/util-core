@@ -42,6 +42,7 @@ pub fn run(ctx: cli.Context, bracket: bool) u8 {
 fn report(context: ?*anyopaque, ev: test_lib.Event) void {
     const ctx: *const cli.Context = @ptrCast(@alignCast(context.?));
     switch (ev) {
+        .no_length_for => |op| cli.warn(ctx.*, "{s} does not accept -l", .{op}),
         .extra_argument => |t| cli.warn(ctx.*, "extra argument {f}", .{cli.quoteC(t)}),
         .missing_argument_after => |t| cli.warn(ctx.*, "missing argument after {f}", .{cli.quoteC(t)}),
         .binary_operator_expected => |t| cli.warn(ctx.*, "{f}: binary operator expected", .{cli.quoteC(t)}),

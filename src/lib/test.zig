@@ -25,6 +25,8 @@ pub const Options = struct {
 /// A syntax error in the expression; evaluation stops (GNU exit status 2).
 pub const Event = union(enum) {
     extra_argument: []const u8,
+    /// A file test was given "-l STRING"; the operator is named.
+    no_length_for: []const u8,
     missing_argument_after: []const u8,
     binary_operator_expected: []const u8,
     unary_operator_expected: []const u8,
@@ -198,9 +200,11 @@ const Parser = struct {
                 return p.fail(.{ .close_paren_expected = p.at(p.pos) });
             }
             p.pos += 1;
+        } else if (p.args.len - p.pos >= 4 and std.mem.eql(u8, a, "-l") and isBinary(p.at(p.pos + 2))) {
+            p.pos += 1;
+            value = try p.lengthBinary(true);
         } else if (p.args.len - p.pos >= 3 and isBinary(p.at(p.pos + 1))) {
-            value = try p.binary(a, p.at(p.pos + 1), p.at(p.pos + 2));
-            p.pos += 3;
+            value = try p.lengthBinary(false);
         } else if (a.len == 2 and a[0] == '-') {
             if (p.pos + 1 >= p.args.len) {
                 return p.beyond(); // a switch needs an operand
@@ -213,6 +217,26 @@ const Parser = struct {
             p.pos += 1;
         }
         return negated != value;
+    }
+
+    /// A binary operator at `pos + 1` whose integer operands may be written
+    /// "-l STRING", the length of STRING. `left_is_length`: the "-l" of the
+    /// left one has been passed.
+    fn lengthBinary(p: *Parser, left_is_length: bool) Error!bool {
+        var l = p.at(p.pos);
+        const op = p.at(p.pos + 1);
+        const right_is_length = p.args.len - p.pos >= 4 and std.mem.eql(u8, p.at(p.pos + 2), "-l");
+        var r = p.at(p.pos + 2);
+        const file_test = std.mem.eql(u8, op, "-nt") or std.mem.eql(u8, op, "-ot") or std.mem.eql(u8, op, "-ef");
+        if (file_test and (left_is_length or right_is_length)) return p.fail(.{ .no_length_for = op });
+        // The string operators take the words as they stand.
+        const numeric = op.len == 3 and op[0] == '-' and !file_test;
+        var buffers: [2][24]u8 = undefined;
+        if (numeric and left_is_length) l = std.fmt.bufPrint(&buffers[0], "{d}", .{l.len}) catch unreachable;
+        if (numeric and right_is_length) r = std.fmt.bufPrint(&buffers[1], "{d}", .{p.at(p.pos + 3).len}) catch unreachable;
+        const value = try p.binary(l, op, r);
+        p.pos += if (right_is_length) 4 else 3;
+        return value;
     }
 
     /// Unary operator `op` (a two-character switch) applied to `arg`.
