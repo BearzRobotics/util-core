@@ -793,7 +793,11 @@ pub fn parseParameterScan(arena: std.mem.Allocator, spec: []const u8) error{ Out
     const lo = std.fmt.parseFloat(f64, lo_s) catch return error.Invalid;
     const hi = std.fmt.parseFloat(f64, hi_s) catch return error.Invalid;
     const step = std.fmt.parseFloat(f64, step_s) catch return error.Invalid;
-    if (!(step > 0) or hi < lo) return error.Invalid;
+    // Past 2^53 a float no longer counts in ones, and a step that does not
+    // move the value would repeat it.
+    const exact: f64 = 1 << 53;
+    if (!(@abs(lo) <= exact and @abs(hi) <= exact)) return error.Invalid;
+    if (!(step > 0 and step <= 2 * exact) or hi < lo or lo + step == lo) return error.Invalid;
     const frac = std.mem.indexOfScalar(u8, lo_s, '.') != null or std.mem.indexOfScalar(u8, hi_s, '.') != null or std.mem.indexOfScalar(u8, step_s, '.') != null;
     var values: std.ArrayList([]const u8) = .empty;
     var i: usize = 0;

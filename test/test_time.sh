@@ -112,5 +112,15 @@ check "metrics hyperfine names"       $BIN_DIR/time --bench --runs=2 --metrics=t
 check "bad --metrics rejected"        sh -c "! $BIN_DIR/time --bench --metrics=bogus true >/dev/null 2>&1"
 check "--min-runs and --max-runs"     $BIN_DIR/time --bench --duration=50 --min-runs=2 --max-runs=5 true
 check "bench option without --bench rejected" sh -c "! $BIN_DIR/time --warmup=2 true >/dev/null 2>&1"
+# Bounds that do not fit a whole number, or a step that does not move them
+# (MISC-037).
+for spec in x:1e19:1e19 x:inf:inf x:0:inf x:-inf:0 x:nan:1 x:1:2:inf x:1:2:nan x:1e16:1e16; do
+    out=$("$BIN_DIR/time" --bench --runs 1 --parameter-scan "$spec" 'true {x}' 2>&1 >/dev/null; echo "status $?")
+    case $out in
+    *"invalid --parameter-scan"*"status 125") PASS=$((PASS + 1)); echo "PASS refused $spec" ;;
+    *) FAIL=$((FAIL + 1)); echo "FAIL $spec: $out" ;;
+    esac
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]
