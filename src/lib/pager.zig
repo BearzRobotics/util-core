@@ -247,12 +247,31 @@ pub const Pager = struct {
         return .{ .len = d.len, .width = 1, .form = .text };
     }
 
-    /// Length in bytes of an escape sequence at the start of `s` (0 if none).
+    /// Length of the escape sequence at the start of `s` that raw mode lets
+    /// through (0 if there is none): a colour or style, ESC [ ... m, or an
+    /// OSC 8 hyperlink. Anything else could move the cursor, erase, or make
+    /// the terminal answer, and is shown as text.
     fn escLen(s: []const u8) usize {
-        if (s.len < 2 or s[0] != 0x1b or s[1] != '[') return 0;
-        var k: usize = 2;
-        while (k < s.len and !(s[k] >= 0x40 and s[k] <= 0x7e)) k += 1;
-        return if (k < s.len) k + 1 else s.len;
+        if (s.len < 3 or s[0] != 0x1b) return 0;
+        if (s[1] == '[') {
+            var k: usize = 2;
+            while (k < s.len and (std.ascii.isDigit(s[k]) or s[k] == ';' or s[k] == ':')) k += 1;
+            return if (k < s.len and s[k] == 'm') k + 1 else 0;
+        }
+        if (!std.mem.startsWith(u8, s[1..], link_start)) return 0;
+        var k: usize = 1 + link_start.len;
+        while (k < s.len and s[k] >= 0x20 and s[k] <= 0x7e) k += 1;
+        if (k >= s.len) return 0;
+        if (s[k] == 0x07) return k + 1;
+        return if (s[k] == 0x1b and k + 1 < s.len and s[k + 1] == '\\') k + 2 else 0;
+    }
+
+    const link_start = "]8;";
+    const link_end = "\x1b]8;;\x1b\\";
+
+    /// Whether `ln` may leave a hyperlink open behind it.
+    fn hasLink(ln: []const u8) bool {
+        return std.mem.indexOf(u8, ln, "\x1b" ++ link_start) != null;
     }
 
     /// Byte offset where the screen row that starts at `start` ends.
@@ -533,6 +552,28 @@ pub const Pager = struct {
         p.message = "Pattern not found";
     }
 
+    /// The hyperlink open at byte `upto` of `ln`, to restore on a wrapped
+    /// row; empty when there is none.
+    fn activeLink(ln: []const u8, upto: usize) []const u8 {
+        var link: []const u8 = "";
+        var i: usize = 0;
+        while (i < upto) {
+            const e = escLen(ln[i..upto]);
+            if (e == 0) {
+                i += 1;
+                continue;
+            }
+            const seq = ln[i .. i + e];
+            i += e;
+            if (seq[1] != ']') continue;
+            // ESC ] 8 ; params ; URI end: an empty URI closes the link.
+            const semi = std.mem.indexOfScalarPos(u8, seq, 1 + link_start.len, ';') orelse continue;
+            const first = seq[semi + 1];
+            link = if (first == 0x07 or first == 0x1b) "" else seq;
+        }
+        return link;
+    }
+
     /// The control sequences that are in effect at byte `upto` of `ln`
     /// (colours set earlier in the line), to restore on a wrapped row.
     fn activeStyle(ln: []const u8, upto: usize, buf: []u8) []const u8 {
@@ -604,6 +645,7 @@ pub const Pager = struct {
             if (p.opts.numbers) try w.print("\x1b[90m{d: >6} \x1b[0m", .{i + 1});
             try p.emitRow(w, ln, 0, ln.len);
             if (p.opts.raw and std.mem.indexOfScalar(u8, ln, 0x1b) != null) try w.writeAll("\x1b[0m");
+            if (p.opts.raw and hasLink(ln)) try w.writeAll(link_end);
             // The last line may still be without its newline.
             if (i + 1 < p.lineCount() or p.at_line_start) try w.writeByte('\n');
         }
@@ -633,9 +675,11 @@ pub const Pager = struct {
                 if (start > 0 and p.opts.raw) {
                     var sb: [256]u8 = undefined;
                     try w.writeAll(activeStyle(ln, start, &sb));
+                    try w.writeAll(activeLink(ln, start));
                 }
                 try p.emitRow(w, ln, start, end);
                 try w.writeAll("\x1b[0m");
+                if (p.opts.raw and hasLink(ln)) try w.writeAll(link_end);
                 have = p.stepDown(&pos);
             } else try w.writeAll("~");
             try w.writeAll("\r\n");
@@ -696,6 +740,36 @@ test "pager: C1 controls and stray bytes are shown, not sent" {
     defer p.deinit();
     _ = try p.append("ab\xc2\x9bcd\n");
     try std.testing.expectEqual(@as(usize, 2), p.rowsOf(0));
+}
+
+test "pager: raw mode passes colours and links, nothing else" {
+    const gpa = std.testing.allocator;
+    const pass = [_][]const u8{ "\x1b[m", "\x1b[0m", "\x1b[31;1m", "\x1b[38:5:1m", "\x1b]8;;http://x/\x07", "\x1b]8;id=1;file:///a\x1b\\", "\x1b]8;;\x1b\\" };
+    for (pass) |s| try std.testing.expectEqual(s.len, Pager.escLen(s));
+    const refuse = [_][]const u8{ "\x1b[6n", "\x1b[2;1H", "\x1b[3J", "\x1b[?25l", "\x1b[?1m", "\x1b[>4;2m", "\x1b[31", "\x1b[31 hello m", "\x1bc", "\x1b]0;T\x07", "\x1b]52;c;aGk=\x07", "\x1b]8;;http://x/", "\x1b]8;;a\x1b[2J\x07", "\x1b]8;;a\nb\x07", "\x1b" };
+    for (refuse) |s| try std.testing.expectEqual(@as(usize, 0), Pager.escLen(s));
+
+    var p = Pager.init(gpa, .{ .raw = true }, 5, 80);
+    defer p.deinit();
+    _ = try p.append("x\x1b[6ny\x1b[31mz\x1b[3Jw\n");
+    var aw: Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    try p.print(&aw.writer);
+    try std.testing.expectEqualStrings("x^[[6ny\x1b[31mz^[[3Jw\x1b[0m\n", aw.written());
+}
+
+test "pager: a link is closed at the end of a row and reopened on the next" {
+    const gpa = std.testing.allocator;
+    var p = Pager.init(gpa, .{ .raw = true }, 5, 4);
+    defer p.deinit();
+    _ = try p.append("\x1b]8;;u\x07abcdefgh\x1b]8;;\x07\n");
+    p.finish();
+    var aw: Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    try p.render(&aw.writer);
+    const frame = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, frame, "\x1b]8;;u\x07abcd\x1b[0m\x1b]8;;\x1b\\\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, frame, "\x1b[K\x1b]8;;u\x07efgh") != null);
 }
 
 test "partial UTF-8 at the end" {

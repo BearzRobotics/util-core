@@ -170,6 +170,16 @@ for flags in [[], ['-R'], ['-F'], ['-F', '-R']]:
     check('less %s: C1 controls are shown, not sent' % ' '.join(flags),
           st == 0 and 'a<U+009B>2Jb c<9B>d caf\u00e9' in out and '\x9b' not in out)
 
+# -R lets colours and links through, and nothing that moves, erases or asks.
+csi = os.path.join(tmp, 'pty_csi.txt')
+with open(csi, 'wb') as f:
+    f.write(b'x\x1b[6ny\x1b[2;1Hz\x1b[3Jw \x1b[32mgreen\x1b[m\n')
+for flags in [['-R'], ['-r'], ['-F', '-R']]:
+    out, st, _ = session([less, *flags, csi], [] if '-F' in flags else [(b'q', 0.5)])
+    check('less %s: only colour sequences pass' % ' '.join(flags),
+          st == 0 and 'x^[[6ny^[[2;1Hz^[[3Jw \x1b[32mgreen' in out
+          and not any(s in out for s in ('\x1b[6n', '\x1b[2;1H', '\x1b[3J')))
+
 # cat: a long file is paged, a short one is not
 out, st, _ = session([cat, big], [(b'q', 0.5)])
 check("cat: long view is paged and quits with q", '\x1b[?1049h' in out and st == 0)
