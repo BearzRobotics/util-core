@@ -50,5 +50,15 @@ for o in "" -e -m -s -L -q; do
         run_cmp "realpath $o $(printf '%.30s' "$n")" $o "$n"
     done
 done
+# -L applies ".." to the name before following links; -s, -L and -P override
+# one another, apart from -e and -m.
+mkdir -p logical/a/b logical/t && (cd logical && ln -s a/b l)
+cd logical
+for o in -L -s -P "-s -L" "-L -s" "-s -P" "-s -e" "-L -e" "-L -m" "--relative-to=l/.. -L" "--relative-base=l -s"; do
+    for n in l/.. l/../t l/../a nosuch/.. l/nosuch nosuch/x; do
+        run_cmp "links $o $n" $o "$n"
+    done
+done
+cd ..
 chmod 755 locked noexec; cd /
 print_summary
