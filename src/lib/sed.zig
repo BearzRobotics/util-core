@@ -1319,6 +1319,8 @@ const Exec = struct {
         if (e.in_place_tmp) |tmp| {
             if (e.cur_out.fd != sys.invalid_handle) _ = sys.closeFd(e.cur_out.fd);
             _ = sys.unlinkPath(tmp, false);
+            e.cur_out.buf.deinit(e.gpa);
+            e.cur_out.buf = .empty;
         }
         if (e.in.ahead) |*r| r.close(e.gpa);
         e.in.cur.close(e.gpa);
@@ -1595,6 +1597,8 @@ const Exec = struct {
         if (e.in_place_st) |st| e.keepAttributes(e.in.cur.fd, o.fd, st);
         const close_error = sys.closeFd(o.fd);
         o.fd = sys.invalid_handle;
+        o.buf.deinit(e.gpa);
+        o.buf = .empty;
         if (close_error) |er| {
             e.s.obs.emit(.{ .close_failed = .{ .name = tmp, .errno = er } });
             try e.flushAll();
