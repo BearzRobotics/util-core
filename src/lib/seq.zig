@@ -29,6 +29,8 @@ const Dec = struct {
     mant: i128,
     scale: i32,
     inf: i2 = 0, // +1 / -1 for infinities, mant ignored
+    /// Written as a zero with a minus sign, which `mant` cannot hold.
+    negative_zero: bool = false,
 
     fn precision(d: Dec) usize {
         return @intCast(@max(d.scale, 0));
@@ -162,7 +164,7 @@ fn parseDecimal(t: []const u8) ?Dec {
         exp = numparse.parseInt(i32, s[i + 1 ..], 10) catch return null;
         if (@abs(exp) > 60) return null; // far outside i128 range; use the float path
     }
-    return .{ .mant = if (neg) -mant else mant, .scale = frac - exp };
+    return .{ .mant = if (neg) -mant else mant, .scale = frac - exp, .negative_zero = neg and mant == 0 };
 }
 
 fn pow10(n: u32) ?i128 {
@@ -207,10 +209,10 @@ fn decimalPath(env: Env, observer: Observer, out: *Sink, first: Dec, step: Dec, 
     if (equal_width) {
         // LAST is formatted as an operand even when it is never reached.
         const lw = if (last.inf != 0) 0 else fmtDec(b2, @divTrunc(l, drop), prec, 0).len;
-        width = @max(fmtDec(b1, @divTrunc(f, drop), prec, 0).len, lw);
+        width = @max(fmtDec(b1, @divTrunc(f, drop), prec, 0).len + @intFromBool(first.negative_zero), lw);
     }
 
-    if (prec == 0 and width == 0 and last.inf == 0 and st != 0 and fitsI64(f) and fitsI64(l) and fitsI64(st)) {
+    if (!first.negative_zero and prec == 0 and width == 0 and last.inf == 0 and st != 0 and fitsI64(f) and fitsI64(l) and fitsI64(st)) {
         integerPath(out, @intCast(f), @intCast(l), @intCast(st), sep);
         return true;
     }
@@ -220,7 +222,11 @@ fn decimalPath(env: Env, observer: Observer, out: *Sink, first: Dec, step: Dec, 
     while (if (st > 0) x <= l else x >= l) {
         if (!first_item) out.write(sep);
         first_item = false;
-        out.write(fmtDec(b1, @divTrunc(x, drop), prec, width));
+        if (first.negative_zero and x == f) {
+            // Only the first number keeps the sign of a "-0".
+            out.write("-");
+            out.write(fmtDec(b1, 0, prec, width -| 1));
+        } else out.write(fmtDec(b1, @divTrunc(x, drop), prec, width));
         if (out.failed) return true;
         x = std.math.add(i128, x, st) catch break;
     }
@@ -436,7 +442,8 @@ fn floatPath(env: Env, observer: Observer, out: *Sink, v: [3]f64, format: ?[]con
     var k: u64 = 0;
     var first_item = true;
     while (true) : (k += 1) {
-        const x = first + @as(f64, @floatFromInt(k)) * step;
+        // Not computed for the first one: -0 + 0 is +0.
+        const x = if (k == 0) first else first + @as(f64, @floatFromInt(k)) * step;
         if (if (step >= 0) x > last else x < last) break;
         if (!first_item) out.write(sep);
         first_item = false;

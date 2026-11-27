@@ -133,4 +133,14 @@ run_cmp "long precision %e"       -f %.30000e 3
 run_cmp "1_0" 1_0
 run_cmp "1 1_0 20" 1 1_0 20
 
+# A first number written -0 keeps its sign (MISC-033).
+run_cmp "-0 first"               -0 1
+run_cmp "-0.0 first"             -0.0 1
+run_cmp "-0 with -w"             -w -0 10
+run_cmp "-0.0 with -w"           -w -0.0 1 2
+run_cmp "-0 counting down"       -0 -1 -2
+run_cmp "-0 with -s"             -s, -0 2
+run_cmp "-0 with -f"             -f '%.2f' -0.0 1
+run_cmp "-0 as LAST"             1 -1 -0
+
 print_summary
