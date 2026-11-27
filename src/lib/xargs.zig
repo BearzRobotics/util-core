@@ -47,6 +47,9 @@ pub const Event = union(enum) {
     command_too_long,
     /// -t: the command line about to run, shell-quoted, without newline.
     trace: []const u8,
+    /// The input could not be read to its end. The whole items before that
+    /// have run.
+    read_failed,
 };
 pub const Observer = common.Observer(Event);
 
@@ -186,6 +189,7 @@ const X = struct {
     pids: std.ArrayList(sys.Pid) = .empty,
     ran_any: bool = false,
     nul_warned: bool = false,
+    read_failed: bool = false,
 
     fn abort(x: *X, status: u8) Stop {
         x.abort_status = status;
@@ -458,8 +462,13 @@ fn endOfLine(x: *X) Stop!void {
     if (x.lines_in_cmd >= x.opt.max_lines and x.items.items.len > 0) try runCommand(x);
 }
 
-fn nextByte(r: *Io.Reader) ?u8 {
-    return r.takeByte() catch null;
+/// The next byte; null at the end of the input, or when reading fails, which
+/// is then recorded: that end is not the end.
+fn nextByte(x: *X, r: *Io.Reader) ?u8 {
+    return r.takeByte() catch |e| {
+        if (e == error.ReadFailed) x.read_failed = true;
+        return null;
+    };
 }
 
 /// Add a byte to the item being read. An item as long as a whole command line
@@ -493,7 +502,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
         const d: u8 = x.opt.delimiter orelse 0;
         var have = false;
         while (true) {
-            const c = nextByte(rd) orelse break;
+            const c = nextByte(x, rd) orelse break;
             if (c == d) {
                 have = false;
                 try finishToken(x, &tok, true);
@@ -502,7 +511,7 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
                 try appendByte(x, &tok, c);
             }
         }
-        if (have) try finishToken(x, &tok, true);
+        if (have and !x.read_failed) try finishToken(x, &tok, true);
         return;
     }
 
@@ -516,8 +525,13 @@ fn processInput(x: *X, rd: *Io.Reader) Stop!void {
     var escaped = false;
     var stop = false;
     while (!stop) {
-        const c_opt = nextByte(rd);
+        const c_opt = nextByte(x, rd);
         if (c_opt == null) {
+            if (x.read_failed) {
+                // What was cut off could name something else than was meant.
+                if (line_has_item) try endOfLine(x);
+                break;
+            }
             if (quote != 0) {
                 if (x.items.items.len > 0 and x.opt.max_lines == 0) try runCommand(x);
                 return unmatchedQuote(x, quote);
@@ -617,6 +631,10 @@ fn runAll(x: *X, input: *Io.Reader) Stop!void {
         try runCommand(x);
     }
     try finishAll(x);
+    if (x.read_failed) {
+        x.observer.emit(.read_failed);
+        return x.abort(1);
+    }
 }
 
 /// Read items from `input` and run the command over them.

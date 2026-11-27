@@ -58,6 +58,7 @@ fn report(context: ?*anyopaque, ev: xargs.Event) void {
             };
             cli.warn(ctx.*, "{s}: {s}", .{ s.name, text });
         },
+        .read_failed => cli.warn(ctx.*, "error reading the input; its last, cut-off item was not used", .{}),
         .trace => |line| {
             const gpa = ctx.gpa;
             const text = std.fmt.allocPrint(gpa, "{s}\n", .{line}) catch return;
@@ -226,7 +227,11 @@ pub fn main(ctx: cli.Context) u8 {
 
     var rbuf: [8192]u8 = undefined;
     var reader = input.readerStreaming(ctx.io, &rbuf);
-    const result = xargs.run(env, o, &reader.interface, .{ .context = @constCast(&ctx), .func = report }) catch {
+    // As GNU, a directory named by -a holds no items (one as standard input
+    // is a read error).
+    var nothing: Io.Reader = .fixed("");
+    const from_directory = close_input and if (input.stat(ctx.io)) |st| st.kind == .directory else |_| false;
+    const result = xargs.run(env, o, if (from_directory) &nothing else &reader.interface, .{ .context = @constCast(&ctx), .func = report }) catch {
         cli.warn(ctx, "out of memory", .{});
         return 1;
     };
