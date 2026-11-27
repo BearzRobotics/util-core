@@ -184,4 +184,14 @@ mkdir -p "$W/nostat/sub" && touch "$W/nostat/sub/a" "$W/nostat/sub/b" && chmod 6
 CMP_LOCALE=C td 'a directory without search permission' "$W/nostat"
 chmod 700 "$W/nostat/sub"
 
+# Output that cannot be written is not a success, unlike in tree (FIND-030).
+if [ -c /dev/full ]; then
+    for how in -o redirect; do
+        if [ $how = -o ]; then out=$("$BIN_DIR/tree" -o /dev/full "$W/t/dir1" 2>&1); st=$?
+        else out=$("$BIN_DIR/tree" "$W/t/dir1" 2>&1 >/dev/full); st=$?; fi
+        if [ "$st" = 1 ] && [ "$out" = "tree: write error: No space left on device" ]; then PASS=$((PASS + 1)); echo "PASS full disk, $how"
+        else FAIL=$((FAIL + 1)); echo "FAIL full disk, $how: $st $out"; fi
+    done
+fi
+
 cd /; print_summary

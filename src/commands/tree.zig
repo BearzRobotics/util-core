@@ -219,13 +219,21 @@ pub fn main(ctx: cli.Context) u8 {
 
     var buf: [8192]u8 = undefined;
     var w = (out_file_handle orelse Io.File.stdout()).writerStreaming(ctx.io, &buf);
-    // A failed write is dropped: tree has always ignored it.
+    // tree itself ignores a failed write; a report that was cut off is not a
+    // success here.
     const result = tree.run(env, o, p.operands.items, &w.interface, .{}) catch |e| switch (e) {
         error.OutOfMemory => return oom(ctx),
-        error.WriteFailed => return 0,
+        error.WriteFailed => return writeFailed(ctx, w.err),
     };
-    w.interface.flush() catch {};
+    w.interface.flush() catch return writeFailed(ctx, w.err);
     return result.exit_status;
+}
+
+fn writeFailed(ctx: cli.Context, err: ?Io.File.Writer.Error) u8 {
+    // A reader that has gone has seen all it wanted.
+    if (err) |e| if (e == error.BrokenPipe) return 0;
+    cli.warn(ctx, "write error: {s}", .{cli.errText(err orelse error.WriteFailed)});
+    return 1;
 }
 
 fn usageErr() u8 {
