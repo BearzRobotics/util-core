@@ -78,15 +78,23 @@ else
     echo "run check skipped (cannot run $target on $host)"
 fi
 
+# No pipelines: their status is the last command's, so a failure before it
+# would leave a cut-off archive that looks finished. The archive gets its name
+# only once it is whole.
 case $target in
 *windows*)
     out="$outdir/$base.zip"
-    rm -f "$out"
-    (cd "$work" && find "$base" -type f | LC_ALL=C sort | zip -X -q -9 "$out" -@)
+    rm -f "$out" "$out.part"
+    (cd "$work" && find "$base" -type f > files && LC_ALL=C sort -o files files)
+    (cd "$work" && zip -X -q -9 "$work/archive.zip" -@ < files)
+    cp "$work/archive.zip" "$out.part"
     ;;
 *)
     out="$outdir/$base.tar.gz"
-    (cd "$work" && tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - "$base") | gzip -n -9 > "$out"
+    rm -f "$out" "$out.part"
+    (cd "$work" && tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf archive.tar "$base")
+    gzip -n -9 < "$work/archive.tar" > "$out.part"
     ;;
 esac
+mv "$out.part" "$out"
 echo "wrote $out ($(du -h "$out" | cut -f1))"
