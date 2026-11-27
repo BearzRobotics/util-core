@@ -90,6 +90,15 @@ pub fn main(ctx: cli.Context) u8 {
             if (!quiet) cli.warn(ctx, "failed to create {s} via template {f}: {s}", .{ if (make_dir) "directory" else "file", cli.quoteA(plan.full), cli.errText(e) });
             return 1;
         },
-        .name => |name| return if (cli.writeStdout(ctx.io, std.fmt.allocPrint(a, "{s}\n", .{name}) catch return 1)) 0 else 1,
+        .name => |name| {
+            const line = std.fmt.allocPrint(a, "{s}\n", .{name}) catch null;
+            if (line != null and cli.writeStdout(ctx.io, line.?)) return 0;
+            // As GNU: nobody was told the name, so nobody else can remove it.
+            if (!dry_run) {
+                const cwd = std.Io.Dir.cwd();
+                if (make_dir) cwd.deleteDir(ctx.io, name) catch {} else cwd.deleteFile(ctx.io, name) catch {};
+            }
+            return 1;
+        },
     }
 }

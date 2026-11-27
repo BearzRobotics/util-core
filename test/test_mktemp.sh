@@ -124,5 +124,13 @@ chk "all chars used"   sh -c "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17
 # X is one of the characters a name is made of, so one or two may well appear;
 # a long run of them would be the template left as it was.
 chk "no run of X left" sh -c "n=\$($BIN_DIR/mktemp -u fooXXXXXXXXXXXXXXXXXXXX) && [ \${#n} = 23 ] && ! echo \$n | grep -q XXXXXXXXXX"
+# A name that could not be told is removed again (FSOP-020).
+if [ -c /dev/full ]; then
+    mkdir "$TEST_TMP/gone"
+    for a in "" -d; do
+        chk "nothing left when printing fails $a" sh -c "! $BIN_DIR/mktemp $a -p $TEST_TMP/gone > /dev/full 2>/dev/null && [ -z \"\$(ls -A $TEST_TMP/gone)\" ]"
+    done
+fi
+
 print_summary
 [ "$FAIL" -eq 0 ]
