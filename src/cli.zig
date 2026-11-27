@@ -278,7 +278,12 @@ pub fn readYes(io: Io, file: Io.File) bool {
 /// -v/--verbose options of mkdir, rmdir, ...). Best effort.
 pub fn say(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     var buf: [512]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
+    var long: ?[]u8 = null;
+    defer if (long) |l| ctx.gpa.free(l);
+    const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch blk: {
+        long = std.fmt.allocPrint(ctx.gpa, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
+        break :blk long.?;
+    };
     _ = writeStdout(ctx.io, msg);
 }
 const quote_impl = @import("quote.zig");
