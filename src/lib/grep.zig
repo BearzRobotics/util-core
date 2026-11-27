@@ -28,6 +28,7 @@ const unicode = @import("../unicode.zig");
 const fnmatch = @import("../fnmatch.zig");
 const ign = @import("grep_ignore.zig");
 const scan = @import("grep_scan.zig");
+const checks = @import("grep_checks.zig");
 const vec = @import("../bytes.zig");
 const msearch = @import("../multisearch.zig");
 
@@ -2425,6 +2426,9 @@ fn isZlib(data: []const u8) bool {
 }
 
 /// Decompress gzip, zlib, xz or zstd data (by magic number).
+/// What the xz decoder's `init` consumes.
+const xz_stream_header_len = 12;
+
 fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
     const std_c = std.compress;
     const gzip = std.mem.startsWith(u8, data, &gzip_magic);
@@ -2441,11 +2445,19 @@ fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
     defer out.deinit(gpa);
     var trailing = false;
     if (zstd) {
-        // The decoder goes on from frame to frame by itself.
+        // A frame at a time, so that each one's checksum can be verified.
         const zbuf = gpa.alloc(u8, std_c.zstd.default_window_len + std_c.zstd.block_size_max) catch return .failed;
         defer gpa.free(zbuf);
-        var d = std_c.zstd.Decompress.init(&in, zbuf, .{});
-        d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
+        var at: usize = 0;
+        while (at < data.len) {
+            const frame = checks.zstdFrame(data[at..]) orelse return .failed;
+            var one = Io.Reader.fixed(data[at..][0..frame.len]);
+            var d = std_c.zstd.Decompress.init(&one, zbuf, .{});
+            const start = out.items.len;
+            d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
+            if (!checks.zstdOk(frame, out.items[start..])) return .failed;
+            at += frame.len;
+        }
     } else if (xz) {
         // A file may hold several streams, with zeros between and after
         // them in multiples of four ("Stream Padding").
@@ -2456,7 +2468,10 @@ fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
                 return .failed;
             };
             defer d.deinit();
+            const start = out.items.len;
+            const from = in.seek - xz_stream_header_len;
             d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
+            if (!checks.xzOk(data[from..in.seek], out.items[start..])) return .failed;
             const rest = data[in.seek..];
             const padding = std.mem.findNone(u8, rest, &.{0}) orelse rest.len;
             if (padding % 4 == 0 and std.mem.startsWith(u8, rest[padding..], &xz_magic)) {
@@ -2471,7 +2486,9 @@ fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
         var win: [std_c.flate.max_window_len]u8 = undefined;
         while (true) {
             var d = std_c.flate.Decompress.init(&in, if (gzip) .gzip else .zlib, &win);
+            const start = out.items.len;
             d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
+            if (!checks.flateOk(d.container_metadata, out.items[start..])) return .failed;
             const rest = data[in.seek..];
             if (gzip and std.mem.startsWith(u8, rest, &gzip_magic)) continue;
             // As gzip, accept zeros that fill up the last block.

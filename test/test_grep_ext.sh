@@ -317,6 +317,24 @@ cmp 'decompress stdin is not decompressed' "/usr/bin/grep -c needle < p.gz" "\$G
 cmp 'decompress bzip2 warns and searches the bytes' "echo 'grep: p.bz2: bzip2 compression is not supported by --decompress; searching the compressed bytes'; /usr/bin/grep -c needle p.bz2" "\$G --decompress -c needle p.bz2"
 head -c 40 p.gz > trunc.gz
 cmp 'decompress damaged data is an error' "echo 'grep: trunc.gz: cannot decompress: the compressed data is damaged or truncated'; exit 2" "\$G --decompress needle trunc.gz"
+# Data that still decodes but fails its checksum (REGX-033). `bad IN OUT N`
+# flips one bit of the byte N from the end; for xz the text is stored as it is,
+# so a changed letter decodes without complaint.
+bad() { cp "$1" "$2"; at=$(($(wc -c < "$1") - $3)); byte=$(od -An -tu1 -j "$at" -N1 "$1"); printf "\\$(printf '%o' $((byte ^ 1)))" | dd of="$2" bs=1 seek="$at" conv=notrunc status=none; }
+printf 'needle\n' > one.txt
+gzip -n -c one.txt > one.gz; zstd -q -c one.txt > one.zst
+bad one.gz crc.gz 8; bad one.gz length.gz 4; bad one.zst sum.zst 1
+cat one.gz crc.gz > second.gz; cat one.zst sum.zst > second.zst
+damaged() { cmp "decompress checksum: $1" "echo 'grep: $1: cannot decompress: the compressed data is damaged or truncated'; exit 2" "\$G --decompress needle $1"; }
+for f in crc.gz length.gz second.gz sum.zst second.zst; do damaged $f; done
+for check in crc32 crc64 sha256; do
+    xz --check=$check -c one.txt > one-$check.xz
+    cmp "decompress intact xz $check" "echo 1" "\$G --decompress -c needle one-$check.xz"
+    at=$(grep -abo needle one-$check.xz | cut -d: -f1)
+    bad one-$check.xz text-$check.xz $(($(wc -c < one-$check.xz) - at)); damaged text-$check.xz
+done
+seq 20000 | sed 's/^/needle /' > many.txt; xz --block-size=20000 -c many.txt > blocks.xz
+cmp 'decompress xz with many blocks' "echo 20000" "\$G --decompress -c needle blocks.xz"
 zlib plain.txt > p.zlib 2>/dev/null
 if [ -s p.zlib ] && python3 -c 'import zlib' 2>/dev/null; then
     cmp 'decompress zlib' "echo 2" "\$G --decompress -c needle p.zlib"

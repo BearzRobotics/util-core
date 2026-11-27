@@ -57,6 +57,7 @@ test {
     _ = @import("lib/fold.zig");
     _ = @import("lib/fu_common.zig");
     _ = @import("lib/grep.zig");
+    _ = @import("lib/grep_checks.zig");
     _ = @import("lib/grep_ignore.zig");
     _ = @import("lib/grep_scan.zig");
     _ = @import("lib/hashsum.zig");
