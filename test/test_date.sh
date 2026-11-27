@@ -124,5 +124,12 @@ while IFS= read -r line; do
     TZ=America/New_York run_cmp "rnd '$line' NY" -d "$line" '+%s %F %T %Z'
 done < rnd
 
+# Input is worked through as it arrives, in little memory.
+n=$(yes '@0' | (ulimit -v 200000; timeout 60 "$BIN_DIR/date" -u -f - 2>&1) | head -n 200000 | cksum)
+g=$(yes '@0' | LC_ALL=C timeout 60 "${GNU_BIN:-/usr/bin}/date" -u -f - 2>&1 | head -n 200000 | cksum)
+if [ "$n" = "$g" ]; then PASS=$((PASS + 1)); echo "PASS endless input"; else FAIL=$((FAIL + 1)); echo "FAIL endless input: GNU $g, ours $n"; fi
+first=$( (echo '@0'; sleep 3) | timeout 2 "$BIN_DIR/date" -u -f - 2>/dev/null | head -n 1)
+if [ -n "$first" ]; then PASS=$((PASS + 1)); echo "PASS a line is answered before the input ends"; else FAIL=$((FAIL + 1)); echo "FAIL no output before the end of input"; fi
+
 print_summary
 [ "$FAIL" -eq 0 ]

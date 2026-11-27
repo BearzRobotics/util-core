@@ -349,41 +349,50 @@ pub fn check(env: Env, o: Options, lists: []const Input, out: *Io.Writer, observ
 
 /// Verify one checksum list. Returns false when the exit status must be 1.
 fn checkOne(env: Env, o: Options, out: *Io.Writer, list: Io.File, list_name: []const u8, buf: []u8, observer: Observer) Error!bool {
-    // The list is read whole: lines are short and their order matters.
-    var text: std.ArrayList(u8) = .empty;
-    defer text.deinit(env.gpa);
-    while (true) {
-        try text.ensureUnusedCapacity(env.gpa, 64 * 1024);
-        const n = common.readChunk(env.io, list, text.unusedCapacitySlice()) catch |e| {
-            observer.emit(.{ .read_failed = .{ .name = list_name, .err = e, .list = true } });
-            return false;
-        };
-        if (n == 0) break;
-        text.items.len += n;
-    }
-
     var t: Totals = .{};
     var lineno: u64 = 0;
     var any_valid = false;
     var name_buf: std.ArrayList(u8) = .empty;
     defer name_buf.deinit(env.gpa);
     var label_algo = o.algo; // algorithm named in "improperly formatted" warnings
-    var pos: usize = 0;
-    while (pos < text.items.len) {
-        const nl = std.mem.indexOfScalarPos(u8, text.items, pos, '\n');
-        const end = nl orelse text.items.len;
-        const raw = text.items[pos..end];
-        pos = if (nl) |k| k + 1 else text.items.len;
-        lineno += 1;
-        if (raw.len == 0 or raw[0] == '#') continue;
-        const parsed = parseLine(env.gpa, o, raw, &name_buf) orelse {
-            t.improper += 1;
-            if (o.warn) observer.emit(.{ .improper_line = .{ .list = list_name, .line = lineno, .label = checkLabel(label_algo) } });
-            continue;
+    // The list is verified as it is read.
+    var batches: common.Batcher = .{};
+    defer batches.deinit(env.gpa);
+    var chunk: [16 * 1024]u8 = undefined;
+    const from_stdin = list.handle == Io.File.stdin().handle;
+    var at_end = false;
+    while (!at_end) {
+        // What is verified goes out before a read that may wait.
+        try out.flush();
+        const n = common.readChunk(env.io, list, &chunk) catch |e| {
+            observer.emit(.{ .read_failed = .{ .name = list_name, .err = e, .list = true } });
+            return false;
         };
-        any_valid = true;
-        label_algo = parsed.algo;
-        try verifyOne(env, o, out, parsed, &t, buf, observer);
+        at_end = n == 0;
+        const text = if (at_end) batches.rest() else try batches.add(env.gpa, chunk[0..n], "\n") orelse continue;
+        var pos: usize = 0;
+        while (pos < text.len) {
+            const nl = std.mem.indexOfScalarPos(u8, text, pos, '\n');
+            const end = nl orelse text.len;
+            const raw = text[pos..end];
+            pos = if (nl) |k| k + 1 else text.len;
+            lineno += 1;
+            if (raw.len == 0 or raw[0] == '#') continue;
+            var entry = parseLine(env.gpa, o, raw, &name_buf);
+            // As in GNU, a list on standard input cannot name it: checking
+            // that entry would read the rest of the list.
+            if (entry) |p| if (from_stdin and std.mem.eql(u8, p.name, "-")) {
+                entry = null;
+            };
+            const parsed = entry orelse {
+                t.improper += 1;
+                if (o.warn) observer.emit(.{ .improper_line = .{ .list = list_name, .line = lineno, .label = checkLabel(label_algo) } });
+                continue;
+            };
+            any_valid = true;
+            label_algo = parsed.algo;
+            try verifyOne(env, o, out, parsed, &t, buf, observer);
+        }
     }
 
     if (!any_valid) {

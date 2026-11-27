@@ -206,7 +206,10 @@ pub fn main(ctx: cli.Context) u8 {
     var stdin = Io.File.stdin().readerStreaming(ctx.io, &rbuf);
     const input: numfmt.Input = if (operands.len > 0) .{ .operands = operands } else .{ .reader = &stdin.interface };
     const result = numfmt.run(env, o, input, &stdout.interface, observer) catch |e| switch (e) {
-        error.OutOfMemory => return 1,
+        error.OutOfMemory => {
+            cli.warn(ctx, "memory exhausted", .{});
+            return 1;
+        },
         error.ReadFailed => {
             cli.warn(ctx, "error reading input", .{});
             return 1;

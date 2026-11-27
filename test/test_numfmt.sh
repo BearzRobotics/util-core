@@ -172,5 +172,12 @@ while read -r line; do
     run_cmp "rnd fmt $line"       --from=auto --format='%.2f' -- "$line"
 done < rnd
 
+# Input is worked through as it arrives, in little memory.
+n=$(yes '12000' | (ulimit -v 200000; timeout 60 "$BIN_DIR/numfmt" --to=si 2>&1) | head -n 200000 | cksum)
+g=$(yes '12000' | LC_ALL=C timeout 60 "${GNU_BIN:-/usr/bin}/numfmt" --to=si 2>&1 | head -n 200000 | cksum)
+if [ "$n" = "$g" ]; then PASS=$((PASS + 1)); echo "PASS endless input"; else FAIL=$((FAIL + 1)); echo "FAIL endless input: GNU $g, ours $n"; fi
+first=$( (echo '12000'; sleep 3) | timeout 2 "$BIN_DIR/numfmt" --to=si 2>/dev/null | head -n 1)
+if [ -n "$first" ]; then PASS=$((PASS + 1)); echo "PASS a line is answered before the input ends"; else FAIL=$((FAIL + 1)); echo "FAIL no output before the end of input"; fi
+
 print_summary
 [ "$FAIL" -eq 0 ]
