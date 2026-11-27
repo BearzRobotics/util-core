@@ -743,14 +743,17 @@ pub const Pager = struct {
         } else try w.writeByte(':');
     }
 
+    pub const enter_sequence = "\x1b[?1049h\x1b[?7l\x1b[2J";
+    pub const leave_sequence = "\x1b[?7h\x1b[?1049l";
+
     /// Switch to the alternate screen with line wrapping off.
     pub fn enter(w: *Io.Writer) Io.Writer.Error!void {
-        try w.writeAll("\x1b[?1049h\x1b[?7l\x1b[2J");
+        try w.writeAll(enter_sequence);
     }
 
     /// Back to the normal screen.
     pub fn leave(w: *Io.Writer) Io.Writer.Error!void {
-        try w.writeAll("\x1b[?7h\x1b[?1049l");
+        try w.writeAll(leave_sequence);
     }
 };
 

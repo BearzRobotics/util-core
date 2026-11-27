@@ -62,7 +62,7 @@ none (the `LESS` variable is not read).
 
 # STANDARD STREAMS
 
-The screen is drawn on the alternate screen of the terminal; the keys are read from the terminal itself (`/dev/tty`, or the console on Windows), so standard input may be a pipe.
+A hang-up, interrupt, quit or termination signal leaves the screen and restores the terminal modes before it ends the program; SIGTSTP does so before it stops it, and both are taken again when it goes on (not on Windows). The screen is drawn on the alternate screen of the terminal; the keys are read from the terminal itself (`/dev/tty`, or the console on Windows), so standard input may be a pipe.
 
 # COMPATIBILITY
 

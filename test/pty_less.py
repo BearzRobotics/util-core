@@ -116,6 +116,18 @@ with open(long2, 'w') as f:
 out, st, _ = session([less, '-S', long2], [(b'/NEEDLE', 0.2), (b'\r', 0.5), (b'q', 0.5)])
 check('less: search finds text past 4096 bytes of a line', screen(out)[1:2] == ['after 0'] and 'Pattern not found' not in out)
 
+# A signal that ends the pager leaves the screen and the terminal modes as they
+# were (VIEW-023). The outer shell asks stty afterwards.
+for name, number in [('HUP', 1), ('INT', 2), ('QUIT', 3), ('TERM', 15)]:
+    for program in (less, cat):
+        inner = '(sleep 1; kill -%s $$) & exec "$0" "$1"' % name
+        out, st, _ = session(['/bin/sh', '-c', 'trap "" INT QUIT; ( trap - INT QUIT; /bin/sh -c \'%s\' "$1" "$2" ); echo "status $?"; stty -a < /dev/tty' % inner,
+                              'sh', program, big], [(b'', 1.5)])
+        after = out.split('status ')[-1]
+        words = after.split()
+        check('%s: SIG%s restores the screen and the modes' % (os.path.basename(program), name),
+              '\x1b[?1049l' in out and words[:1] == [str(128 + number)] and 'icanon' in words and 'echo' in words)
+
 # Wrapping versus chopping
 out, st, _ = session([less, long_line], [(b'q', 0.5)], cols=40)
 check("less: long line wraps (200 A's over several rows)", visible(out).count('A' * 40) >= 4)

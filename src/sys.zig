@@ -157,6 +157,7 @@ pub fn terminalColumns() ?usize {
 /// The controlling terminal in raw mode (the built-in pager's input).
 pub const Tty = @import("sys/tty.zig").Tty;
 pub const TtySize = @import("sys/tty.zig").Size;
+pub const TtyGuard = @import("sys/tty.zig").Guard;
 
 /// Windows: enable ANSI escapes and UTF-8 on the console. Elsewhere true.
 pub fn enableAnsiOutput() bool {

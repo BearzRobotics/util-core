@@ -101,12 +101,17 @@ pub const Ui = struct {
         ui.left = false;
         pager.Pager.enter(&ui.out.interface) catch {};
         ui.draw();
+        // A signal can cut a frame short; CAN ends an unfinished sequence.
+        sys.TtyGuard.arm(&ui.tty.?, Io.File.stdout().handle, pager.Pager.enter_sequence, "\x18\x1b[0m" ++ pager.Pager.leave_sequence);
         return true;
     }
 
     /// Give the terminal its former mode back, if it was changed.
     fn closeTerminal(ui: *Ui) void {
-        if (ui.tty) |*t| t.close(ui.io);
+        if (ui.tty) |*t| {
+            sys.TtyGuard.disarm();
+            t.close(ui.io);
+        }
         ui.tty = null;
     }
 
@@ -173,7 +178,18 @@ pub const Ui = struct {
         while (true) {
             // End of input on the terminal: nobody can type, so stop reading but
             // let the pager finish its output (no keys means no way to quit it).
-            const b = tty.readByte() orelse return;
+            const b = switch (tty.waitByte(200)) {
+                .byte => |b| b,
+                .closed => return,
+                .idle => {
+                    if (sys.TtyGuard.resumed()) {
+                        ui.lock();
+                        if (!ui.stopped) ui.draw();
+                        ui.unlock();
+                    }
+                    continue;
+                },
+            };
             const k = parser.feed(b) orelse continue;
             ui.lock();
             if (ui.stopped) {

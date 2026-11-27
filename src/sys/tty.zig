@@ -37,6 +37,96 @@ const win = if (is_win) struct {
     extern "kernel32" fn GetConsoleScreenBufferInfo(h: w.HANDLE, info: *CSBI) callconv(.winapi) c_int;
 } else struct {};
 
+/// While a program has the terminal in raw mode and perhaps another screen, a
+/// signal must not leave it so. `Guard.arm` has SIGHUP, SIGINT, SIGQUIT and
+/// SIGTERM put things back before they end the process, and SIGTSTP before it
+/// stops; when it goes on, the terminal is taken again and `Guard.resumed`
+/// reports it, so that the screen can be redrawn. Signals that are ignored
+/// stay ignored. One terminal at a time; does nothing on Windows.
+pub const Guard = struct {
+    const sigs = if (is_win) .{} else [_]std.posix.SIG{ .HUP, .INT, .QUIT, .TERM, .TSTP };
+
+    const State = struct {
+        tty: std.posix.fd_t,
+        saved: std.posix.termios,
+        raw: std.posix.termios,
+        out: std.posix.fd_t,
+        enter: []const u8,
+        leave: []const u8,
+    };
+    var state: if (is_win) void else State = undefined;
+    var armed: std.atomic.Value(bool) = .init(false);
+    var went_on: std.atomic.Value(bool) = .init(false);
+    var previous: if (is_win) void else [sigs.len]std.posix.Sigaction = undefined;
+    var caught: [sigs.len]bool = undefined;
+
+    /// `enter` and `leave` are what is written to `out` to take the screen and
+    /// to give it back; they must live as long as the guard.
+    pub fn arm(t: *const Tty, out: Io.File.Handle, enter: []const u8, leave: []const u8) void {
+        if (comptime is_win) return;
+        const raw = std.posix.tcgetattr(t.handle) catch return;
+        state = .{ .tty = t.handle, .saved = t.saved_termios, .raw = raw, .out = out, .enter = enter, .leave = leave };
+        armed.store(true, .release);
+        for (sigs, 0..) |sig, i| {
+            std.posix.sigaction(sig, null, &previous[i]);
+            caught[i] = previous[i].handler.handler != std.posix.SIG.IGN;
+            if (caught[i]) catchSignal(sig);
+        }
+    }
+
+    pub fn disarm() void {
+        if (comptime is_win) return;
+        if (!armed.swap(false, .acq_rel)) return;
+        for (sigs, 0..) |sig, i| {
+            if (caught[i]) std.posix.sigaction(sig, &previous[i], null);
+        }
+    }
+
+    /// Whether the process was stopped and has gone on since the last call.
+    pub fn resumed() bool {
+        return went_on.swap(false, .acq_rel);
+    }
+
+    fn catchSignal(sig: std.posix.SIG) void {
+        const act: std.posix.Sigaction = .{ .handler = .{ .handler = handle }, .mask = std.posix.sigemptyset(), .flags = std.posix.SA.RESTART };
+        std.posix.sigaction(sig, &act, null);
+    }
+
+    // Everything from here on runs in a signal handler.
+
+    fn handle(sig: std.posix.SIG) callconv(.c) void {
+        if (comptime is_win) return;
+        if (armed.load(.acquire)) {
+            send(state.leave);
+            std.posix.tcsetattr(state.tty, .NOW, state.saved) catch {};
+        }
+        // Now as if the signal had not been caught.
+        const dfl: std.posix.Sigaction = .{ .handler = .{ .handler = std.posix.SIG.DFL }, .mask = std.posix.sigemptyset(), .flags = 0 };
+        std.posix.sigaction(sig, &dfl, null);
+        var only = std.posix.sigemptyset();
+        std.posix.sigaddset(&only, sig);
+        std.posix.raise(sig) catch {};
+        std.posix.sigprocmask(std.posix.SIG.UNBLOCK, &only, null);
+        // Only a stop comes back (or is discarded, in an orphaned group).
+        if (sig != .TSTP) return;
+        catchSignal(sig);
+        if (armed.load(.acquire)) {
+            std.posix.tcsetattr(state.tty, .NOW, state.raw) catch {};
+            send(state.enter);
+            went_on.store(true, .release);
+        }
+    }
+
+    fn send(bytes: []const u8) void {
+        var rest = bytes;
+        while (rest.len > 0) {
+            const n = std.posix.system.write(state.out, rest.ptr, rest.len);
+            if (std.posix.errno(n) != .SUCCESS or n == 0) return;
+            rest = rest[@intCast(n)..];
+        }
+    }
+};
+
 pub const Tty = struct {
     handle: if (is_win) std.os.windows.HANDLE else std.posix.fd_t,
     saved_termios: if (is_win) void else std.posix.termios,
@@ -104,6 +194,19 @@ pub const Tty = struct {
         }
         const n = std.posix.read(t.handle, &b) catch return null;
         return if (n == 1) b[0] else null;
+    }
+
+    pub const Wait = union(enum) { byte: u8, idle, closed };
+
+    /// Next input byte, or `.idle` when none comes within `ms` milliseconds.
+    /// Where the terminal cannot be polled this waits for a byte.
+    pub fn waitByte(t: *const Tty, ms: u32) Wait {
+        if (comptime builtin.os.tag == .linux) {
+            var fds = [1]std.posix.pollfd{.{ .fd = t.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+            const n = std.posix.poll(&fds, @intCast(ms)) catch return .closed;
+            if (n == 0) return .idle;
+        }
+        return if (t.readByte()) |b| .{ .byte = b } else .closed;
     }
 
     /// Next input byte, waiting at most `ms` milliseconds; null on timeout,
