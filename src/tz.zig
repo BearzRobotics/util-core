@@ -411,6 +411,7 @@ fn parseTzif(gpa: std.mem.Allocator, data: []const u8) ?Zone {
     for (0..6) |k| cnt[k] = @intCast(std.mem.readInt(u32, hdr[20 + 4 * k ..][0..4], .big));
     if (version >= '2') {
         // Skip the 32-bit block.
+        for (cnt) |c| if (c > data.len) return null;
         const skip = 44 + cnt[3] * 4 + cnt[3] + cnt[4] * 6 + cnt[5] + cnt[2] * 8 + cnt[1] + cnt[0];
         if (data.len < skip + 44) return null;
         off = skip;
@@ -418,15 +419,33 @@ fn parseTzif(gpa: std.mem.Allocator, data: []const u8) ?Zone {
         for (0..6) |k| cnt[k] = @intCast(std.mem.readInt(u32, hdr[20 + 4 * k ..][0..4], .big));
         tsize = 8;
     }
+    // No count can exceed the file; checked first so the sums cannot overflow.
+    for (cnt) |c| if (c > data.len) return null;
     var p = off + 44;
     const timecnt = cnt[3];
     const typecnt = cnt[4];
     const charcnt = cnt[5];
     if (data.len < p + timecnt * tsize + timecnt + typecnt * 6 + charcnt) return null;
-    var z: Zone = .{ .gpa = gpa };
-    z.trans = gpa.alloc(i64, timecnt) catch return null;
-    z.trans_type = gpa.alloc(u8, timecnt) catch return null;
-    z.types = gpa.alloc(Type, typecnt) catch return null;
+    // The file may be anything TZ names: every index is checked before use.
+    if (typecnt == 0) return null;
+    for (data[p + timecnt * tsize ..][0..timecnt]) |t| if (t >= typecnt) return null;
+    for (0..typecnt) |k| {
+        const e = data[p + timecnt * tsize + timecnt + k * 6 ..];
+        // RFC 8536 keeps offsets within about a day; a week is generous.
+        const utoff = be32(e);
+        if (e[5] >= charcnt or utoff > 7 * 86400 or utoff < -7 * 86400) return null;
+    }
+    const trans = gpa.alloc(i64, timecnt) catch return null;
+    const trans_type = gpa.alloc(u8, timecnt) catch {
+        gpa.free(trans);
+        return null;
+    };
+    const types = gpa.alloc(Type, typecnt) catch {
+        gpa.free(trans);
+        gpa.free(trans_type);
+        return null;
+    };
+    var z: Zone = .{ .gpa = gpa, .trans = trans, .trans_type = trans_type, .types = types };
     for (0..timecnt) |k| z.trans[k] = if (tsize == 8) be64(data[p + k * 8 ..]) else be32(data[p + k * 4 ..]);
     p += timecnt * tsize;
     for (0..timecnt) |k| z.trans_type[k] = data[p + k];
@@ -539,4 +558,26 @@ test "posix TZ numbers beyond any clock" {
         try t.expect(parsePosix(text) == null);
     }
     try t.expectEqual(@as(i32, 24 * 7 * 3600), parsePosix("AAA0BBB,J1/99999999999999,J2").?.start.time);
+}
+
+test "a TZif file with bad indices is refused" {
+    const t = std.testing;
+    // A version 1 header (counts: isut, isstd, leap, time, type, char), one
+    // transition, one type, and its abbreviation.
+    var data: [44 + 5 + 6 + 4]u8 = @splat(0);
+    @memcpy(data[0..4], "TZif");
+    std.mem.writeInt(u32, data[32..36], 1, .big);
+    std.mem.writeInt(u32, data[36..40], 1, .big);
+    std.mem.writeInt(u32, data[40..44], 4, .big);
+    @memcpy(data[55..58], "AAA");
+    var good = parseTzif(t.allocator, &data).?;
+    good.deinit();
+    data[48] = 200; // a transition to a type that is not there
+    try t.expect(parseTzif(t.allocator, &data) == null);
+    data[48] = 0;
+    data[54] = 200; // an abbreviation outside the table
+    try t.expect(parseTzif(t.allocator, &data) == null);
+    data[54] = 0;
+    std.mem.writeInt(u32, data[36..40], 0, .big); // transitions but no types
+    try t.expect(parseTzif(t.allocator, &data) == null);
 }
