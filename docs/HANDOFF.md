@@ -1,5 +1,8 @@
 # Handoff for the next Claude (updated 2026-11-08)
 
+> **Bug hunt in progress (2026-11-27):** read
+> [HANDOFF-bug-hunt.md](HANDOFF-bug-hunt.md) first.
+
 > **Structured (JSON) output work, 2026-11-14:** see
 > `/stuff/git/dksh/docs/HANDOFF-structured-output.md` (branch `value-pipe`) for the
 > `--json` additions on the `structured-output` branch and what remains.
