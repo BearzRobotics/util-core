@@ -267,4 +267,10 @@ else
     skip_test "swapped directory (no usable strace)"
 fi
 
+# The smallest threshold cannot be negated (DISK-023).
+cd "$TEST_TMP" && printf 'hello\n' > thr
+for t in -8E -9223372036854775808 -9223372036854775807 8E 9223372036854775807 -9223372036854775809 -1 -4K -5K; do
+    run_cmp "threshold $t" -t $t thr
+done
+
 cd /; print_summary

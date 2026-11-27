@@ -465,7 +465,8 @@ fn visit(s: *Du, dir: ?*dirat.Level, name: []const u8, level: u64, parent: *Leve
 
     if ((is_dir and level <= s.max_depth) or (s.opt_all and level <= s.max_depth) or level == 0) {
         const v: u64 = if (s.inodes) to_print.inodes else to_print.size;
-        const keep = if (s.threshold < 0) v <= @as(u64, @intCast(-s.threshold)) else v >= @as(u64, @intCast(s.threshold));
+        // (The smallest threshold has no positive i64.)
+        const keep = if (s.threshold < 0) v <= @abs(s.threshold) else v >= @as(u64, @intCast(s.threshold));
         if (keep) s.printSize(to_print, path);
     }
     return ok;
