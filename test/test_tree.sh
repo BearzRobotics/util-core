@@ -133,6 +133,17 @@ for secs in -9223372036854775808 -100000000000000000 100000000000000000 92233720
         else FAIL=$((FAIL + 1)); echo "FAIL mtime $secs: tree $o (rc=$rc)"; printf '%s\n' "$out" | head -8; fi
     done
 done
+# Past PATH_MAX the listing stops where tree's does. The tree is walked a
+# directory at a time from open descriptors, which could go further.
+mkdir "$W/deep" && ( cd "$W/deep" && i=0; while [ $i -lt 2100 ]; do mkdir a && cd -P a || exit 1; i=$((i + 1)); done ) 2>/dev/null
+for o in -d -J; do
+    exp=$(cd "$W" && ulimit -s 8192 && LC_ALL=C gnu $o deep 2>&1 | cksum; echo)
+    act=$(cd "$W" && ulimit -s 8192 && LC_ALL=C timeout 120 "$BIN_DIR/tree" $o deep 2>&1 | cksum; echo)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS past PATH_MAX $o"
+    else FAIL=$((FAIL + 1)); echo "FAIL past PATH_MAX $o: GNU $exp, ours $act"; fi
+done
+/usr/bin/rm -rf "$W/deep"
+
 # Link loops end in every output mode, not only in the text listing. (With a
 # timeout: without loop detection these never finish.)
 mkdir -p "$W/loops/two/d" "$W/loops/up/a/b/c" "$W/loops/cross/one" "$W/loops/cross/other"
