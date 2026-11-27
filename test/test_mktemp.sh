@@ -121,6 +121,8 @@ chk "umask 077 file"   sh -c "umask 277; f=\$($BIN_DIR/mktemp zzumXXXX) && [ \"\
 chk "dry run absent"   sh -c "f=\$($BIN_DIR/mktemp -u zzdryXXXX) && [ ! -e \$f ]"
 chk "names differ"     sh -c "[ \"\$($BIN_DIR/mktemp -u XXXXXXXXXX)\" != \"\$($BIN_DIR/mktemp -u XXXXXXXXXX)\" ]"
 chk "all chars used"   sh -c "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do $BIN_DIR/mktemp -u XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX; done | fold -w1 | sort -u | wc -l | grep -qx 62"
-chk "no X left"        sh -c "! $BIN_DIR/mktemp -u fooXXXXXX | grep -q X"
+# X is one of the characters a name is made of, so one or two may well appear;
+# a long run of them would be the template left as it was.
+chk "no run of X left" sh -c "n=\$($BIN_DIR/mktemp -u fooXXXXXXXXXXXXXXXXXXXX) && [ \${#n} = 23 ] && ! echo \$n | grep -q XXXXXXXXXX"
 print_summary
 [ "$FAIL" -eq 0 ]
