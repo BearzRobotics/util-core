@@ -628,8 +628,10 @@ const Parser = struct {
                 n.perm_kind = s[0];
                 s = s[1..];
             }
-            if (s.len > 0 and s[0] == '+' and false) {}
-            const parsed: ?u32 = blk: {
+            // "+644" was an older spelling of "/644" and GNU find refuses it,
+            // though as a mode elsewhere it is one.
+            const old_form = v.len > 1 and v[0] == '+' and std.ascii.isDigit(v[1]);
+            const parsed: ?u32 = if (old_form) null else blk: {
                 if (s.len > 0 and std.ascii.isDigit(s[0])) {
                     const o = numparse.parseInt(u32, s, 8) catch break :blk null;
                     if (o > 0o7777) break :blk null;
