@@ -109,6 +109,13 @@ check("less: / search puts the match at the top", screen(out)[:2] == ['row 150 x
 out, st, _ = session([less, big], [(b'G', 0.3), (b'?w 42', 0.2), (b'\r', 0.5), (b'q', 0.5)])
 check("less: ? searches backwards", screen(out)[:2] == ['row 42', 'row 43 x'])
 
+# The whole of a long line is searched (VIEW-024).
+long2 = os.path.join(tmp, 'pty_long2.txt')
+with open(long2, 'w') as f:
+    f.write(''.join('before %d\n' % i for i in range(50)) + 'a' * 5000 + 'NEEDLE\n' + ''.join('after %d\n' % i for i in range(50)))
+out, st, _ = session([less, '-S', long2], [(b'/NEEDLE', 0.2), (b'\r', 0.5), (b'q', 0.5)])
+check('less: search finds text past 4096 bytes of a line', screen(out)[1:2] == ['after 0'] and 'Pattern not found' not in out)
+
 # Wrapping versus chopping
 out, st, _ = session([less, long_line], [(b'q', 0.5)], cols=40)
 check("less: long line wraps (200 A's over several rows)", visible(out).count('A' * 40) >= 4)

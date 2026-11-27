@@ -152,6 +152,10 @@ pub const Pager = struct {
     pattern: std.ArrayList(u8) = .empty,
     message: []const u8 = "",
     msg_buf: [256]u8 = undefined,
+    /// A line without its escape sequences, for searching.
+    stripped: std.ArrayList(u8) = .empty,
+    /// A search could not look at a line for want of memory.
+    search_failed: bool = false,
     name: []const u8 = "",
 
     pub fn init(gpa: std.mem.Allocator, opts: Options, rows: usize, cols: usize) Pager {
@@ -164,6 +168,7 @@ pub const Pager = struct {
         p.rowc.deinit(p.gpa);
         p.input.deinit(p.gpa);
         p.pattern.deinit(p.gpa);
+        p.stripped.deinit(p.gpa);
     }
 
     pub fn lineCount(p: *const Pager) usize {
@@ -506,22 +511,29 @@ pub const Pager = struct {
     }
 
     /// Does line `i`, with escape sequences removed, contain the pattern?
-    fn lineMatches(p: *const Pager, i: usize) bool {
-        var buf: [4096]u8 = undefined;
+    fn lineMatches(p: *Pager, i: usize) bool {
         const raw = p.line(i);
-        var n: usize = 0;
-        var k: usize = 0;
-        while (k < raw.len and n < buf.len) {
-            const e = escLen(raw[k..]);
-            if (e > 0) {
-                k += e;
-                continue;
+        var hay = raw;
+        if (std.mem.indexOfScalar(u8, raw, 0x1b) != null) {
+            // Without its sequences the line is a copy, in a buffer that is
+            // kept from line to line.
+            p.stripped.clearRetainingCapacity();
+            var k: usize = 0;
+            while (k < raw.len) {
+                const e = escLen(raw[k..]);
+                if (e > 0) {
+                    k += e;
+                    continue;
+                }
+                const next = std.mem.indexOfScalarPos(u8, raw, k + 1, 0x1b) orelse raw.len;
+                p.stripped.appendSlice(p.gpa, raw[k..next]) catch {
+                    p.search_failed = true;
+                    return false;
+                };
+                k = next;
             }
-            buf[n] = raw[k];
-            n += 1;
-            k += 1;
+            hay = p.stripped.items;
         }
-        const hay = buf[0..n];
         if (p.ignoreCase()) return std.ascii.findIgnoreCase(hay, p.pattern.items) != null;
         return std.mem.indexOf(u8, hay, p.pattern.items) != null;
     }
@@ -533,6 +545,7 @@ pub const Pager = struct {
         }
         const n = p.lineCount();
         if (n == 0) return;
+        p.search_failed = false;
         var i = p.top;
         var step: usize = 0;
         while (step + 1 < n) : (step += 1) {
@@ -550,7 +563,7 @@ pub const Pager = struct {
                 return;
             }
         }
-        p.message = "Pattern not found";
+        p.message = if (p.search_failed) "Out of memory: not every line was searched" else "Pattern not found";
     }
 
     /// The hyperlink open at byte `upto` of `ln`, to restore on a wrapped
@@ -771,6 +784,26 @@ test "pager: a link is closed at the end of a row and reopened on the next" {
     const frame = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, frame, "\x1b]8;;u\x07abcd\x1b[0m\x1b]8;;\x1b\\\r\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, frame, "\x1b[K\x1b]8;;u\x07efgh") != null);
+}
+
+test "pager: search looks at the whole of a long line" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ "", "\x1b[1m" }) |style| {
+        var p = Pager.init(gpa, .{ .raw = true }, 4, 80);
+        defer p.deinit();
+        for (0..20) |_| _ = try p.append("short\n");
+        _ = try p.append(style);
+        const filler: [9000]u8 = @splat('a');
+        _ = try p.append(&filler);
+        _ = try p.append("NEE\x1b[0mDLE\n");
+        for (0..20) |_| _ = try p.append("short\n");
+        p.finish();
+        _ = p.key(.{ .char = '/' });
+        for ("NEEDLE") |c| _ = p.key(.{ .char = c });
+        _ = p.key(.enter);
+        try std.testing.expectEqual(@as(usize, 20), p.top);
+        try std.testing.expectEqualStrings("", p.message);
+    }
 }
 
 test "partial UTF-8 at the end" {
