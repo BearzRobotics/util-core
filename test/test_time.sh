@@ -135,5 +135,10 @@ out=$("$BIN_DIR/time" -o "$TEST_TMP/nosuch/report" "$BIN_DIR/echo" ran 2>/dev/nu
 if [ "$out" = "status 125" ]; then PASS=$((PASS + 1)); echo "PASS -o unwritable: not run"
 else FAIL=$((FAIL + 1)); echo "FAIL -o unwritable: $out"; fi
 
+# --export-json is valid UTF-8 whatever the command holds (MISC-036).
+"$BIN_DIR/time" --bench --runs 2 --export-json "$TEST_TMP/bench.json" "true $(printf '\377')" > /dev/null 2>&1
+if iconv -f UTF-8 -t UTF-8 "$TEST_TMP/bench.json" > /dev/null 2>&1 && grep -q 'true \\ufffd' "$TEST_TMP/bench.json"; then PASS=$((PASS + 1)); echo "PASS JSON is UTF-8"
+else FAIL=$((FAIL + 1)); echo "FAIL JSON is UTF-8"; fi
+
 print_summary
 [ "$FAIL" -eq 0 ]

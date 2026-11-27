@@ -11,6 +11,7 @@
 //! repeats `run` and returns statistics, `writeBenchmark` draws each result.
 
 const std = @import("std");
+const json = @import("../json.zig");
 const subprog = @import("subprog.zig");
 const numparse = @import("../numparse.zig");
 const Io = std.Io;
@@ -876,20 +877,6 @@ fn toSecs(ns: f64) f64 {
     return ns / 1e9;
 }
 
-fn writeJsonString(w: *Io.Writer, text: []const u8) Io.Writer.Error!void {
-    try w.writeByte('"');
-    for (text) |c| switch (c) {
-        '"' => try w.writeAll("\\\""),
-        '\\' => try w.writeAll("\\\\"),
-        '\n' => try w.writeAll("\\n"),
-        '\r' => try w.writeAll("\\r"),
-        '\t' => try w.writeAll("\\t"),
-        0...8, 11, 12, 14...31 => try w.print("\\u{x:0>4}", .{c}),
-        else => try w.writeByte(c),
-    };
-    try w.writeByte('"');
-}
-
 fn writeJsonArray(w: *Io.Writer, items: []const f64, scale: f64) Io.Writer.Error!void {
     try w.writeByte('[');
     for (items, 0..) |v, i| {
@@ -907,7 +894,7 @@ pub fn writeJson(w: *Io.Writer, entries: []const ExportEntry) Io.Writer.Error!vo
         const r = e.result;
         const wall = r.metrics[@intFromEnum(Metric.wall_time)];
         try w.writeAll("    {\n      \"command\": ");
-        try writeJsonString(w, e.command);
+        try json.writeString(w, e.command);
         try w.print(",\n      \"mean\": {d},\n      \"stddev\": {d},\n      \"median\": {d},\n", .{ toSecs(wall.mean), toSecs(wall.stddev), toSecs(r.median_wall) });
         try w.print("      \"user\": {d},\n      \"system\": {d},\n", .{ toSecs(r.metrics[@intFromEnum(Metric.user_time)].mean), toSecs(r.metrics[@intFromEnum(Metric.system_time)].mean) });
         try w.print("      \"min\": {d},\n      \"max\": {d},\n", .{ toSecs(wall.min), toSecs(wall.max) });
@@ -925,9 +912,9 @@ pub fn writeJson(w: *Io.Writer, entries: []const ExportEntry) Io.Writer.Error!vo
             try w.writeAll(",\n      \"parameters\": {");
             for (e.pairs, 0..) |p, k| {
                 if (k > 0) try w.writeAll(", ");
-                try writeJsonString(w, p.name);
+                try json.writeString(w, p.name);
                 try w.writeAll(": ");
-                try writeJsonString(w, p.value);
+                try json.writeString(w, p.value);
             }
             try w.writeAll("}");
         }
