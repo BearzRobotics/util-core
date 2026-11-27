@@ -121,7 +121,7 @@ This manual describes util-core 0.2.0.
 # FILES
 
 
-`$XDG_CONFIG_HOME/cat/syntaxes` or `~/.config/cat/syntaxes`: Sublime Text `.sublime-syntax` grammars. Your grammars are found before the built-in ones. Grammars are loaded only when a highlighted view is possible (terminal output, color on), so plain use pays nothing.
+`$XDG_CONFIG_HOME/cat/syntaxes` or `~/.config/cat/syntaxes` (a variable that is empty or not an absolute path is ignored): Sublime Text `.sublime-syntax` grammars. Your grammars are found before the built-in ones. Grammars are loaded only when a highlighted view is possible (terminal output, color on), so plain use pays nothing.
 
 `$XDG_CONFIG_HOME/cat/themes/NAME.theme` or `~/.config/cat/themes/NAME.theme`: your themes, one rule per line (`comment = #6c7a8c italic`, `keyword = 5 bold`, `string = #9ece6a on 0`, `extends = night`). Built-in themes: ansi (the terminal's 16 palette colors), night, ember, day, paper. With 24-bit colors the terminal is recognised from `$COLORTERM`, `$WT_SESSION` and similar; otherwise colors are reduced to 256 or 16. `auto` queries the terminal for its background color (OSC 11); terminals that do not answer are treated as dark unless `$COLORFGBG` says otherwise.
 

@@ -247,6 +247,20 @@ if command -v git >/dev/null 2>&1; then
     rm -rf "$H"
 fi
 
+# Grammars and themes never come from the current directory (VIEW-021).
+mkdir -p "$TEST_TMP/cwd/cat/syntaxes" "$TEST_TMP/cwd/.config/cat/syntaxes" "$TEST_TMP/cwd/rel/cat/syntaxes"
+for d in cat .config/cat rel/cat; do
+    printf '%%YAML 1.2\n---\nname: FromCwd\nfile_extensions: [cwdx]\nscope: source.cwd\ncontexts:\n  main: []\n' > "$TEST_TMP/cwd/$d/syntaxes/c.sublime-syntax"
+done
+for e in "XDG_CONFIG_HOME= HOME=" "HOME=" "XDG_CONFIG_HOME=. HOME=." "XDG_CONFIG_HOME=rel HOME=rel" "XDG_CONFIG_HOME= HOME=/nonexistent APPDATA="; do
+    if ( cd "$TEST_TMP/cwd" && env -u XDG_CONFIG_HOME -u APPDATA $e "$BIN_DIR/cat" --list-languages ) | grep -q FromCwd; then
+        FAIL=$((FAIL + 1)); echo "FAIL a grammar of the current directory is loaded: $e"
+    else PASS=$((PASS + 1)); echo "PASS no grammar from the current directory: $e"; fi
+done
+if ( cd / && XDG_CONFIG_HOME="$TEST_TMP/cwd" "$BIN_DIR/cat" --list-languages ) | grep -q FromCwd; then
+    PASS=$((PASS + 1)); echo "PASS an absolute XDG_CONFIG_HOME is used"
+else FAIL=$((FAIL + 1)); echo "FAIL an absolute XDG_CONFIG_HOME is not used"; fi
+
 # A message longer than any buffer is still printed (INFRA-010).
 run_cmp "a 9000 byte name" "$(head -c 9000 /dev/zero | tr '\0' x)"
 

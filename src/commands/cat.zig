@@ -362,10 +362,18 @@ fn report(context: ?*anyopaque, ev: cat.Event) void {
 /// A directory under the user's cat configuration ($XDG_CONFIG_HOME/cat or
 /// ~/.config/cat, and %APPDATA%\cat on Windows). Caller frees.
 fn configDir(ctx: cli.Context, sub: []const u8) ?[]u8 {
-    if (cli.getenv(ctx, "XDG_CONFIG_HOME")) |x| return std.Io.Dir.path.join(ctx.gpa, &.{ x, "cat", sub }) catch null;
-    if (cli.getenv(ctx, "HOME")) |h| return std.Io.Dir.path.join(ctx.gpa, &.{ h, ".config", "cat", sub }) catch null;
-    if (cli.getenv(ctx, "APPDATA")) |a| return std.Io.Dir.path.join(ctx.gpa, &.{ a, "cat", sub }) catch null;
+    if (absoluteDir(ctx, "XDG_CONFIG_HOME")) |x| return std.Io.Dir.path.join(ctx.gpa, &.{ x, "cat", sub }) catch null;
+    if (absoluteDir(ctx, "HOME")) |h| return std.Io.Dir.path.join(ctx.gpa, &.{ h, ".config", "cat", sub }) catch null;
+    if (absoluteDir(ctx, "APPDATA")) |a| return std.Io.Dir.path.join(ctx.gpa, &.{ a, "cat", sub }) catch null;
     return null;
+}
+
+/// The directory a variable names, when it names one from the root. As the XDG
+/// specification asks, an empty or relative value does not count: it would
+/// take grammars and themes from wherever the user happens to be.
+fn absoluteDir(ctx: cli.Context, name: []const u8) ?[]const u8 {
+    const value = cli.getenv(ctx, name) orelse return null;
+    return if (std.Io.Dir.path.isAbsolute(value)) value else null;
 }
 
 /// Pick the theme: --theme, else $BAT_THEME, else `auto` (a light or dark
