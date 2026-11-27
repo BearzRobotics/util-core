@@ -225,7 +225,8 @@ const Driver = struct {
 
     /// Compare two operands. `real` are the paths to open, `disp` the names
     /// shown; `only` is the one side that exists for a -N comparison.
-    fn compareFiles(d: *Driver, nested: bool, real_in: [2][]const u8, disp_in: [2][]const u8, only: ?usize) anyerror!void {
+    fn compareFiles(d: *Driver, nested: bool, real_in: [2][]const u8, disp_in: [2][]const u8, only_in: ?usize) anyerror!void {
+        var only = only_in;
         const gpa = d.env.gpa;
         const o = d.options;
         var real = real_in;
@@ -239,11 +240,32 @@ const Driver = struct {
                 continue;
             }
             infos[f] = d.statPath(real[f]) catch |e| {
+                // An operand that is not there counts as empty with -N, the
+                // first one also with -P, as long as the other is there.
+                const absent = e == error.FileNotFound or e == error.NotDir;
+                if (!nested and absent and (o.new_file or (o.unidirectional_new_file and f == 0))) {
+                    infos[f] = .{ .exists = false };
+                    continue;
+                }
                 d.fileError(real[f], e);
                 return;
             };
         }
-        if (!nested) {
+        if (!nested and (!infos[0].exists or !infos[1].exists)) {
+            if (!infos[0].exists and !infos[1].exists) return d.fileError(real[0], error.FileNotFound);
+            const there: usize = if (infos[0].exists) 0 else 1;
+            if (infos[there].kind == .directory) {
+                // GNU takes a missing directory in second place only.
+                if (there == 1) return d.fileError(real[there], error.IsDir);
+                infos[1].kind = .directory;
+                d.dir_mode = true;
+            }
+            // And with the first one missing, its -u and -c headers date both
+            // files at the Epoch (inside directories it does not).
+            if (there == 1) infos[1].mtime = .{ .sec = 0, .nsec = 0 };
+            only = there;
+        }
+        if (!nested and only == null) {
             const d0 = infos[0].kind == .directory;
             const d1 = infos[1].kind == .directory;
             if (d0 != d1) {

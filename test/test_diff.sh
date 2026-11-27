@@ -176,6 +176,17 @@ if command -v bwrap > /dev/null && [ "$(two_fs 'stat -c %i "$1/m1/f" "$1/m2/f" |
 else
     skip_test "equal inodes on two file systems (needs bwrap and matching inode numbers)"
 fi
+# -N, -P: an operand that is not there is empty.
+printf 'q\n' > "$TEST_TMP/there"; mkdir -p "$TEST_TMP/dirthere/sub"; echo z > "$TEST_TMP/dirthere/file"
+for o in -N -P -Nq -uN -cN -ruN --unidirectional-new-file; do
+    for pair in "there nofile" "nofile there" "nofile/x there" "there/x there" "dirthere nofile" "nofile dirthere"; do
+        a=$TEST_TMP/${pair% *}; b=$TEST_TMP/${pair#* }
+        run_cmp "$o missing operand: $pair" $o "$a" "$b"
+    done
+    # (Not -u: standard input is dated now.)
+    case $o in *u*) ;; *) CMP_STDIN="$TEST_TMP/there" run_cmp "$o missing operand: - nofile" $o - "$TEST_TMP/nofile" ;; esac
+done
+
 # -N without -r: a subdirectory on one side only (VIEW-012).
 ( cd "$TEST_TMP" && mkdir -p n1/onlysub n2/other && echo q > n1/onlysub/f && echo a > n1/x && echo b > n2/x )
 for o in -N -P -Nq -Ns "-N --label A --label B" "-r -N" "-r -P"; do
