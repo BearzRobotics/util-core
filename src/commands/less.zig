@@ -124,17 +124,20 @@ fn copyAll(ctx: cli.Context, inputs: []const Input, status: u8, visible: bool) u
         while (true) {
             const n = in.file.readStreaming(ctx.io, &.{&buf}) catch break;
             if (n == 0) break;
-            writeCopy(ctx.gpa, &out.interface, buf[0..n], visible) catch {
-                cli.noteStdoutFailure(cli.errText(out.err orelse error.WriteFailed));
-                return 1;
-            };
+            writeCopy(ctx.gpa, &out.interface, buf[0..n], visible) catch
+                return copyFailed(out.err, status);
         }
     }
-    out.interface.flush() catch {
-        cli.noteStdoutFailure(cli.errText(out.err orelse error.WriteFailed));
-        return 1;
-    };
+    out.interface.flush() catch return copyFailed(out.err, status);
     return status;
+}
+
+/// A reader that has gone has seen all it wanted: as with less itself, that
+/// is no error (SIGPIPE only arrives here as one when it is ignored).
+fn copyFailed(err: ?Io.File.Writer.Error, status: u8) u8 {
+    if (err) |e| if (e == error.BrokenPipe) return status;
+    cli.noteStdoutFailure(cli.errText(err orelse error.WriteFailed));
+    return 1;
 }
 
 fn writeCopy(gpa: std.mem.Allocator, w: *Io.Writer, bytes: []const u8, visible: bool) !void {

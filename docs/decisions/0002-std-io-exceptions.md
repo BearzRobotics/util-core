@@ -30,7 +30,7 @@ the command prints a one-line diagnostic. See `docs/portability.md`.
 
 | `sys` function | Used by | What it does | Why `std.Io` cannot |
 |---|---|---|---|
-| `ignoreSignal`, `defaultSignal`, `restoreSigpipe` | every entry point (SIGPIPE), `tee` (SIGINT, SIGPIPE) | `sigaction` | no signal API; Zig's runtime ignores SIGPIPE, which would turn `cmd \| head` into a write-error message |
+| `ignoreSignal`, `defaultSignal`, `inheritSigpipe` | every entry point (SIGPIPE), `tee` (SIGINT, SIGPIPE) | `sigaction` | no signal API; Zig's runtime catches SIGPIPE, which would turn `cmd \| head` into a write-error message and lose an inherited "ignore" in the programs a command runs |
 | `umask` | `mkdir` | read the process umask (Linux: `umask(2)` set-and-restore; elsewhere 022) | no query API |
 | `terminalColumns` | `cat` (bat-style view) | `ioctl(TIOCGWINSZ)` on standard output | `Io.File.isTty` only answers yes or no |
 | `processAlive` | `tail --pid` | `kill(pid, 0)`; EPERM counts as alive | no signal or process-probe API |

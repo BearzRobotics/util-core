@@ -118,12 +118,19 @@ pub fn defaultSignal(sg: Signal) void {
     setDisposition(sg, false);
 }
 
-/// Zig's runtime ignores SIGPIPE, which would turn `cmd | head` into a write
-/// error message. The conventional (GNU) behaviour is to die silently, so
-/// every entry point restores the default action; commands that need to see
-/// EPIPE (tee --output-error) set it back to ignore.
-pub fn restoreSigpipe() void {
-    defaultSignal(.pipe);
+/// Zig's runtime catches SIGPIPE, which would turn `cmd | head` into a write
+/// error message, and would lose an inherited "ignore" in the programs we run
+/// (exec resets a caught signal). Every entry point puts back what the process
+/// was started with, as GNU does: normally the default action, which ends the
+/// process silently. `threaded` is the runtime that saved it. Commands that
+/// need to see EPIPE (tee --output-error) set it to ignore themselves.
+pub fn inheritSigpipe(threaded: *const std.Io.Threaded) void {
+    var ignored = false;
+    if (comptime !builtin.single_threaded and std.posix.Sigaction != void and builtin.os.tag != .windows) {
+        if (threaded.have_signal_handler)
+            ignored = threaded.old_sig_pipe.handler.handler == std.posix.SIG.IGN;
+    }
+    setDisposition(.pipe, ignored);
 }
 
 /// The process file-mode creation mask. Linux reads it with umask(2) (set and

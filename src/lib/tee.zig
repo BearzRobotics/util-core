@@ -92,7 +92,9 @@ pub fn run(env: Env, options: Options, input: Io.File, destinations: []const Des
             if (!o.alive) continue;
             o.file.writeStreamingAll(env.io, buf[0..n]) catch |e| {
                 const pipe = e == error.BrokenPipe;
-                const quiet = pipe and (mode == .warn_nopipe or mode == .exit_nopipe);
+                // A closed pipe only shows as an error here when SIGPIPE is
+                // ignored; by default GNU then drops the output in silence.
+                const quiet = pipe and (mode == .default or mode == .warn_nopipe or mode == .exit_nopipe);
                 if (!quiet) {
                     observer.emit(.{ .name = o.name, .err = e });
                     status = 1;

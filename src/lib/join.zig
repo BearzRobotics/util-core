@@ -294,6 +294,8 @@ fn merge(st: *State, a: *Side, b: *Side) bool {
     }
 
     while (a.have and b.have) {
+        // The output may be gone, with much still to compare.
+        if (st.out.failed) return true;
         const ka = keyOf(cfg, a.cur.items, a.key_field);
         const d = cmpKeys(cfg, ka, keyOf(cfg, b.cur.items, b.key_field));
         if (d < 0) {
@@ -327,6 +329,8 @@ fn merge(st: *State, a: *Side, b: *Side) bool {
         }
         if (cfg.pairs) {
             for (0..g1.count()) |x| {
+                // A group of equal keys makes the product of its two sides.
+                if (st.out.failed) return true;
                 for (0..g2.count()) |y| printPair(st, g1.get(x), g2.get(y), fmt_auto);
             }
         }

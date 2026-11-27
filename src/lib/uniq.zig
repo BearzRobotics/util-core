@@ -94,7 +94,8 @@ fn filter(env: Env, out: *stickyout.Out, reader: *lines.LineReader, cfg: Options
     var groups_printed: u64 = 0; // for -D separators
     var ok = true;
 
-    while (true) {
+    // Checked first: a long run of equal lines never leaves the group.
+    while (!out.failed) {
         const maybe = reader.next() catch |e| {
             out.flush();
             observer.emit(.{ .err = e });
@@ -128,7 +129,6 @@ fn filter(env: Env, out: *stickyout.Out, reader: *lines.LineReader, cfg: Options
             if (cfg.method == .prepend or (cfg.method == .both and groups_started == 1) or (cfg.method == .separate and groups_started > 1)) out.writeByte(cfg.term);
             writeLine(out, line.text, cfg.term);
         }
-        if (out.failed) return ok;
     }
     if (count > 0) finishGroup(out, first_line.items, count, cfg);
     return ok;

@@ -11,7 +11,7 @@ GNU coreutils 9.7 (`/usr/bin/tee --version` on the development machine, installe
 - `-a, --append`: Append to files (opened with O_APPEND) instead of truncating.
 - `-i, --ignore-interrupts`: Ignore SIGINT.
 - `-p`: Same as --output-error=warn-nopipe.
-- `--output-error[=MODE]`: MODE is warn, warn-nopipe (default for the option), exit or exit-nopipe. Without the option SIGPIPE keeps its default action.
+- `--output-error[=MODE]`: MODE is warn, warn-nopipe (default for the option), exit or exit-nopipe. Without the option SIGPIPE stays as tee was started with it, normally the default action; if it was ignored, an output whose reader has gone is dropped without a diagnostic and does not change the exit status.
 - `--help, --version`: Print help or version and exit.
 
 ## Supported behaviour

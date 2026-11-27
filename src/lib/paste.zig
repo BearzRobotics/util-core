@@ -158,6 +158,7 @@ fn pasteSerial(env: Env, out: *stickyout.Out, sources: []Source, delims: []const
             }
             first = false;
             out.write(t);
+            if (out.failed) return;
         }
         out.writeByte(term);
         if (out.failed) return;

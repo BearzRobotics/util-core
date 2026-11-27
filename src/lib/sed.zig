@@ -1332,7 +1332,7 @@ const Exec = struct {
     }
 
     fn writeFailed(e: *Exec, name: []const u8, items: usize, errno: ?LX.E) Err {
-        if (errno == null or errno.? != .PIPE) e.s.obs.emit(.{ .write_error = .{ .name = name, .items = items, .errno = errno } });
+        e.s.obs.emit(.{ .write_error = .{ .name = name, .items = items, .errno = errno } });
         e.s.exit_code = 4;
         return error.Abort;
     }

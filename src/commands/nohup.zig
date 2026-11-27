@@ -96,7 +96,6 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     _ = sys.setSignal(sys.signo.HUP, .ignore);
-    sys.restoreSigpipe();
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(ctx.gpa);
     for (args) |a| argv.append(ctx.gpa, a) catch return 125;

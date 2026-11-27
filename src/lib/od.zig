@@ -114,7 +114,7 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
         var addr: u64 = skip;
         var lab: u64 = opts.label orelse 0;
         const radix = opts.radix;
-        while (true) {
+        while (!out.failed) {
             const n = src.read(cur);
             if (n == 0) break;
             if (!opts.verbose and n == bpb and have_prev and std.mem.eql(u8, cur, prev)) {

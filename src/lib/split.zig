@@ -1005,7 +1005,8 @@ fn writeChunkBytes(st: *State, dest: RecordDest, bytes: []const u8) bool {
         .stdout => {
             st.out.?.write(bytes);
             if (st.unbuffered) st.out.?.flush();
-            return true;
+            // Nothing else ends the run of an endless input.
+            return !st.out.?.failed or stdoutOkImpl(st);
         },
         .current => return st.write(bytes),
         .rr => |i| {

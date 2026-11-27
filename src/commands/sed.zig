@@ -196,6 +196,10 @@ fn reportCompileError(ctx: cli.Context, d: *const sed.CompileError) u8 {
     }
 }
 
+fn plural(n: usize) []const u8 {
+    return if (n == 1) "" else "s";
+}
+
 const Report = struct { ctx: cli.Context, stdout: *Io.File.Writer, stderr: *Io.File.Writer };
 
 /// Word the library's events as GNU sed does.
@@ -209,13 +213,12 @@ fn report(context: ?*anyopaque, ev: sed.Event) void {
         .read_error => |e| cli.warn(ctx, "read error on {s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
         .write_error => |e| {
             if (e.errno) |no| {
-                cli.warn(ctx, "couldn't write {d} items to {s}: {s}", .{ e.items, e.name, sys.errnoText(no) });
+                cli.warn(ctx, "couldn't write {d} item{s} to {s}: {s}", .{ e.items, plural(e.items), e.name, sys.errnoText(no) });
             } else {
                 // The error belongs to a writer we gave the library.
                 const w = if (std.mem.eql(u8, e.name, "stdout")) st.stdout else st.stderr;
                 const werr = w.err orelse error.WriteFailed;
-                if (werr == error.BrokenPipe) return;
-                cli.warn(ctx, "couldn't write {d} items to {s}: {s}", .{ e.items, e.name, cli.errText(werr) });
+                cli.warn(ctx, "couldn't write {d} item{s} to {s}: {s}", .{ e.items, plural(e.items), e.name, cli.errText(werr) });
             }
         },
         .temp_open_failed => |e| cli.warn(ctx, "couldn't open temporary file {s}: {s}", .{ e.path, sys.errnoText(e.errno) }),

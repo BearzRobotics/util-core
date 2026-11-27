@@ -117,7 +117,7 @@ fn compare(env: Env, out: *stickyout.Out, sides: *[2]Side, options: Options, sep
     // Prime both sides; the first line of each input is never order-checked.
     for (sides) |*s| advance(env, s) catch return readFail(out, observer);
 
-    while (sides[0].present or sides[1].present) {
+    while (!out.failed and (sides[0].present or sides[1].present)) {
         const order: i32 = if (!sides[0].present) 1 else if (!sides[1].present) -1 else switch (std.mem.order(u8, sides[0].cur.items, sides[1].cur.items)) {
             .lt => -1,
             .eq => 0,
