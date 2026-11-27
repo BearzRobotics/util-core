@@ -128,5 +128,11 @@ EOT
     else FAIL=$((FAIL + 1)); echo "FAIL editor copy, signal $sig: GNU $got_gnu, ours $got_ours"; fi
 done
 
+# A tab size past any size is refused, as GNU refuses it (VIEW-015).
+printf 'a\nb\n' > "$TEST_TMP/big1"; printf 'a\nc\n' > "$TEST_TMP/big2"
+for o in "--tabsize=99999999999999999999" "-s --tabsize=99999999999999999999" "--tabsize=9223372036854775807"; do
+    run_cmp "huge $o" $o "$TEST_TMP/big1" "$TEST_TMP/big2"
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]

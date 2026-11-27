@@ -33,12 +33,16 @@ fn diffUsage(ctx: cli.Context, comptime fmt: []const u8, args: anytype) u8 {
     return 2;
 }
 
+/// Larger numbers are cut to this, which leaves room to add a few of them
+/// without overflow. No file or line comes near it.
+const max_count: usize = std.math.maxInt(isize) / 4;
+
 fn parseCount(text: []const u8) ?usize {
     if (text.len == 0) return null;
     var v: usize = 0;
     for (text) |c| {
         if (!std.ascii.isDigit(c)) return null;
-        v = v *| 10 +| (c - '0');
+        v = @min(v *| 10 +| (c - '0'), max_count);
     }
     return v;
 }
@@ -206,7 +210,7 @@ pub fn main(ctx: cli.Context) u8 {
             O.tabsize => {
                 dargs.appendSlice(arena, &.{ "--tabsize", a.arg.? }) catch return 2;
                 const v = parseCount(a.arg.?) orelse 0;
-                if (v == 0) return diffUsage(ctx, "invalid tabsize '{s}'", .{a.arg.?});
+                if (v == 0 or v == max_count) return diffUsage(ctx, "invalid tabsize '{s}'", .{a.arg.?});
                 o.diff.tab_size = v;
             },
             'd' => {

@@ -248,5 +248,13 @@ for args in '- pos' 'pos -' '- -' '-s - pos'; do
     done
 done
 
+# Numbers past any size used to overflow (VIEW-015).
+printf 'a\nb\n' > "$TEST_TMP/big1"; printf 'a\nc\n' > "$TEST_TMP/big2"
+B=99999999999999999999
+for o in "-U $B --label x --label y" "-C $B --label x --label y" "--horizon-lines=$B" "-y --tabsize=$B" "--tabsize=$B" "-y --tabsize=1000" "-U 9223372036854775807 --label x --label y"; do
+    run_cmp "huge $o" $o "$TEST_TMP/big1" "$TEST_TMP/big2"
+done
+for f in "%c'\\77777777777'" "%c'\\101'|" "%c'\\1011'|"; do run_cmp "line format $f" "--line-format=$f" "$TEST_TMP/big1" "$TEST_TMP/big2"; done
+
 print_summary
 [ "$FAIL" -eq 0 ]
