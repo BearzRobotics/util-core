@@ -176,6 +176,16 @@ if command -v bwrap > /dev/null && [ "$(two_fs 'stat -c %i "$1/m1/f" "$1/m2/f" |
 else
     skip_test "equal inodes on two file systems (needs bwrap and matching inode numbers)"
 fi
+# -N without -r: a subdirectory on one side only (VIEW-012).
+( cd "$TEST_TMP" && mkdir -p n1/onlysub n2/other && echo q > n1/onlysub/f && echo a > n1/x && echo b > n2/x )
+for o in -N -P -Nq -Ns "-N --label A --label B" "-r -N" "-r -P"; do
+    run_cmp "$o one-sided subdirectories" $o "$TEST_TMP/n1" "$TEST_TMP/n2"
+    run_cmp "$o one-sided subdirectories, reversed" $o "$TEST_TMP/n2" "$TEST_TMP/n1"
+done
+if "$BIN_DIR/diff" --json -N "$TEST_TMP/n1" "$TEST_TMP/n2" | python3 -c 'import json,sys; k=[e["kind"] for e in json.load(sys.stdin)]; sys.exit(0 if k.count("common_subdirectory") == 2 else 1)'; then
+    PASS=$((PASS + 1)); echo "PASS --json -N one-sided subdirectories"
+else FAIL=$((FAIL + 1)); echo "FAIL --json -N one-sided subdirectories"; fi
+
 # -q must not go by sizes that files do not have (VIEW-010).
 for f in /proc/version /proc/filesystems /sys/kernel/mm/transparent_hugepage/enabled; do
     [ -r "$f" ] || continue

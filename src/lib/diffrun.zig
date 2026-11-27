@@ -269,13 +269,9 @@ const Driver = struct {
         if (only) |ex| {
             if (is_dir[ex]) {
                 // -N: a directory missing on one side is compared as an empty one.
-                if (o.recursive) {
+                if (o.recursive or !nested) {
                     try d.compareDirs(nested, real, disp, only);
-                } else {
-                    const parent = std.fs.path.dirname(disp[ex]) orelse ".";
-                    try d.w.print("Only in {s}: {s}\n", .{ parent, std.fs.path.basename(disp[ex]) });
-                    d.raise(1);
-                }
+                } else try d.commonSubdirectory(dn, disp);
                 return;
             }
         }
@@ -287,12 +283,7 @@ const Driver = struct {
             if (!nested or o.recursive) {
                 if (!nested) d.dir_mode = true;
                 try d.compareDirs(nested, real, disp, only);
-            } else {
-                if (o.json) {
-                    try d.jsonHead("common_subdirectory", dn);
-                    try d.w.writeAll("}");
-                } else try d.w.print("Common subdirectories: {s} and {s}\n", .{ dn[0], dn[1] });
-            }
+            } else try d.commonSubdirectory(dn, disp);
             return;
         }
         if (is_dir[0] or is_dir[1] or (nested and infos[0].exists and infos[1].exists and infos[0].kind != infos[1].kind)) {
@@ -329,6 +320,16 @@ const Driver = struct {
             return;
         }
         try d.compareContents(nested, real, dn, infos);
+    }
+
+    /// Without -r, a directory met inside the operands is only named.
+    /// As GNU, the message names the directories themselves, whatever --label
+    /// says; the JSON entry is labelled like the others.
+    fn commonSubdirectory(d: *Driver, dn: [2][]const u8, disp: [2][]const u8) !void {
+        if (d.options.json) {
+            try d.jsonHead("common_subdirectory", dn);
+            try d.w.writeAll("}");
+        } else try d.w.print("Common subdirectories: {s} and {s}\n", .{ disp[0], disp[1] });
     }
 
     /// `-l`: format the finished output of one file with the page formatter,
