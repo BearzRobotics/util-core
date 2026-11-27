@@ -11,6 +11,7 @@
 //! depends on the control flow) and routed by the caller.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const common = @import("lib/common.zig");
 const quote = @import("quote.zig");
 const errtext = @import("errtext.zig");
@@ -1073,6 +1074,19 @@ pub const Copier = struct {
                 if (now == null or !sameInode(now.?, src_sb)) {
                     _ = sys.closeFd(held);
                     held = sys.invalid_handle;
+                }
+            }
+            if (held == sys.invalid_handle and builtin.os.tag == .linux) {
+                // The ACLs of a directory that may not be read can still be
+                // read: hold it by name only and go through /proc.
+                if (sys.openFdAt(src.fd(), src.name, sys.O.PATH | nofollow, 0, &e)) |named| {
+                    defer _ = sys.closeFd(named);
+                    const now = sys.fstatFd(named, &e);
+                    if (now != null and sameInode(now.?, src_sb)) {
+                        var buf: [32]u8 = undefined;
+                        const proc = std.fmt.bufPrint(&buf, "/proc/self/fd/{d}", .{named}) catch unreachable;
+                        return posixacl.preserve(.{ .path = proc }, .{ .entry = dst }, mode, true);
+                    }
                 }
             }
             // Without a descriptor the ACL is unknown, which preserve reports,
