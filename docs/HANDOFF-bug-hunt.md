@@ -30,10 +30,7 @@ functionality, and assume the logic is wrong until it is proven good.
   sed refuses it), INFRA-014 (leaving the built-in pager while its input is
   blocked, and dd on SIGINT, end the process), DISK-032 (documented; names are
   not looked up through NSS).
-- `main` is at `8b435a0`, behind `bug-fixes`. Merge with the release, as
-  `git merge --no-ff -F MSGFILE bug-fixes` (`git merge -F -` does not read
-  standard input).
-- Next: the release, at the end of this file.
+- 0.3.0 is released; see the end of this file. Next: Windows.
 
 ### CI
 
@@ -132,14 +129,7 @@ tests and fix the Windows bugs, keeping Linux as it is.
   `nmcli connection up virbr0`.
 - Then publish Windows archives again (`release.yml`, README, release.md).
 
-## The release, at the end
+## Release
 
-Version 0.3.0 (CHANGELOG, `build.zig.zon`, `src/cli.zig`, manual pages). The
-steps are in `docs/release.md`. Pushing the tag makes `release.yml` create the
-GitHub release with the two Linux archives (no Windows ones for now). v0.0.0 also carried a vendored
-source archive, as did v0.1.0 (v0.2.0 did not); attach one with
-`gh release upload`.
-Both `regex` and `yaml` must be copied to `vendor/`, and the result must build
-with an empty `ZIG_GLOBAL_CACHE_DIR` (the recipe under "Release" in
-`docs/HANDOFF.md` predates `yaml`).
-
+0.3.0 was published on 2026-11-27 from `651a3d5` (main): two Linux archives,
+SHA256SUMS and the vendored source archive. No Windows archives.
