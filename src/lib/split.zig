@@ -15,6 +15,7 @@
 //! the writer the caller passes.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const common = @import("common.zig");
 const wsink = @import("wsink.zig");
@@ -363,11 +364,14 @@ const State = struct {
                 while (it.next()) |e| env.put(e.key_ptr.*, e.value_ptr.*) catch return null;
             }
             env.put("FILE", name) catch return null;
-            const shell = st.env.getenv("SHELL");
-            const sh: []const u8 = if (shell != null and shell.?.len > 0) shell.? else "/bin/sh";
+            // Windows has the command processor, with its own way of being
+            // given a command.
+            const windows = builtin.os.tag == .windows;
+            const shell = st.env.getenv(if (windows) "COMSPEC" else "SHELL");
+            const sh: []const u8 = if (shell != null and shell.?.len > 0) shell.? else if (windows) "cmd.exe" else "/bin/sh";
             if (st.ignore_sigpipe) sys.defaultSignal(.pipe);
             const spawned = std.process.spawn(st.env.io, .{
-                .argv = &.{ sh, "-c", cmd },
+                .argv = if (windows) &.{ sh, "/d", "/s", "/c", cmd } else &.{ sh, "-c", cmd },
                 .environ_map = &env,
                 .stdin = .pipe,
             });
@@ -391,7 +395,9 @@ const State = struct {
     fn createOutput(st: *State, name: []const u8) ?Io.File {
         const io = st.env.io;
         const f = while (true) {
-            if (Io.Dir.cwd().createFile(io, name, .{ .truncate = false })) |f| break f else |e| {
+            // (Windows lets nothing be asked through a handle that may only
+            // write, and the file is examined next.)
+            if (Io.Dir.cwd().createFile(io, name, .{ .truncate = false, .read = builtin.os.tag == .windows })) |f| break f else |e| {
                 if (e == error.ProcessFdQuotaExceeded or e == error.SystemFdQuotaExceeded) switch (st.releaseOutput()) {
                     .released => continue,
                     .failed => return null,

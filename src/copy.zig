@@ -421,6 +421,13 @@ pub const Copier = struct {
         const x = &c.x;
         const same = sameInode(src_sb, dst_sb);
         return_now.* = false;
+        // Where names differ in case alone and mean one file, mv changes how
+        // it is spelled. (With one link, one file is one directory entry.)
+        if (builtin.os.tag == .windows and x.move_mode and same and src_sb.nlink == 1) {
+            const old = std.fs.path.basename(src.name);
+            const new = std.fs.path.basename(dst.name);
+            if (!std.mem.eql(u8, old, new) and std.ascii.eqlIgnoreCase(old, new)) return true;
+        }
         if (same and x.hard_link) {
             return_now.* = true;
             return true;

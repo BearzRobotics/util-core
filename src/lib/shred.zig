@@ -15,6 +15,7 @@
 //! the program-name prefix; names in it are already quoted).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const common = @import("common.zig");
 const quote = @import("../quote.zig");
@@ -403,7 +404,8 @@ fn wipeName(ctx: *Ctx, oldname: []const u8, qoldname: []const u8, o: Options) bo
     defer ctx.gpa.free(cur);
     var dir_fd: sys.Handle = sys.invalid_handle;
     var e: E = .SUCCESS;
-    if (o.remove == .wipesync) dir_fd = sys.openFd(dir, sys.O.RDONLY | sys.O.DIRECTORY | sys.O.NOCTTY | sys.O.NONBLOCK, 0, &e) orelse sys.invalid_handle;
+    // (Windows has no way to sync a directory.)
+    if (o.remove == .wipesync and builtin.os.tag != .windows) dir_fd = sys.openFd(dir, sys.O.RDONLY | sys.O.DIRECTORY | sys.O.NOCTTY | sys.O.NONBLOCK, 0, &e) orelse sys.invalid_handle;
     if (o.verbose) warn(ctx, "{s}: removing", .{qoldname});
     var first = true;
     if (o.remove != .unlink) {
