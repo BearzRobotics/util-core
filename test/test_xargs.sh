@@ -251,4 +251,12 @@ case $out in
 *) FAIL=$((FAIL + 1)); echo "FAIL xargs reading a directory: $out" ;;
 esac
 
+# -s limits a command made with -I too (FIND-023).
+printf 'aaaaaaaaaaaaaaaaaaaaaaaa\nb\n' > "$TEST_TMP/long-item"
+for s in 4 24 25 26 29 30 54 55; do
+    CMP_STDIN="$TEST_TMP/long-item" run_cmp "-I -s $s" -s $s -I{} echo {} {}
+done
+printf 'abc\n' > "$TEST_TMP/short-item"
+CMP_STDIN="$TEST_TMP/short-item" run_cmp "-I -s smaller than the command" -s 4 -I{} echo '{}{}'
+
 cd /; print_summary

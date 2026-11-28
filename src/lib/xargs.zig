@@ -308,6 +308,7 @@ fn runCommand(x: *X) Stop!void {
             try owned.append(gpa, s);
             try argv.append(gpa, cutNul(s));
         }
+        try checkReplacedSize(x, argv.items);
     } else {
         try argv.appendSlice(gpa, x.initial);
         for (x.items.items) |it| try argv.append(gpa, cutNul(it));
@@ -386,6 +387,30 @@ fn runCommand(x: *X) Stop!void {
     x.running.appendAssumeCapacity(.{ .child = child, .slot = slot });
     clearItems(x);
     if (x.opt.procs == 1) try waitOne(x) else try reapEnded(x);
+}
+
+/// The -s limit on a command made with -I, argument by argument as GNU
+/// builds it: one that fills the limit alone, then all of them together.
+fn checkReplacedSize(x: *X, argv: []const []const u8) Stop!void {
+    var total: usize = 0;
+    for (argv, 0..) |a, i| {
+        if (i == 0 and a.len + 1 > x.max_chars) {
+            x.observer.emit(.cannot_fit_single_argument);
+            try finishAll(x);
+            return x.abort(1);
+        }
+        if (i > 0 and a.len + 1 >= x.max_chars) {
+            x.observer.emit(.command_too_long);
+            try finishAll(x);
+            return x.abort(1);
+        }
+        total += a.len + 1;
+        if (total > x.max_chars) {
+            x.observer.emit(.argument_list_too_long);
+            try finishAll(x);
+            return x.abort(1);
+        }
+    }
 }
 
 fn slotInUse(x: *const X, slot: usize) bool {
