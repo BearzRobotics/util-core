@@ -130,6 +130,7 @@ See docs/compatibility/ls.md for details.
 
 # LIMITATIONS
 
+- User and group names come from `/etc/passwd` and `/etc/group` alone, not through NSS. GNU asks the C library, which knows more sources. For accounts that exist only in LDAP, SSSD, systemd-homed or as systemd dynamic users, `ls -l` prints the numbers, and the JSON `user` and `group` fields are null.
 - Only the C locale is modelled: names sort bytewise, only ASCII counts as printable (with `-q` every other byte becomes `?`), `locale` quoting uses `'`, and month names are English. GNU in a UTF-8 locale differs.
 - Capability colouring (`ca=`) checks only that the `security.capability` attribute exists; it could not be compared with a GNU ls built with libcap.
 - SELinux contexts are read from the `security.selinux` attribute only; ACLs are detected through the `system.posix_acl_*` attributes, so `+` appears only when the file system exposes them.

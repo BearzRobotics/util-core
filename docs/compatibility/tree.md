@@ -33,6 +33,7 @@ None added by util-core: tree is not a GNU program and its own options (`-J`, `-
 
 ## Known deviations and gaps
 
+- User and group names come from `/etc/passwd` and `/etc/group` alone, not through NSS. tree asks the C library, which knows more sources. For accounts that exist only in LDAP, SSSD, systemd-homed or as systemd dynamic users, `-u` and `-g` print numbers.
 - Output that cannot be written (a full disk, with or without `-o`) is reported as `tree: write error: ...` with status 1; tree 2.3.1 is silent and exits 0.
 - Not implemented: `-H` (HTML), `--fromfile`, `--fromtabfile`, `--gitignore`, `--info`, `--hyperlink`, `--compress`, `--condense`, `-R`, `--opt-toggle`, ACL and SELinux display.
 - The multi-root JSON/XML output reproduces tree's separators only for the cases covered by the tests; a symbolic link to the start directory in -J output lacks tree's empty `contents` array.
