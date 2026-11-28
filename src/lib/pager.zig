@@ -588,9 +588,10 @@ pub const Pager = struct {
                 i -= 1;
             }
             if (p.lineMatches(i)) {
+                // At the top even in the last screenful, as less does: the
+                // next search goes on from here.
                 p.top = i;
                 p.sub = 0;
-                if (p.top > p.bottomPos().line) p.toBottom();
                 return;
             }
         }

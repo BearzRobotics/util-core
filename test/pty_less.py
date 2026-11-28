@@ -253,6 +253,20 @@ check("cat -P: no paging", st == 0 and '\x1b[?1049h' not in out and 'row 199' in
 out, st, _ = session([cat, '--paging=never', big], [])
 check("cat --paging=never: no paging", st == 0 and '\x1b[?1049h' not in out)
 
+# A match in the last screenful goes to the top too, so that repeating the
+# search moves on and then says there is nothing more (VIEW-025).
+tail_hits = os.path.join(tmp, 'pty_tail.txt')
+with open(tail_hits, 'w') as f:
+    f.write(''.join('NEEDLE %d\n' % i if i in (95, 98) else 'row %d\n' % i for i in range(100)))
+for repeats, top in [(0, 'NEEDLE 95'), (1, 'NEEDLE 98'), (2, 'NEEDLE 98')]:
+    steps = [(b'/NEEDLE', 0.2), (b'\r', 0.3)] + [(b'n', 0.3)] * repeats + [(b'q', 0.5)]
+    out, st, _ = session([less, tail_hits], steps)
+    check('less: search near the end, %d repeats' % repeats, screen(out)[:1] == [top] and screen(out)[-1:] == ['~'])
+    if repeats == 2:
+        check('less: no further match is said', 'Pattern not found' in out)
+out, st, _ = session([less, tail_hits], [(b'/NEEDLE', 0.2), (b'\r', 0.3), (b'n', 0.3), (b'N', 0.3), (b'q', 0.5)])
+check('less: search back near the end', screen(out)[:1] == ['NEEDLE 95'])
+
 # cat: highlighting of a source file through the built-in grammars
 src = os.path.join(tmp, 'pty_sample.zig')
 with open(src, 'w') as f:
