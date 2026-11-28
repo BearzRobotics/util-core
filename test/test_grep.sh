@@ -455,4 +455,10 @@ for cut in 1 2 3 4; do
     else FAIL=$((FAIL + 1)); echo "FAIL preview cut at $cut: $out"; fi
 done
 
+# Leading context stays right however often its queue is refilled (REGX-024).
+awk 'BEGIN { for (i = 1; i <= 3000; i++) print (i % 97 == 0 || i % 101 == 0 ? "hit " : "line ") i }' > "$TEST_TMP/manyctx"
+for before in 1 2 7 50 1000; do
+    run_cmp "-B $before, long input" -n -B $before hit "$TEST_TMP/manyctx"
+done
+
 cd /; print_summary

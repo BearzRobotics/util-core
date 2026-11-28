@@ -1393,7 +1393,10 @@ const G = struct {
     pending: i64 = 0,
     used: bool = false,
     outleft: i64 = 0,
+    /// The lines of leading context: those from `before_head` on. The ones
+    /// before it have been dropped and freed.
     before_q: std.ArrayList(CtxLine) = .empty,
+    before_head: usize = 0,
     line_no: u64 = 0,
     offset: u64 = 0, // byte offset of the current line start
     last_printed_end: ?u64 = null, // offset just after the last printed line
@@ -1911,8 +1914,9 @@ fn printStats(g: *G) Err!void {
 }
 
 fn flushBefore(g: *G) void {
-    for (g.before_q.items) |c| g.gpa.free(c.text);
+    for (g.before_q.items[g.before_head..]) |c| g.gpa.free(c.text);
     g.before_q.clearRetainingCapacity();
+    g.before_head = 0;
 }
 
 // --------------------------------------------------------------- scanning
@@ -1965,7 +1969,7 @@ fn doLine(g: *G, text: []const u8, known_match: bool) Err!Stop {
                 g.pending = 0;
             }
             var first_ctx_no: u64 = no;
-            if (g.before_q.items.len > 0) first_ctx_no = g.before_q.items[0].no;
+            if (g.before_q.items.len > g.before_head) first_ctx_no = g.before_q.items[g.before_head].no;
             if ((o.before >= 0 or o.after >= 0) and g.used and (g.lastout_line < 0 or g.lastout_line + 1 != @as(i64, @intCast(first_ctx_no)))) {
                 if (o.group_sep) |gs| {
                     if (o.color) try sgrStart(g, g.colors.se);
@@ -1974,7 +1978,7 @@ fn doLine(g: *G, text: []const u8, known_match: bool) Err!Stop {
                     try emitByte(g, '\n');
                 }
             }
-            for (g.before_q.items) |c| {
+            for (g.before_q.items[g.before_head..]) |c| {
                 if (try prline(g, c.text, c.no, c.off, '-')) g.lastout_line = @intCast(c.no);
             }
             flushBefore(g);
@@ -2000,9 +2004,14 @@ fn doLine(g: *G, text: []const u8, known_match: bool) Err!Stop {
             g.pending -= 1;
         } else if (o.before > 0) {
             const copy = try g.gpa.dupe(u8, text);
-            if (g.before_q.items.len >= @as(usize, @intCast(o.before))) {
-                g.gpa.free(g.before_q.items[0].text);
-                _ = g.before_q.orderedRemove(0);
+            if (g.before_q.items.len - g.before_head >= @as(usize, @intCast(o.before))) {
+                g.gpa.free(g.before_q.items[g.before_head].text);
+                g.before_head += 1;
+                // The dropped places are given back once they are half of all.
+                if (g.before_head > g.before_q.items.len / 2) {
+                    g.before_q.replaceRangeAssumeCapacity(0, g.before_head, &.{});
+                    g.before_head = 0;
+                }
             }
             try g.before_q.append(g.gpa, .{ .text = copy, .no = no, .off = off });
         }
