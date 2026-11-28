@@ -16,6 +16,8 @@
 //! persists across files, because GNU cat treats the inputs as one stream.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const timing = @import("../lib/time.zig");
 const Io = std.Io;
 const cli = @import("../cli.zig");
 const fu = @import("../lib/fu_common.zig");
@@ -246,7 +248,9 @@ pub fn main(ctx: cli.Context) u8 {
     // scrolls while cat is still writing.
     const choice: Pager.Choice = if (want_pager) Pager.start(ctx, pager_cmd) else .off;
     var pager: ?Pager = if (choice == .process) choice.process else null;
-    defer if (pager) |*p| p.finish(ctx);
+    defer if (pager) |*p| {
+        _ = p.finish(ctx);
+    };
     var ui: ?*pager_ui.Ui = if (choice == .built_in)
         pager_ui.Ui.start(ctx.gpa, ctx.io, .{ .raw = true }, "", true)
     else
@@ -263,8 +267,13 @@ pub fn main(ctx: cli.Context) u8 {
     }) catch |e| switch (e) {
         error.OutOfMemory => return fail(ctx, "out of memory"),
         error.WriteFailed => {
-            // The user left the pager before the end: not an error.
-            if (pager != null) return 0;
+            // The user left the pager before the end: not an error, unless
+            // it is the pager that failed.
+            if (pager) |*running| {
+                const status = pagerStatus(ctx, running);
+                pager = null;
+                return status;
+            }
             // `cli.finish` words the write error.
             cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
             return 1;
@@ -276,7 +285,20 @@ pub fn main(ctx: cli.Context) u8 {
         u.deinit();
         ui = null;
     }
+    if (pager) |*running| {
+        stdout.interface.flush() catch {};
+        const status = pagerStatus(ctx, running);
+        pager = null;
+        if (status != 0) return status;
+    }
     return if (result.failed) 1 else 0;
+}
+
+/// Wait for the pager. One that fails may have shown nothing, so say so.
+fn pagerStatus(ctx: cli.Context, pager: *Pager) u8 {
+    const failure = pager.finish(ctx) orelse return 0;
+    cli.warn(ctx, "the pager failed (status {d}); --paging=never shows the text without it", .{failure});
+    return 1;
 }
 
 /// Whether the operand `path` reads a terminal.
@@ -310,20 +332,28 @@ const Pager = struct {
     /// A pager that is just `cat` is the usual way to ask for no paging.
     fn start(ctx: cli.Context, given: ?[]const u8) Choice {
         const cmd = given orelse cli.getenv(ctx, "BAT_PAGER") orelse cli.getenv(ctx, "PAGER") orelse return .built_in;
-        var argv: [8][]const u8 = undefined;
-        var n: usize = 0;
-        var it = std.mem.tokenizeAny(u8, cmd, " \t");
-        while (it.next()) |w| {
-            if (n == argv.len) break;
-            argv[n] = w;
-            n += 1;
-        }
-        if (n == 0) return .built_in;
+        var arena_state: std.heap.ArenaAllocator = .init(ctx.gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        // Quoted as for a shell. A backslash is part of a Windows path.
+        const line = if (builtin.os.tag == .windows)
+            std.mem.replaceOwned(u8, arena, cmd, "\\", "\\\\") catch return .off
+        else
+            cmd;
+        const words = timing.splitCommand(arena, line) catch |e| switch (e) {
+            error.OutOfMemory => return .off,
+            error.UnterminatedQuote => {
+                cli.warn(ctx, "the pager command has an unterminated quote; not paging", .{});
+                return .off;
+            },
+        };
+        if (words.len == 0) return .built_in;
+        var argv = std.mem.concat(arena, []const u8, &.{ words, &.{"-FRX"} }) catch return .off;
+        var n: usize = words.len;
         const base = std.Io.Dir.path.basename(argv[0]);
         if (n == 1 and (std.mem.eql(u8, base, "cat") or std.ascii.eqlIgnoreCase(base, "cat.exe"))) return .off;
         if (n == 1 and (std.mem.eql(u8, base, "less") or std.mem.eql(u8, base, "less.exe"))) {
-            argv[1] = "-FRX";
-            n = 2;
+            n = 2; // the "-FRX" appended above
         }
         var environ: ?std.process.Environ.Map = null;
         defer if (environ) |*m| m.deinit();
@@ -340,14 +370,21 @@ const Pager = struct {
         const f = child.stdin orelse return .built_in;
         // Ctrl-C belongs to the pager while it runs (it uses it for searches).
         _ = sys.setSignal(sys.signo.INT, .ignore);
+        // And a pager that goes away must not take cat with it unreported.
+        sys.ignoreSignal(.pipe);
         return .{ .process = .{ .child = child, .stdin = f } };
     }
 
-    /// Close the pipe and wait until the user leaves the pager.
-    fn finish(p: *Pager, ctx: cli.Context) void {
+    /// Close the pipe and wait until the user leaves the pager. Returns its
+    /// exit status when that reports a failure.
+    fn finish(p: *Pager, ctx: cli.Context) ?u8 {
         p.stdin.close(ctx.io);
         p.child.stdin = null;
-        _ = p.child.wait(ctx.io) catch {};
+        const term = p.child.wait(ctx.io) catch return null;
+        return switch (term) {
+            .exited => |code| if (code == 0) null else code,
+            else => null,
+        };
     }
 };
 

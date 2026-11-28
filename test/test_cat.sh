@@ -310,4 +310,20 @@ for kind in inc var; do
     else FAIL=$((FAIL + 1)); echo "FAIL grammar bomb: $kind: $out"; fi
 done
 
+# The pager command is quoted as for a shell, and a pager that fails is
+# reported (VIEW-022). script gives cat a terminal.
+if command -v script > /dev/null 2>&1; then
+    printf 'hello world\n' > "$TEST_TMP/paged"
+    paged() { PAGER="$1" TERM=xterm script -qec "'$BIN_DIR/cat' --paging=always --theme=ansi -p '$TEST_TMP/paged'; echo status \$?" /dev/null < /dev/null | tr -d '\r' | tr '\n' ' '; }
+    for pair in "false|cat: the pager failed (status 1); --paging=never shows the text without it status 1 " \
+        'sed -e "s/world/two words/"|hello two words status 0 ' \
+        'sed -e s/o/0/ -e s/l/1/ -e s/h/H/ -e s/w/W/ -e s/r/R/ -e s/d/D/|He1l0 WoRlD status 0 '; do
+        got=$(paged "${pair%%|*}")
+        if [ "$got" = "${pair#*|}" ]; then PASS=$((PASS + 1)); echo "PASS pager: ${pair%%|*}"
+        else FAIL=$((FAIL + 1)); echo "FAIL pager: ${pair%%|*}: $got"; fi
+    done
+else
+    echo "SKIP pager commands (no script)"
+fi
+
 print_summary

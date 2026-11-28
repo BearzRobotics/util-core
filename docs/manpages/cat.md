@@ -56,7 +56,7 @@ Copy each FILE (or standard input when none is given, or for the name -) to stan
 : Same as `--paging=never`.
 
 --pager=CMD
-: The pager program. Default: `$BAT_PAGER`, then `$PAGER`, then the built-in pager. A bare `less` gets `-FRX`. A pager that is just `cat` means no paging. cat starts the pager with `UTIL_CORE_CAT_PAGER` set, and a cat that finds it set never starts a pager (one reached through a script, say); given only the pager's standard input, it also passes it on undecorated.
+: The pager program, with its arguments; words are quoted as for a shell (on Windows a backslash stands for itself). A pager that exits with a failure is reported and cat exits with status 1. Default: `$BAT_PAGER`, then `$PAGER`, then the built-in pager. A bare `less` gets `-FRX`. A pager that is just `cat` means no paging. cat starts the pager with `UTIL_CORE_CAT_PAGER` set, and a cat that finds it set never starts a pager (one reached through a script, say); given only the pager's standard input, it also passes it on undecorated.
 
 -l, --language=NAME
 : Highlight with the grammar NAME: its full name, scope (`source.rust`), the last part of the scope (`rust`) or a file extension (`rs`). Without this option the grammar is chosen from the file name, then from the grammar's first-line pattern. Unknown names are an error. Only used in the bat view with color on.
