@@ -93,21 +93,40 @@ Unix, and neither are those from PowerShell, so `ls.exe *.txt` gets the text
 
 ### PowerShell
 
-**Type the extension.** In both versions `cat`, `cp`, `diff`, `dir`, `echo`,
-`ls`, `mkdir`, `mv`, `pwd`, `rm`, `rmdir`, `sleep`, `sort` and `tee` are
-PowerShell's own aliases or functions. `ls.exe` runs util-core, provided its
-directory comes before `C:\Windows\System32` on `PATH`, where Windows has its
-own `sort.exe` and `find.exe`.
+PowerShell 7.4 or later is supported (tested: 7.7.0). Load `windows/init.ps1`
+with a dot, with the programs in a `bin` folder beside it or in its own folder:
 
-**Wildcards are not expanded.** PowerShell gives a program the same text for
-`*.txt`, `'*.txt'` and `"*.txt"`, so util-core cannot expand one without
-breaking `find.exe . -name '*.txt'`. Let PowerShell list the names:
+    . E:\util-core\init.ps1
+
+For that session it
+
+* puts the programs first on `PATH`, ahead of the `sort.exe` and `find.exe` in
+  `C:\Windows\System32`;
+* removes `cat`, `cp`, `diff`, `dir`, `echo`, `ls`, `mkdir`, `mv`, `pwd`, `rm`,
+  `rmdir`, `sleep`, `sort` and `tee`, PowerShell's own aliases and function, so
+  that those names run util-core. What expects PowerShell's `ls` or `rm` in the
+  same session gets util-core's;
+* expands unquoted wildcards in util-core commands typed at the prompt, by the
+  rules above. `ls *.txt` lists the files, and `find . -name '*.txt'` gets the
+  pattern.
+
+PowerShell gives a program the same text for `*.txt` and `'*.txt'`, so the
+programs cannot do this. The script looks at the typed line and replaces each
+unquoted pattern with a call that lists the names; `Get-History` shows that
+form. **Scripts are not read this way**, nor is `pwsh -Command`. There, and
+without `init.ps1` (where several of the names need their `.exe`), let
+PowerShell list the names:
 
     ls.exe -l (Get-ChildItem -Name *.txt)          # names in this directory
     ls.exe -l (Resolve-Path -Relative sub\*.txt)   # in another one
 
-When nothing matches, the command gets no names at all, so `cat.exe` and the
-like then wait for standard input.
+When nothing matches those give no names at all, so `cat.exe` and the like then
+wait for standard input.
+
+**Windows PowerShell 5.1 is not supported.** `init.ps1` there sets `PATH` and
+the names, says so, and leaves wildcards alone. Its handling of pipes and `>`
+changes data, see below; Microsoft's coreutils package asks for PowerShell 7.4
+as well.
 
 **Quote what PowerShell would read as its own.** Both versions change these
 before the program sees them; in single quotes they arrive as typed.
@@ -134,6 +153,14 @@ not end: it had taken 3.2 GB when it was stopped. Use PowerShell 7 or
 When the second program ends before reading everything, it may report "The pipe
 is being closed" for the first.
 
+### cmd.exe
+
+Wildcards work as typed. Only double quotes quote; `'` is an ordinary
+character. `cmd.exe` has commands of its own named `dir`, `echo`, `mkdir`,
+`rmdir` and `date`, which run in place of util-core's. In the tests on Windows
+11 even `mkdir.exe` and `date.exe` ran the built-in one, so give the program's
+full path.
+
 Paths: Windows accepts `/` and `\`; the commands print the path text they were
 given. Text is never translated (no CRLF conversion).
 
@@ -155,5 +182,8 @@ given. Text is never translated (no CRLF conversion).
   arguments, read and write files and pipes, and walk directories, but not how
   real Windows file systems, permissions, symbolic links or console behave. A
   run on a real Windows machine is planned before release.
+* `test/windows_init_test.ps1` checks `windows/init.ps1` on a Windows machine
+  (49 checks in PowerShell 7.7.0, 16 in 5.1). It calls the line rewriting
+  directly; typing at a prompt was checked separately over SSH on 2026-11-28.
 * macOS: compile-checked only. The libc paths (open, stat, chown, signals, kqueue
   watcher, statfs) have never been executed; treat them as untested.

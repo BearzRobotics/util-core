@@ -7,6 +7,9 @@ Windows (still no Windows downloads):
 - Wildcards such as `*.txt` are expanded for commands started by `cmd.exe`.
   Quoted ones are left alone. Not done for PowerShell or for arguments another
   program passes on (see docs/portability.md).
+- New `windows/init.ps1` for PowerShell 7.4 and later: puts the commands on
+  `PATH`, removes the aliases that hide them and expands wildcards typed at the
+  prompt. Windows PowerShell 5.1 is not supported.
 - Tested under `cmd.exe`, PowerShell 7.7.0 and Windows PowerShell 5.1;
   docs/portability.md says what to watch for in PowerShell.
 - Fixed: setting file times and permissions crashed (`touch`, `install`,
