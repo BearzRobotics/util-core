@@ -230,7 +230,5 @@ t "unicode content" 'printf "héllo 日本\n" > u.txt && cat u.txt && wc -c u.tx
 t "deep path" 'mkdir -p L/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd && find L | wc -l && cp -r L L2 && find L2 | wc -l && rm -r L L2 && ls -1'
 t "dot dot path" 'cat dir/sub/../t.txt'
 t "trailing slash dir" 'ls -1 dir/'
-t "wildcard to program" 'ls -1 *.txt'
-t "wildcard to cat" 'cat dir/*.txt'
 t "CRLF input" 'printf "b\r\na\r\n" | sort | od -c'
 t "binary round trip" 'head -c 65536 a.txt > h.bin && cmp a.txt h.bin && echo same'

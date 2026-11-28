@@ -13,20 +13,19 @@ failure status; it never silently succeeds. WASI is not supported.
 | Target | Compiles (multicall and standalone) | Run | Test status |
 |---|---|---|---|
 | x86_64-linux-musl, aarch64-linux-musl | yes | yes | every `test/test_*.sh` suite (differential against GNU coreutils) |
-| x86_64-windows | yes | yes | `test/test_windows_wine.sh` (79 cases, a smoke test) under wine; `test/test_windows_vm.sh` on Windows 11, see "Known to fail on Windows" |
+| x86_64-windows | yes | yes | `test/test_windows_wine.sh` (98 cases, a smoke test) under wine; `test/test_windows_vm.sh` on Windows 11, see "Known to fail on Windows" |
 | aarch64-windows | yes | no | compiled only |
 | aarch64-macos, x86_64-macos | yes | no | compiled only; no Mac was available. The libc code in `src/sys/other.zig` is unexecuted |
 
 ### Known to fail on Windows
 
-`test/test_windows_vm.sh` runs 304 cases on a real Windows machine over SSH and
-compares them with the Linux build: 301 pass on Windows 11 (2026-11-27). Most
-commands have only a few cases, and nothing interactive is covered (paging on a
-console, Ctrl-C, prompts), nor PowerShell. No Windows archives are published
-yet. Still failing:
+`test/test_windows_vm.sh` runs the cases on a real Windows machine over SSH and
+compares them with the Linux build. On 2026-11-27, 301 of the 304 cases then in
+it passed on Windows 11; the wildcard cases added since have only run under
+wine. Most commands have only a few cases, and nothing interactive is covered
+(paging on a console, Ctrl-C, prompts), nor PowerShell. No Windows archives are
+published yet. Besides wildcards, one thing failed in that run:
 
-- Wildcards: cmd.exe passes `*.txt` to the program as it is, and util-core does
-  not expand it.
 - `df` does not list the file systems.
 
 Fixed since 0.3.0: setting file times and permissions crashed (`touch`,
@@ -53,6 +52,7 @@ host.
 
 | Area | Linux | macOS | Windows |
 |---|---|---|---|
+| Wildcards in arguments | the shell's job | the shell's job | expanded by the program when `cmd.exe` started it, see below |
 | Text, data and hashing commands (cat, wc, sort, cut, tr, uniq, sed, grep, seq, printf, md5sum, ...) | yes | yes | yes |
 | File commands (cp, mv, rm, mkdir, touch, ln, find, ls, du, stat, tail, tee, ...) | yes | yes | yes, with the differences below |
 | `date` | yes | yes | yes; `date -s` is `Function not implemented` |
@@ -73,6 +73,17 @@ host.
 | `uname`, `arch`, `hostid`, `nproc` | yes | yes | `uname` reports `Windows_NT`, the computer name, the NT version and build; `nproc` as `std` reports it |
 | Signals (`kill`-like behaviour, `ls` colour reset on SIGINT, SIGPIPE) | yes | yes | no signals; the code compiles to no-ops |
 
+Wildcards: `cmd.exe` passes `*.txt` on as it is, so on Windows each program
+expands it, by the Unix shell's rules: `*` and `?` count only outside double
+quotes (`find . -name "*.txt"` gets the pattern), a pattern that matches nothing
+stays, matches are sorted, and a name starting with "." needs a pattern starting
+with ".". Names match whatever their case (ASCII letters only). `[` is an
+ordinary character, and the hidden attribute does not hide a file. This happens
+only when `cmd.exe` is the program that started the command. Arguments passed
+by other programs (`xargs`, `find -exec`, `env`) are never expanded, as on
+Unix, and neither are those from PowerShell, so `ls.exe *.txt` gets the text
+`*.txt` there.
+
 Paths: Windows accepts `/` and `\`; the commands print the path text they were
 given. Text is never translated (no CRLF conversion).
 
@@ -82,11 +93,11 @@ given. Text is never translated (no CRLF conversion).
   work. The suites run against the Linux build only.
 * Windows: `test/test_windows_wine.sh` runs the x86_64-windows build under
   wine 10.0 (in a private wine prefix) and compares standard output and exit
-  status of 79 small cases with the Linux build. The commands covered are cat,
+  status of 98 small cases with the Linux build. The commands covered are cat,
   wc, sort, ls, cp, rm, mkdir, date, find, grep, sed, printf, test, env, seq,
   md5sum, tr, cut, uniq, tee, head, tail, du, stat, basename and readlink. It
   skips cleanly when wine or either build is missing. Standard error is not
-  compared. Result: **79 passed, 0 failed.** Differences found while writing
+  compared. Result: **98 passed, 0 failed.** Differences found while writing
   it and kept out of the comparison on purpose: directory sizes (`ls -S`
   sorts a directory by 4096 on Linux, 0 on Windows).
   **This is wine, not Windows.** Wine runs the same PE binaries against its own

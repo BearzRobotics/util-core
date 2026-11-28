@@ -142,6 +142,7 @@ test {
     _ = @import("dirat.zig");
     _ = @import("posixacl.zig");
     _ = @import("programpath.zig");
+    _ = @import("winglob.zig");
     _ = @import("bytes.zig");
     _ = @import("multisearch.zig");
     _ = @import("hash.zig");

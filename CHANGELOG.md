@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+Windows (still no Windows downloads):
+
+- Wildcards such as `*.txt` are expanded for commands started by `cmd.exe`.
+  Quoted ones are left alone. Not done for PowerShell or for arguments another
+  program passes on (see docs/portability.md).
+- Fixed: setting file times and permissions crashed (`touch`, `install`,
+  `mkdir -m`, `cp -p`, `cp -a`); `dd oflag=append` overwrote instead of
+  appending; `split`, `link`, `ln`, `cp -l`, `shred -u`, `whoami`, changing the
+  case of a name with `mv`, and the commands that run another program (`env`,
+  `nice` and the rest) failed.
+
 ## 0.3.0
 
 A bug-fix release: an audit of every command, and the fixes for what it found. Behaviour is

@@ -184,9 +184,28 @@ pub fn openAppend(dir: w.HANDLE, path: []const u8, create: bool, exclusive: bool
     });
 }
 
-extern "kernel32" fn GetCurrentProcess() callconv(.winapi) w.HANDLE;
 extern "kernel32" fn SetPriorityClass(process: w.HANDLE, class: u32) callconv(.winapi) c_int;
 extern "advapi32" fn GetUserNameW(buffer: [*]u16, size: *u32) callconv(.winapi) c_int;
+
+extern "kernel32" fn OpenProcess(access: u32, inherit: c_int, id: u32) callconv(.winapi) ?w.HANDLE;
+extern "kernel32" fn QueryFullProcessImageNameW(process: w.HANDLE, flags: u32, name: [*]u16, size: *u32) callconv(.winapi) c_int;
+
+/// Whether the program that started this one is cmd.exe.
+pub fn startedByCmd() bool {
+    var basic: w.PROCESS.BASIC_INFORMATION = undefined;
+    const status = w.ntdll.NtQueryInformationProcess(w.GetCurrentProcess(), .BasicInformation, &basic, @sizeOf(w.PROCESS.BASIC_INFORMATION), null);
+    if (status != .SUCCESS) return false;
+    const limited_information: u32 = 0x1000; // PROCESS_QUERY_LIMITED_INFORMATION
+    const parent = OpenProcess(limited_information, 0, @truncate(basic.InheritedFromUniqueProcessId)) orelse return false;
+    defer w.CloseHandle(parent);
+    var wide: [1024]u16 = undefined;
+    var size: u32 = wide.len;
+    if (QueryFullProcessImageNameW(parent, 0, &wide, &size) == 0) return false;
+    var buf: [3 * wide.len]u8 = undefined;
+    const path = buf[0..std.unicode.wtf16LeToWtf8(&buf, wide[0..size])];
+    const slash = std.mem.lastIndexOfScalar(u8, path, '\\') orelse return false;
+    return std.ascii.eqlIgnoreCase(path[slash + 1 ..], "cmd.exe");
+}
 
 /// Windows has priority classes where POSIX has niceness. A program started
 /// from here keeps the two lower ones. False when the class cannot be set.
@@ -195,7 +214,7 @@ pub fn setNice(value: i32) bool {
     else if (value > 0) 0x4000 // BELOW_NORMAL_PRIORITY_CLASS
     else if (value == 0) 0x20 // NORMAL_PRIORITY_CLASS
     else 0x8000; // ABOVE_NORMAL_PRIORITY_CLASS
-    return SetPriorityClass(GetCurrentProcess(), class) != 0;
+    return SetPriorityClass(w.GetCurrentProcess(), class) != 0;
 }
 
 /// The name of the user this process runs as, as UTF-8 in `buf`.

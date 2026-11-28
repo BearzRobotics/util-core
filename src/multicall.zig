@@ -12,6 +12,7 @@ const options = @import("build_options");
 const cli = @import("cli.zig");
 const sys = @import("sys.zig");
 const commands = @import("commands.zig");
+const winglob = @import("winglob.zig");
 
 const enabled = options.commands;
 
@@ -26,7 +27,8 @@ pub const panic = if (builtin.mode == .debug) std.debug.FullPanic(std.debug.defa
 
 pub fn main(init: std.process.Init) !u8 {
     sys.inheritSigpipe(@ptrCast(@alignCast(init.io.userdata.?)));
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    const given = try init.minimal.args.toSlice(init.arena.allocator());
+    const args = winglob.argv(init.io, init.arena.allocator(), if (builtin.os.tag == .windows) init.minimal.args.vector, given);
     var ctx: cli.Context = .{
         .name = "",
         .args = args[1..],

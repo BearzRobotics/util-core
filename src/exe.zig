@@ -8,6 +8,7 @@ const options = @import("build_options");
 const cli = @import("cli.zig");
 const sys = @import("sys.zig");
 const commands = @import("commands.zig");
+const winglob = @import("winglob.zig");
 
 // Release builds drop the stack-trace machinery (about 6 KB per binary) and
 // keep the panic message; Debug builds keep the full std behaviour.
@@ -20,7 +21,8 @@ pub const panic = if (builtin.mode == .debug) std.debug.FullPanic(std.debug.defa
 
 pub fn main(init: std.process.Init) !u8 {
     sys.inheritSigpipe(@ptrCast(@alignCast(init.io.userdata.?)));
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    const given = try init.minimal.args.toSlice(init.arena.allocator());
+    const args = winglob.argv(init.io, init.arena.allocator(), if (builtin.os.tag == .windows) init.minimal.args.vector, given);
     const ctx: cli.Context = .{
         .name = options.command,
         .args = args[1..],
