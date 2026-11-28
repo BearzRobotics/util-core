@@ -1728,9 +1728,21 @@ fn printJson(st: *State) void {
     emit(st, aw.written());
 }
 
+/// A name as -ls writes it (findutils' own spelling, not a quoting style).
+fn appendLsName(out: *std.ArrayList(u8), gpa: std.mem.Allocator, name: []const u8) !void {
+    for (name) |c| switch (c) {
+        ' ', '"', '\\' => try out.appendSlice(gpa, &.{ '\\', c }),
+        8 => try out.appendSlice(gpa, "\\b"),
+        12 => try out.appendSlice(gpa, "\\f"),
+        '\n' => try out.appendSlice(gpa, "\\n"),
+        '\r' => try out.appendSlice(gpa, "\\r"),
+        '\t' => try out.appendSlice(gpa, "\\t"),
+        '!', '#'...'[', ']'...'~' => try out.append(gpa, c),
+        else => try out.print(gpa, "\\{o:0>3}", .{c}),
+    };
+}
+
 fn printLs(st: *State, o: ?*OutFile) void {
-    var space_set: quotearg.ExtraSet = .{};
-    space_set.add(' ');
     const s = getSt(st) orelse return;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(st.gpa);
@@ -1754,13 +1766,13 @@ fn printLs(st: *State, o: ?*OutFile) void {
     } else out.print(st.gpa, "{d: >8} ", .{s.size}) catch st.nomem();
     out.appendSlice(st.gpa, tbuf.items) catch st.nomem();
     out.append(st.gpa, ' ') catch st.nomem();
-    quotearg.quote(&out, st.gpa, st.cur_path, .escape, &space_set) catch st.nomem();
+    appendLsName(&out, st.gpa, st.cur_path) catch st.nomem();
     if (s.isLink()) {
         var buf: [4096]u8 = undefined;
         var err: LX.E = .SUCCESS;
         if (sys.readlinkAt(st.at().dir, st.at().name, &buf, &err)) |k| {
             out.appendSlice(st.gpa, " -> ") catch st.nomem();
-            quotearg.quote(&out, st.gpa, buf[0..k], .escape, &space_set) catch st.nomem();
+            appendLsName(&out, st.gpa, buf[0..k]) catch st.nomem();
         }
     }
     out.append(st.gpa, '\n') catch st.nomem();
