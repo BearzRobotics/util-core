@@ -95,5 +95,16 @@ for sig in '' INT TERM; do
     else FAIL=$((FAIL + 1)); echo "FAIL stdin copy, signal '$sig': $got"; fi
 done
 
+# The range of the command that removes the extra dots (VIEW-018).
+dots="$TEST_TMP/dots"; mkdir -p "$dots"
+printf 'd\ny\r\ne' > "$dots/A"; printf 'd\ny\r\n' > "$dots/B"; printf 'y\r\n}\n.\n\n' > "$dots/C"
+printf '..\n' > "$dots/D"; printf 'b\nc\n.\n.\nb\n' > "$dots/E"; printf 'c\ne\n\n.\n}\n' > "$dots/F"
+printf '\n\n' > "$dots/G"; printf '..\ne\nd\n' > "$dots/H"
+for opt in -e -E -A -x -X -3; do
+    run_cmp "dots $opt" $opt "$dots/A" "$dots/B" "$dots/C"
+    run_cmp "dots in a conflict $opt" $opt "$dots/D" "$dots/E" "$dots/F"
+    run_cmp "dots in the old lines $opt" $opt "$dots/G" "$dots/H" "$dots/G"
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]
