@@ -101,6 +101,9 @@ pub const LoadError = error{ OutOfMemory, InvalidSyntax } || yaml.ParseError;
 /// rules, captures and context references are read.
 const max_context_depth = 32;
 const max_grammar_items = 100_000;
+/// What one pattern may grow to as its variables are replaced.
+const max_pattern_len = 1 << 20;
+const max_variable_uses = 100_000;
 
 /// The text of a scalar (following an alias), or null for a collection.
 fn str(v: yaml.Value) ?[]const u8 {
@@ -416,9 +419,12 @@ pub const Registry = struct {
     }
 
     /// Expand {{variables}} in `pattern` using `syn`'s variables (recursively).
-    pub fn expand(r: *Registry, syn: *Syntax, pattern: []const u8, out: *std.ArrayList(u8), depth: u32) !void {
+    /// `uses` counts the variables replaced: variables made of each other
+    /// grow exponentially, so both it and the result are bounded.
+    pub fn expand(r: *Registry, syn: *Syntax, pattern: []const u8, out: *std.ArrayList(u8), uses: *u32, depth: u32) error{ OutOfMemory, TooLong }!void {
         var i: usize = 0;
         while (i < pattern.len) {
+            if (out.items.len > max_pattern_len) return error.TooLong;
             if (pattern[i] == '\\' and i + 1 < pattern.len) {
                 try out.appendSlice(r.gpa, pattern[i .. i + 2]);
                 i += 2;
@@ -432,7 +438,9 @@ pub const Registry = struct {
                     } else true;
                     if (ok and depth < 16) {
                         if (syn.variables.get(name)) |val| {
-                            try r.expand(syn, val, out, depth + 1);
+                            uses.* += 1;
+                            if (uses.* > max_variable_uses) return error.TooLong;
+                            try r.expand(syn, val, out, uses, depth + 1);
                             i = end + 2;
                             continue;
                         }
@@ -454,7 +462,16 @@ pub const Registry = struct {
         }
         var text: std.ArrayList(u8) = .empty;
         defer text.deinit(r.gpa);
-        try r.expand(rule.syntax, rule.pattern, &text, 0);
+        var uses: u32 = 0;
+        r.expand(rule.syntax, rule.pattern, &text, &uses, 0) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooLong => {
+                rule.rt.state = .failed;
+                const msg = try std.fmt.allocPrint(r.arena(), "pattern /{s}/ rejected: its variables expand too far", .{rule.pattern});
+                try r.warn(rule.syntax, msg);
+                return false;
+            },
+        };
 
         var d: regex.Diagnostic = .{};
         var re = regex.Regex.compile(r.gpa, text.items, .{ .dialect = .oniguruma }, &d) catch |e| switch (e) {

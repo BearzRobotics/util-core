@@ -293,4 +293,21 @@ if [ -c /dev/full ]; then
     else FAIL=$((FAIL + 1)); echo "FAIL write error after a name with writ: $act"; fi
 fi
 
+# A small grammar cannot unfold without end: contexts that include each other
+# repeatedly, and variables made of each other (VIEW-020).
+bomb="$TEST_TMP/bomb"; mkdir -p "$bomb/inc" "$bomb/var"
+bomb_head='%%%%YAML 1.2\n---\nname: Bomb\nfile_extensions: [bomb]\nscope: source.bomb\n'
+# shellcheck disable=SC2059
+{ printf "${bomb_head}contexts:\n"; printf '  main:\n    - include: main\n    - include: other\n    - include: other\n    - match: a\n      scope: keyword\n  other:\n    - include: main\n    - include: main\n'; } > "$bomb/inc/b.sublime-syntax"
+# shellcheck disable=SC2059
+{ printf "${bomb_head}variables:\n"
+    i=0; while [ $i -lt 14 ]; do j=$((i + 1)); printf "  v$i: '{{v$j}}{{v$j}}{{v$j}}{{v$j}}{{v$j}}{{v$j}}{{v$j}}{{v$j}}'\n"; i=$j; done
+    printf "  v14: ''\ncontexts:\n  main:\n    - match: '{{v0}}'\n      scope: keyword\n    - match: a\n      scope: keyword\n"; } > "$bomb/var/b.sublime-syntax"
+printf 'a b a\n' > "$bomb/f.bomb"
+for kind in inc var; do
+    out=$( (ulimit -v 600000; timeout 30 "$BIN_DIR/cat" --syntax-dir="$bomb/$kind" --decorations=always --color=always --theme=ansi -p "$bomb/f.bomb") 2>&1 | cat -v)
+    if [ "$out" = '^[[35ma^[[0m b ^[[35ma^[[0m' ]; then PASS=$((PASS + 1)); echo "PASS grammar bomb: $kind"
+    else FAIL=$((FAIL + 1)); echo "FAIL grammar bomb: $kind: $out"; fi
+done
+
 print_summary
