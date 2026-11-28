@@ -727,4 +727,13 @@ help_cmp_find() {
     else FAIL=$((FAIL + 1)); printf "FAIL --help text\n"; fi
 }
 help_cmp_find
+# [[=a=]], [[.a.]], a trailing backslash (FIND-019) and the escapes of -ls
+# (FIND-036).
+mkdir fnm && : > fnm/a && : > fnm/b && : > 'fnm/x\' && : > "fnm/$(printf 'c\007\013\014"d \\e\200')"
+for pat in '[[=a=]]' '[[.a.]]' '[![=a=]]' '[[.a.]-b]' '[a-[.b.]]' '[[=a=' '[b[.]' '[b[=]' 'x\' 'x\\' '[[.ab.]]'; do
+    run_cmp "name $pat" fnm -name "$pat"
+done
+ln -s "$(printf 't \007"\014')" fnm/link
+run_cmp "-ls escapes" fnm -ls
+
 cd /; print_summary

@@ -31,10 +31,18 @@ fn classMatch(name: []const u8, c: u8) ?bool {
     return null;
 }
 
+const Bracket = struct { matched: bool, next: usize };
+
+/// A bracket expression that glibc gives up on: nothing matches it, negated
+/// or not.
+fn never(pattern: []const u8) Bracket {
+    return .{ .matched = false, .next = pattern.len };
+}
+
 /// Parse the bracket expression starting at pattern[start] == '['. Returns
 /// whether `c` matches and the index after the closing ']', or null when the
 /// expression is not terminated (the '[' is then literal).
-fn bracket(pattern: []const u8, start: usize, c: u8, cf: bool) ?struct { matched: bool, next: usize } {
+fn bracket(pattern: []const u8, start: usize, c: u8, cf: bool) ?Bracket {
     var i = start + 1;
     var negate = false;
     if (i < pattern.len and (pattern[i] == '!' or pattern[i] == '^')) {
@@ -60,17 +68,48 @@ fn bracket(pattern: []const u8, start: usize, c: u8, cf: bool) ?struct { matched
                 }
             }
         }
-        if (lo == '\\' and i + 1 < pattern.len) {
-            i += 1;
-            lo = pattern[i];
+        // "[=c=]" is a class of one in the C locale, and cannot end a range.
+        // Broken, it stands for itself, except behind a match, where glibc
+        // only looks for the end of the bracket and gives up.
+        if (lo == '[' and i + 1 < pattern.len and pattern[i + 1] == '=') {
+            if (i + 4 < pattern.len and pattern[i + 3] == '=' and pattern[i + 4] == ']') {
+                if (ceq(pattern[i + 2], c, cf)) matched = true;
+                i += 5;
+                continue;
+            }
+            if (matched) return never(pattern);
         }
-        i += 1;
+        if (lo == '[' and i + 1 < pattern.len and pattern[i + 1] == '.') {
+            // "[.c.]". One without an end spoils the whole pattern, as does
+            // an unknown name, unless it is behind a match.
+            const end = std.mem.indexOfPos(u8, pattern, i + 2, ".]") orelse return never(pattern);
+            if (end != i + 3) {
+                if (!matched) return never(pattern);
+                i = end + 2;
+                continue;
+            }
+            lo = pattern[i + 2];
+            i += 5;
+        } else {
+            if (lo == '\\' and i + 1 < pattern.len) {
+                i += 1;
+                lo = pattern[i];
+            }
+            i += 1;
+        }
         if (i + 1 < pattern.len and pattern[i] == '-' and pattern[i + 1] != ']') {
             var hi = pattern[i + 1];
-            i += 2;
-            if (hi == '\\' and i < pattern.len) {
-                hi = pattern[i];
-                i += 1;
+            if (hi == '[' and i + 2 < pattern.len and pattern[i + 2] == '.') {
+                const end = std.mem.indexOfPos(u8, pattern, i + 3, ".]") orelse return never(pattern);
+                if (end != i + 4) return never(pattern);
+                hi = pattern[i + 3];
+                i += 6;
+            } else {
+                i += 2;
+                if (hi == '\\' and i < pattern.len) {
+                    hi = pattern[i];
+                    i += 1;
+                }
             }
             if ((lo <= c and c <= hi) or (cf and lo <= other(c) and other(c) <= hi)) matched = true;
         } else if (ceq(lo, c, cf)) matched = true;
@@ -92,7 +131,9 @@ fn element(pattern: []const u8, pi: usize, text: []const u8, ti: usize, flags: F
             return if (!hidden and b.matched) b.next else null;
         },
         '\\' => {
-            const at = if (pi + 1 < pattern.len) pi + 1 else pi;
+            // One that ends the pattern matches nothing, as in glibc.
+            if (pi + 1 >= pattern.len) return null;
+            const at = pi + 1;
             return if (ceq(pattern[at], c, flags.casefold)) at + 1 else null;
         },
         else => |literal| return if (ceq(literal, c, flags.casefold)) pi + 1 else null,
