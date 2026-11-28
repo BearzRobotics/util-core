@@ -220,8 +220,8 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         },
     };
-    // --invalid=abort: output so far is flushed; exit at once with status 2.
-    if (result.aborted) std.process.exit(2);
+    // --invalid=abort: the output so far is flushed, the status is 2.
+    if (result.aborted) return 2;
     if (!result.valid and o.invalid != .warn and o.invalid != .ignore) return 2;
     return 0;
 }

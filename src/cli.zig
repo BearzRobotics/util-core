@@ -78,7 +78,11 @@ pub fn styleEnabled(ctx: Context, when: When, stream_is_tty: bool) bool {
     return true;
 }
 
-/// A command frontend: returns the process exit status.
+/// A command frontend: returns the process exit status. A program that embeds
+/// one calls `finish` with that status, which also forgets the command's write
+/// failures. Two things still end the process, as the commands must: leaving
+/// the built-in pager while its input is still blocked, and `dd` dying of the
+/// SIGINT it was sent.
 pub const CommandFn = *const fn (ctx: Context) u8;
 
 /// True when `args` is exactly one argument equal to `flag`. GNU true/false
@@ -188,6 +192,11 @@ pub fn writeErrorWarn(ctx: Context) void {
 
 /// Called by the entry points after a command returns.
 pub fn finish(ctx: Context, rc: u8) u8 {
+    // For a program that runs more than one command: the next starts afresh.
+    defer {
+        stdout_err = null;
+        warned = false;
+    }
     if (stdout_err == null) return rc;
     if (!warned) writeErrorWarn(ctx);
     return if (rc == 0) 1 else rc;

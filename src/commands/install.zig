@@ -241,8 +241,8 @@ fn run(ctx: cli.Context, out: *cli.Out) u8 {
         .{ .file = .{ .make_ancestors = mkdir_and_install } };
     const operand_list: []const []const u8 = if (dir_arg) operands else if (target_directory != null) operands[0..n_files] else operands[0..2];
     const ok = install.run(env, s, operand_list, plan, routing.sink()) catch |err| switch (err) {
-        // GNU exits at once, leaving buffered standard output unwritten.
-        error.Fatal => std.process.exit(1),
+        // As GNU, which exits at once: buffered standard output is not written.
+        error.Fatal => return 1,
         error.OutOfMemory => return 1,
     };
     return if (ok) 0 else 1;

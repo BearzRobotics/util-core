@@ -18,12 +18,15 @@ fn operandMatches(str: []const u8, pattern: []const u8, delim: u8) bool {
     return str.len == pattern.len or str[pattern.len] == delim;
 }
 
-fn usageFail(ctx: cli.Context) noreturn {
+/// A bad operand: reported already, and dd ends with status 1.
+const Bad = error{BadOperand};
+
+fn usageFail(ctx: cli.Context) Bad {
     cli.writeStderr(ctx, "Try '{s} --help' for more information.", .{ctx.name});
-    std.process.exit(1);
+    return error.BadOperand;
 }
 
-fn parseSymbols(ctx: cli.Context, str_in: []const u8, table: []const dd.Sym, exclusive: bool, msg: []const u8) u32 {
+fn parseSymbols(ctx: cli.Context, str_in: []const u8, table: []const dd.Sym, exclusive: bool, msg: []const u8) Bad!u32 {
     var value: u32 = 0;
     var str = str_in;
     while (true) {
@@ -37,9 +40,11 @@ fn parseSymbols(ctx: cli.Context, str_in: []const u8, table: []const dd.Sym, exc
             }
         }
         if (found == null) {
-            const q = @import("../quotearg.zig").quoteAlloc(ctx.gpa, piece, .locale, null) catch "";
-            cli.warn(ctx, "{s}: {s}", .{ msg, q });
-            usageFail(ctx);
+            if (@import("../quotearg.zig").quoteAlloc(ctx.gpa, piece, .locale, null)) |q| {
+                defer ctx.gpa.free(q);
+                cli.warn(ctx, "{s}: {s}", .{ msg, q });
+            } else |_| cli.warn(ctx, "{s}", .{msg});
+            return usageFail(ctx);
         }
         if (exclusive) value = found.? else value |= found.?;
         if (comma == null) break;
@@ -102,7 +107,7 @@ fn multipleBits(v: u32) bool {
     return v & (v -% 1) != 0;
 }
 
-fn scanArgs(ctx: cli.Context, d: *dd.Job, args: []const []const u8) void {
+fn scanArgs(ctx: cli.Context, d: *dd.Job, args: []const []const u8) Bad!void {
     var blocksize: usize = 0;
     var count: i64 = std.math.maxInt(i64);
     var skip: i64 = 0;
@@ -114,7 +119,7 @@ fn scanArgs(ctx: cli.Context, d: *dd.Job, args: []const []const u8) void {
         const eq = std.mem.indexOfScalar(u8, name, '=');
         if (eq == null) {
             cli.warn(ctx, "unrecognized operand {f}", .{cli.quoteA(name)});
-            usageFail(ctx);
+            return usageFail(ctx);
         }
         const val = name[eq.? + 1 ..];
         if (operandMatches(name, "if", '=')) {
@@ -122,13 +127,13 @@ fn scanArgs(ctx: cli.Context, d: *dd.Job, args: []const []const u8) void {
         } else if (operandMatches(name, "of", '=')) {
             d.output_file = val;
         } else if (operandMatches(name, "conv", '=')) {
-            d.conv |= parseSymbols(ctx, val, &dd.conversions, false, "invalid conversion");
+            d.conv |= try parseSymbols(ctx, val, &dd.conversions, false, "invalid conversion");
         } else if (operandMatches(name, "iflag", '=')) {
-            d.iflags |= parseSymbols(ctx, val, &dd.flag_syms, false, "invalid input flag");
+            d.iflags |= try parseSymbols(ctx, val, &dd.flag_syms, false, "invalid input flag");
         } else if (operandMatches(name, "oflag", '=')) {
-            d.oflags |= parseSymbols(ctx, val, &dd.flag_syms, false, "invalid output flag");
+            d.oflags |= try parseSymbols(ctx, val, &dd.flag_syms, false, "invalid output flag");
         } else if (operandMatches(name, "status", '=')) {
-            d.status = parseSymbols(ctx, val, &dd.status_syms, true, "invalid status level");
+            d.status = try parseSymbols(ctx, val, &dd.status_syms, true, "invalid status level");
         } else {
             var invalid: IntErr = .ok;
             const n = parseInteger(ctx, val, &invalid);
@@ -164,7 +169,7 @@ fn scanArgs(ctx: cli.Context, d: *dd.Job, args: []const []const u8) void {
                 count_b = has_b;
             } else {
                 cli.warn(ctx, "unrecognized operand {f}", .{cli.quoteA(name)});
-                usageFail(ctx);
+                return usageFail(ctx);
             }
             if (invalid == .ok) {
                 if (n < n_min) invalid = .invalid else if (n > n_max) invalid = .overflow;
@@ -173,7 +178,7 @@ fn scanArgs(ctx: cli.Context, d: *dd.Job, args: []const []const u8) void {
                 if (invalid == .overflow) {
                     cli.warn(ctx, "invalid number: {f}: Value too large for defined data type", .{cli.quoteA(val)});
                 } else cli.warn(ctx, "invalid number: {f}", .{cli.quoteA(val)});
-                std.process.exit(1);
+                return error.BadOperand;
             }
             if (target) |t| t.* = @intCast(n);
         }
@@ -188,7 +193,7 @@ fn scanArgs(ctx: cli.Context, d: *dd.Job, args: []const []const u8) void {
     if (d.iflags & (dd.O_DSYNC | dd.O_SYNC) != 0) d.iflags |= dd.O_RSYNC;
     if (d.oflags & dd.O_FULLBLOCK != 0) {
         cli.warn(ctx, "invalid output flag: {f}", .{cli.quoteC("fullblock")});
-        usageFail(ctx);
+        return usageFail(ctx);
     }
     if (skip_b) d.iflags |= dd.O_SKIP_BYTES;
     if (d.iflags & dd.O_SKIP_BYTES != 0 and skip != 0) {
@@ -209,18 +214,18 @@ fn scanArgs(ctx: cli.Context, d: *dd.Job, args: []const []const u8) void {
         (d.skip_records != 0 or (d.max_records > 0 and d.max_records < std.math.maxInt(i64)) or ((d.iflags | d.oflags) & dd.O_DIRECT) != 0);
     d.fullblock = d.iflags & dd.O_FULLBLOCK != 0;
     d.iflags &= ~dd.O_FULLBLOCK;
-    if (multipleBits(d.conv & (dd.C_ASCII | dd.C_EBCDIC | dd.C_IBM))) fatal(ctx, "cannot combine any two of {ascii,ebcdic,ibm}");
-    if (multipleBits(d.conv & (dd.C_BLOCK | dd.C_UNBLOCK))) fatal(ctx, "cannot combine block and unblock");
-    if (multipleBits(d.conv & (dd.C_LCASE | dd.C_UCASE))) fatal(ctx, "cannot combine lcase and ucase");
-    if (multipleBits(d.conv & (dd.C_EXCL | dd.C_NOCREAT))) fatal(ctx, "cannot combine excl and nocreat");
-    if (multipleBits(d.iflags & (dd.O_DIRECT | dd.O_NOCACHE)) or multipleBits(d.oflags & (dd.O_DIRECT | dd.O_NOCACHE))) fatal(ctx, "cannot combine direct and nocache");
+    if (multipleBits(d.conv & (dd.C_ASCII | dd.C_EBCDIC | dd.C_IBM))) return fatal(ctx, "cannot combine any two of {ascii,ebcdic,ibm}");
+    if (multipleBits(d.conv & (dd.C_BLOCK | dd.C_UNBLOCK))) return fatal(ctx, "cannot combine block and unblock");
+    if (multipleBits(d.conv & (dd.C_LCASE | dd.C_UCASE))) return fatal(ctx, "cannot combine lcase and ucase");
+    if (multipleBits(d.conv & (dd.C_EXCL | dd.C_NOCREAT))) return fatal(ctx, "cannot combine excl and nocreat");
+    if (multipleBits(d.iflags & (dd.O_DIRECT | dd.O_NOCACHE)) or multipleBits(d.oflags & (dd.O_DIRECT | dd.O_NOCACHE))) return fatal(ctx, "cannot combine direct and nocache");
     d.iflags &= ~dd.O_NOCACHE;
     d.oflags &= ~dd.O_NOCACHE;
 }
 
-fn fatal(ctx: cli.Context, msg: []const u8) noreturn {
+fn fatal(ctx: cli.Context, msg: []const u8) Bad {
     cli.warn(ctx, "{s}", .{msg});
-    std.process.exit(1);
+    return error.BadOperand;
 }
 
 pub fn main(ctx: cli.Context) u8 {
@@ -243,7 +248,7 @@ pub fn main(ctx: cli.Context) u8 {
         };
         for (p.operands.items) |o| list.append(ctx.gpa, o) catch {};
     }
-    scanArgs(ctx, &d, list.items);
+    scanArgs(ctx, &d, list.items) catch return 1;
     dd.catchSignals(cli.getenv(ctx, "POSIXLY_CORRECT") != null);
 
     return dd.run(&d);
