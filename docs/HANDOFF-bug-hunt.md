@@ -112,17 +112,34 @@ printf '\n## Status\n\nFixed in %s.\n' HASH >> docs/bugs/ID-*.md
   Not in the audit.
 - head: when `-n -N` writes nothing we leave stdin where it was (documented).
 
+## After 0.3.0: Windows
+
+Maintainer, 2026-11-27: release 0.3.0 for Linux only; then widen the Windows
+tests and fix the Windows bugs, keeping Linux as it is.
+
+- `test/test_windows_wine.sh` is a smoke test (79 cases, fewer than 30 of about
+  105 commands) and wine hides real faults. Windows needs checks of every
+  command, above all those that change files, run on the VM, kept in the repo.
+- Known failures: "Known to fail on Windows" in `docs/portability.md`. Also to
+  examine: `ls 'p.txt*'` says "Invalid argument" (cmd does not expand
+  wildcards), and `xargs` fed by cmd's `echo` got "BadPathName".
+- On the VM, cmd takes `mkdir.exe` and `date.exe` for its own commands: use
+  full paths. SSH is OpenSSH for Windows (user `aimgr`; ask for the password,
+  never store it).
+- On this host a saved NetworkManager connection `virbr0` stops libvirt's
+  `default` network: `nmcli connection down virbr0` before
+  `virsh net-start default`; afterwards `virsh net-destroy default` and
+  `nmcli connection up virbr0`.
+- Then publish Windows archives again (`release.yml`, README, release.md).
+
 ## The release, at the end
 
 Version 0.3.0 (CHANGELOG, `build.zig.zon`, `src/cli.zig`, manual pages). The
 steps are in `docs/release.md`. Pushing the tag makes `release.yml` create the
-GitHub release with the four binary archives. v0.0.0 also carried a vendored
+GitHub release with the two Linux archives (no Windows ones for now). v0.0.0 also carried a vendored
 source archive, as did v0.1.0 (v0.2.0 did not); attach one with
 `gh release upload`.
 Both `regex` and `yaml` must be copied to `vendor/`, and the result must build
 with an empty `ZIG_GLOBAL_CACHE_DIR` (the recipe under "Release" in
 `docs/HANDOFF.md` predates `yaml`).
 
-Ask the maintainer before merging into `main` and tagging: the version number,
-and the manual Windows 11 VM check of `docs/release.md` step 3 (needs the
-password of `aimgr`; never store it).

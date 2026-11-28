@@ -6,6 +6,12 @@ A bug-fix release: an audit of every command, and the fixes for what it found. B
 checked against GNU case by case; where the two differ on purpose, the command's record in
 `docs/compatibility/` says so.
 
+**No Windows downloads in this release.** Tests on Windows 11 showed that several commands
+fail or crash there (`cp -a`, `touch`, `install`, `split` and others; the list is in
+`docs/portability.md`). Wine had not shown it, and `cp` could not copy any file on real
+Windows in 0.2.0; that one is fixed. Windows builds from source as before. Archives will
+return once the Windows build has been fixed and tested.
+
 **Security and data safety**
 - `tree` walks from open directories, so a directory swapped for a link while it runs cannot
   lead it elsewhere. `sed -i` uses random temporary names.

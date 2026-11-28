@@ -22,8 +22,6 @@ jobs:
         include:
           - { target: x86_64-linux-musl,  label: linux-x86_64 }
           - { target: aarch64-linux-musl, label: linux-aarch64 }
-          - { target: x86_64-windows,     label: windows-x86_64 }
-          - { target: aarch64-windows,    label: windows-aarch64 }
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -59,7 +57,7 @@ jobs:
           cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS && cd ..
           {
             scripts/release-notes.sh "${GITHUB_REF_NAME}"
-            printf '\n%s\n' 'Prebuilt archives: Linux (x86_64, aarch64; static musl) and Windows (x86_64, aarch64). macOS builds from source and is compile-checked in CI, but no prebuilt macOS binaries are provided because no maintainer owns a Mac. Check downloads against SHA256SUMS.'
+            printf '\n%s\n' 'Prebuilt archives: Linux only (x86_64, aarch64; static musl). No Windows archives are published until the Windows build has been fixed and tested on real Windows. macOS builds from source and is compile-checked in CI, but no prebuilt macOS binaries are provided because no maintainer owns a Mac. Check downloads against SHA256SUMS.'
           } > notes.md
       - name: Publish
         env:
