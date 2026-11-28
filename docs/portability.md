@@ -13,18 +13,25 @@ failure status; it never silently succeeds. WASI is not supported.
 | Target | Compiles (multicall and standalone) | Run | Test status |
 |---|---|---|---|
 | x86_64-linux-musl, aarch64-linux-musl | yes | yes | every `test/test_*.sh` suite (differential against GNU coreutils) |
-| x86_64-windows | yes | yes | `test/test_windows_wine.sh` (98 cases, a smoke test) under wine; `test/test_windows_vm.sh` on Windows 11, see "Known to fail on Windows" |
+| x86_64-windows | yes | yes | `test/test_windows_wine.sh` (106 cases, a smoke test) under wine; `test/test_windows_vm.sh` on Windows 11, see "Known to fail on Windows" |
 | aarch64-windows | yes | no | compiled only |
 | aarch64-macos, x86_64-macos | yes | no | compiled only; no Mac was available. The libc code in `src/sys/other.zig` is unexecuted |
 
 ### Known to fail on Windows
 
 `test/test_windows_vm.sh` runs the cases on a real Windows machine over SSH and
-compares them with the Linux build. On 2026-11-27, 301 of the 304 cases then in
-it passed on Windows 11; the wildcard cases added since have only run under
-wine. Most commands have only a few cases, and nothing interactive is covered
-(paging on a console, Ctrl-C, prompts), nor PowerShell. No Windows archives are
-published yet. Besides wildcards, one thing failed in that run:
+compares them with the Linux build. On 2026-11-28, on Windows 11:
+
+| Shell | Passed | Not run |
+|---|---|---|
+| `cmd.exe` | 328 of 329 | |
+| PowerShell 7.7.0 | 314 of 328 | `yes \| head`, checked by hand |
+| Windows PowerShell 5.1 | 273 of 328 | `yes \| head`, which never ends there |
+
+`df` fails in all three. The other PowerShell failures are how PowerShell treats
+what is typed or what goes through a pipe, see "PowerShell" below. Most
+commands have only a few cases, and nothing interactive is covered (paging on a
+console, Ctrl-C, prompts). No Windows archives are published yet.
 
 - `df` does not list the file systems.
 
@@ -84,6 +91,49 @@ by other programs (`xargs`, `find -exec`, `env`) are never expanded, as on
 Unix, and neither are those from PowerShell, so `ls.exe *.txt` gets the text
 `*.txt` there.
 
+### PowerShell
+
+**Type the extension.** In both versions `cat`, `cp`, `diff`, `dir`, `echo`,
+`ls`, `mkdir`, `mv`, `pwd`, `rm`, `rmdir`, `sleep`, `sort` and `tee` are
+PowerShell's own aliases or functions. `ls.exe` runs util-core, provided its
+directory comes before `C:\Windows\System32` on `PATH`, where Windows has its
+own `sort.exe` and `find.exe`.
+
+**Wildcards are not expanded.** PowerShell gives a program the same text for
+`*.txt`, `'*.txt'` and `"*.txt"`, so util-core cannot expand one without
+breaking `find.exe . -name '*.txt'`. Let PowerShell list the names:
+
+    ls.exe -l (Get-ChildItem -Name *.txt)          # names in this directory
+    ls.exe -l (Resolve-Path -Relative sub\*.txt)   # in another one
+
+When nothing matches, the command gets no names at all, so `cat.exe` and the
+like then wait for standard input.
+
+**Quote what PowerShell would read as its own.** Both versions change these
+before the program sees them; in single quotes they arrive as typed.
+
+| Typed | The program gets | Write |
+|---|---|---|
+| `cut.exe -d, -f1` | nothing: a syntax error | `cut.exe -d ',' -f1`, `'-t,'` |
+| `date.exe -d @0` | `-d` | `'@0'` |
+| `sed.exe -i.bak` | `-i` `.bak` | `'-i.bak'` |
+| `-exec cat.exe {} +`, `-I{}` | `-encodedCommand` and other words | `'{}'`, `'-I{}'` |
+| `echo.exe "a"*` | `a` `*` | `'a*'` |
+
+Windows PowerShell 5.1 also drops an empty argument (`''`) and loses double
+quotes inside an argument. PowerShell 7.7.0 passes both on, but replaces a bare
+`~` with the home directory.
+
+**Pipes and `>`.** Windows PowerShell 5.1 treats what programs write as text. In
+the tests, `>` wrote UTF-16 files, pipes between two programs added carriage
+returns (`wc.exe` counted 37 bytes for 31), non-ASCII text and binary data
+changed, and `md5sum.exe a > sums` followed by `md5sum.exe -c sums` failed. A
+pipeline whose first program writes for ever (`yes.exe | head.exe -n 3`) does
+not end: it had taken 3.2 GB when it was stopped. Use PowerShell 7 or
+`cmd.exe` for such work. In PowerShell 7.7.0 the pipe and `>` cases passed.
+When the second program ends before reading everything, it may report "The pipe
+is being closed" for the first.
+
 Paths: Windows accepts `/` and `\`; the commands print the path text they were
 given. Text is never translated (no CRLF conversion).
 
@@ -93,11 +143,11 @@ given. Text is never translated (no CRLF conversion).
   work. The suites run against the Linux build only.
 * Windows: `test/test_windows_wine.sh` runs the x86_64-windows build under
   wine 10.0 (in a private wine prefix) and compares standard output and exit
-  status of 98 small cases with the Linux build. The commands covered are cat,
+  status of 106 small cases with the Linux build. The commands covered are cat,
   wc, sort, ls, cp, rm, mkdir, date, find, grep, sed, printf, test, env, seq,
   md5sum, tr, cut, uniq, tee, head, tail, du, stat, basename and readlink. It
   skips cleanly when wine or either build is missing. Standard error is not
-  compared. Result: **98 passed, 0 failed.** Differences found while writing
+  compared. Result: **106 passed, 0 failed.** Differences found while writing
   it and kept out of the comparison on purpose: directory sizes (`ls -S`
   sorts a directory by 4096 on Linux, 0 on Windows).
   **This is wine, not Windows.** Wine runs the same PE binaries against its own

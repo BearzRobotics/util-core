@@ -7,11 +7,18 @@ Windows (still no Windows downloads):
 - Wildcards such as `*.txt` are expanded for commands started by `cmd.exe`.
   Quoted ones are left alone. Not done for PowerShell or for arguments another
   program passes on (see docs/portability.md).
+- Tested under `cmd.exe`, PowerShell 7.7.0 and Windows PowerShell 5.1;
+  docs/portability.md says what to watch for in PowerShell.
 - Fixed: setting file times and permissions crashed (`touch`, `install`,
   `mkdir -m`, `cp -p`, `cp -a`); `dd oflag=append` overwrote instead of
   appending; `split`, `link`, `ln`, `cp -l`, `shred -u`, `whoami`, changing the
   case of a name with `mv`, and the commands that run another program (`env`,
   `nice` and the rest) failed.
+- Fixed: `rm -f` failed on a wildcard that matched nothing; `cat`, `head`,
+  `sort` and others printed `BadPathName` for such a name.
+
+Library: `link.run` now returns `!void` instead of `Io.Dir.HardLinkError!void`,
+because Windows has errors of its own there. No other signature changed.
 
 ## 0.3.0
 
