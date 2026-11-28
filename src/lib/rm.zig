@@ -17,6 +17,7 @@
 //! (failures, refusals, the -v "removed" lines) through the `Observer`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
@@ -145,13 +146,20 @@ fn failed(st: *State, path: []const u8, errno: sys.E) bool {
     return false;
 }
 
+/// No Windows file has "*" or "?" in its name, and asking for one fails as
+/// invalid, not as missing. It is what a wildcard that matched nothing leaves
+/// behind, which `rm -f` must not mind.
+fn namesNothing(path: []const u8, errno: sys.E) bool {
+    return builtin.os.tag == .windows and errno == .INVAL and std.mem.indexOfAny(u8, path, "*?") != null;
+}
+
 /// Remove one file (recursively when asked). Returns true when it is gone.
 fn remove(st: *State, parent: ?*dirat.Level, name: []const u8, path: []const u8, is_arg: bool) bool {
     const cfg = st.opts;
     const file: Target = .{ .parent = parent, .name = name, .path = path };
     var le: sys.E = .SUCCESS;
     const lst = sys.fileStatAt(dirat.fdOf(parent), name, false, &le) orelse {
-        if (cfg.force and le == .NOENT) return true;
+        if (cfg.force and (le == .NOENT or namesNothing(path, le))) return true;
         return failed(st, path, le);
     };
 

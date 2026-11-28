@@ -41,7 +41,8 @@ pub const Error = error{
 
 fn mapError(e: anyerror) Error {
     return switch (e) {
-        error.FileNotFound => error.NotFound,
+        // BadPathName: a name no Windows file can have, so there is none.
+        error.FileNotFound, error.BadPathName => error.NotFound,
         error.NotDir => error.NotDir,
         error.SymLinkLoop => error.Loop,
         error.NameTooLong => error.NameTooLong,

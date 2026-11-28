@@ -11,6 +11,8 @@ pub fn errText(err: anyerror) []const u8 {
         error.PermissionDenied => "Operation not permitted",
         error.IsDir => "Is a directory",
         error.NotDir => "Not a directory",
+        // EINVAL: on Windows, a name no file can have ("a*b").
+        error.BadPathName, error.InvalidUtf8, error.InvalidWtf8 => "Invalid argument",
         error.BrokenPipe => "Broken pipe",
         error.NameTooLong => "File name too long",
         error.SymLinkLoop => "Too many levels of symbolic links",
