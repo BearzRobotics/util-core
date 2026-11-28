@@ -111,7 +111,9 @@ const FileInfo = struct {
     name: []const u8,
     linkname: ?[]const u8 = null,
     absolute_name: ?[]const u8 = null,
-    st: sys.FileStat = undefined,
+    /// All zero when `stat_ok` is false, as in GNU: widths and sort keys are
+    /// taken from it either way.
+    st: sys.FileStat = std.mem.zeroes(sys.FileStat),
     filetype: FileType = .unknown,
     linkmode: u32 = 0,
     scontext: []const u8 = "?",
