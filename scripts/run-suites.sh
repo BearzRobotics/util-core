@@ -18,8 +18,8 @@ tree true truncate tsort unexpand uniq unlink updatedb users vdir wc wc_json who
 xargs yes"
 
 # sync and df call sync on the whole system. rm runs `rm -rf /` forms and needs a
-# read-only root. windows_wine needs wine and a Windows build.
-SKIP="sync df rm windows_wine"
+# read-only root. The windows suites need a Windows build and wine or a machine.
+SKIP="sync df rm windows_vm windows_wine"
 
 for f in test/test_*.sh; do
     n=${f#test/test_}; n=${n%.sh}

@@ -4,3 +4,4 @@ zig-pkg/
 .claude/
 dist/
 docs/bugs/
+zig-out-*/
