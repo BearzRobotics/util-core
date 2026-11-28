@@ -6,6 +6,8 @@
 //! given to `env` must be searched. `resolve` does that search.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const programpath = @import("programpath.zig");
 const cli = @import("cli.zig");
 const sys = @import("sys.zig");
 const Io = std.Io;
@@ -15,6 +17,12 @@ const Io = std.Io;
 /// "/bin:/usr/bin" if PATH is unset) is tried and the first executable regular
 /// file wins. If none is executable but one existed, `denied` is set.
 pub fn resolve(ctx: cli.Context, arena: std.mem.Allocator, env: ?*const std.process.Environ.Map, prog: []const u8, denied: *bool) ?[]const u8 {
+    if (builtin.os.tag == .windows) {
+        // ";"-separated PATH, ".exe" and the rest, and never the current
+        // directory.
+        const found: @import("lib/common.zig").Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = env };
+        return programpath.resolve(found, arena, prog) catch null;
+    }
     if (std.mem.indexOfScalar(u8, prog, '/') != null) return prog;
     const path: []const u8 = if (env) |m| (m.get("PATH") orelse "/bin:/usr/bin") else "/bin:/usr/bin";
     var it = std.mem.splitScalar(u8, path, ':');
@@ -66,6 +74,7 @@ fn execReporting(ctx: cli.Context, prog: []const u8, argv: []const []const u8, e
         report(ctx, style, prog, if (denied) "Permission denied" else "No such file or directory");
         return if (denied) 126 else 127;
     };
+    if (builtin.os.tag == .windows) return runInstead(ctx, path, argv, env orelse ctx.environ, style, prog);
     var err = std.process.replace(ctx.io, .{
         .exe = .{ .explicit = .{ .dir = Io.Dir.cwd(), .path = path } },
         .argv = argv,
@@ -89,6 +98,32 @@ fn execReporting(ctx: cli.Context, prog: []const u8, argv: []const []const u8, e
     if (terminal) |fd| _ = sys.dup2(fd, 2);
     report(ctx, style, prog, text);
     return if (err == error.FileNotFound) 127 else 126;
+}
+
+/// Windows cannot put another program in this one's place: run it, wait, and
+/// end with its status.
+fn runInstead(ctx: cli.Context, path: []const u8, argv: []const []const u8, env: ?*const std.process.Environ.Map, style: Style, prog: []const u8) u8 {
+    var arena = std.heap.ArenaAllocator.init(ctx.gpa);
+    defer arena.deinit();
+    const args = arena.allocator().dupe([]const u8, argv) catch {
+        report(ctx, style, prog, "Cannot allocate memory");
+        return 126;
+    };
+    if (args.len > 0) args[0] = path;
+    var child = std.process.spawn(ctx.io, .{ .argv = args, .environ_map = env }) catch |e| {
+        report(ctx, style, prog, switch (e) {
+            error.FileNotFound => "No such file or directory",
+            error.AccessDenied, error.PermissionDenied => "Permission denied",
+            error.InvalidExe => "Exec format error",
+            else => @errorName(e),
+        });
+        return if (e == error.FileNotFound) 127 else 126;
+    };
+    const term = child.wait(ctx.io) catch return 126;
+    return switch (term) {
+        .exited => |code| code,
+        else => 126,
+    };
 }
 
 fn report(ctx: cli.Context, style: Style, prog: []const u8, text: []const u8) void {
