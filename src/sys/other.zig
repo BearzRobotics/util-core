@@ -665,9 +665,12 @@ pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?
         }
         return rc;
     }
+    // Windows lets a handle opened for writing alone be asked nothing about
+    // the file, and what writes a file also examines it (cp does at once).
+    const windows = builtin.os.tag == .windows;
     const file = if (flags & O.CREAT != 0)
         dirOf(dir).createFile(io(), path, .{
-            .read = acc == O.RDWR,
+            .read = acc == O.RDWR or windows,
             .truncate = flags & O.TRUNC != 0,
             .exclusive = flags & O.EXCL != 0,
             .permissions = sys.permissionsFromMode(mode),
@@ -675,7 +678,7 @@ pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?
     else
         dirOf(dir).openFile(io(), path, .{
             .mode = switch (acc) {
-                O.WRONLY => .write_only,
+                O.WRONLY => if (windows) .read_write else .write_only,
                 O.RDWR => .read_write,
                 else => .read_only,
             },
