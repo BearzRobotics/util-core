@@ -260,15 +260,31 @@ pub const Du = struct {
         s.out.flush();
     }
 
+    /// The start of `pattern` up to and with its first '*', when what comes
+    /// before is plain enough to tell that this '*' is one.
+    fn headThroughStar(pattern: []const u8) ?[]const u8 {
+        const star = std.mem.indexOfScalar(u8, pattern, '*') orelse return null;
+        if (std.mem.indexOfAny(u8, pattern[0..star], "[\\") != null) return null;
+        return pattern[0 .. star + 1];
+    }
+
     fn excluded(s: *Du, f: []const u8) bool {
         for (s.patterns.items) |p| {
             if (p.wildcard) {
-                if (fnmatch.match(p.text, f, .{})) return true;
+                // The pattern may match the path or what follows any slash.
+                // With a '*' (which takes slashes too) only the first of those
+                // places where the part before it matches need be tried: if
+                // not from there, then not from a later one with less text.
+                const head = headThroughStar(p.text);
                 var i: usize = 0;
-                while (i < f.len) : (i += 1) {
-                    if (f[i] == '/' and i + 1 < f.len and f[i + 1] != '/') {
-                        if (fnmatch.match(p.text, f[i + 1 ..], .{})) return true;
+                while (i <= f.len) : (i += 1) {
+                    if (i > 0 and !(f[i - 1] == '/' and i < f.len and f[i] != '/')) continue;
+                    if (head) |h| {
+                        if (!fnmatch.match(h, f[i..], .{})) continue;
+                        if (fnmatch.match(p.text, f[i..], .{})) return true;
+                        break;
                     }
+                    if (fnmatch.match(p.text, f[i..], .{})) return true;
                 }
             } else {
                 if (std.mem.eql(u8, p.text, f)) return true;

@@ -277,4 +277,9 @@ done
 printf 'f1\n' > "$TEST_TMP/patterns"
 CMP_STDIN="$TEST_TMP/patterns" run_cmp "-X - from stdin" -X - -a $N
 
+# Wildcard exclusions: which trailing part of a path they match (DISK-038).
+for pat in 'a*' '*a' 'd*f1' 'a*/*' 'a/*' '*/f?' '?*1' '[ab]*' 'a?*b'; do
+    run_cmp "exclude wildcard $pat" -a --exclude="$pat" $N
+done
+
 cd /; print_summary
