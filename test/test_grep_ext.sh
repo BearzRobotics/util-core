@@ -317,10 +317,40 @@ cmp 'decompress stdin is not decompressed' "/usr/bin/grep -c needle < p.gz" "\$G
 cmp 'decompress bzip2 warns and searches the bytes' "echo 'grep: p.bz2: bzip2 compression is not supported by --decompress; searching the compressed bytes'; /usr/bin/grep -c needle p.bz2" "\$G --decompress -c needle p.bz2"
 head -c 40 p.gz > trunc.gz
 cmp 'decompress damaged data is an error' "echo 'grep: trunc.gz: cannot decompress: the compressed data is damaged or truncated'; exit 2" "\$G --decompress needle trunc.gz"
+# Data that still decodes but fails its checksum (REGX-033). `bad IN OUT N`
+# flips one bit of the byte N from the end; for xz the text is stored as it is,
+# so a changed letter decodes without complaint.
+bad() { cp "$1" "$2"; at=$(($(wc -c < "$1") - $3)); byte=$(od -An -tu1 -j "$at" -N1 "$1"); printf "\\$(printf '%o' $((byte ^ 1)))" | dd of="$2" bs=1 seek="$at" conv=notrunc status=none; }
+printf 'needle\n' > one.txt
+gzip -n -c one.txt > one.gz; zstd -q -c one.txt > one.zst
+bad one.gz crc.gz 8; bad one.gz length.gz 4; bad one.zst sum.zst 1
+cat one.gz crc.gz > second.gz; cat one.zst sum.zst > second.zst
+damaged() { cmp "decompress checksum: $1" "echo 'grep: $1: cannot decompress: the compressed data is damaged or truncated'; exit 2" "\$G --decompress needle $1"; }
+for f in crc.gz length.gz second.gz sum.zst second.zst; do damaged $f; done
+for check in crc32 crc64 sha256; do
+    xz --check=$check -c one.txt > one-$check.xz
+    cmp "decompress intact xz $check" "echo 1" "\$G --decompress -c needle one-$check.xz"
+    at=$(grep -abo needle one-$check.xz | cut -d: -f1)
+    bad one-$check.xz text-$check.xz $(($(wc -c < one-$check.xz) - at)); damaged text-$check.xz
+done
+seq 20000 | sed 's/^/needle /' > many.txt; xz --block-size=20000 -c many.txt > blocks.xz
+cmp 'decompress xz with many blocks' "echo 20000" "\$G --decompress -c needle blocks.xz"
 zlib plain.txt > p.zlib 2>/dev/null
 if [ -s p.zlib ] && python3 -c 'import zlib' 2>/dev/null; then
     cmp 'decompress zlib' "echo 2" "\$G --decompress -c needle p.zlib"
 fi
+
+# Data that decodes to more than 32 MB is not held whole (REGX-019): it is
+# decoded once to be checked and again as it is searched.
+yes 'a line with nothing in it' | head -c 200000000 | gzip -1 > bomb.gz
+cmp 'decompress a large file in bounded memory' "echo 0; exit 1" "(ulimit -v 150000; \$G --decompress -c needle bomb.gz)"
+(yes 'a line with nothing in it' | head -c 39999986; echo needle) > large.txt
+gzip -1 -c large.txt > large.gz; zstd -q -1 -c large.txt > large.zst
+for f in large.gz large.zst; do
+    cmp "decompress large $f" "echo 1538462:needle" "\$G --decompress -n needle $f"
+done
+bad large.gz large-crc.gz 8; damaged large-crc.gz
+rm -f bomb.gz large.txt large.gz large.zst large-crc.gz
 
 # ------------------------------------------------------------- diagnostics
 cmp 'diag: invalid -P pattern, stdout and status as GNU' "/usr/bin/grep -P '(' a.txt 2>/dev/null; echo rc=\$?" "\$G -P '(' a.txt 2>/dev/null; echo rc=\$?" ""

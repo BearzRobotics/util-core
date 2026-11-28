@@ -56,7 +56,7 @@ Copy each FILE (or standard input when none is given, or for the name -) to stan
 : Same as `--paging=never`.
 
 --pager=CMD
-: The pager program. Default: `$BAT_PAGER`, then `$PAGER`, then the built-in pager. A bare `less` gets `-FRX`. A pager that is just `cat` means no paging. cat starts the pager with `UTIL_CORE_CAT_PAGER` set, and a cat that finds it set never starts a pager (one reached through a script, say); given only the pager's standard input, it also passes it on undecorated.
+: The pager program, with its arguments; words are quoted as for a shell (on Windows a backslash stands for itself). A pager that exits with a failure is reported and cat exits with status 1. Default: `$BAT_PAGER`, then `$PAGER`, then the built-in pager. A bare `less` gets `-FRX`. A pager that is just `cat` means no paging. cat starts the pager with `UTIL_CORE_CAT_PAGER` set, and a cat that finds it set never starts a pager (one reached through a script, say); given only the pager's standard input, it also passes it on undecorated.
 
 -l, --language=NAME
 : Highlight with the grammar NAME: its full name, scope (`source.rust`), the last part of the scope (`rust`) or a file extension (`rs`). Without this option the grammar is chosen from the file name, then from the grammar's first-line pattern. Unknown names are an error. Only used in the bat view with color on.
@@ -116,12 +116,12 @@ docs/compatibility/cat.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.
 
 # FILES
 
 
-`$XDG_CONFIG_HOME/cat/syntaxes` or `~/.config/cat/syntaxes`: Sublime Text `.sublime-syntax` grammars. Your grammars are found before the built-in ones. Grammars are loaded only when a highlighted view is possible (terminal output, color on), so plain use pays nothing.
+`$XDG_CONFIG_HOME/cat/syntaxes` or `~/.config/cat/syntaxes` (a variable that is empty or not an absolute path is ignored): Sublime Text `.sublime-syntax` grammars. Your grammars are found before the built-in ones. Grammars are loaded only when a highlighted view is possible (terminal output, color on), so plain use pays nothing.
 
 `$XDG_CONFIG_HOME/cat/themes/NAME.theme` or `~/.config/cat/themes/NAME.theme`: your themes, one rule per line (`comment = #6c7a8c italic`, `keyword = 5 bold`, `string = #9ece6a on 0`, `extends = night`). Built-in themes: ansi (the terminal's 16 palette colors), night, ember, day, paper. With 24-bit colors the terminal is recognised from `$COLORTERM`, `$WT_SESSION` and similar; otherwise colors are reduced to 256 or 16. `auto` queries the terminal for its background color (OSC 11); terminals that do not answer are treated as dark unless `$COLORFGBG` says otherwise.
 

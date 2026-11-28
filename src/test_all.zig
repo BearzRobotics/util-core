@@ -4,6 +4,11 @@ const std = @import("std");
 const commands = @import("commands.zig");
 
 test {
+    _ = @import("cli.zig");
+    _ = @import("quote.zig");
+    _ = @import("commands/dircolors.zig");
+    _ = @import("commands/head.zig");
+    _ = @import("commands/tail.zig");
     _ = @import("count_arg.zig");
     _ = @import("fmt_float.zig");
     _ = @import("mode.zig");
@@ -31,6 +36,7 @@ test {
     _ = @import("lib/diff3.zig");
     _ = @import("lib/sdiff.zig");
     _ = @import("lib/comm.zig");
+    _ = @import("lib/common.zig");
     _ = @import("lib/cp.zig");
     _ = @import("lib/csplit.zig");
     _ = @import("lib/cut.zig");
@@ -51,6 +57,9 @@ test {
     _ = @import("lib/fold.zig");
     _ = @import("lib/fu_common.zig");
     _ = @import("lib/grep.zig");
+    _ = @import("lib/grep_checks.zig");
+    _ = @import("lib/grep_ignore.zig");
+    _ = @import("lib/grep_scan.zig");
     _ = @import("lib/hashsum.zig");
     _ = @import("lib/head.zig");
     _ = @import("lib/hostid.zig");

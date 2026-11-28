@@ -84,4 +84,11 @@ for v in $(cat rnd1); do run_cmp "random $v" $v; done
 awk 'BEGIN { srand(62); for (i = 0; i < 40; i++) { s = ""; l = 20 + int(rand() * 18); s = int(1 + rand() * 9); for (j = 1; j < l; j++) s = s int(rand() * 10); print s } }' > rnd2
 for v in $(cat rnd2); do run_cmp "random digits $v" $v; done
 rm -rf "$W"
+# Input is worked through as it arrives, in little memory.
+n=$(yes '12' | (ulimit -v 200000; timeout 60 "$BIN_DIR/factor"  2>&1) | head -n 200000 | cksum)
+g=$(yes '12' | LC_ALL=C timeout 60 "${GNU_BIN:-/usr/bin}/factor"  2>&1 | head -n 200000 | cksum)
+if [ "$n" = "$g" ]; then PASS=$((PASS + 1)); echo "PASS endless input"; else FAIL=$((FAIL + 1)); echo "FAIL endless input: GNU $g, ours $n"; fi
+first=$( (echo '12'; sleep 3) | timeout 2 "$BIN_DIR/factor"  2>/dev/null | head -n 1)
+if [ -n "$first" ]; then PASS=$((PASS + 1)); echo "PASS a line is answered before the input ends"; else FAIL=$((FAIL + 1)); echo "FAIL no output before the end of input"; fi
+
 print_summary

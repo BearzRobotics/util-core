@@ -293,17 +293,26 @@ fn realMain(s: *S) u8 {
             'P' => s.deref = .physical,
             'S' => s.separate_dirs = true,
             'X' => {
-                const f = Io.Dir.cwd().openFile(ctx.io, o.arg.?, .{}) catch |e| {
+                const from_stdin = std.mem.eql(u8, o.arg.?, "-");
+                const f = if (from_stdin) Io.File.stdin() else Io.Dir.cwd().openFile(ctx.io, o.arg.?, .{}) catch |e| {
                     cli.warn(ctx, "{f}: {s}", .{ cli.quote(o.arg.?), cli.errText(e) });
                     ok = false;
                     continue;
                 };
-                defer f.close(ctx.io);
+                defer if (!from_stdin) f.close(ctx.io);
                 var data: std.ArrayList(u8) = .empty;
                 defer data.deinit(ctx.gpa);
+                // Patterns that were not read would silently count files they
+                // exclude, so a failure here ends du.
                 while (true) {
-                    data.ensureUnusedCapacity(ctx.gpa, 8192) catch break;
-                    const n = cli.readChunk(ctx.io, f, data.unusedCapacitySlice()) catch break;
+                    data.ensureUnusedCapacity(ctx.gpa, 8192) catch {
+                        cli.warn(ctx, "memory exhausted", .{});
+                        return 1;
+                    };
+                    const n = cli.readChunk(ctx.io, f, data.unusedCapacitySlice()) catch |e| {
+                        cli.warn(ctx, "{f}: {s}\nTry '{s} --help' for more information.", .{ cli.quote(o.arg.?), cli.errText(e), ctx.name });
+                        return 1;
+                    };
                     if (n == 0) break;
                     data.items.len += n;
                 }

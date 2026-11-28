@@ -111,6 +111,8 @@ pub const CompileError = struct {
         unmatched_brace,
         /// A `w` file could not be created: "couldn't open file NAME: ERRNO".
         open_output,
+        /// "[:alpha:]" written without the outer brackets.
+        bare_class,
         /// "can't find label for jump to `NAME'".
         missing_label,
     };
@@ -555,8 +557,12 @@ const Parser = struct {
         const s = p.s;
         if (pat.len == 0) return null;
         const conv = try convertEscapes(s.arena, pat, true);
+        if (posixre.bareClass(conv)) {
+            s.diag.* = .{ .kind = .bare_class };
+            return error.BadProg;
+        }
         var rflags: posixre.Flags = .{};
-        const body = posixre.translateFlags(s.arena, conv, s.opts.ere, .{ .utf8 = s.opts.utf8, .icase = icase }, &rflags) catch |e| switch (e) {
+        const body = posixre.translateFlags(s.arena, conv, s.opts.ere, .{ .utf8 = s.opts.utf8, .icase = icase, .strict_interval_start = true }, &rflags) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             error.BadPattern => return p.fail("{s}", .{posixre.diagnoseMode(conv, s.opts.ere)}),
         };
@@ -1319,6 +1325,8 @@ const Exec = struct {
         if (e.in_place_tmp) |tmp| {
             if (e.cur_out.fd != sys.invalid_handle) _ = sys.closeFd(e.cur_out.fd);
             _ = sys.unlinkPath(tmp, false);
+            e.cur_out.buf.deinit(e.gpa);
+            e.cur_out.buf = .empty;
         }
         if (e.in.ahead) |*r| r.close(e.gpa);
         e.in.cur.close(e.gpa);
@@ -1332,7 +1340,7 @@ const Exec = struct {
     }
 
     fn writeFailed(e: *Exec, name: []const u8, items: usize, errno: ?LX.E) Err {
-        if (errno == null or errno.? != .PIPE) e.s.obs.emit(.{ .write_error = .{ .name = name, .items = items, .errno = errno } });
+        e.s.obs.emit(.{ .write_error = .{ .name = name, .items = items, .errno = errno } });
         e.s.exit_code = 4;
         return error.Abort;
     }
@@ -1543,10 +1551,12 @@ const Exec = struct {
         const dir_end = std.mem.lastIndexOfScalar(u8, name, '/');
         const dir = if (dir_end) |d| name[0 .. d + 1] else "./";
         var err: LX.E = .SUCCESS;
-        const pid: u32 = @intCast(LX.getpid());
         var attempt: u32 = 0;
         while (attempt < 100) : (attempt += 1) {
-            const tmp = std.fmt.allocPrint(e.ar(), "{s}sed{x:0>6}", .{ dir, (pid *% 2654435761 +% attempt *% 40503) & 0xffffff }) catch return error.OutOfMemory;
+            // Random, so that nobody can take all the names in advance.
+            var random: [4]u8 = undefined;
+            e.s.env.io.random(&random);
+            const tmp = std.fmt.allocPrint(e.ar(), "{s}sed{x:0>6}", .{ dir, std.mem.readInt(u32, &random, .little) & 0xffffff }) catch return error.OutOfMemory;
             const fd = sys.openFd(tmp, sys.O.WRONLY | sys.O.CREAT | sys.O.EXCL, 0o600, &err) orelse {
                 if (err == .EXIST) continue;
                 e.s.obs.emit(.{ .temp_open_failed = .{ .path = tmp, .errno = err } });
@@ -1560,6 +1570,8 @@ const Exec = struct {
             e.in_place_target = name;
             return true;
         }
+        e.s.obs.emit(.{ .temp_open_failed = .{ .path = dir, .errno = .EXIST } });
+        e.s.exit_code = 4;
         return false;
     }
 
@@ -1589,8 +1601,12 @@ const Exec = struct {
         const o = e.cur_out;
         try e.flushOut(o);
         if (e.in_place_st) |st| e.keepAttributes(e.in.cur.fd, o.fd, st);
+        // Done with the original. Windows will not replace a file that is open.
+        e.in.cur.close(e.gpa);
         const close_error = sys.closeFd(o.fd);
         o.fd = sys.invalid_handle;
+        o.buf.deinit(e.gpa);
+        o.buf = .empty;
         if (close_error) |er| {
             e.s.obs.emit(.{ .close_failed = .{ .name = tmp, .errno = er } });
             try e.flushAll();
@@ -1740,7 +1756,6 @@ const Exec = struct {
                 'R' => {
                     try e.missingNl(e.cur_out);
                     try e.emit(e.cur_out, a.text);
-                    try e.emit(e.cur_out, &.{'\n'});
                 },
                 else => {},
             }
@@ -2286,7 +2301,7 @@ const Exec = struct {
                 'F' => {
                     try e.missingNl(e.cur_out);
                     try e.emit(e.cur_out, e.in.name);
-                    try e.emit(e.cur_out, "\n");
+                    try e.emit(e.cur_out, &.{e.delim});
                 },
                 'g' => {
                     e.ps.clearRetainingCapacity();
@@ -2370,9 +2385,10 @@ const Exec = struct {
                     const rf = &e.r_files.items[found.?];
                     if (rf.pos < rf.data.len) {
                         const rest = rf.data[rf.pos..];
-                        const nl = std.mem.indexOfScalar(u8, rest, '\n');
-                        const line = if (nl) |k| rest[0..k] else rest;
-                        rf.pos += line.len + @as(usize, if (nl != null) 1 else 0);
+                        const nl = std.mem.indexOfScalar(u8, rest, e.delim);
+                        // With its delimiter, if the file gives it one.
+                        const line = if (nl) |k| rest[0 .. k + 1] else rest;
+                        rf.pos += line.len;
                         e.append_q.append(e.gpa, .{ .kind = 'R', .text = line }) catch return error.OutOfMemory;
                     }
                 },

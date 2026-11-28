@@ -135,7 +135,7 @@ pub const Date = struct {
         }
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(gpa);
-        strftime.format(&buf, gpa, d.options.format, &tm, when.sec, when.nsec) catch return error.FormatFailed;
+        try strftime.format(&buf, gpa, d.options.format, &tm, when.sec, when.nsec);
         try writer.writeAll(buf.items);
         try writer.writeByte('\n');
     }

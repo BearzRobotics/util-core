@@ -4,6 +4,7 @@
 //! algorithm is in src/lib/fmt.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const fmt = @import("../lib/fmt.zig");
@@ -15,7 +16,7 @@ const WidthError = error{ invalid, range };
 
 fn parseWidth(text: []const u8, max: u64) WidthError!u64 {
     if (text.len > 0 and text[0] == '-') return error.invalid;
-    const v = std.fmt.parseInt(u64, text, 10) catch |e| return if (e == error.Overflow) error.range else error.invalid;
+    const v = numparse.parseInt(u64, text, 10) catch |e| return if (e == error.Overflow) error.range else error.invalid;
     if (v > max) return error.range;
     return v;
 }

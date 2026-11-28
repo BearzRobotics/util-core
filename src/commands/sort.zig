@@ -5,6 +5,7 @@
 //! engine and the sort/merge/check modes are in src/lib/sort.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const sort = @import("../lib/sort.zig");
 const Io = std.Io;
@@ -150,9 +151,9 @@ pub fn main(ctx: cli.Context) u8 {
                 14 => {
                     const v = value orelse "diagnose-first";
                     if (std.mem.eql(u8, v, "diagnose-first")) {
-                        cfg.check = .diagnose;
+                        if (!setCheck(ctx, &cfg, .diagnose)) return fail_status;
                     } else if (std.mem.eql(u8, v, "quiet") or std.mem.eql(u8, v, "silent")) {
-                        cfg.check = .quiet;
+                        if (!setCheck(ctx, &cfg, .quiet)) return fail_status;
                     } else {
                         cli.warn(ctx, "invalid argument '{s}' for '--check'\nValid arguments are:\n  - 'quiet', 'silent'\n  - 'diagnose-first'\nTry '{s} --help' for more information.", .{ v, ctx.name });
                         return 1;
@@ -165,7 +166,7 @@ pub fn main(ctx: cli.Context) u8 {
                     if (!addKey(ctx, &cfg, value.?)) return fail_status;
                 },
                 19 => cfg.merge = true,
-                20 => cfg.output = value.?,
+                20 => if (!setOutput(ctx, &cfg, value.?)) return fail_status,
                 21 => cfg.stable = true,
                 22 => {
                     if (!validBufferSize(ctx, value.?)) return fail_status;
@@ -200,7 +201,7 @@ pub fn main(ctx: cli.Context) u8 {
                 switch (c) {
                     'k' => if (!addKey(ctx, &cfg, value)) return fail_status,
                     't' => if (!setTab(ctx, &cfg, &tab_given, value)) return fail_status,
-                    'o' => cfg.output = value,
+                    'o' => if (!setOutput(ctx, &cfg, value)) return fail_status,
                     'S' => if (!validBufferSize(ctx, value)) return fail_status,
                     else => {}, // -T
                 }
@@ -211,8 +212,8 @@ pub fn main(ctx: cli.Context) u8 {
                 'r' => cfg.gkey.reverse = true,
                 'R' => setLetter(&cfg.gkey, 'R', .both),
                 'V' => setLetter(&cfg.gkey, 'V', .both),
-                'c' => cfg.check = .diagnose,
-                'C' => cfg.check = .quiet,
+                'c' => if (!setCheck(ctx, &cfg, .diagnose)) return fail_status,
+                'C' => if (!setCheck(ctx, &cfg, .quiet)) return fail_status,
                 'm' => cfg.merge = true,
                 's' => cfg.stable = true,
                 'u' => cfg.unique = true,
@@ -226,6 +227,11 @@ pub fn main(ctx: cli.Context) u8 {
     }
 
     if (!finishKeys(ctx, &cfg)) return fail_status;
+    // A check writes no output (--debug has messages of its own).
+    if (cfg.check != .none and cfg.output != null and !cfg.debug) {
+        cli.warn(ctx, "options '-{c}o' are incompatible", .{@as(u8, if (cfg.check == .quiet) 'C' else 'c')});
+        return fail_status;
+    }
 
     var opts: sort.Options = .{
         .gkey = cfg.gkey,
@@ -394,6 +400,25 @@ fn unsupported(ctx: cli.Context, what: []const u8) u8 {
     return fail_status;
 }
 
+/// -c and -C, in either spelling: both at once is an error.
+fn setCheck(ctx: cli.Context, cfg: *Config, mode: sort.Check) bool {
+    if (cfg.check != .none and cfg.check != mode) {
+        cli.warn(ctx, "options '-cC' are incompatible", .{});
+        return false;
+    }
+    cfg.check = mode;
+    return true;
+}
+
+fn setOutput(ctx: cli.Context, cfg: *Config, name: []const u8) bool {
+    if (cfg.output) |had| if (!std.mem.eql(u8, had, name)) {
+        cli.warn(ctx, "multiple output files specified", .{});
+        return false;
+    };
+    cfg.output = name;
+    return true;
+}
+
 fn setTab(ctx: cli.Context, cfg: *Config, given: *bool, arg: []const u8) bool {
     var t: u8 = undefined;
     if (arg.len == 1) {
@@ -418,7 +443,7 @@ fn setTab(ctx: cli.Context, cfg: *Config, given: *bool, arg: []const u8) bool {
 }
 
 fn validParallel(ctx: cli.Context, arg: []const u8) bool {
-    const n = std.fmt.parseInt(usize, arg, 10) catch {
+    const n = numparse.parseInt(usize, arg, 10) catch {
         cli.warn(ctx, "invalid --parallel argument '{s}'", .{arg});
         return false;
     };
@@ -430,7 +455,7 @@ fn validParallel(ctx: cli.Context, arg: []const u8) bool {
 }
 
 fn validBatchSize(ctx: cli.Context, arg: []const u8) bool {
-    const n = std.fmt.parseInt(usize, arg, 10) catch {
+    const n = numparse.parseInt(usize, arg, 10) catch {
         cli.warn(ctx, "invalid --batch-size argument '{s}'", .{arg});
         return false;
     };
@@ -520,7 +545,7 @@ fn parseObsolete(ctx: cli.Context, cfg: *Config, a: []const u8, args: []const []
                 return false;
             };
         }
-        key.obs_e = key.eword + @intFromBool(key.echar != 0);
+        key.obs_e = key.eword +| @intFromBool(key.echar != 0);
         key.obs_has_e = true;
         if (key.echar == 0 and key.eword != 0) key.eword -= 1;
         parseLetters(&t, &key.ord, .end);
@@ -656,13 +681,20 @@ fn help(ctx: cli.Context) u8 {
         "  -M, --month-sort            compare (unknown) < 'JAN' < ... < 'DEC'\n" ++
         "  -h, --human-numeric-sort    compare human readable numbers (e.g., 2K 1G)\n" ++
         "  -n, --numeric-sort          compare according to string numerical value\n" ++
+        "  -R, --random-sort           shuffle, but group identical keys\n" ++
+        "      --random-source=FILE    get random bytes from FILE\n" ++
         "  -r, --reverse               reverse the result of comparisons\n" ++
         "      --sort=WORD             sort according to WORD:\n" ++
         "                                general-numeric -g, human-numeric -h, month -M,\n" ++
-        "                                numeric -n\n\n" ++
+        "                                numeric -n, random -R, version -V\n" ++
+        "  -V, --version-sort          natural sort of (version) numbers within text\n\n" ++
         "Other options:\n\n" ++
+        "      --batch-size=NMERGE   accepted and ignored (no temporary files)\n" ++
         "  -c, --check, --check=diagnose-first  check for sorted input; do not sort\n" ++
         "  -C, --check=quiet, --check=silent  like -c, but do not report first bad line\n" ++
+        "      --compress-program=PROG  accepted and ignored (no temporary files)\n" ++
+        "      --debug               annotate the part of the line used to sort,\n" ++
+        "                              and warn about questionable usage to stderr\n" ++
         "      --files0-from=F       read input from the files specified by\n" ++
         "                            NUL-terminated names in file F;\n" ++
         "                            If F is - then read names from standard input\n" ++
@@ -672,6 +704,8 @@ fn help(ctx: cli.Context) u8 {
         "  -s, --stable              stabilize sort by disabling last-resort comparison\n" ++
         "  -S, --buffer-size=SIZE    accepted and ignored (input is held in memory)\n" ++
         "  -t, --field-separator=SEP  use SEP instead of non-blank to blank transition\n" ++
+        "  -T, --temporary-directory=DIR  accepted and ignored (no temporary files)\n" ++
+        "      --parallel=N          accepted and ignored (one thread is used)\n" ++
         "  -u, --unique              output only the first of lines with equal keys;\n" ++
         "                              with -c, check for strict ordering\n" ++
         "  -z, --zero-terminated     line delimiter is NUL, not newline\n" ++
@@ -680,6 +714,5 @@ fn help(ctx: cli.Context) u8 {
         "KEYDEF is F[.C][OPTS][,F[.C][OPTS]] for start and stop position, where F is a\n" ++
         "field number and C a character position in the field; both are origin 1, and\n" ++
         "the stop position defaults to the line's end.  OPTS is one or more single-letter\n" ++
-        "ordering options [bdfghiMnr], which override global ordering options for that key.\n" ++
-        "Not implemented: -R, -V, --debug.\n")) 0 else 1;
+        "ordering options [bdfghiMnRrV], which override global ordering options for that key.\n")) 0 else 1;
 }

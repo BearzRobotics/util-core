@@ -4,6 +4,7 @@
 //! od does and words the diagnostics; the formatting is in src/lib/od.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const od = @import("../lib/od.zig");
@@ -28,7 +29,7 @@ fn parseBytes(text: []const u8, allow_suffix: bool) ?u64 {
     var j = i;
     while (j < text.len and std.fmt.charToDigit(text[j], base) catch null != null) j += 1;
     if (j == i and base == 10) return null;
-    const v = std.fmt.parseInt(u64, text[i..j], base) catch if (j == i) @as(u64, 0) else return null;
+    const v = numparse.parseInt(u64, text[i..j], base) catch if (j == i) @as(u64, 0) else return null;
     const suffix = text[j..];
     if (suffix.len == 0) return v;
     if (!allow_suffix) return null;
@@ -226,7 +227,10 @@ pub fn main(ctx: cli.Context) u8 {
         .big_endian = big_endian,
         .label = if (have_label) label else null,
     }, inputs.items, &stdout.interface, .{ .context = @constCast(&ctx), .func = report }) catch |e| switch (e) {
-        error.OutOfMemory => return 1,
+        error.OutOfMemory => {
+            cli.warn(ctx, "memory exhausted", .{});
+            return 1;
+        },
         error.WriteFailed => {
             cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
             return 1;
@@ -255,7 +259,7 @@ fn oldOffset(text: []const u8) ?u64 {
     if (s.len > 0 and s[0] == '+') s = s[1..];
     if (s.len == 0) return null;
     if (s.len > 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X')) {
-        return std.fmt.parseInt(u64, s[2..], 16) catch null;
+        return numparse.parseInt(u64, s[2..], 16) catch null;
     }
     var mult: u64 = 1;
     if (s[s.len - 1] == 'b' or s[s.len - 1] == 'B') {
@@ -263,7 +267,7 @@ fn oldOffset(text: []const u8) ?u64 {
         s = s[0 .. s.len - 1];
     }
     if (s.len == 0) return null;
-    const v = std.fmt.parseInt(u64, s, 8) catch return null;
+    const v = numparse.parseInt(u64, s, 8) catch return null;
     return v *| mult;
 }
 
@@ -281,7 +285,12 @@ fn parseType(ctx: cli.Context, text: []const u8, fmts: *std.ArrayList(Fmt)) bool
                 if (i < text.len and std.ascii.isDigit(text[i])) {
                     var j = i;
                     var v: usize = 0;
-                    while (j < text.len and std.ascii.isDigit(text[j])) : (j += 1) v = v * 10 + (text[j] - '0');
+                    while (j < text.len and std.ascii.isDigit(text[j])) : (j += 1) v = v *| 10 +| (text[j] - '0');
+                    // As in GNU, a size beyond an int is only "invalid".
+                    if (v > std.math.maxInt(i32)) {
+                        cli.warn(ctx, "invalid type string {f}", .{cli.quoteC(text)});
+                        return false;
+                    }
                     size = v;
                     i = j;
                 } else if (i < text.len and std.mem.indexOfScalar(u8, "CSIL", text[i]) != null) {
@@ -310,7 +319,12 @@ fn parseType(ctx: cli.Context, text: []const u8, fmts: *std.ArrayList(Fmt)) bool
                 if (i < text.len and std.ascii.isDigit(text[i])) {
                     var j = i;
                     var v: usize = 0;
-                    while (j < text.len and std.ascii.isDigit(text[j])) : (j += 1) v = v * 10 + (text[j] - '0');
+                    while (j < text.len and std.ascii.isDigit(text[j])) : (j += 1) v = v *| 10 +| (text[j] - '0');
+                    // As in GNU, a size beyond an int is only "invalid".
+                    if (v > std.math.maxInt(i32)) {
+                        cli.warn(ctx, "invalid type string {f}", .{cli.quoteC(text)});
+                        return false;
+                    }
                     size = v;
                     i = j;
                 } else if (i < text.len and std.mem.indexOfScalar(u8, "BHFDL", text[i]) != null) {

@@ -10,7 +10,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 
-pub const version = "0.2.0";
+pub const version = "0.3.0";
 
 /// Everything a command frontend needs for one invocation.
 pub const Context = struct {
@@ -78,7 +78,11 @@ pub fn styleEnabled(ctx: Context, when: When, stream_is_tty: bool) bool {
     return true;
 }
 
-/// A command frontend: returns the process exit status.
+/// A command frontend: returns the process exit status. A program that embeds
+/// one calls `finish` with that status, which also forgets the command's write
+/// failures. Two things still end the process, as the commands must: leaving
+/// the built-in pager while its input is still blocked, and `dd` dying of the
+/// SIGINT it was sent.
 pub const CommandFn = *const fn (ctx: Context) u8;
 
 /// True when `args` is exactly one argument equal to `flag`. GNU true/false
@@ -188,6 +192,11 @@ pub fn writeErrorWarn(ctx: Context) void {
 
 /// Called by the entry points after a command returns.
 pub fn finish(ctx: Context, rc: u8) u8 {
+    // For a program that runs more than one command: the next starts afresh.
+    defer {
+        stdout_err = null;
+        warned = false;
+    }
     if (stdout_err == null) return rc;
     if (!warned) writeErrorWarn(ctx);
     return if (rc == 0) 1 else rc;
@@ -234,34 +243,62 @@ pub fn warn(ctx: Context, comptime fmt: []const u8, args: anytype) void {
         long = std.fmt.allocPrint(ctx.gpa, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
         break :blk long.?;
     };
-    if (std.mem.indexOf(u8, msg, "writ") != null) warned = true;
+    // Judged by our own wording, never by what was put into it: a file may be
+    // called "rewrite".
+    if (comptime std.mem.indexOf(u8, fmt, "writ") != null and std.mem.indexOf(u8, fmt, "write-protected") == null) warned = true;
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
 }
 
 /// Print a line to stderr exactly as formatted (no command-name prefix).
 pub fn writeStderr(ctx: Context, comptime fmt: []const u8, args: anytype) void {
-    var buf: [512]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, fmt ++ "\n", args) catch return;
-    Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
+    writeStderrNoNl(ctx, fmt ++ "\n", args);
 }
 
 /// Write to stderr exactly as formatted, without a trailing newline.
 pub fn writeStderrNoNl(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     var buf: [1024]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    var long: ?[]u8 = null;
+    defer if (long) |l| ctx.gpa.free(l);
+    // A long name must not make a message, least of all a question, vanish.
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch blk: {
+        long = std.fmt.allocPrint(ctx.gpa, fmt, args) catch return;
+        break :blk long.?;
+    };
     Io.File.stderr().writeStreamingAll(ctx.io, msg) catch {};
+}
+
+/// Read the answer to one question from `file`: yes when the line begins with
+/// y or Y. The whole line is consumed however long it is, so that none of it
+/// can answer the next question, and nothing past it, which belongs to that
+/// question or to whoever reads the file next. No answer, or an error, is no.
+pub fn readYes(io: Io, file: Io.File) bool {
+    var first: ?u8 = null;
+    while (true) {
+        var b: [1]u8 = undefined;
+        const n = readChunk(io, file, &b) catch return false;
+        if (n == 0) break;
+        if (first == null) first = b[0];
+        if (b[0] == '\n') break;
+    }
+    return first == 'y' or first == 'Y';
 }
 
 /// Print an informational line `<name>: <message>\n` to stdout (used by the
 /// -v/--verbose options of mkdir, rmdir, ...). Best effort.
 pub fn say(ctx: Context, comptime fmt: []const u8, args: anytype) void {
     var buf: [512]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
+    var long: ?[]u8 = null;
+    defer if (long) |l| ctx.gpa.free(l);
+    const msg = std.fmt.bufPrint(&buf, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch blk: {
+        long = std.fmt.allocPrint(ctx.gpa, "{s}: " ++ fmt ++ "\n", .{ctx.name} ++ args) catch return;
+        break :blk long.?;
+    };
     _ = writeStdout(ctx.io, msg);
 }
 const quote_impl = @import("quote.zig");
 pub const Quoted = quote_impl.Quoted;
 pub const QuotedC = quote_impl.QuotedC;
+pub const Visible = quote_impl.Visible;
 pub const quote = quote_impl.quote;
 pub const quoteA = quote_impl.quoteA;
 pub const quoteC = quote_impl.quoteC;
@@ -321,14 +358,33 @@ pub const Out = struct {
         o.write(&.{byte});
     }
 
+    /// Formatted text of any length.
     pub fn print(o: *Out, comptime fmt: []const u8, args: anytype) void {
-        var tmp: [256]u8 = undefined;
-        const s = std.fmt.bufPrint(&tmp, fmt, args) catch {
-            o.failed = true;
-            return;
-        };
-        o.write(s);
+        var staging: [256]u8 = undefined;
+        var f: Formatter = .{ .out = o, .writer = .{ .vtable = &.{ .drain = Formatter.drain }, .buffer = &staging } };
+        // `drain` takes everything; a real failure is recorded in `failed`.
+        f.writer.print(fmt, args) catch {};
+        o.write(f.writer.buffered());
     }
+
+    /// Feeds what does not fit the staging buffer on to `out`.
+    const Formatter = struct {
+        out: *Out,
+        writer: Io.Writer,
+
+        fn drain(w: *Io.Writer, data: []const []const u8, splat: usize) Io.Writer.Error!usize {
+            const f: *Formatter = @fieldParentPtr("writer", w);
+            f.out.write(w.buffered());
+            w.end = 0;
+            var taken: usize = 0;
+            for (data, 0..) |bytes, i| {
+                const times = if (i == data.len - 1) splat else 1;
+                for (0..times) |_| f.out.write(bytes);
+                taken += bytes.len * times;
+            }
+            return taken;
+        }
+    };
 
     pub fn flush(o: *Out) void {
         if (o.failed or o.len == 0) return;

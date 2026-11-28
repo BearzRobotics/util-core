@@ -14,7 +14,10 @@ export TZ=UTC
 # field name -> GNU stat directive
 check_field() { # file, json key, GNU format, extra GNU args
     f=$1; key=$2; gfmt=$3; shift 3
-    want=$(stat "$@" -c "$gfmt" -- "$f")
+    # Two empty answers would agree whatever went wrong: GNU must give one.
+    if ! want=$(stat "$@" -c "$gfmt" -- "$f") || [ -z "$want" ]; then
+        fail=$((fail + 1)); echo "FAIL $f $key: no value from GNU stat to compare with"; return
+    fi
     got=$("$BIN/stat" "$@" --json -- "$f" | python3 -c "import json,sys; v=json.load(sys.stdin)[\"$key\"]; print(v)" 2>/dev/null)
     if [ "$want" = "$got" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL $f $key: GNU=[$want] OURS=[$got]"; fi
 }
@@ -37,9 +40,14 @@ for f in file empty big dir lnk dangling fifo /dev/null /dev/zero / /proc "we\"i
     check_field "$f" atime '%X'
     check_field "$f" mtime '%Y'
     check_field "$f" ctime '%Z'
+    [ "$f" = dangling ] && continue
     check_field "$f" mtime '%Y' -L
     check_field "$f" type_desc '%F' -L
 done
+# -L on a link to nothing fails: the status and the message must be GNU's.
+want=$(LC_ALL=C stat -L -c %Y dangling 2>&1; echo "status $?")
+got=$(LC_ALL=C "$BIN/stat" -L --json dangling 2>&1; echo "status $?")
+if [ "$(echo "$want" | sed 's|^[^ ]*stat:|stat:|')" = "$got" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL -L dangling: GNU=[$want] OURS=[$got]"; fi
 for f in /dev/null /dev/zero; do
     check_field "$f" rdev_major '%Hr'
     check_field "$f" rdev_minor '%Lr'
@@ -50,7 +58,7 @@ t "symlink target" sh -c "[ \"\$('$BIN/stat' --json lnk | python3 -c 'import jso
 t "dangling target" sh -c "[ \"\$('$BIN/stat' --json dangling | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"link_target\"])')\" = nowhere ]"
 t "non-link target is null" sh -c "'$BIN/stat' --json file | python3 -c 'import json,sys;assert json.load(sys.stdin)[\"link_target\"] is None'"
 t "mtime nsec" sh -c "'$BIN/stat' --json file | python3 -c 'import json,sys;d=json.load(sys.stdin);assert (d[\"mtime\"],d[\"mtime_nsec\"])==(1234567890,123456789)'"
-t "non-UTF-8 name still parses" sh -c "'$BIN/stat' --json bad* | python3 -c 'import json,sys;json.load(sys.stdin)'"
+t "non-UTF-8 name still parses" sh -c "'$BIN/stat' --json bad* | python3 -c 'import json,sys;assert json.load(sys.stdin)[\"name\"]==\"bad\\ufffdname\"'"
 t "one line per operand" sh -c "[ \"\$('$BIN/stat' --json file dir empty | wc -l)\" = 3 ]"
 t "missing operand: others still printed, status 1" sh -c "out=\$('$BIN/stat' --json nofile file 2>/dev/null); rc=\$?; [ \$rc = 1 ] && [ \$(echo \"\$out\" | wc -l) = 1 ]"
 t "-f parses and matches block counts" sh -c "[ \"\$('$BIN/stat' --json -f / | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"block_size\"])')\" = \"\$(stat -f -c %s /)\" ]"

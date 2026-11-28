@@ -5,6 +5,9 @@ ORACLE_OK=1  # tree is not a GNU program; the reference is Steve Baker's tree 2.
 . "$(dirname "$0")/testlib.sh"
 W="$(mktemp -d)"; cd "$W"
 export TZ=UTC
+# The colour variables would otherwise be whatever this machine has.
+export TERM=xterm
+unset LS_COLORS TREE_COLORS NO_COLOR CLICOLOR CLICOLOR_FORCE
 set -f
 mkdir t && cd t
 mkdir -p dir1/sub .hid emptyd d2/x/y/z deep/a/b/c/d/e
@@ -92,6 +95,24 @@ done
 unset LS_COLORS
 CMP_LOCALE=C td 'LS_COLORS unset -C' tree -C -a
 CMP_LOCALE=C td 'NO_COLOR' tree -C -n
+# Short inode and device numbers are padded; sysfs has them everywhere.
+if [ -d /sys/kernel ]; then
+    CMP_LOCALE=C td 'short inode numbers' --inodes --device -d -L 1 /sys
+    CMP_LOCALE=C td 'short inode numbers, -p' --inodes -p -d -L 1 /sys
+fi
+
+# Whether to colour and with which table, from the environment.
+mkdir "$W/ext"; for e in tar gz zip jpg mp3 wav exe bat txt Tar 7z; do : > "$W/ext/f.$e"; done
+ln -s nowhere "$W/ext/orphan"
+for spec in '' TERM= CLICOLOR=1 CLICOLOR_FORCE=1 CLICOLOR_FORCE= 'NO_COLOR=1 CLICOLOR_FORCE=1' LS_COLORS= LS_COLORS=di=33 \
+    'LS_COLORS=di=33 TREE_COLORS=di=32' 'LS_COLORS=di=33 TREE_COLORS=' LS_COLORS=no=36 LS_COLORS=no=36:mi=31; do
+    for v in $spec; do export "$v"; done
+    for o in -C -a '-n -C' '-C -n' -n; do CMP_LOCALE=C td "color env '$spec' $o" $o "$W/ext"; done
+    unset LS_COLORS TREE_COLORS NO_COLOR CLICOLOR CLICOLOR_FORCE; export TERM=xterm
+done
+unset TERM
+CMP_LOCALE=C td 'no TERM, -C' -C "$W/ext"
+export TERM=xterm
 help_cmp_tree() {
     exp=$(LC_ALL=C /usr/bin/tree --help 2>&1)
     act=$(ours --help 2>&1)
@@ -112,6 +133,17 @@ for secs in -9223372036854775808 -100000000000000000 100000000000000000 92233720
         else FAIL=$((FAIL + 1)); echo "FAIL mtime $secs: tree $o (rc=$rc)"; printf '%s\n' "$out" | head -8; fi
     done
 done
+# Past PATH_MAX the listing stops where tree's does. The tree is walked a
+# directory at a time from open descriptors, which could go further.
+mkdir "$W/deep" && ( cd "$W/deep" && i=0; while [ $i -lt 2100 ]; do mkdir a && cd -P a || exit 1; i=$((i + 1)); done ) 2>/dev/null
+for o in -d -J; do
+    exp=$(cd "$W" && ulimit -s 8192 && LC_ALL=C gnu $o deep 2>&1 | cksum; echo)
+    act=$(cd "$W" && ulimit -s 8192 && LC_ALL=C timeout 120 "$BIN_DIR/tree" $o deep 2>&1 | cksum; echo)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS past PATH_MAX $o"
+    else FAIL=$((FAIL + 1)); echo "FAIL past PATH_MAX $o: GNU $exp, ours $act"; fi
+done
+/usr/bin/rm -rf "$W/deep"
+
 # Link loops end in every output mode, not only in the text listing. (With a
 # timeout: without loop detection these never finish.)
 mkdir -p "$W/loops/two/d" "$W/loops/up/a/b/c" "$W/loops/cross/one" "$W/loops/cross/other"
@@ -122,6 +154,17 @@ cd "$W/loops"
 ours() { timeout 20 "$BIN_DIR/$UTIL" "$@"; }
 for o in "-l" "-J -l" "-X -l" "--du -l" "--du -l -h" "-J --du -l" "-X --du -l" "-J -l -s" "-X -l -s" "-J --du -l -s" "-J -l --noreport" "-J -l -d" "-J -l -a"; do
     for t in two up cross; do
+        case $o in
+        *--du*)
+            # Under --du tree walks in the order the file system returns the
+            # names, and that decides which link of a loop it follows. Ours
+            # walks in sorted order; compare where the two are the same.
+            if [ "$t" != two ] && [ "$(/usr/bin/ls -U "$t")" != "$(LC_ALL=C /usr/bin/ls "$t")" ]; then
+                if ours $o $t > /dev/null 2>&1; then PASS=$((PASS + 1)); echo "PASS loop $o $t ends"
+                else FAIL=$((FAIL + 1)); echo "FAIL loop $o $t ends"; fi
+                continue
+            fi ;;
+        esac
         td "loop $o $t" $o $t
     done
 done
@@ -136,4 +179,19 @@ for o in "" "-q" "-N" "-Q" "-f" "-F" "-p" "-qQ"; do
     CMP_LOCALE=C.UTF-8 td "unprintable characters $o" $o --noreport d
     CMP_LOCALE=C td "unprintable characters, C locale $o" $o --noreport d
 done
+# Entries that cannot be examined leave nothing behind on standard error (FIND-031).
+mkdir -p "$W/nostat/sub" && touch "$W/nostat/sub/a" "$W/nostat/sub/b" && chmod 600 "$W/nostat/sub"
+CMP_LOCALE=C td 'a directory without search permission' "$W/nostat"
+chmod 700 "$W/nostat/sub"
+
+# Output that cannot be written is not a success, unlike in tree (FIND-030).
+if [ -c /dev/full ]; then
+    for how in -o redirect; do
+        if [ $how = -o ]; then out=$("$BIN_DIR/tree" -o /dev/full "$W/t/dir1" 2>&1); st=$?
+        else out=$("$BIN_DIR/tree" "$W/t/dir1" 2>&1 >/dev/full); st=$?; fi
+        if [ "$st" = 1 ] && [ "$out" = "tree: write error: No space left on device" ]; then PASS=$((PASS + 1)); echo "PASS full disk, $how"
+        else FAIL=$((FAIL + 1)); echo "FAIL full disk, $how: $st $out"; fi
+    done
+fi
+
 cd /; print_summary

@@ -69,6 +69,14 @@ pub fn main(ctx: cli.Context) u8 {
     // A command that reads the terminal from our group stops the whole group;
     // we must keep running to enforce the limit. It starts with the default
     // actions, as under GNU.
+    //
+    // Were SIGCHLD ignored, the kernel would reap the command itself and its
+    // exit status would be lost.
+    if (sys.signalNumber("CHLD")) |chld| _ = sys.setSignal(chld, .default);
+    // Until they are watched for, a signal must not end us and leave the
+    // command running without a limit.
+    const watched: timeout.Watched = .init(signal);
+    sys.holdSignals(watched.list());
     sys.catchTerminalStops();
     const spawned = timeout.spawn(env, command);
     sys.ignoreTerminalStops();
@@ -86,12 +94,14 @@ pub fn main(ctx: cli.Context) u8 {
     };
     const pid = child.id.?;
     // Blocks the watched signals; they are read from the signalfd instead.
-    const w = sys.Watcher.init(pid, &timeout.watched_signals) orelse {
+    const w = sys.Watcher.init(pid, watched.list()) orelse {
         cli.warn(ctx, "unable to monitor the command", .{});
         child.kill(ctx.io);
         return 125;
     };
     defer w.deinit();
+    // One that came before they were blocked is passed on like the others.
+    if (sys.takeCaughtSignal()) |sig| sys.raiseHeld(sig);
 
     var rep: Report = .{ .ctx = &ctx, .name = command[0] };
     const outcome = timeout.supervise(env, .{

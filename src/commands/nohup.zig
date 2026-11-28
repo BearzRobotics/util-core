@@ -65,6 +65,9 @@ pub fn main(ctx: cli.Context) u8 {
     if (plan.redirect_stdout) {
         var buf: [4096]u8 = undefined;
         var shown: []const u8 = nohup.output_name;
+        // The file is to be 0600 whatever the umask, as GNU makes it; the
+        // command gets the umask back.
+        const mask = sys.setUmask(0o177);
         const file = sys.openAppendMode(nohup.output_name, 0o600) catch |e1| blk: {
             const p = nohup.homeOutputPath(cli.getenv(ctx, "HOME"), &buf);
             if (p) |path| {
@@ -80,6 +83,7 @@ pub fn main(ctx: cli.Context) u8 {
             cli.warn(ctx, "failed to open {f}: {s}", .{ cli.quoteA(nohup.output_name), cli.errText(e1) });
             return 125;
         };
+        _ = sys.setUmask(mask);
         _ = sys.dup2(file.handle, 1);
         if (file.handle != Io.File.stdout().handle) file.close(ctx.io);
         switch (plan.stdout_notice) {
@@ -87,18 +91,21 @@ pub fn main(ctx: cli.Context) u8 {
             .appending_output => cli.warn(ctx, "appending output to {f}", .{cli.quoteA(shown)}),
         }
     }
+    var saved_stderr: ?sys.Handle = null;
     if (plan.redirect_stderr) {
         if (plan.stderr_notice) |n| switch (n) {
             .ignoring_input_and_redirecting_stderr => cli.warn(ctx, "ignoring input and redirecting stderr to stdout", .{}),
             .redirecting_stderr => cli.warn(ctx, "redirecting stderr to stdout", .{}),
         };
+        // As GNU, the terminal is kept to say there that the command could
+        // not be run.
+        saved_stderr = sys.dupCloexec(2);
         _ = sys.dup2(Io.File.stdout().handle, 2);
     }
 
     _ = sys.setSignal(sys.signo.HUP, .ignore);
-    sys.restoreSigpipe();
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(ctx.gpa);
     for (args) |a| argv.append(ctx.gpa, a) catch return 125;
-    return exec.execStyled(ctx, args[0], argv.items, null, .run);
+    return exec.execRestoring(ctx, args[0], argv.items, saved_stderr);
 }

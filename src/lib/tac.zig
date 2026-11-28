@@ -65,7 +65,7 @@ fn tacInput(env: Env, out: *stickyout.Out, in: Input, sep: []const u8, before: b
 
     if (in.source == .path) {
         if (file.stat(env.io)) |st| {
-            if (st.kind == .file and st.size > 0) return tacBackwards(env, out, file, st.size, sep, before);
+            if (st.kind == .file and try common.sizeIsReal(env.io, file, st.size)) return tacBackwards(env, out, file, st.size, sep, before);
         } else |_| {}
     }
     while (true) {

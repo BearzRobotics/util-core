@@ -5,6 +5,7 @@
 const std = @import("std");
 const Io = std.Io;
 const cli = @import("../cli.zig");
+const sys = @import("../sys.zig");
 const getopt = @import("../getopt.zig");
 const sdiff = @import("../lib/sdiff.zig");
 const diff = @import("../lib/diff.zig");
@@ -32,12 +33,16 @@ fn diffUsage(ctx: cli.Context, comptime fmt: []const u8, args: anytype) u8 {
     return 2;
 }
 
+/// Larger numbers are cut to this, which leaves room to add a few of them
+/// without overflow. No file or line comes near it.
+const max_count: usize = std.math.maxInt(isize) / 4;
+
 fn parseCount(text: []const u8) ?usize {
     if (text.len == 0) return null;
     var v: usize = 0;
     for (text) |c| {
         if (!std.ascii.isDigit(c)) return null;
-        v = v *| 10 +| (c - '0');
+        v = @min(v *| 10 +| (c - '0'), max_count);
     }
     return v;
 }
@@ -66,17 +71,23 @@ fn runEditor(context: ?*anyopaque, gpa: std.mem.Allocator, text: []const u8) ?[]
     const ec: *EditCtx = @ptrCast(@alignCast(context.?));
     const ctx = ec.ctx.*;
     const editor = cli.getenv(ctx, "EDITOR") orelse "ed";
-    const tmpdir = cli.getenv(ctx, "TMPDIR") orelse "/tmp";
-    const stamp: i96 = Io.Timestamp.now(ctx.io, .real).nanoseconds;
-    const path = std.fmt.allocPrint(gpa, "{s}/sdiff.{x}", .{ tmpdir, @as(u64, @truncate(@as(u96, @bitCast(stamp)))) }) catch return null;
-    defer gpa.free(path);
-    {
-        const f = Io.Dir.cwd().createFile(ctx.io, path, .{ .exclusive = true }) catch return null;
-        defer f.close(ctx.io);
-        f.writeStreamingAll(ctx.io, text) catch return null;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const env: subprog.Env = .{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ };
+    // As GNU: a signal that ends sdiff waits until the copy is gone. SIGINT
+    // does not end it here, for Ctrl-C belongs to the editor.
+    sys.catchTerminationSignals();
+    defer {
+        const caught = sys.takeCaughtSignal();
+        sys.restoreCaughtSignals();
+        if (caught) |sig| if (sig != sys.signo.INT) sys.deliverCaughtSignal(sig);
     }
+    const path = subprog.privateCopy(env, arena.allocator(), cli.getenv(ctx, "TMPDIR"), "sdiff", text) catch |e| {
+        cli.warn(ctx, "cannot create a temporary file: {s}", .{cli.errText(e)});
+        return null;
+    };
     defer Io.Dir.cwd().deleteFile(ctx.io, path) catch {};
-    const status = subprog.inherit(.{ .io = ctx.io, .gpa = gpa, .environ = ctx.environ }, &.{ editor, path });
+    const status = subprog.inherit(env, &.{ editor, path });
     if (status != 0) {
         var eb: [512]u8 = undefined;
         cli.warn(ctx, "{s}", .{subprog.describe(&eb, editor, status)});
@@ -199,7 +210,7 @@ pub fn main(ctx: cli.Context) u8 {
             O.tabsize => {
                 dargs.appendSlice(arena, &.{ "--tabsize", a.arg.? }) catch return 2;
                 const v = parseCount(a.arg.?) orelse 0;
-                if (v == 0) return diffUsage(ctx, "invalid tabsize '{s}'", .{a.arg.?});
+                if (v == 0 or v == max_count) return diffUsage(ctx, "invalid tabsize '{s}'", .{a.arg.?});
                 o.diff.tab_size = v;
             },
             'd' => {
@@ -251,10 +262,11 @@ pub fn main(ctx: cli.Context) u8 {
     // With -o the files are read as given (a directory operand means the file
     // of the same name in it); the comparison itself names them as typed.
     var fnames: [2][]const u8 = .{ ops[0], ops[1] };
-    if (output != null) {
+    {
         var is_dir: [2]bool = .{ false, false };
         for (0..2) |i| {
             if (std.mem.eql(u8, ops[i], "-")) {
+                if (output == null) continue;
                 cli.warn(ctx, "cannot interactively merge standard input", .{});
                 return 2;
             }
@@ -262,12 +274,16 @@ pub fn main(ctx: cli.Context) u8 {
                 is_dir[i] = st.kind == .directory;
             } else |_| {}
         }
-        if (is_dir[0] and is_dir[1]) {
+        if (is_dir[0] and is_dir[1] and output != null) {
             cli.warn(ctx, "both files to be compared are directories", .{});
             return 2;
         }
         for (0..2) |i| {
-            if (!is_dir[i]) continue;
+            if (!is_dir[i] or is_dir[1 - i]) continue;
+            if (std.mem.eql(u8, ops[1 - i], "-")) {
+                cli.writeStderr(ctx, "diff: cannot compare '-' to a directory", .{});
+                return 2;
+            }
             const base = std.fs.path.basename(ops[1 - i]);
             const dir = ops[i];
             const slash: []const u8 = if (dir.len > 0 and dir[dir.len - 1] != '/') "/" else "";
@@ -278,7 +294,7 @@ pub fn main(ctx: cli.Context) u8 {
     defer for (data) |m| gpa.free(m);
     for (0..2) |i| {
         data[i] = readAll(ctx, fnames[i]) catch |e| {
-            if (output != null) cli.warn(ctx, "{s}: {s}", .{ fnames[i], cli.errText(e) }) else cli.writeStderr(ctx, "diff: {s}: {s}", .{ ops[i], cli.errText(e) });
+            if (output != null) cli.warn(ctx, "{s}: {s}", .{ fnames[i], cli.errText(e) }) else cli.writeStderr(ctx, "diff: {s}: {s}", .{ fnames[i], cli.errText(e) });
             return 2;
         };
     }

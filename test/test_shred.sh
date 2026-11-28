@@ -86,4 +86,12 @@ if strace -o /dev/null -e inject=renameat2:error=EINVAL true 2>/dev/null; then
 else
     skip_test "renameat2 without RENAME_NOREPLACE (no usable strace)"
 fi
+# Running out of memory is said, and nothing is overwritten (DISK-009).
+printf secret > "$TEST_TMP/sf"
+out=$( (ulimit -v 1000000; "$BIN_DIR/shred" -n 100000000000 "$TEST_TMP/sf") </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"memory exhausted"*"status 1") PASS=$((PASS + 1)); echo "PASS shred -n too large" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL shred -n too large: $out" ;;
+esac
+
 cd /; print_summary

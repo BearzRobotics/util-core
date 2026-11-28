@@ -267,4 +267,19 @@ else
     skip_test "swapped directory (no usable strace)"
 fi
 
+# The smallest threshold cannot be negated (DISK-023).
+cd "$TEST_TMP" && printf 'hello\n' > thr
+for t in -8E -9223372036854775808 -9223372036854775807 8E 9223372036854775807 -9223372036854775809 -1 -4K -5K; do
+    run_cmp "threshold $t" -t $t thr
+done
+
+# -X - reads the patterns from standard input (DISK-024).
+printf 'f1\n' > "$TEST_TMP/patterns"
+CMP_STDIN="$TEST_TMP/patterns" run_cmp "-X - from stdin" -X - -a $N
+
+# Wildcard exclusions: which trailing part of a path they match (DISK-038).
+for pat in 'a*' '*a' 'd*f1' 'a*/*' 'a/*' '*/f?' '?*1' '[ab]*' 'a?*b'; do
+    run_cmp "exclude wildcard $pat" -a --exclude="$pat" $N
+done
+
 cd /; print_summary

@@ -10,7 +10,7 @@
 //! As in gnulib, every component is examined, and any failure to do so is an
 //! error: a name that could not be checked is never reported as canonical.
 //! `.missing` (-m) tolerates all of them; `.canonical` (-f) only a last
-//! component that does not exist (and `.logical_only` any missing one that
+//! component that does not exist (and without following links any missing one that
 //! only names follow).
 
 const std = @import("std");
@@ -23,7 +23,6 @@ pub const Mode = enum {
     canonical, // -f: last component may be missing
     existing, // -e: everything must exist
     missing, // -m: nothing needs to exist
-    logical_only, // realpath -s: no symlink expansion
 };
 
 pub const Error = error{
@@ -113,13 +112,14 @@ test "needsDirectory" {
 /// Absolute canonical form of `path` (caller frees). `ctx` is anything with
 /// `.io` and `.gpa` (a `cli.Context` or a `common.Env`).
 pub fn resolve(ctx: anytype, path: []const u8, mode: Mode) Error![]u8 {
-    return resolveLogical(ctx, path, mode, false);
+    return resolveLinks(ctx, path, mode, true);
 }
 
 /// Like `resolve`; `dotdot_first` applies ".." before symlink expansion
 /// (realpath -L).
-pub fn resolveLogical(ctx: anytype, path: []const u8, mode: Mode, dotdot_first: bool) Error![]u8 {
-    _ = dotdot_first;
+/// Like `resolve`. With `follow` false, symlinks stay as they are, so that
+/// ".." removes the name before it; the path must still be valid.
+pub fn resolveLinks(ctx: anytype, path: []const u8, mode: Mode, follow: bool) Error![]u8 {
     const gpa = ctx.gpa;
     var result: std.ArrayList(u8) = .empty;
     errdefer result.deinit(gpa);
@@ -162,9 +162,7 @@ pub fn resolveLogical(ctx: anytype, path: []const u8, mode: Mode, dotdot_first: 
         try result.appendSlice(gpa, comp);
         const rest = pending.items[pos..];
         const failure: Error = failed: {
-            if (mode == .logical_only) {
-                // -s: symlinks stay as they are, but the path must still be
-                // valid.
+            if (!follow) {
                 mustExist(gpa, &result, needsDirectory(rest)) catch |e| break :failed e;
                 continue;
             }
@@ -201,7 +199,7 @@ pub fn resolveLogical(ctx: anytype, path: []const u8, mode: Mode, dotdot_first: 
         const last = std.mem.indexOfNone(u8, rest, "/") == null;
         if (failure == error.NotFound and last and mode != .existing) continue;
         // As GNU, -s lets names go on past a missing one, but not "." or "..".
-        if (failure == error.NotFound and mode == .logical_only and !needsDirectory(rest)) continue;
+        if (failure == error.NotFound and !follow and mode != .existing and !needsDirectory(rest)) continue;
         return failure;
     }
     return result.toOwnedSlice(gpa);

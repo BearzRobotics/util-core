@@ -172,5 +172,24 @@ while read -r line; do
     run_cmp "rnd fmt $line"       --from=auto --format='%.2f' -- "$line"
 done < rnd
 
+# Input is worked through as it arrives, in little memory.
+n=$(yes '12000' | (ulimit -v 200000; timeout 60 "$BIN_DIR/numfmt" --to=si 2>&1) | head -n 200000 | cksum)
+g=$(yes '12000' | LC_ALL=C timeout 60 "${GNU_BIN:-/usr/bin}/numfmt" --to=si 2>&1 | head -n 200000 | cksum)
+if [ "$n" = "$g" ]; then PASS=$((PASS + 1)); echo "PASS endless input"; else FAIL=$((FAIL + 1)); echo "FAIL endless input: GNU $g, ours $n"; fi
+first=$( (echo '12000'; sleep 3) | timeout 2 "$BIN_DIR/numfmt" --to=si 2>/dev/null | head -n 1)
+if [ -n "$first" ]; then PASS=$((PASS + 1)); echo "PASS a line is answered before the input ends"; else FAIL=$((FAIL + 1)); echo "FAIL no output before the end of input"; fi
+
+# A number and a suffix whose product fits nowhere (MISC-019).
+for o in --from-unit --to-unit; do
+    for v in 100000000000Q 18446744073709551615Qi 99999999999999999999K 16E 19E 18446744073709551615 18446744073709551616; do
+        run_cmp "$o=$v" $o=$v 1
+    done
+done
+
+# "1_0" is not 10: the digit separators of Zig source are refused (MISC-021).
+run_cmp "--padding=1_0" --padding=1_0 1
+run_cmp "--header=1_0" --header=1_0 1
+run_cmp "--from-unit=1_0" --from-unit=1_0 1
+
 print_summary
 [ "$FAIL" -eq 0 ]

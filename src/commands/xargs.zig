@@ -5,6 +5,7 @@
 //! splitting, limits and process management are in src/lib/xargs.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const xargs = @import("../lib/xargs.zig");
@@ -18,7 +19,7 @@ fn usageFail(ctx: cli.Context) u8 {
 }
 
 fn parseNum(ctx: cli.Context, text: []const u8, opt: []const u8, min: i64, max: ?u64) ?u64 {
-    const v = std.fmt.parseInt(i64, text, 10) catch |e| {
+    const v = numparse.parseInt(i64, text, 10) catch |e| {
         if (e == error.Overflow and text.len > 0 and text[0] != '-') return std.math.maxInt(i64);
         cli.warn(ctx, "invalid number \"{s}\" for {s} option", .{ text, opt });
         return null;
@@ -57,6 +58,7 @@ fn report(context: ?*anyopaque, ev: xargs.Event) void {
             };
             cli.warn(ctx.*, "{s}: {s}", .{ s.name, text });
         },
+        .read_failed => cli.warn(ctx.*, "error reading the input; its last, cut-off item was not used", .{}),
         .trace => |line| {
             const gpa = ctx.gpa;
             const text = std.fmt.allocPrint(gpa, "{s}\n", .{line}) catch return;
@@ -81,9 +83,7 @@ fn confirm(context: ?*anyopaque, line: []const u8) xargs.Answer {
     const text = std.fmt.allocPrint(gpa, "{s} ?...", .{line}) catch return .abort;
     defer gpa.free(text);
     tty.writeStreamingAll(ctx.io, text) catch {};
-    var ans: [64]u8 = undefined;
-    const n = cli.readChunk(ctx.io, tty, &ans) catch 0;
-    return if (n > 0 and (ans[0] == 'y' or ans[0] == 'Y')) .yes else .no;
+    return if (cli.readYes(ctx.io, tty)) .yes else .no;
 }
 
 pub fn main(ctx: cli.Context) u8 {
@@ -178,7 +178,7 @@ pub fn main(ctx: cli.Context) u8 {
             'o' => o.open_tty = true,
             'r' => o.no_run_if_empty = true,
             's' => {
-                const v = std.fmt.parseInt(i64, opt.arg.?, 10) catch {
+                const v = numparse.parseInt(i64, opt.arg.?, 10) catch {
                     cli.warn(ctx, "invalid number \"{s}\" for -s option", .{opt.arg.?});
                     return usageFail(ctx);
                 };
@@ -227,7 +227,11 @@ pub fn main(ctx: cli.Context) u8 {
 
     var rbuf: [8192]u8 = undefined;
     var reader = input.readerStreaming(ctx.io, &rbuf);
-    const result = xargs.run(env, o, &reader.interface, .{ .context = @constCast(&ctx), .func = report }) catch {
+    // As GNU, a directory named by -a holds no items (one as standard input
+    // is a read error).
+    var nothing: Io.Reader = .fixed("");
+    const from_directory = close_input and if (input.stat(ctx.io)) |st| st.kind == .directory else |_| false;
+    const result = xargs.run(env, o, if (from_directory) &nothing else &reader.interface, .{ .context = @constCast(&ctx), .func = report }) catch {
         cli.warn(ctx, "out of memory", .{});
         return 1;
     };

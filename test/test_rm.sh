@@ -19,6 +19,17 @@ for f in a empty sl sd dang ff ro "sp ace" nofile e d d/f d/sub; do
     run_tree "rm -rv $f"           "$S" -rv "$f"
 done
 run_tree "several"                 "$S" a b empty
+# One line answers one prompt, however long it is (FSOP-018).
+long_answer="$(mktemp)"; { printf '%0256d' 0 | tr 0 n; printf 'y\nn\n'; } > "$long_answer"
+TREE_STDIN="$long_answer" run_tree "-i a long answer line"  "$S" -i a b
+{ printf 'y'; printf '%05000d\n' 0; printf 'n\n'; } > "$long_answer"
+TREE_STDIN="$long_answer" run_tree "-i a long yes"          "$S" -i a b
+
+# A -v line longer than 256 bytes once ended all later output (INFRA-012).
+long=$(printf '%0200d' 0)
+long_setup="mkdir $long; touch $long/$long short"
+run_tree "-v long path"            "$long_setup" -v "$long/$long" short
+run_tree "-rv long path"           "$long_setup" -rv "$long" short
 run_tree "several with missing"    "$S" a nofile b
 run_tree "several -f missing"      "$S" -f a nofile b
 run_tree "-R"                      "$S" -R d
@@ -256,4 +267,13 @@ else
     FAIL=$((FAIL + 1)); echo "FAIL rm -r does not follow a link that replaced a directory (rc=$rc)"; cat "$d/err"; echo
 fi
 rm -rf "$d"
+# A directory that cannot be read goes if it is empty, but not with -i
+# (FSOP-017).
+unread='mkdir -p e/empty; chmod 000 e/empty'
+run_tree "-rf unreadable empty"    "$unread" -rf e
+run_tree "-r unreadable empty"     "$unread" -r e
+run_tree "-rv unreadable empty"    "$unread" -rv e
+run_tree "-d unreadable empty"     "$unread" -d e/empty
+TREE_STDIN="$yes_all" run_tree "-ri unreadable empty" "$unread" -ri e
+
 print_summary

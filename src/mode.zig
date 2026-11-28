@@ -8,7 +8,7 @@
 //! Grammar (symbolic):  clause[,clause]...   clause = [ugoa]*  (op perm*)+
 //!   op   = + - =
 //!   perm = r w x X s t   or a single u g o (copy that class's permissions)
-//! Octal: 1-4 octal digits, value at most 07777.
+//! Octal: 1-4 octal digits, value at most 07777; or after +, - or = alone.
 //!
 //! Semantics checked against GNU 9.7 `mkdir -m` (see test/test_mkdir.sh): with
 //! no `who`, all classes are affected but the bits in the umask are left alone
@@ -38,6 +38,8 @@ pub fn applyTracked(text: []const u8, old: u16, is_dir: bool, umask: u16, decide
     decided.* = 0;
     if (text.len == 0) return null;
     if (std.ascii.isDigit(text[0])) {
+        // (parseInt alone would also take the "_" of "7_5_5".)
+        for (text) |c| if (c < '0' or c > '7') return null;
         const v = std.fmt.parseInt(u16, text, 8) catch return null;
         if (v > all_bits) return null;
         const mentioned: u16 = if (text.len < 5) (v & set_id_bits) | 0o1777 else all_bits;
@@ -67,6 +69,25 @@ pub fn applyTracked(text: []const u8, old: u16, is_dir: bool, umask: u16, decide
         while (i < text.len and std.mem.indexOfScalar(u8, "+-=", text[i]) != null) {
             const op = text[i];
             i += 1;
+            // An octal number may follow the operator, with no who before it
+            // and nothing but the next clause after. It says every bit, and
+            // the umask has no part in it.
+            if (!mentioned and i < text.len and text[i] >= '0' and text[i] <= '7') {
+                var number: u32 = 0;
+                while (i < text.len and text[i] >= '0' and text[i] <= '7') : (i += 1) {
+                    number = number * 8 + (text[i] - '0');
+                    if (number > all_bits) return null;
+                }
+                if (i < text.len and text[i] != ',') return null;
+                const bits: u16 = @intCast(number);
+                switch (op) {
+                    '+' => mode |= bits,
+                    '-' => mode &= ~bits,
+                    else => mode = bits,
+                }
+                decided.* |= if (op == '=') all_bits else bits;
+                break;
+            }
             var value: u16 = 0;
             if (i < text.len and std.mem.indexOfScalar(u8, "ugo", text[i]) != null) {
                 const cls: u16 = switch (text[i]) {
@@ -123,6 +144,17 @@ test "octal" {
     try t.expect(apply("10000", 0, true, 0) == null);
     try t.expect(apply("789", 0, true, 0) == null);
     try t.expect(apply("", 0, true, 0) == null);
+}
+
+test "an octal number after an operator" {
+    const t = std.testing;
+    try t.expectEqual(@as(?u16, 0o755), apply("=755", 0o777, true, 0o022));
+    try t.expectEqual(@as(?u16, 0o777), apply("+111", 0o666, true, 0o022));
+    try t.expectEqual(@as(?u16, 0o755), apply("-022", 0o777, true, 0o077));
+    try t.expectEqual(@as(?u16, 0o744), apply("=644,u+x", 0, false, 0));
+    for ([_][]const u8{ "u=755", "=755x", "=5=7", "=8", "=10000", "7_5_5", "1_0", "+1_0" }) |bad| {
+        try t.expectEqual(@as(?u16, null), apply(bad, 0o777, true, 0));
+    }
 }
 
 test "symbolic with umask 022 from 0777 (values measured with GNU mkdir -m)" {

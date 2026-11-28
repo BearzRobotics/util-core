@@ -1,6 +1,61 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+A bug-fix release: an audit of every command, and the fixes for what it found. Behaviour is
+checked against GNU case by case; where the two differ on purpose, the command's record in
+`docs/compatibility/` says so.
+
+**No Windows downloads in this release.** Tests on Windows 11 showed that several commands
+fail or crash there (`cp -a`, `touch`, `install`, `split` and others; the list is in
+`docs/portability.md`). Wine had not shown it, and `cp` could not copy any file on real
+Windows in 0.2.0; that one is fixed. Windows builds from source as before. Archives will
+return once the Windows build has been fixed and tested.
+
+**Security and data safety**
+- `tree` walks from open directories, so a directory swapped for a link while it runs cannot
+  lead it elsewhere. `sed -i` uses random temporary names.
+- `sdiff` and `diff3` keep their temporary copies private and remove them when a signal ends them.
+- `less` and `cat` no longer send control characters from file names or C1 controls from files
+  to the terminal; `less -R` passes only colours and links.
+- `nohup` creates `nohup.out` with mode 0600 whatever the umask.
+- `cp -a` and cross-device `mv` copy the ACLs of a directory that cannot be read.
+- `timeout` passes on a signal that arrives while the command is starting; before, `timeout`
+  could die and leave the command running without a limit.
+- A grammar file can no longer exhaust memory through repeated includes or nested variables.
+
+**Crashes, hangs and memory**
+- Numbers too large to handle (widths, precisions, tab stops, repeat counts, dates, time zone
+  strings, zone files) are refused or bounded instead of overflowing.
+- `cut`, `pr`, `factor`, `numfmt`, `date -f`, `checksum -c` and `head -n -N` work through
+  input as it arrives. `grep --decompress` no longer holds large gzip, zlib or zstd output in
+  memory.
+- Much faster on bad cases: `join` with long lines, `sort -m` with many files, `grep -B` with
+  a large count, `du --exclude` on deep trees, `less` loading a long line.
+- `diff -r` copes with deep trees and stops at directory loops.
+
+**Wrong or lost output**
+- Output or input that fails is reported with a failing status in many places that were silent
+  (among them `rm -v`, `mkdir -v`, `split`, `shred`, `dd`, `mktemp`, `diff -q`, `sed`,
+  `xargs`, `less`). Where GNU or tree stays silent (`tree` on a full disk, a failed read in
+  `sed -f`, `xargs` or `less`), this is deliberate and documented.
+- `cat` quotes its pager command as a shell would, and reports a pager that fails instead of
+  showing nothing.
+- `grep --decompress` verifies checksums, so damaged data is no longer searched as if sound.
+- A program that embeds a command through `util_core.commands` is no longer ended by it.
+
+**Closer to GNU**
+- Fixes in the text tools (`tr`, `comm`, `join`, `sort`, `tsort`, `od`, `nl`, `uniq`,
+  `shuf`, `seq`, `printf`), in file tools (`rm`, `ln`, `stat`, `ls`, `du`, `dd`, `find`,
+  `xargs`, `realpath`), in `diff`, `diff3`, `sdiff` and `cmp`, and in `date` format flags.
+- Regular expressions: `grep -P` matches characters in a UTF-8 locale; malformed intervals,
+  leading operators, bare `[:class:]`, `[[=a=]]` and `[[.a.]]` behave as in GNU.
+- Command-line details: `nice -N` anywhere, `test -l STRING`, `du -X -`, scripts without
+  `#!` under `env`, `nice`, `timeout` and friends, more checksum list formats.
+
+**Packaging and tests**
+- `syntax-probe` is no longer installed by default (`zig build syntax-probe`).
+- CI runs the differential suites, and a release requires CI to pass.
 
 **`cat`**
 - Grammars are read with the `yaml-zig` package: `.sublime-syntax` files may now use anchors,

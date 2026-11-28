@@ -34,4 +34,15 @@ ms=$(( (end - start) / 1000000 ))
 kill -0 "$pid" 2>/dev/null && { PASS=$((PASS + 1)); echo "PASS inf keeps sleeping"; } || { FAIL=$((FAIL + 1)); echo "FAIL inf returned"; }
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 
+# Longer than the system can count in one wait; these used to crash.
+for n in 9.3e18 1e19 3e19 1e30d; do
+    "$BIN_DIR/sleep" "$n" 2>/dev/null & pid=$!; sleep 0.2
+    kill -0 "$pid" 2>/dev/null && { PASS=$((PASS + 1)); echo "PASS $n keeps sleeping"; } || { FAIL=$((FAIL + 1)); echo "FAIL $n returned"; }
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+done
+
+# "1_0" is not 10: the digit separators of Zig source are refused (MISC-021).
+run_cmp "1_0e-2" 1_0e-2
+run_cmp "0_0" 0_0
+
 print_summary

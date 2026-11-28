@@ -107,5 +107,38 @@ done
 GENPASS=$((PASS - START)); GENFAILS=$((FAIL - F0))
 printf "\nGenerated pairs: %d/%d agree with GNU sdiff\n" "$GENPASS" "$((GENPASS + GENFAILS))"
 
+# The copy given to the editor is private, and a signal does not leave it
+# behind (VIEW-016). Interrupt is the editor's: sdiff goes on, as GNU does.
+mkdir "$TEST_TMP/ed"; printf 'a\n' > "$TEST_TMP/s1"; printf 'b\n' > "$TEST_TMP/s2"
+for sig in none INT HUP QUIT TERM; do
+    cat > "$TEST_TMP/editor.sh" <<EOT
+#!/bin/sh
+stat -c %a "\$1" > "$TEST_TMP/mode"
+[ $sig = none ] || kill -$sig \$PPID
+EOT
+    chmod +x "$TEST_TMP/editor.sh"
+    for who in gnu ours; do
+        rm -f "$TEST_TMP/mode"
+        # (In a subshell: its report of a death by signal is not wanted.)
+        (printf 'eb\nq\n' | (umask 022; EDITOR="$TEST_TMP/editor.sh" TMPDIR="$TEST_TMP/ed" $who -o "$TEST_TMP/merged" "$TEST_TMP/s1" "$TEST_TMP/s2")) >/dev/null 2>&1
+        eval "got_$who=\"status $? mode $(cat "$TEST_TMP/mode") left $(ls "$TEST_TMP/ed" | wc -l)\""
+        rm -f "$TEST_TMP/ed/"*
+    done
+    if [ "$got_gnu" = "$got_ours" ]; then PASS=$((PASS + 1)); echo "PASS editor copy, signal $sig"
+    else FAIL=$((FAIL + 1)); echo "FAIL editor copy, signal $sig: GNU $got_gnu, ours $got_ours"; fi
+done
+
+# A tab size past any size is refused, as GNU refuses it (VIEW-015).
+printf 'a\nb\n' > "$TEST_TMP/big1"; printf 'a\nc\n' > "$TEST_TMP/big2"
+for o in "--tabsize=99999999999999999999" "-s --tabsize=99999999999999999999" "--tabsize=9223372036854775807"; do
+    run_cmp "huge $o" $o "$TEST_TMP/big1" "$TEST_TMP/big2"
+done
+
+# A directory stands for the file of the same name in it, without -o too
+# (VIEW-017).
+mkdir sddir; cp i1 sddir/i2
+run_cmp "DIR FILE"               sddir i2
+run_cmp "FILE DIR"               i2 sddir
+
 print_summary
 [ "$FAIL" -eq 0 ]

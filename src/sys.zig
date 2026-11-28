@@ -17,6 +17,7 @@
 //! (chroot, mknod, signals on Windows, ...). See docs/portability.md.
 
 const std = @import("std");
+const numparse = @import("numparse.zig");
 const builtin = @import("builtin");
 const Io = std.Io;
 
@@ -118,12 +119,19 @@ pub fn defaultSignal(sg: Signal) void {
     setDisposition(sg, false);
 }
 
-/// Zig's runtime ignores SIGPIPE, which would turn `cmd | head` into a write
-/// error message. The conventional (GNU) behaviour is to die silently, so
-/// every entry point restores the default action; commands that need to see
-/// EPIPE (tee --output-error) set it back to ignore.
-pub fn restoreSigpipe() void {
-    defaultSignal(.pipe);
+/// Zig's runtime catches SIGPIPE, which would turn `cmd | head` into a write
+/// error message, and would lose an inherited "ignore" in the programs we run
+/// (exec resets a caught signal). Every entry point puts back what the process
+/// was started with, as GNU does: normally the default action, which ends the
+/// process silently. `threaded` is the runtime that saved it. Commands that
+/// need to see EPIPE (tee --output-error) set it to ignore themselves.
+pub fn inheritSigpipe(threaded: *const std.Io.Threaded) void {
+    var ignored = false;
+    if (comptime !builtin.single_threaded and std.posix.Sigaction != void and builtin.os.tag != .windows) {
+        if (threaded.have_signal_handler)
+            ignored = threaded.old_sig_pipe.handler.handler == std.posix.SIG.IGN;
+    }
+    setDisposition(.pipe, ignored);
 }
 
 /// The process file-mode creation mask. Linux reads it with umask(2) (set and
@@ -150,6 +158,7 @@ pub fn terminalColumns() ?usize {
 /// The controlling terminal in raw mode (the built-in pager's input).
 pub const Tty = @import("sys/tty.zig").Tty;
 pub const TtySize = @import("sys/tty.zig").Size;
+pub const TtyGuard = @import("sys/tty.zig").Guard;
 
 /// Windows: enable ANSI escapes and UTF-8 on the console. Elsewhere true.
 pub fn enableAnsiOutput() bool {
@@ -487,7 +496,7 @@ pub fn signalName(n: u8, buf: *[16]u8) ?[]const u8 {
 pub fn signalNumber(text: []const u8) ?u8 {
     if (text.len == 0) return null;
     if (std.ascii.isDigit(text[0])) {
-        const n = std.fmt.parseInt(u8, text, 10) catch return null;
+        const n = numparse.parseInt(u8, text, 10) catch return null;
         return if (n <= 64) n else null;
     }
     var name = text;
@@ -1596,6 +1605,14 @@ pub noinline fn accessAt(dir: Handle, path: []const u8, mode: u32) ?LX.E {
     return errOf(LX.syscall4(.faccessat2, @bitCast(@as(isize, dir)), @intFromPtr(p), mode, 0x200));
 }
 
+/// A duplicate of `fd`, above the standard streams, that a program started
+/// from here does not inherit. Null when there is none (or on Windows).
+pub fn dupCloexec(fd: Handle) ?Handle {
+    if (comptime !is_linux) return other.dupCloexec(fd);
+    const rc = LX.fcntl(fd, LX.F.DUPFD_CLOEXEC, 3);
+    return if (LX.errno(rc) == .SUCCESS) @intCast(rc) else null;
+}
+
 /// lseek(2): whence 0/1/2 or SEEK_DATA 3 / SEEK_HOLE 4.
 pub fn seekFd(fd: Handle, off: i64, whence: u32, err: *LX.E) ?i64 {
     if (comptime !is_linux) return other.seekFd(fd, off, whence, err);
@@ -1709,6 +1726,38 @@ fn catchOne(i: usize) void {
 pub fn catchSignals() void {
     if (comptime !is_linux) return other.catchSignals();
     for (0..catch_signals.len) |i| catchOne(i);
+}
+
+/// As `catchSignals`, for SIGHUP, SIGINT, SIGQUIT and SIGTERM alone: for a
+/// caller that waits for a child and must tidy up before it dies. SIGTSTP is
+/// left alone, so that the two stop together.
+pub fn catchTerminationSignals() void {
+    if (comptime !is_linux) return other.catchTerminationSignals();
+    for ([_]usize{ 0, 1, 3, 4 }) |i| catchOne(i);
+}
+
+/// Record rather than act on each of `signals` that is not ignored, until the
+/// caller blocks them. For a supervisor about to start its child: a signal that
+/// comes before it is ready does not end it, and the child, which exec gives
+/// the default actions, is not affected. Linux only.
+pub fn holdSignals(signals: []const u8) void {
+    if (comptime !is_linux) return;
+    const L = std.os.linux;
+    for (signals) |n| {
+        const sig: L.SIG = @enumFromInt(n);
+        var old: L.Sigaction = undefined;
+        if (L.errno(L.sigaction(sig, null, &old)) != .SUCCESS) continue;
+        if (old.handler.handler == L.SIG.IGN) continue;
+        const act: L.Sigaction = .{ .handler = .{ .handler = catchHandler }, .mask = L.sigemptyset(), .flags = L.SA.RESTART };
+        _ = L.sigaction(sig, &act, null);
+    }
+}
+
+/// Send `sig` to this process again, to be read from a `Watcher` that has
+/// blocked it.
+pub fn raiseHeld(sig: u8) void {
+    if (comptime !is_linux) return;
+    _ = std.os.linux.kill(std.os.linux.getpid(), @enumFromInt(sig));
 }
 
 /// Put back the actions that were in place before `catchSignals`.

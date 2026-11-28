@@ -95,10 +95,9 @@ pub fn run(env: Env, opts: Options, files: []const []const u8, out_w: *Io.Writer
     pr.* = .{ .env = env, .obs = obs, .gpa = gpa, .out = wsink.Sink.initWriter(out_w), .zone = tzmod.load(gpa, env.io, env.getenv("TZ")) };
     defer {
         pr.zone.deinit();
-        for (pr.streams.items) |s| gpa.destroy(s);
+        pr.releaseStreams();
         pr.streams.deinit(gpa);
-        for (pr.stream_data.items) |d| gpa.free(d);
-        pr.stream_data.deinit(gpa);
+        if (pr.stdin_stream) |s| gpa.destroy(s);
         pr.columns_v.deinit(gpa);
         pr.buff.deinit(gpa);
         gpa.free(pr.line_vector);
@@ -158,7 +157,7 @@ pub fn run(env: Env, opts: Options, files: []const []const u8, out_w: *Io.Writer
                 failed = true;
                 break;
             }
-            if (pr.read_failed or pr.out_of_memory or pr.overflowed) break;
+            if (pr.read_failed or pr.out_of_memory or pr.overflowed or pr.out.failed) break;
         }
     }
     pr.out.flush();
@@ -180,19 +179,48 @@ const Status = enum { open, ff_found, on_hold, closed };
 const PrintFn = enum { read_line, print_stored };
 const CharFn = enum { store_char, print_char };
 
+/// An input read as it is printed, so that it may be endless.
 const Stream = struct {
-    data: []const u8,
+    io: Io,
+    /// Null once there is nothing more to read, and for `stdin_data`.
+    file: ?Io.File,
+    /// Close `file` as soon as it is read: many may be named.
+    owned: bool = false,
+    /// What has been read and not yet taken.
+    data: []const u8 = "",
     pos: usize = 0,
     /// Reading stopped on this error after `data`.
     err: ?anyerror = null,
+    buf: [16384]u8 = undefined,
 
     fn getc(s: *Stream) i32 {
-        if (s.pos >= s.data.len) return eof;
+        if (s.pos >= s.data.len and !s.refill()) return eof;
         const c = s.data[s.pos];
         s.pos += 1;
         return c;
     }
 
+    fn refill(s: *Stream) bool {
+        const f = s.file orelse return false;
+        const n = common.readChunk(s.io, f, &s.buf) catch |e| blk: {
+            s.err = e;
+            break :blk 0;
+        };
+        if (n == 0) {
+            s.close();
+            return false;
+        }
+        s.data = s.buf[0..n];
+        s.pos = 0;
+        return true;
+    }
+
+    fn close(s: *Stream) void {
+        if (s.owned) if (s.file) |f| f.close(s.io);
+        s.file = null;
+    }
+
+    /// Only after a `getc` that returned a byte, which is still in `data`.
     fn ungetc(s: *Stream, c: i32) void {
         if (c == eof) return;
         if (s.pos > 0) s.pos -= 1;
@@ -307,8 +335,11 @@ const Pr = struct {
     last_line: bool = false,
     now_sec: ?i64 = null,
     now_nsec: u32 = 0,
+    /// The files being printed.
     streams: std.ArrayList(*Stream) = .empty,
-    stream_data: std.ArrayList([]u8) = .empty,
+    /// One for the whole run: every "-" reads on from where it is, and two of
+    /// them side by side take its lines in turn.
+    stdin_stream: ?*Stream = null,
 
     fn putchar(p: *Pr, c: u8) void {
         p.out.writeByte(c);
@@ -371,46 +402,39 @@ const Pr = struct {
         return true;
     }
 
-    /// What could be read of a file, and the error that ended it, if any.
-    const Contents = struct { data: []u8, err: ?anyerror = null };
-
-    fn readStdin(p: *Pr) error{OutOfMemory}!Contents {
-        if (p.stdin_data) |d| return .{ .data = try p.gpa.dupe(u8, d) };
-        return p.readAll(Io.File.stdin());
-    }
-
-    fn readAll(p: *Pr, file: Io.File) error{OutOfMemory}!Contents {
-        var list: std.ArrayList(u8) = .empty;
-        errdefer list.deinit(p.gpa);
-        var chunk: [65536]u8 = undefined;
-        var failure: ?anyerror = null;
-        while (true) {
-            const n = common.readChunk(p.env.io, file, &chunk) catch |e| {
-                failure = e;
-                break;
-            };
-            if (n == 0) break;
-            try list.appendSlice(p.gpa, chunk[0..n]);
+    fn stdinStream(p: *Pr) error{OutOfMemory}!*Stream {
+        const file: ?Io.File = if (p.stdin_data == null) Io.File.stdin() else null;
+        if (p.stdin_stream) |s| {
+            // A terminal has more to give after an end of file.
+            if (s.err == null) s.file = file;
+            return s;
         }
-        return .{ .data = try list.toOwnedSlice(p.gpa), .err = failure };
-    }
-
-    /// A stream over `contents`, which it takes over.
-    fn newStream(p: *Pr, contents: Contents) error{OutOfMemory}!*Stream {
-        p.stream_data.append(p.gpa, contents.data) catch |e| {
-            p.gpa.free(contents.data);
-            return e;
-        };
         const s = try p.gpa.create(Stream);
-        errdefer p.gpa.destroy(s);
-        s.* = .{ .data = contents.data, .err = contents.err };
-        try p.streams.append(p.gpa, s);
+        s.* = .{ .io = p.env.io, .file = file, .data = p.stdin_data orelse "" };
+        p.stdin_stream = s;
         return s;
     }
 
-    fn attach(p: *Pr, c: *Column, contents: error{OutOfMemory}!Contents) bool {
-        const s = p.newStream(contents catch return p.noMemory()) catch return p.noMemory();
-        c.fp = s;
+    /// A stream over `file`, which it takes over.
+    fn newStream(p: *Pr, file: Io.File) error{OutOfMemory}!*Stream {
+        errdefer file.close(p.env.io);
+        try p.streams.ensureUnusedCapacity(p.gpa, 1);
+        const s = try p.gpa.create(Stream);
+        s.* = .{ .io = p.env.io, .file = file, .owned = true };
+        p.streams.appendAssumeCapacity(s);
+        return s;
+    }
+
+    fn releaseStreams(p: *Pr) void {
+        for (p.streams.items) |s| {
+            s.close();
+            p.gpa.destroy(s);
+        }
+        p.streams.clearRetainingCapacity();
+    }
+
+    fn attach(p: *Pr, c: *Column, stream: error{OutOfMemory}!*Stream) bool {
+        c.fp = stream catch return p.noMemory();
         c.status = .open;
         c.full_page_printed = false;
         p.total_files += 1;
@@ -426,7 +450,7 @@ const Pr = struct {
         if (std.mem.eql(u8, name, "-")) {
             c.name = "standard input";
             p.have_read_stdin = true;
-            return p.attach(c, p.readStdin());
+            return p.attach(c, p.stdinStream());
         }
         c.name = name;
         const f = openPath(p.env.io, name) catch |e| {
@@ -434,8 +458,7 @@ const Pr = struct {
             if (!p.ignore_failed_opens) p.obs.emit(.{ .open_failed = .{ .name = name, .err = e } });
             return false;
         };
-        defer f.close(p.env.io);
-        return p.attach(c, p.readAll(f));
+        return p.attach(c, p.newStream(f));
     }
 
     /// As in GNU, a read error ends the whole run where the reading failed:
@@ -449,6 +472,11 @@ const Pr = struct {
             p.discard = .init(&.{});
             p.out = wsink.Sink.initWriter(&p.discard.writer);
         }
+    }
+
+    /// Nothing more can come of reading: an endless line must not be read on.
+    fn stopped(p: *Pr) bool {
+        return p.out.failed or p.out_of_memory;
     }
 
     /// Called when a column reaches the end of what was read.
@@ -524,7 +552,7 @@ const Pr = struct {
             } else {
                 c0.name = "standard input";
                 p.have_read_stdin = true;
-                if (!p.attach(c0, p.readStdin())) return false;
+                if (!p.attach(c0, p.stdinStream())) return false;
                 p.initHeader("", -1, null);
                 c0.lines_stored = 0;
             }
@@ -614,6 +642,7 @@ const Pr = struct {
 
     fn printFiles(p: *Pr, names: []const []const u8) bool {
         if (!p.initParameters(names.len)) return false;
+        defer p.releaseStreams();
         if (!p.initFps(names)) return true;
         if (p.storing_columns and !p.initStoreCols()) return true;
         if (p.first_page_number > 1) {
@@ -622,7 +651,7 @@ const Pr = struct {
         } else p.page_number = 1;
         p.initFuncs();
         p.line_number = p.line_count;
-        while (p.printPage()) {}
+        while (!p.stopped() and p.printPage()) {}
         return true;
     }
 
@@ -862,6 +891,7 @@ const Pr = struct {
     fn readRestOfLine(p: *Pr, c: *Column) void {
         const f = c.fp;
         while (true) {
+            if (p.stopped()) return p.closeFile(c);
             var ch = f.getc();
             if (ch == '\n') break;
             if (ch == 0x0c) {
@@ -1085,6 +1115,10 @@ const Pr = struct {
         if (ch == '\n') return true;
         p.printClump(c, chars);
         while (true) {
+            if (p.stopped()) {
+                p.closeFile(c);
+                return true;
+            }
             ch = c.fp.getc();
             switch (ch) {
                 '\n' => return true,

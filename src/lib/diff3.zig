@@ -405,12 +405,15 @@ fn edText(w: *Io.Writer, text: []const u8) Io.Writer.Error!void {
 const Ins = struct {
     /// Number the next inserted line gets once the command has run.
     next: usize,
-    first_dot: ?usize = null,
+    /// The number of the first line inserted, markers aside.
+    first: ?usize = null,
+    dotted: bool = false,
 
     fn line(s: *Ins, w: *Io.Writer, text: []const u8) Io.Writer.Error!void {
+        if (s.first == null) s.first = s.next;
         if (text.len > 0 and text[0] == '.') {
             try w.writeByte('.');
-            if (s.first_dot == null) s.first_dot = s.next;
+            s.dotted = true;
         }
         try edText(w, text);
         s.next += 1;
@@ -423,7 +426,8 @@ const Ins = struct {
 
     fn finish(s: *Ins, w: *Io.Writer) Io.Writer.Error!void {
         try w.writeAll(".\n");
-        if (s.first_dot) |f| {
+        if (s.dotted) {
+            const f = s.first.?;
             const last = s.next - 1;
             if (f == last) try w.print("{d}s/^\\.//\n", .{f}) else try w.print("{d},{d}s/^\\.//\n", .{ f, last });
         }
@@ -477,6 +481,11 @@ pub fn writeEd(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void
                     var i: usize = 0;
                     while (i < y.count) : (i += 1) try ins.line(w, r.lines[2].raw(y.start + i));
                     try ins.marker(w, ">>>>>>> {s}", .{o.labels[2]});
+                    // For a conflict GNU unescapes from after the first
+                    // marker, as many lines as the old and the new text and
+                    // one more take, whether or not the old text is shown.
+                    ins.first = m.start + m.count + 2;
+                    ins.next = ins.first.? + old.count + y.count + 1;
                 }
                 try ins.finish(w);
                 // Before the block: the opening part.
@@ -487,6 +496,9 @@ pub fn writeEd(w: *Io.Writer, r: *const Result, o: Options) Io.Writer.Error!void
                     var i: usize = 0;
                     while (i < old.count) : (i += 1) try ins2.line(w, r.lines[1].raw(old.start + i));
                     try ins2.marker(w, "=======", .{});
+                    // Here GNU unescapes the old lines alone.
+                    ins2.first = m.start + 2;
+                    ins2.next = ins2.first.? + old.count;
                 } else try ins2.marker(w, "<<<<<<< {s}", .{o.labels[0]});
                 try ins2.finish(w);
             },

@@ -48,7 +48,7 @@ fn decodePreserve(ctx: cli.Context, arg: []const u8, x: *copy.Opts, on: bool, op
             3 => x.preserve_links = on,
             4 => if (on) {
                 cli.warn(ctx, "cannot preserve security context without an SELinux-enabled kernel", .{});
-                std.process.exit(1);
+                return false;
             },
             5 => {},
             else => {

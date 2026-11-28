@@ -9,9 +9,8 @@
 UTIL="dircolors"
 . "$(dirname "$0")/testlib.sh"
 
-T=/tmp/test_dircolors.$$
-mkdir -p "$T"
-trap 'rm -rf "$T"' EXIT
+# Under testlib's directory, which its trap removes.
+T=$(mktemp -d "$TEST_TMP/dircolors.XXXXXX") || exit 2
 export SHELL=/bin/bash TERM=xterm
 unset COLORTERM
 

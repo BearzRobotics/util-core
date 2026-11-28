@@ -119,4 +119,20 @@ for f in big runs65 oneletter rnd; do
 done
 CMP_STDIN="$W/text"
 
+# Options end at the first operand: STRING2 may start with '-'.
+for a in '_ -x' '[:upper:]x-z -a' 'x -d' 'x --help' 'x --version' 'x --' '-- -x y' '-d a -s' 'a -- b' 'a b -c' '-s a -d' '-d a --help'; do
+    run_cmp "options after an operand: tr $a" $a
+done
+
+# Repeat counts: too large ones are refused; very large ones do not need the
+# memory (GNU does not finish on them, so the output is spelled out).
+for n in 18446744073709551615 99999999999999999999; do
+    run_cmp "-d repeat $n" -d "[a*$n]"
+    run_cmp "translate repeat $n" ab "[x*$n]"
+done
+for c in 1048577 1000000000; do run_cmp "-d repeat $c" -d "[a*$c]"; run_cmp "translate repeat $c" "[a*$c]b" xy; done
+got=$(echo aabbcc | timeout 10 "$BIN_DIR/tr" -d '[a*18446744073709551614]')
+if [ "$got" = bbcc ]; then PASS=$((PASS + 1)); echo "PASS huge valid repeat in string1"
+else FAIL=$((FAIL + 1)); echo "FAIL huge valid repeat in string1: $got"; fi
+
 print_summary

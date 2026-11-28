@@ -110,5 +110,37 @@ r=$(ours 1 3000000 | md5sum); g=$(gnu 1 3000000 | md5sum)
 [ "$r" = "$g" ] && { PASS=$((PASS+1)); echo "PASS 3000000 numbers identical"; } || { FAIL=$((FAIL+1)); echo "FAIL 3000000 numbers differ"; }
 r=$(ours -s: -9999 7 99999 | md5sum); g=$(gnu -s: -9999 7 99999 | md5sum)
 [ "$r" = "$g" ] && { PASS=$((PASS+1)); echo "PASS step 7 across zero identical"; } || { FAIL=$((FAIL+1)); echo "FAIL step 7 across zero differ"; }
+for f in '%99999999999999999999f' '%.99999999999999999999f' 'x%.2147483647e'; do
+    run_test_exit "too wide $f" -f "$f" 2
+    [ -z "$(ours -f "$f" 2 2>/dev/null)" ] && { PASS=$((PASS+1)); echo "PASS no output for $f"; } || { FAIL=$((FAIL+1)); echo "FAIL output for $f"; }
+done
+z=0000000000
+z50=$z$z$z$z$z
+run_cmp "50 places"               1e-50 1e-50 3e-50
+run_cmp "50 places -w"            -w 1e-50 1e-50 3e-50
+run_cmp "50 places, negative -w"  -w -3e-50 1e-50 1e-50
+run_cmp "151 places"              "0.$z50$z50${z50}1" "0.$z50$z50${z50}1" "0.$z50$z50${z50}3"
+run_cmp "zero with 51 places"     "0.${z50}0" 1
+run_cmp "zero, 51 places -w"      -w "0.${z50}0" 3
+run_cmp "LAST with 50 places"     0 1 "2.$z50"
+run_cmp "LAST tiny"               0 1 1e-50
+run_cmp "step does not fit"       "0.${z50}0" 2 5
+
+run_cmp "long precision %f"       -f %.30000f 3
+run_cmp "long precision %e"       -f %.30000e 3
+
+# "1_0" is not 10: the digit separators of Zig source are refused (MISC-021).
+run_cmp "1_0" 1_0
+run_cmp "1 1_0 20" 1 1_0 20
+
+# A first number written -0 keeps its sign (MISC-033).
+run_cmp "-0 first"               -0 1
+run_cmp "-0.0 first"             -0.0 1
+run_cmp "-0 with -w"             -w -0 10
+run_cmp "-0.0 with -w"           -w -0.0 1 2
+run_cmp "-0 counting down"       -0 -1 -2
+run_cmp "-0 with -s"             -s, -0 2
+run_cmp "-0 with -f"             -f '%.2f' -0.0 1
+run_cmp "-0 as LAST"             1 -1 -0
 
 print_summary

@@ -11,6 +11,9 @@
 //! repeats `run` and returns statistics, `writeBenchmark` draws each result.
 
 const std = @import("std");
+const json = @import("../json.zig");
+const subprog = @import("subprog.zig");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
@@ -73,7 +76,7 @@ pub fn run(env: Env, argv: []const []const u8, opts: RunOptions) std.process.Spa
     var perf: sys.Perf = if (opts.perf) sys.Perf.open() else .{};
     defer perf.close();
     const t0 = nowNs(env.io);
-    var child = try std.process.spawn(env.io, .{
+    var child = try subprog.spawn(env, .{
         .argv = argv,
         .stdin = opts.stdin,
         .stdout = opts.stdout,
@@ -790,10 +793,14 @@ pub fn parseParameterScan(arena: std.mem.Allocator, spec: []const u8) error{ Out
     const hi_s = it.next() orelse return error.Invalid;
     const step_s = it.next() orelse "1";
     if (name.len == 0 or it.next() != null) return error.Invalid;
-    const lo = std.fmt.parseFloat(f64, lo_s) catch return error.Invalid;
-    const hi = std.fmt.parseFloat(f64, hi_s) catch return error.Invalid;
-    const step = std.fmt.parseFloat(f64, step_s) catch return error.Invalid;
-    if (!(step > 0) or hi < lo) return error.Invalid;
+    const lo = numparse.parseFloat(f64, lo_s) catch return error.Invalid;
+    const hi = numparse.parseFloat(f64, hi_s) catch return error.Invalid;
+    const step = numparse.parseFloat(f64, step_s) catch return error.Invalid;
+    // Past 2^53 a float no longer counts in ones, and a step that does not
+    // move the value would repeat it.
+    const exact: f64 = 1 << 53;
+    if (!(@abs(lo) <= exact and @abs(hi) <= exact)) return error.Invalid;
+    if (!(step > 0 and step <= 2 * exact) or hi < lo or lo + step == lo) return error.Invalid;
     const frac = std.mem.indexOfScalar(u8, lo_s, '.') != null or std.mem.indexOfScalar(u8, hi_s, '.') != null or std.mem.indexOfScalar(u8, step_s, '.') != null;
     var values: std.ArrayList([]const u8) = .empty;
     var i: usize = 0;
@@ -870,20 +877,6 @@ fn toSecs(ns: f64) f64 {
     return ns / 1e9;
 }
 
-fn writeJsonString(w: *Io.Writer, text: []const u8) Io.Writer.Error!void {
-    try w.writeByte('"');
-    for (text) |c| switch (c) {
-        '"' => try w.writeAll("\\\""),
-        '\\' => try w.writeAll("\\\\"),
-        '\n' => try w.writeAll("\\n"),
-        '\r' => try w.writeAll("\\r"),
-        '\t' => try w.writeAll("\\t"),
-        0...8, 11, 12, 14...31 => try w.print("\\u{x:0>4}", .{c}),
-        else => try w.writeByte(c),
-    };
-    try w.writeByte('"');
-}
-
 fn writeJsonArray(w: *Io.Writer, items: []const f64, scale: f64) Io.Writer.Error!void {
     try w.writeByte('[');
     for (items, 0..) |v, i| {
@@ -901,7 +894,7 @@ pub fn writeJson(w: *Io.Writer, entries: []const ExportEntry) Io.Writer.Error!vo
         const r = e.result;
         const wall = r.metrics[@intFromEnum(Metric.wall_time)];
         try w.writeAll("    {\n      \"command\": ");
-        try writeJsonString(w, e.command);
+        try json.writeString(w, e.command);
         try w.print(",\n      \"mean\": {d},\n      \"stddev\": {d},\n      \"median\": {d},\n", .{ toSecs(wall.mean), toSecs(wall.stddev), toSecs(r.median_wall) });
         try w.print("      \"user\": {d},\n      \"system\": {d},\n", .{ toSecs(r.metrics[@intFromEnum(Metric.user_time)].mean), toSecs(r.metrics[@intFromEnum(Metric.system_time)].mean) });
         try w.print("      \"min\": {d},\n      \"max\": {d},\n", .{ toSecs(wall.min), toSecs(wall.max) });
@@ -919,9 +912,9 @@ pub fn writeJson(w: *Io.Writer, entries: []const ExportEntry) Io.Writer.Error!vo
             try w.writeAll(",\n      \"parameters\": {");
             for (e.pairs, 0..) |p, k| {
                 if (k > 0) try w.writeAll(", ");
-                try writeJsonString(w, p.name);
+                try json.writeString(w, p.name);
                 try w.writeAll(": ");
-                try writeJsonString(w, p.value);
+                try json.writeString(w, p.value);
             }
             try w.writeAll("}");
         }

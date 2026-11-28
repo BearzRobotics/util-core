@@ -303,7 +303,18 @@ fn parseName(s: []const u8, i: *usize) ?[]const u8 {
     return s[st..i.*];
 }
 
-fn parseOffset(s: []const u8, i: *usize) ?i32 {
+/// A run of digits, or null when there is none. This is environment input: a
+/// number too large to hold stays large.
+fn parseNumber(s: []const u8, i: *usize) ?u32 {
+    const start = i.*;
+    var v: u32 = 0;
+    while (i.* < s.len and std.ascii.isDigit(s[i.*])) : (i.* += 1) v = v *| 10 +| (s[i.*] - '0');
+    return if (i.* == start) null else v;
+}
+
+/// hh[:mm[:ss]] with a sign, in seconds. As in glibc, minutes and seconds
+/// stop at 59 and hours at `max_hours`.
+fn parseOffset(s: []const u8, i: *usize, max_hours: u32) ?i32 {
     var neg = false;
     if (i.* < s.len and (s[i.*] == '+' or s[i.*] == '-')) {
         neg = s[i.*] == '-';
@@ -312,17 +323,11 @@ fn parseOffset(s: []const u8, i: *usize) ?i32 {
     var parts: [3]i32 = .{ 0, 0, 0 };
     var n: usize = 0;
     while (n < 3) {
-        const st = i.*;
-        var v: i32 = 0;
-        while (i.* < s.len and std.ascii.isDigit(s[i.*])) {
-            v = v * 10 + @as(i32, s[i.*] - '0');
-            i.* += 1;
-        }
-        if (i.* == st) {
+        const v = parseNumber(s, i) orelse {
             if (n == 0) return null;
             break;
-        }
-        parts[n] = v;
+        };
+        parts[n] = @intCast(@min(v, if (n == 0) max_hours else 59));
         n += 1;
         if (i.* < s.len and s[i.*] == ':') i.* += 1 else break;
     }
@@ -335,38 +340,28 @@ fn parseRuleSpec(s: []const u8, i: *usize) ?RuleSpec {
     if (i.* >= s.len) return null;
     if (s[i.*] == 'M') {
         i.* += 1;
-        var v: [3]u16 = undefined;
+        var v: [3]u32 = undefined;
         for (0..3) |k| {
-            var x: u16 = 0;
-            const st = i.*;
-            while (i.* < s.len and std.ascii.isDigit(s[i.*])) {
-                x = x * 10 + (s[i.*] - '0');
-                i.* += 1;
-            }
-            if (st == i.*) return null;
-            v[k] = x;
+            v[k] = parseNumber(s, i) orelse return null;
             if (k < 2) {
                 if (i.* >= s.len or s[i.*] != '.') return null;
                 i.* += 1;
             }
         }
-        r = .{ .kind = .mwd, .m = @intCast(v[0]), .w = @intCast(v[1]), .d = v[2] };
-        if (r.m < 1 or r.m > 12 or r.w < 1 or r.w > 5 or r.d > 6) return null;
+        if (v[0] < 1 or v[0] > 12 or v[1] < 1 or v[1] > 5 or v[2] > 6) return null;
+        r = .{ .kind = .mwd, .m = @intCast(v[0]), .w = @intCast(v[1]), .d = @intCast(v[2]) };
     } else {
         const j = s[i.*] == 'J';
         if (j) i.* += 1;
-        var x: u16 = 0;
-        const st = i.*;
-        while (i.* < s.len and std.ascii.isDigit(s[i.*])) {
-            x = x * 10 + (s[i.*] - '0');
-            i.* += 1;
-        }
-        if (st == i.*) return null;
-        r = .{ .kind = if (j) .julian1 else .julian0, .d = x };
+        const x = parseNumber(s, i) orelse return null;
+        // Jn is day 1 to 365; plain n is day 0 to 365.
+        if (x > 365 or (j and x == 0)) return null;
+        r = .{ .kind = if (j) .julian1 else .julian0, .d = @intCast(x) };
     }
     if (i.* < s.len and s[i.*] == '/') {
         i.* += 1;
-        r.time = parseOffset(s, i) orelse return null;
+        // RFC 8536 allows a transition up to a week from its day.
+        r.time = parseOffset(s, i, 24 * 7) orelse return null;
     }
     return r;
 }
@@ -375,12 +370,12 @@ fn parseRuleSpec(s: []const u8, i: *usize) ?RuleSpec {
 pub fn parsePosix(s: []const u8) ?Rule {
     var i: usize = 0;
     const std_name = parseName(s, &i) orelse return null;
-    const std_off = parseOffset(s, &i) orelse return null;
+    const std_off = parseOffset(s, &i, 24) orelse return null;
     var r: Rule = .{ .std = mkType(-std_off, false, std_name) };
     if (i >= s.len) return r;
     const dst_name = parseName(s, &i) orelse return null;
     var dst_off = std_off - 3600;
-    if (i < s.len and s[i] != ',') dst_off = parseOffset(s, &i) orelse return null;
+    if (i < s.len and s[i] != ',') dst_off = parseOffset(s, &i, 24) orelse return null;
     r.dst = mkType(-dst_off, true, dst_name);
     if (i < s.len and s[i] == ',') {
         i += 1;
@@ -416,6 +411,7 @@ fn parseTzif(gpa: std.mem.Allocator, data: []const u8) ?Zone {
     for (0..6) |k| cnt[k] = @intCast(std.mem.readInt(u32, hdr[20 + 4 * k ..][0..4], .big));
     if (version >= '2') {
         // Skip the 32-bit block.
+        for (cnt) |c| if (c > data.len) return null;
         const skip = 44 + cnt[3] * 4 + cnt[3] + cnt[4] * 6 + cnt[5] + cnt[2] * 8 + cnt[1] + cnt[0];
         if (data.len < skip + 44) return null;
         off = skip;
@@ -423,15 +419,33 @@ fn parseTzif(gpa: std.mem.Allocator, data: []const u8) ?Zone {
         for (0..6) |k| cnt[k] = @intCast(std.mem.readInt(u32, hdr[20 + 4 * k ..][0..4], .big));
         tsize = 8;
     }
+    // No count can exceed the file; checked first so the sums cannot overflow.
+    for (cnt) |c| if (c > data.len) return null;
     var p = off + 44;
     const timecnt = cnt[3];
     const typecnt = cnt[4];
     const charcnt = cnt[5];
     if (data.len < p + timecnt * tsize + timecnt + typecnt * 6 + charcnt) return null;
-    var z: Zone = .{ .gpa = gpa };
-    z.trans = gpa.alloc(i64, timecnt) catch return null;
-    z.trans_type = gpa.alloc(u8, timecnt) catch return null;
-    z.types = gpa.alloc(Type, typecnt) catch return null;
+    // The file may be anything TZ names: every index is checked before use.
+    if (typecnt == 0) return null;
+    for (data[p + timecnt * tsize ..][0..timecnt]) |t| if (t >= typecnt) return null;
+    for (0..typecnt) |k| {
+        const e = data[p + timecnt * tsize + timecnt + k * 6 ..];
+        // RFC 8536 keeps offsets within about a day; a week is generous.
+        const utoff = be32(e);
+        if (e[5] >= charcnt or utoff > 7 * 86400 or utoff < -7 * 86400) return null;
+    }
+    const trans = gpa.alloc(i64, timecnt) catch return null;
+    const trans_type = gpa.alloc(u8, timecnt) catch {
+        gpa.free(trans);
+        return null;
+    };
+    const types = gpa.alloc(Type, typecnt) catch {
+        gpa.free(trans);
+        gpa.free(trans_type);
+        return null;
+    };
+    var z: Zone = .{ .gpa = gpa, .trans = trans, .trans_type = trans_type, .types = types };
     for (0..timecnt) |k| z.trans[k] = if (tsize == 8) be64(data[p + k * 8 ..]) else be32(data[p + k * 4 ..]);
     p += timecnt * tsize;
     for (0..timecnt) |k| z.trans_type[k] = data[p + k];
@@ -457,24 +471,31 @@ fn parseTzif(gpa: std.mem.Allocator, data: []const u8) ?Zone {
     return z;
 }
 
-fn readWhole(gpa: std.mem.Allocator, io: Io, path: []const u8) ?[]u8 {
+/// Far more than any real zone file needs.
+const max_zone_file = 1 << 20;
+
+/// The contents of a zone file, or null when `path` cannot be one. TZ, and a
+/// TZ="..." inside a date string, may name anything: only a regular file of
+/// modest size that starts as TZif does is read.
+fn readZoneFile(gpa: std.mem.Allocator, io: Io, path: []const u8) ?[]u8 {
+    // Asked before opening: opening a FIFO waits for a writer.
+    const info = Io.Dir.cwd().statFile(io, path, .{}) catch return null;
+    if (info.kind != .file or info.size > max_zone_file) return null;
     const f = Io.Dir.cwd().openFile(io, path, .{}) catch return null;
     defer f.close(io);
     var list: std.ArrayList(u8) = .empty;
+    defer list.deinit(gpa);
     var buf: [8192]u8 = undefined;
     while (true) {
         const n = f.readStreaming(io, &.{&buf}) catch |e| switch (e) {
             error.EndOfStream => 0,
-            else => {
-                list.deinit(gpa);
-                return null;
-            },
+            else => return null,
         };
         if (n == 0) break;
-        list.appendSlice(gpa, buf[0..n]) catch {
-            list.deinit(gpa);
-            return null;
-        };
+        list.appendSlice(gpa, buf[0..n]) catch return null;
+        // Some files report no size and have no end.
+        if (list.items.len > max_zone_file) return null;
+        if (list.items.len >= 4 and !std.mem.startsWith(u8, list.items, "TZif")) return null;
     }
     return list.toOwnedSlice(gpa) catch null;
 }
@@ -498,7 +519,7 @@ pub fn load(gpa: std.mem.Allocator, io: Io, tz: ?[]const u8) Zone {
 }
 
 fn loadFile(gpa: std.mem.Allocator, io: Io, path: []const u8) ?Zone {
-    const data = readWhole(gpa, io, path) orelse return null;
+    const data = readZoneFile(gpa, io, path) orelse return null;
     defer gpa.free(data);
     return parseTzif(gpa, data);
 }
@@ -534,4 +555,36 @@ test "any i64 time can be broken down" {
     }
     const tm = breakdown(0, 0);
     try t.expect(fitsStructTm(&tm));
+}
+
+test "posix TZ numbers beyond any clock" {
+    const t = std.testing;
+    try t.expectEqual(@as(i32, -24 * 3600), parsePosix("AAA99999999999999999999").?.std.utoff);
+    try t.expectEqual(@as(i32, -(3600 + 59 * 60 + 59)), parsePosix("AAA1:99:99").?.std.utoff);
+    for ([_][]const u8{ "AAA0BBB,J99999,J1", "AAA0BBB,J0,J1", "AAA0BBB,366,J1", "AAA0BBB,M300.1.1,M1.1.1", "AAA0BBB,M1.999999999999.1,J1" }) |text| {
+        try t.expect(parsePosix(text) == null);
+    }
+    try t.expectEqual(@as(i32, 24 * 7 * 3600), parsePosix("AAA0BBB,J1/99999999999999,J2").?.start.time);
+}
+
+test "a TZif file with bad indices is refused" {
+    const t = std.testing;
+    // A version 1 header (counts: isut, isstd, leap, time, type, char), one
+    // transition, one type, and its abbreviation.
+    var data: [44 + 5 + 6 + 4]u8 = @splat(0);
+    @memcpy(data[0..4], "TZif");
+    std.mem.writeInt(u32, data[32..36], 1, .big);
+    std.mem.writeInt(u32, data[36..40], 1, .big);
+    std.mem.writeInt(u32, data[40..44], 4, .big);
+    @memcpy(data[55..58], "AAA");
+    var good = parseTzif(t.allocator, &data).?;
+    good.deinit();
+    data[48] = 200; // a transition to a type that is not there
+    try t.expect(parseTzif(t.allocator, &data) == null);
+    data[48] = 0;
+    data[54] = 200; // an abbreviation outside the table
+    try t.expect(parseTzif(t.allocator, &data) == null);
+    data[54] = 0;
+    std.mem.writeInt(u32, data[36..40], 0, .big); // transitions but no types
+    try t.expect(parseTzif(t.allocator, &data) == null);
 }

@@ -17,7 +17,7 @@ Print the resolved absolute file name.
 : All components must exist / none need to.
 
 -s, --strip, --no-symlinks
-: Do not expand symbolic links (existence and loops are still diagnosed as GNU does); overridden by -L.
+: Do not expand symbolic links (existence and loops are still diagnosed as GNU does). Of -s, -L and -P the last one given counts.
 
 -L, -P
 : Resolve `..` before symbolic links / as encountered (default).
@@ -58,7 +58,7 @@ See docs/compatibility/realpath.md for details.
 
 # LIMITATIONS
 
-- `-L` is accepted and resolves like `-P` apart from its interaction with `-s`; the difference matters only when `..` follows a symbolic link.
+None known.
 
 # SEE ALSO
 
@@ -66,5 +66,5 @@ docs/compatibility/realpath.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.
 

@@ -43,6 +43,7 @@ fn report(context: ?*anyopaque, ev: expr.Event) void {
         .missing_argument_after => |t| cli.warn(ctx.*, "syntax error: missing argument after {f}", .{cli.quoteC(t)}),
         .expecting_close_after => |t| cli.warn(ctx.*, "syntax error: expecting {f} after {f}", .{ cli.quoteC(")"), cli.quoteC(t) }),
         .expecting_close_instead => |t| cli.warn(ctx.*, "syntax error: expecting {f} instead of {f}", .{ cli.quoteC(")"), cli.quoteC(t) }),
+        .unexpected_close => cli.warn(ctx.*, "syntax error: unexpected ')'", .{}),
         .unexpected_argument => |t| cli.warn(ctx.*, "syntax error: unexpected argument {f}", .{cli.quoteC(t)}),
         .non_integer_argument => cli.warn(ctx.*, "non-integer argument", .{}),
         .division_by_zero => cli.warn(ctx.*, "division by zero", .{}),

@@ -9,15 +9,16 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 version=${1:-$(sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon)}
 version=${version#v}
+# A file of our own: a name that could be guessed could be a link planted there.
+notes=$(mktemp)
+trap 'rm -f "$notes"' EXIT
 awk -v v="$version" '
     $0 == "## " v || index($0, "## " v " ") == 1 { on = 1; next }
     on && /^## / { exit }
     on { print }
-' CHANGELOG.md > "${TMPDIR:-/tmp}/rn.$$"
-if ! grep -q '[^[:space:]]' "${TMPDIR:-/tmp}/rn.$$"; then
-    rm -f "${TMPDIR:-/tmp}/rn.$$"
+' CHANGELOG.md > "$notes"
+if ! grep -q '[^[:space:]]' "$notes"; then
     echo "CHANGELOG.md has no '## $version' section" >&2
     exit 1
 fi
-cat "${TMPDIR:-/tmp}/rn.$$"
-rm -f "${TMPDIR:-/tmp}/rn.$$"
+cat "$notes"

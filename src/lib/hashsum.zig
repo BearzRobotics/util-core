@@ -15,6 +15,7 @@
 //! A name "-" inside a checksum list refers to standard input (GNU).
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const hash = @import("../hash.zig");
@@ -349,41 +350,53 @@ pub fn check(env: Env, o: Options, lists: []const Input, out: *Io.Writer, observ
 
 /// Verify one checksum list. Returns false when the exit status must be 1.
 fn checkOne(env: Env, o: Options, out: *Io.Writer, list: Io.File, list_name: []const u8, buf: []u8, observer: Observer) Error!bool {
-    // The list is read whole: lines are short and their order matters.
-    var text: std.ArrayList(u8) = .empty;
-    defer text.deinit(env.gpa);
-    while (true) {
-        try text.ensureUnusedCapacity(env.gpa, 64 * 1024);
-        const n = common.readChunk(env.io, list, text.unusedCapacitySlice()) catch |e| {
-            observer.emit(.{ .read_failed = .{ .name = list_name, .err = e, .list = true } });
-            return false;
-        };
-        if (n == 0) break;
-        text.items.len += n;
-    }
-
     var t: Totals = .{};
     var lineno: u64 = 0;
     var any_valid = false;
     var name_buf: std.ArrayList(u8) = .empty;
     defer name_buf.deinit(env.gpa);
     var label_algo = o.algo; // algorithm named in "improperly formatted" warnings
-    var pos: usize = 0;
-    while (pos < text.items.len) {
-        const nl = std.mem.indexOfScalarPos(u8, text.items, pos, '\n');
-        const end = nl orelse text.items.len;
-        const raw = text.items[pos..end];
-        pos = if (nl) |k| k + 1 else text.items.len;
-        lineno += 1;
-        if (raw.len == 0 or raw[0] == '#') continue;
-        const parsed = parseLine(env.gpa, o, raw, &name_buf) orelse {
-            t.improper += 1;
-            if (o.warn) observer.emit(.{ .improper_line = .{ .list = list_name, .line = lineno, .label = checkLabel(label_algo) } });
-            continue;
+    // The list is verified as it is read.
+    var batches: common.Batcher = .{};
+    defer batches.deinit(env.gpa);
+    var chunk: [16 * 1024]u8 = undefined;
+    const from_stdin = list.handle == Io.File.stdin().handle;
+    var at_end = false;
+    while (!at_end) {
+        // What is verified goes out before a read that may wait.
+        try out.flush();
+        const n = common.readChunk(env.io, list, &chunk) catch |e| {
+            observer.emit(.{ .read_failed = .{ .name = list_name, .err = e, .list = true } });
+            return false;
         };
-        any_valid = true;
-        label_algo = parsed.algo;
-        try verifyOne(env, o, out, parsed, &t, buf, observer);
+        at_end = n == 0;
+        const text = if (at_end) batches.rest() else try batches.add(env.gpa, chunk[0..n], "\n") orelse continue;
+        var pos: usize = 0;
+        while (pos < text.len) {
+            const nl = std.mem.indexOfScalarPos(u8, text, pos, '\n');
+            const end = nl orelse text.len;
+            var raw = text[pos..end];
+            pos = if (nl) |k| k + 1 else text.len;
+            lineno += 1;
+            // A list written on Windows ends its lines with CR LF. A name that
+            // really ends in CR is written escaped, as "\r".
+            if (std.mem.endsWith(u8, raw, "\r")) raw = raw[0 .. raw.len - 1];
+            if (raw.len == 0 or raw[0] == '#') continue;
+            var entry = parseLine(env.gpa, o, raw, &name_buf);
+            // As in GNU, a list on standard input cannot name it: checking
+            // that entry would read the rest of the list.
+            if (entry) |p| if (from_stdin and std.mem.eql(u8, p.name, "-")) {
+                entry = null;
+            };
+            const parsed = entry orelse {
+                t.improper += 1;
+                if (o.warn) observer.emit(.{ .improper_line = .{ .list = list_name, .line = lineno, .label = checkLabel(label_algo) } });
+                continue;
+            };
+            any_valid = true;
+            label_algo = parsed.algo;
+            try verifyOne(env, o, out, parsed, &t, buf, observer);
+        }
     }
 
     if (!any_valid) {
@@ -456,7 +469,7 @@ fn printResult(out: *Io.Writer, o: Options, name: []const u8, verdict: []const u
 
 /// Parse one line of a checksum list in any of the three formats.
 fn parseLine(gpa: std.mem.Allocator, o: Options, raw: []const u8, name_buf: *std.ArrayList(u8)) ?Line {
-    var s = raw;
+    var s = std.mem.trimStart(u8, raw, " \t");
     var escaped = false;
     if (s.len > 0 and s[0] == '\\') {
         escaped = true;
@@ -499,8 +512,11 @@ fn parseLine(gpa: std.mem.Allocator, o: Options, raw: []const u8, name_buf: *std
 /// "TAG (NAME) = DIGEST", with the tag of the selected algorithm (any known
 /// algorithm for cksum) and "BLAKE2b-BITS" for shortened BLAKE2b digests.
 fn parseTagged(o: Options, s: []const u8, ln: *Line, name_out: *[]const u8) bool {
-    const paren = std.mem.indexOf(u8, s, " (") orelse return false;
-    const tag = s[0..paren];
+    // "TAG (", or "TAG(" as OpenSSL writes it.
+    const end = std.mem.indexOfAny(u8, s, " (") orelse return false;
+    const open = end + @intFromBool(s[end] == ' ');
+    if (open >= s.len or s[open] != '(') return false;
+    const tag = s[0..end];
     var algo: hash.Algo = undefined;
     var bits: ?usize = null;
     var found = false;
@@ -512,7 +528,7 @@ fn parseTagged(o: Options, s: []const u8, ln: *Line, name_out: *[]const u8) bool
                 if (a == .blake2b) bits = 512;
                 found = true;
             } else if (a == .blake2b and std.mem.startsWith(u8, tag, "BLAKE2b-")) {
-                const n = std.fmt.parseInt(usize, tag["BLAKE2b-".len..], 10) catch return false;
+                const n = numparse.parseInt(usize, tag["BLAKE2b-".len..], 10) catch return false;
                 if (n == 0 or n > 512 or n % 8 != 0) return false;
                 algo = a;
                 bits = n;
@@ -522,10 +538,12 @@ fn parseTagged(o: Options, s: []const u8, ln: *Line, name_out: *[]const u8) bool
     }
     if (!found) return false;
     if (o.standalone() and algo != o.algo) return false;
-    const rest = s[paren + 2 ..];
-    const close = std.mem.lastIndexOf(u8, rest, ") = ") orelse return false;
+    const rest = s[open + 1 ..];
+    const close = std.mem.lastIndexOfScalar(u8, rest, ')') orelse return false;
     const name = rest[0..close];
-    const digest_text = rest[close + 4 ..];
+    var after = std.mem.trimStart(u8, rest[close + 1 ..], " \t");
+    if (after.len == 0 or after[0] != '=') return false;
+    const digest_text = std.mem.trimStart(u8, after[1..], " \t");
     ln.algo = algo;
     if (!decodeDigest(digest_text, algo, bits, ln)) return false;
     ln.binary = true;

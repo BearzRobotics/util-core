@@ -96,7 +96,14 @@ pub fn main(ctx: cli.Context) u8 {
                 };
                 var buf: [65536]u8 = undefined;
                 while (true) {
-                    const n = sys.readFd(fd, &buf, &err) orelse break;
+                    const n = sys.readFd(fd, &buf, &err) orelse {
+                        // A directory reads as an empty script, as in GNU. Any
+                        // other failure leaves part of the script, which could
+                        // do harm, above all with -i.
+                        if (err == .ISDIR) break;
+                        cli.warn(ctx, "read error on {s}: {s}", .{ name, sys.errnoText(err) });
+                        return 4;
+                    };
                     if (n == 0) break;
                     data.appendSlice(arena, buf[0..n]) catch return 4;
                 }
@@ -189,11 +196,19 @@ fn reportCompileError(ctx: cli.Context, d: *const sed.CompileError) u8 {
             cli.warn(ctx, "couldn't open file {s}: {s}", .{ d.name(), sys.errnoText(d.errno) });
             return 4;
         },
+        .bare_class => {
+            cli.warn(ctx, "character class syntax is [[:space:]], not [:space:]", .{});
+            return 4;
+        },
         .missing_label => {
             cli.warn(ctx, "can't find label for jump to `{s}'", .{d.name()});
             return 4;
         },
     }
+}
+
+fn plural(n: usize) []const u8 {
+    return if (n == 1) "" else "s";
 }
 
 const Report = struct { ctx: cli.Context, stdout: *Io.File.Writer, stderr: *Io.File.Writer };
@@ -209,13 +224,12 @@ fn report(context: ?*anyopaque, ev: sed.Event) void {
         .read_error => |e| cli.warn(ctx, "read error on {s}: {s}", .{ e.name, sys.errnoText(e.errno) }),
         .write_error => |e| {
             if (e.errno) |no| {
-                cli.warn(ctx, "couldn't write {d} items to {s}: {s}", .{ e.items, e.name, sys.errnoText(no) });
+                cli.warn(ctx, "couldn't write {d} item{s} to {s}: {s}", .{ e.items, plural(e.items), e.name, sys.errnoText(no) });
             } else {
                 // The error belongs to a writer we gave the library.
                 const w = if (std.mem.eql(u8, e.name, "stdout")) st.stdout else st.stderr;
                 const werr = w.err orelse error.WriteFailed;
-                if (werr == error.BrokenPipe) return;
-                cli.warn(ctx, "couldn't write {d} items to {s}: {s}", .{ e.items, e.name, cli.errText(werr) });
+                cli.warn(ctx, "couldn't write {d} item{s} to {s}: {s}", .{ e.items, plural(e.items), e.name, cli.errText(werr) });
             }
         },
         .temp_open_failed => |e| cli.warn(ctx, "couldn't open temporary file {s}: {s}", .{ e.path, sys.errnoText(e.errno) }),

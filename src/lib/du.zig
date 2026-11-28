@@ -260,15 +260,31 @@ pub const Du = struct {
         s.out.flush();
     }
 
+    /// The start of `pattern` up to and with its first '*', when what comes
+    /// before is plain enough to tell that this '*' is one.
+    fn headThroughStar(pattern: []const u8) ?[]const u8 {
+        const star = std.mem.indexOfScalar(u8, pattern, '*') orelse return null;
+        if (std.mem.indexOfAny(u8, pattern[0..star], "[\\") != null) return null;
+        return pattern[0 .. star + 1];
+    }
+
     fn excluded(s: *Du, f: []const u8) bool {
         for (s.patterns.items) |p| {
             if (p.wildcard) {
-                if (fnmatch.match(p.text, f, .{})) return true;
+                // The pattern may match the path or what follows any slash.
+                // With a '*' (which takes slashes too) only the first of those
+                // places where the part before it matches need be tried: if
+                // not from there, then not from a later one with less text.
+                const head = headThroughStar(p.text);
                 var i: usize = 0;
-                while (i < f.len) : (i += 1) {
-                    if (f[i] == '/' and i + 1 < f.len and f[i + 1] != '/') {
-                        if (fnmatch.match(p.text, f[i + 1 ..], .{})) return true;
+                while (i <= f.len) : (i += 1) {
+                    if (i > 0 and !(f[i - 1] == '/' and i < f.len and f[i] != '/')) continue;
+                    if (head) |h| {
+                        if (!fnmatch.match(h, f[i..], .{})) continue;
+                        if (fnmatch.match(p.text, f[i..], .{})) return true;
+                        break;
                     }
+                    if (fnmatch.match(p.text, f[i..], .{})) return true;
                 }
             } else {
                 if (std.mem.eql(u8, p.text, f)) return true;
@@ -465,7 +481,8 @@ fn visit(s: *Du, dir: ?*dirat.Level, name: []const u8, level: u64, parent: *Leve
 
     if ((is_dir and level <= s.max_depth) or (s.opt_all and level <= s.max_depth) or level == 0) {
         const v: u64 = if (s.inodes) to_print.inodes else to_print.size;
-        const keep = if (s.threshold < 0) v <= @as(u64, @intCast(-s.threshold)) else v >= @as(u64, @intCast(s.threshold));
+        // (The smallest threshold has no positive i64.)
+        const keep = if (s.threshold < 0) v <= @abs(s.threshold) else v >= @as(u64, @intCast(s.threshold));
         if (keep) s.printSize(to_print, path);
     }
     return ok;

@@ -53,6 +53,7 @@ See docs/compatibility/head.md for details.
 # LIMITATIONS
 
 - `-c -N` / `-n -N` hold the last N items in memory (as GNU does for non-seekable input).
+- When they hold back everything, so that nothing is written, a seekable standard input is left where it was (GNU may leave it one read buffer further on).
 - `--help` text is shorter than GNU's; diagnostics use ASCII quotes (GNU uses curly quotes in UTF-8 locales).
 - Multibyte characters are not interpreted: -c counts bytes and lines are split on a single delimiter byte, as in GNU.
 - Windows and macOS untested.
@@ -63,5 +64,5 @@ docs/compatibility/head.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.
 

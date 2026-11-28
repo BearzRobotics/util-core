@@ -4,6 +4,7 @@
 //! (read from `Env.environ`) as GNU does.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
@@ -34,12 +35,12 @@ pub fn available(env: Env) usize {
     if (env.getenv("OMP_NUM_THREADS")) |v| {
         // First comma-separated item, as OpenMP defines it.
         const first = std.mem.trim(u8, v[0 .. std.mem.indexOfScalar(u8, v, ',') orelse v.len], " \t");
-        if (std.fmt.parseInt(usize, first, 10)) |t| {
+        if (numparse.parseInt(usize, first, 10)) |t| {
             if (t > 0) n = t;
         } else |_| {}
     }
     if (env.getenv("OMP_THREAD_LIMIT")) |v| {
-        if (std.fmt.parseInt(usize, std.mem.trim(u8, v, " \t"), 10)) |t| {
+        if (numparse.parseInt(usize, std.mem.trim(u8, v, " \t"), 10)) |t| {
             if (t > 0 and t < n) n = t;
         } else |_| {}
     }

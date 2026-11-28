@@ -14,6 +14,10 @@ opt-in or terminal-only departure. Per-command detail is in each
 | find | `-json` action (listed in `--help`) | the action is given | do not pass it |
 | tree | `-J` is tree's own JSON output (not an extension) | n/a | n/a |
 | less | scrolling, searching and quitting keep working while following (`F`); after scrolling back the view stays put while data is still read. GNU less takes no other command until following is interrupted. In both, `^X` or the interrupt key stops following | following | n/a |
+| head | deviation: `-n -N` / `-c -N` that write nothing leave a seekable stdin where it was (GNU: up to a buffer further on) | stdin is a file | n/a |
+| tree | deviation: output that cannot be written is reported, status 1 (tree: silent, status 0) | a write fails | n/a |
+| sed, xargs, less | deviation: a failed read of a script file (`sed -f`) or of the input (`xargs`, `less`) is reported with a failing status (GNU: runs or shows what it read; less names a directory and exits 0) | a read fails | n/a |
+| cat | a pager that exits with a failure is reported, status 1 | cat pages | `--paging=never` |
 | cat (and others, see their records) | see Extensions in each `docs/compatibility/<cmd>.md` | | |
 | grep | ripgrep-, ugrep- and FreeBSD-derived options: `--json`, `--smart-case`, `--glob`, `--hidden`/`--no-hidden`, `--ignore-vcs`, `--replace`, `--count-matches`, `--stats`, `--type`/`--type-not`/`--type-list`, `--max-columns`, `--sort`, `--and`/`--andnot`/`--not`/`--bool`, `-O`/`-p`/`-S`, `--include-dir`, `--mmap`, `--decompress`; clearer stderr for invalid -P patterns, regex limits, out of memory and decompression failures (listed in `--help` as "(not in GNU)") | the option is given (diagnostics: the failure occurs) | do not pass it |
 

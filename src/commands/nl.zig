@@ -12,6 +12,7 @@
 //! engine, which does not exist yet) — it is rejected with an error.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const nl = @import("../lib/nl.zig");
 const Io = std.Io;
@@ -152,7 +153,7 @@ fn parseStyle(ctx: cli.Context, val: []const u8, what: []const u8) ?nl.Style {
 }
 
 fn parseInt(ctx: cli.Context, val: []const u8, what: []const u8) ?i64 {
-    return std.fmt.parseInt(i64, val, 10) catch {
+    return numparse.parseInt(i64, val, 10) catch {
         cli.warn(ctx, "invalid {s}: '{s}'", .{ what, val });
         return null;
     };
@@ -170,14 +171,14 @@ fn setOption(ctx: cli.Context, cfg: *nl.Options, letter: u8, val: []const u8) bo
         'i' => cfg.increment = parseInt(ctx, val, "line number increment") orelse return false,
         'v' => cfg.start = parseInt(ctx, val, "starting line number") orelse return false,
         'l' => {
-            const v = std.fmt.parseInt(u64, val, 10) catch {
+            const v = numparse.parseInt(u64, val, 10) catch {
                 cli.warn(ctx, "invalid line number of blank lines: '{s}'{s}", .{ val, rangeSuffix(val) });
                 return false;
             };
             cfg.join_blank = v;
         },
         'w' => {
-            const v = std.fmt.parseInt(usize, val, 10) catch {
+            const v = numparse.parseInt(usize, val, 10) catch {
                 cli.warn(ctx, "invalid line number field width: '{s}'{s}", .{ val, rangeSuffix(val) });
                 return false;
             };
@@ -202,7 +203,7 @@ fn setOption(ctx: cli.Context, cfg: *nl.Options, letter: u8, val: []const u8) bo
 /// GNU says "Numerical result out of range" for numbers that are well formed
 /// but negative or too large for an unsigned option.
 fn rangeSuffix(val: []const u8) []const u8 {
-    _ = std.fmt.parseInt(i128, val, 10) catch return "";
+    _ = numparse.parseInt(i128, val, 10) catch return "";
     return ": Numerical result out of range";
 }
 

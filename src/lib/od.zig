@@ -78,19 +78,19 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
     var bpb: usize = 16;
     if (lcm > 16) bpb = lcm;
     if (opts.width) |w| {
-        if (w % lcm != 0 or w == 0 or w > 1 << 20) {
+        if (w % lcm != 0 or w == 0) {
             obs.emit(.{ .invalid_width = .{ .width = w, .using = lcm } });
             bpb = lcm;
-        } else bpb = @intCast(w);
+        } else bpb = std.math.cast(usize, w) orelse return error.OutOfMemory;
     } else if (bpb % lcm != 0) bpb = lcm;
 
     // Column alignment across formats.
     var line_w: usize = 0;
-    for (fmts.items) |f| line_w = @max(line_w, (f.width + 1) * (bpb / f.size));
-    for (fmts.items) |*f| {
-        const n = bpb / f.size;
-        f.pad = (line_w - (f.width + 1) * n) / n;
+    for (fmts.items) |f| {
+        const chars = std.math.mul(usize, f.width + 1, bpb / f.size) catch return error.OutOfMemory;
+        line_w = @max(line_w, chars);
     }
+    for (fmts.items) |*f| f.pad = line_w - (f.width + 1) * (bpb / f.size);
 
     var src = Source.init(env, obs, inputs, opts.limit);
     defer src.deinit();
@@ -105,7 +105,7 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
     if (opts.strings) |min| {
         dumpStrings(&src, &out, min, opts.radix, skip);
     } else {
-        const buf = try gpa.alloc(u8, bpb * 2);
+        const buf = try gpa.alloc(u8, std.math.mul(usize, bpb, 2) catch return error.OutOfMemory);
         defer gpa.free(buf);
         const cur = buf[0..bpb];
         const prev = buf[bpb..];
@@ -114,7 +114,7 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
         var addr: u64 = skip;
         var lab: u64 = opts.label orelse 0;
         const radix = opts.radix;
-        while (true) {
+        while (!out.failed) {
             const n = src.read(cur);
             if (n == 0) break;
             if (!opts.verbose and n == bpb and have_prev and std.mem.eql(u8, cur, prev)) {
@@ -124,10 +124,12 @@ pub fn run(env: Env, opts: Options, inputs: []const Input, out_w: *Io.Writer, ob
                 }
             } else {
                 star_printed = false;
-                if (n < bpb) @memset(cur[n..], 0);
-                printBlock(&out, fmts.items, cur, n, addr, radix, opts.big_endian, line_w, if (have_label) lab else null);
-                @memcpy(prev, cur);
+                // Zero only up to the end of the last element: with a large
+                // -w the rest of the block is never looked at.
+                if (n < bpb) @memset(cur[n..@min(bpb, std.mem.alignForward(usize, n, lcm))], 0);
+                printBlock(&out, fmts.items, cur, n, addr, radix, opts.big_endian, if (have_label) lab else null);
                 have_prev = n == bpb;
+                if (have_prev) @memcpy(prev, cur);
             }
             addr += n;
             lab += n;
@@ -308,7 +310,13 @@ fn spaces(out: *wsink.Sink, n: usize) void {
     while (i < n) : (i += 1) out.writeByte(' ');
 }
 
-fn printBlock(out: *wsink.Sink, fmts: []const Fmt, block: []const u8, n_bytes: usize, addr: u64, radix: u8, big: bool, line_w: usize, label: ?u64) void {
+/// The part of a line's `pad` extra spaces that belongs to its last `left`
+/// of `fields` fields.
+fn padLeft(pad: usize, left: usize, fields: usize) usize {
+    return @intCast(@as(u128, pad) * left / fields);
+}
+
+fn printBlock(out: *wsink.Sink, fmts: []const Fmt, block: []const u8, n_bytes: usize, addr: u64, radix: u8, big: bool, label: ?u64) void {
     for (fmts, 0..) |f, fi| {
         if (fi == 0) {
             printAddr(out, addr, radix);
@@ -322,6 +330,7 @@ fn printBlock(out: *wsink.Sink, fmts: []const Fmt, block: []const u8, n_bytes: u
             if (label != null) spaces(out, 3 + addrWidth(radix));
         }
         const n_elems = (n_bytes + f.size - 1) / f.size;
+        const fields = block.len / f.size;
         var i: usize = 0;
         while (i < n_elems) : (i += 1) {
             var tmp: [16]u8 = undefined;
@@ -329,16 +338,15 @@ fn printBlock(out: *wsink.Sink, fmts: []const Fmt, block: []const u8, n_bytes: u
             @memcpy(tmp[0..f.size], e);
             if (big and f.size > 1) std.mem.reverse(u8, tmp[0..f.size]);
             out.writeByte(' ');
-            spaces(out, f.pad);
+            // As in GNU, the padding is spread over the fields, so that the
+            // formats of a block end in the same column.
+            spaces(out, padLeft(f.pad, fields - i, fields) - padLeft(f.pad, fields - i - 1, fields));
             printElem(out, f, tmp[0..f.size]);
         }
         if (f.z) {
             // Pad the missing fields, then ">printable<".
-            const missing = (block.len / f.size) - n_elems;
-            spaces(out, missing * (1 + f.pad + f.width));
-            // Alignment remainder lost to integer division in `pad`.
-            const used = (block.len / f.size) * (1 + f.pad + f.width);
-            spaces(out, line_w - used);
+            const missing = fields - n_elems;
+            spaces(out, missing * (1 + f.width) + padLeft(f.pad, missing, fields));
             out.write("  >");
             for (block[0..n_bytes]) |c| out.writeByte(if (c >= 0x20 and c < 0x7f) c else '.');
             out.writeByte('<');
@@ -415,6 +423,29 @@ fn printElem(out: *wsink.Sink, f: Fmt, e: []const u8) void {
     }
 }
 
+/// A value rounded to so many significant digits, trailing zeros dropped.
+const Decimal = struct {
+    digits: [32]u8,
+    len: usize,
+    exp: i32,
+
+    fn round(d: *Decimal, value: f80, places: usize) bool {
+        const gpa = std.heap.page_allocator;
+        // [-]d[.ddd]e+XX
+        const text = fmt_float.formatAllocLong(gpa, .{ .conv = 'e', .precision = places - 1 }, value) catch return false;
+        defer gpa.free(text);
+        const epos = std.mem.indexOfScalar(u8, text, 'e') orelse return false;
+        d.len = 0;
+        for (text[0..epos]) |c| if (std.ascii.isDigit(c)) {
+            d.digits[d.len] = c;
+            d.len += 1;
+        };
+        while (d.len > 1 and d.digits[d.len - 1] == '0') d.len -= 1;
+        d.exp = std.fmt.parseInt(i32, text[epos + 1 ..], 10) catch return false;
+        return true;
+    }
+};
+
 /// C `%g` of the shortest decimal that reads back as `v` (GNU od prints
 /// floating point values this way, with at most `prec` significant digits).
 fn shortestG(comptime T: type, v: T, dig: usize, buf: *[64]u8) []const u8 {
@@ -437,7 +468,21 @@ fn shortestG(comptime T: type, v: T, dig: usize, buf: *[64]u8) []const u8 {
             nd += 1;
         }
     }
-    const exp = std.fmt.parseInt(i32, sci[epos + 1 ..], 10) catch return "?";
+    var exp = std.fmt.parseInt(i32, sci[epos + 1 ..], 10) catch return "?";
+    // GNU prints with %g, which rounds correctly. Next to a power of two the
+    // shortest text that reads back need not be the correctly rounded one of
+    // that length; then that one does not read back, and GNU takes one digit
+    // more.
+    if (nd > dig) {
+        var exact: Decimal = undefined;
+        if (!exact.round(@floatCast(v), nd)) return "?";
+        if (exact.exp != exp or !std.mem.eql(u8, exact.digits[0..exact.len], digits[0..nd])) {
+            if (!exact.round(@floatCast(v), nd + 1)) return "?";
+            nd = exact.len;
+            @memcpy(digits[0..nd], exact.digits[0..nd]);
+            exp = exact.exp;
+        }
+    }
     var w: std.Io.Writer = .fixed(buf);
     if (neg) w.writeByte('-') catch {};
     if (nd == 1 and digits[0] == '0') {

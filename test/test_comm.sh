@@ -77,5 +77,16 @@ run_cmp "invalid option"            -x f1 f2
 run_cmp "unrecognized long"         --nope f1 f2
 run_cmp "--output-delimiter missing arg" --output-delimiter
 
+
+printf "\n[ Disorder in the last lines ]\n"
+printf 'd\n' > end1; printf 'd\nb\n' > end2; printf 'c\n' > end3; printf 'c\naa\n' > end4
+printf 'c\n\n' > end5; printf 'd\na' > end6
+for pair in 'end1 end2' 'end2 end1' 'end3 end4' 'end4 end3' 'end3 end5' 'end1 end6' 'end2 end2' 'empty end2'; do
+    run_cmp "$pair"                 $pair
+    run_cmp "--check-order $pair"   --check-order $pair
+    run_cmp "--nocheck-order $pair" --nocheck-order $pair
+    run_cmp "-12 --total $pair"     -12 --total $pair
+done
+
 cd /; rm -rf "$W"
 print_summary

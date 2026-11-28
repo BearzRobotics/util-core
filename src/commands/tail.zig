@@ -12,6 +12,7 @@
 //! last N items in memory.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const count_arg = @import("../count_arg.zig");
 const tail = @import("../lib/tail.zig");
@@ -247,7 +248,7 @@ fn setCount(ctx: cli.Context, cfg: *tail.Options, bytes: bool, text: []const u8)
 }
 
 fn setSleep(ctx: cli.Context, cfg: *tail.Options, text: []const u8) bool {
-    const v = std.fmt.parseFloat(f64, text) catch -1;
+    const v = numparse.parseFloat(f64, text) catch -1;
     if (!(v >= 0)) {
         cli.warn(ctx, "invalid number of seconds: '{s}'", .{text});
         return false;
@@ -257,7 +258,7 @@ fn setSleep(ctx: cli.Context, cfg: *tail.Options, text: []const u8) bool {
 }
 
 fn setPid(ctx: cli.Context, cfg: *tail.Options, text: []const u8) bool {
-    const v = std.fmt.parseInt(i32, text, 10) catch -1;
+    const v = numparse.parseInt(i32, text, 10) catch -1;
     if (v < 0) {
         cli.warn(ctx, "invalid PID: '{s}'", .{text});
         return false;

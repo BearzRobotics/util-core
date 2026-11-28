@@ -994,7 +994,9 @@ fn parseGeneral(s: []const u8) General {
             if (m < rest.len and std.ascii.isDigit(rest[m])) {
                 var e: i32 = 0;
                 while (m < rest.len and std.ascii.isDigit(rest[m])) : (m += 1) e = @min(e *| 10 +| @as(i32, rest[m] - '0'), 100000);
-                v *= std.math.pow(f64, 2, @floatFromInt(if (eneg) -e else e));
+                // Zero stays zero at any exponent (Zig's ldexp gives infinity
+                // for a zero and a large one; multiplying by 2^e gave NaN).
+                if (v != 0) v = std.math.ldexp(v, if (eneg) -e else e);
             }
         }
         return .{ .parsed = true, .value = if (neg) -v else v };
@@ -1079,7 +1081,7 @@ pub fn debugNotes(cfg: *const Options, obs: Observer) void {
             var po: [64]u8 = undefined;
             var pn: [64]u8 = undefined;
             const o1 = std.fmt.bufPrint(&po, "+{d}", .{k.obs_s}) catch "";
-            const n1 = std.fmt.bufPrint(&pn, "-k {d}", .{k.obs_s + 1}) catch "";
+            const n1 = std.fmt.bufPrint(&pn, "-k {d}", .{k.obs_s +| 1}) catch "";
             var ob: [96]u8 = undefined;
             var nb: [96]u8 = undefined;
             var ol: []const u8 = o1;
@@ -1359,18 +1361,21 @@ fn mergeStream(env: Env, obs: Observer, out_w: *Io.Writer, s: *const Sorter, cfg
         opened += 1;
     }
     for (0..k) |i| if (!advance(env, obs, readers, heads, alive, names, i)) return fail_status;
+    const queue = gpa.alloc(usize, k) catch return oomStatus(obs);
+    defer gpa.free(queue);
+    var pending: MergeHeap(StreamHeads) = .{ .items = queue[0..0], .ctx = .{ .s = s, .heads = heads } };
+    for (0..k) |i| if (alive[i]) {
+        queue[pending.items.len] = i;
+        pending.items = queue[0 .. pending.items.len + 1];
+    };
+    pending.init();
 
     var out = wsink.Sink.initWriter(out_w);
     var prev: std.ArrayList(u8) = .empty;
     defer prev.deinit(gpa);
     var have_prev = false;
-    while (true) {
-        var best: ?usize = null;
-        for (0..k) |r| {
-            if (!alive[r]) continue;
-            if (best == null or s.compare(heads[r].items, heads[best.?].items) < 0) best = r;
-        }
-        const b = best orelse break;
+    while (pending.items.len > 0) {
+        const b = pending.items[0];
         const text = heads[b].items;
         if (!(cfg.unique and have_prev and s.compare(prev.items, text) == 0)) {
             emitRecord(&out, cfg, text);
@@ -1382,6 +1387,7 @@ fn mergeStream(env: Env, obs: Observer, out_w: *Io.Writer, s: *const Sorter, cfg
             }
         }
         if (!advance(env, obs, readers, heads, alive, names, b)) return fail_status;
+        if (alive[b]) pending.topChanged() else pending.removeTop();
     }
     out.flush();
     if (out.failed) {
@@ -1414,6 +1420,73 @@ fn advance(env: Env, obs: Observer, readers: []linereader.LineReader, heads: []s
     return true;
 }
 
+/// A binary heap of the inputs of a merge that still have a line, smallest
+/// line first, so each output line costs the logarithm of their number. Equal
+/// lines go to the earlier input, as in a stable merge.
+fn MergeHeap(comptime Heads: type) type {
+    return struct {
+        items: []usize,
+        ctx: Heads,
+
+        const Self = @This();
+
+        fn before(h: *const Self, a: usize, b: usize) bool {
+            const c = h.ctx.s.compare(h.ctx.head(a), h.ctx.head(b));
+            return c < 0 or (c == 0 and a < b);
+        }
+
+        fn siftDown(h: *Self, start: usize) void {
+            var i = start;
+            while (true) {
+                var least = i;
+                for ([2]usize{ 2 * i + 1, 2 * i + 2 }) |child| {
+                    if (child < h.items.len and h.before(h.items[child], h.items[least])) least = child;
+                }
+                if (least == i) return;
+                std.mem.swap(usize, &h.items[i], &h.items[least]);
+                i = least;
+            }
+        }
+
+        fn init(h: *Self) void {
+            var i = h.items.len / 2;
+            while (i > 0) {
+                i -= 1;
+                h.siftDown(i);
+            }
+        }
+
+        /// The first input has a new line.
+        fn topChanged(h: *Self) void {
+            h.siftDown(0);
+        }
+
+        /// The first input has ended.
+        fn removeTop(h: *Self) void {
+            h.items[0] = h.items[h.items.len - 1];
+            h.items = h.items[0 .. h.items.len - 1];
+            h.siftDown(0);
+        }
+    };
+}
+
+const StreamHeads = struct {
+    s: *const Sorter,
+    heads: []std.ArrayList(u8),
+    fn head(c: StreamHeads, i: usize) []const u8 {
+        return c.heads[i].items;
+    }
+};
+
+const RunHeads = struct {
+    s: *const Sorter,
+    lines: [][]const u8,
+    pos: []usize,
+    fn head(c: RunHeads, i: usize) []const u8 {
+        return c.lines[c.pos[i]];
+    }
+};
+
 /// k-way merge of the already-sorted runs found at `starts[i]..starts[i+1]`
 /// of `lines`, in place (the result replaces `lines`). Ties go to the earlier
 /// input, as in a stable merge.
@@ -1425,15 +1498,20 @@ fn mergeRuns(gpa: std.mem.Allocator, s: *const Sorter, lines: [][]const u8, star
     for (pos, 0..) |*p, r| p.* = starts[r];
     const merged = try gpa.alloc([]const u8, lines.len);
     defer gpa.free(merged);
+    const queue = try gpa.alloc(usize, runs);
+    defer gpa.free(queue);
+    var pending: MergeHeap(RunHeads) = .{ .items = queue[0..0], .ctx = .{ .s = s, .lines = lines, .pos = pos } };
+    for (0..runs) |r| if (pos[r] < starts[r + 1]) {
+        queue[pending.items.len] = r;
+        pending.items = queue[0 .. pending.items.len + 1];
+    };
+    pending.init();
     var n: usize = 0;
     while (n < merged.len) : (n += 1) {
-        var best: ?usize = null;
-        for (0..runs) |r| {
-            if (pos[r] >= starts[r + 1]) continue;
-            if (best == null or s.compare(lines[pos[r]], lines[pos[best.?]]) < 0) best = r;
-        }
-        merged[n] = lines[pos[best.?]];
-        pos[best.?] += 1;
+        const r = pending.items[0];
+        merged[n] = lines[pos[r]];
+        pos[r] += 1;
+        if (pos[r] < starts[r + 1]) pending.topChanged() else pending.removeTop();
     }
     @memcpy(lines, merged);
 }

@@ -17,6 +17,7 @@
 //!     was given); the library never inspects the terminal or the environment.
 
 const std = @import("std");
+const quote = @import("../quote.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const stickyout = @import("stickyout.zig");
@@ -372,7 +373,11 @@ const BatView = struct {
         v.out.write(label);
         v.col = label.len;
         v.paintBold();
-        for (text) |c| v.putByte(c);
+        // The text can be a file name: what a terminal would act on is shown.
+        var shown: [4096]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&shown);
+        w.print("{f}", .{quote.Visible{ .name = text }}) catch {};
+        for (w.buffered()) |c| v.putByte(c);
         v.paintReset();
         v.out.write(suffix);
         v.out.writeByte('\n');

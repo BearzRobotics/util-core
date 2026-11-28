@@ -8,8 +8,8 @@
 //! immediately to every destination.
 //!
 //! Error handling follows the GNU manual's --output-error table. Without the
-//! option SIGPIPE keeps its default action (the process dies), as in GNU;
-//! with it SIGPIPE is ignored so a broken pipe surfaces as a write error.
+//! option SIGPIPE stays as inherited (normally the process dies; if ignored, a
+//! broken pipe is dropped in silence), as in GNU; with it SIGPIPE is ignored so a broken pipe surfaces as a write error.
 //! -a is implemented with O_APPEND and is POSIX-only for now.
 
 const std = @import("std");
@@ -66,7 +66,7 @@ pub fn main(ctx: cli.Context) u8 {
     const paths = ctx.args[i..];
 
     if (ignore_int) sys.ignoreSignal(.int);
-    // The entry point restored SIGPIPE's default action (as GNU tee has it);
+    // SIGPIPE is as tee was started with it, normally the default action;
     // --output-error wants to see EPIPE as an ordinary write error instead.
     if (mode != .default) sys.ignoreSignal(.pipe);
 

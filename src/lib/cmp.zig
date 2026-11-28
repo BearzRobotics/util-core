@@ -162,7 +162,10 @@ pub fn compare(env: Env, options: Options, inputs: [2]Input, sink: Sink) !Summar
     // reading; two standard inputs likewise.
     if (inputs[0].source == .file and inputs[1].source == .file and
         inputs[0].source.file.handle == inputs[1].source.file.handle and options.skip[0] == options.skip[1]) return sum;
-    if (options.skip[0] == options.skip[1] and (sides[0].is_reg or sides[0].is_dir) and sameFile(sides[0].file, sides[1].file)) return sum;
+    if ((sides[0].is_reg or sides[0].is_dir) and sameFile(sides[0].file, sides[1].file)) {
+        // An open file given to us may have been partly read already.
+        if (startOf(inputs[0], options.skip[0])) |a| if (startOf(inputs[1], options.skip[1])) |b| if (a == b) return sum;
+    }
     if (options.limit == 0) return sum;
 
     for (&sides, 0..) |*s, f| {
@@ -272,6 +275,15 @@ fn openAllowDir(io: Io, in: Input) !Input.Opened {
         .path => |p| .{ .file = try Io.Dir.cwd().openFile(io, p, .{ .allow_directory = true }), .owned = true },
         .file => |f| .{ .file = f, .owned = false },
     };
+}
+
+/// The offset in its file where the comparison of `in` begins.
+fn startOf(in: Input, skip: u64) ?u64 {
+    const at: u64 = switch (in.source) {
+        .path => 0,
+        .file => |f| sys.filePosition(f.handle) orelse return null,
+    };
+    return at +| skip;
 }
 
 fn sameFile(a: Io.File, b: Io.File) bool {

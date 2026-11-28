@@ -8,6 +8,7 @@
 //! signal dispositions, --chdir and the exec, which are process-wide, stay here.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const exec = @import("../exec.zig");
@@ -186,10 +187,18 @@ fn signalOption(ctx: cli.Context, arg: ?[]const u8, d: sys.Disposition, list: *b
     var it = std.mem.splitScalar(u8, text, ',');
     while (it.next()) |tok| {
         if (tok.len == 0) continue;
-        const n = sys.signalNumber(tok) orelse {
+        // 0 names a signal to kill and timeout, but it has no action.
+        const num = sys.signalNumber(tok);
+        const n = if (num != null and num.? != 0) num.? else {
             cli.warn(ctx, "{f}: invalid signal\nTry '{s} --help' for more information.", .{ cli.quoteC(tok), ctx.name });
             return false;
         };
+        // The C library keeps two for itself, and GNU env cannot touch them.
+        if (builtin.os.tag == .linux and (n == 32 or n == 33)) {
+            const what = if (d == .block) "block" else "get signal action for";
+            cli.warn(ctx, "failed to {s} signal {d}: Invalid argument", .{ what, n });
+            return false;
+        }
         if (!sys.setSignal(n, d)) {
             cli.warn(ctx, "failed to set signal action for signal {d}: Invalid argument", .{n});
             return false;

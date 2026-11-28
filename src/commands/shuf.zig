@@ -4,6 +4,7 @@
 //! the gnulib-compatible random draws are in src/lib/shuf.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const shuf = @import("../lib/shuf.zig");
@@ -15,7 +16,7 @@ fn parseU64(text: []const u8) error{ Invalid, Overflow }!u64 {
     if (text.len == 0 or !std.ascii.isDigit(text[0])) {
         if (text.len > 0 and text[0] == '+' and text.len > 1) {} else return error.Invalid;
     }
-    return std.fmt.parseInt(u64, text, 10) catch |e| switch (e) {
+    return numparse.parseInt(u64, text, 10) catch |e| switch (e) {
         error.Overflow => error.Overflow,
         else => error.Invalid,
     };
@@ -142,7 +143,11 @@ pub fn main(ctx: cli.Context) u8 {
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const env: shuf.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
     shuf.run(env, opts, &stdout.interface, .{ .context = @constCast(&ctx), .func = report }) catch |e| switch (e) {
-        error.Failed, error.OutOfMemory => return 1,
+        error.Failed => return 1, // already reported
+        error.OutOfMemory => {
+            cli.warn(ctx, "memory exhausted", .{});
+            return 1;
+        },
         error.WriteFailed => {
             if (outfile == null) cli.noteStdoutFailure(cli.errText(stdout.err orelse error.WriteFailed));
             cli.writeErrorWarn(ctx);

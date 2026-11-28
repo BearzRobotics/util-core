@@ -106,5 +106,12 @@ run_cmp "invalid option"       -x xyz
 run_cmp "unrecognized long"    --nope xyz
 run_cmp "-b missing arg"       -b
 
+# The count for -l runs on across section delimiter lines.
+printf '\n\\:\\:\n\n' > blanks1; printf '\n\\:\n\na\n\n' > blanks2
+for o in "-ba -l2" "-ba -l2 -p" "-ba -ht -l2 -p" "-ba -fn -l2" "-bt -fa -ha -l3"; do
+    run_cmp "blank count across sections $o" $o blanks1
+    run_cmp "blank count across sections, footer $o" $o blanks2
+done
+
 cd /; rm -rf "$W"
 print_summary

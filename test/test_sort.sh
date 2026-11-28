@@ -421,4 +421,42 @@ run_cmp "debug -z records" --debug -z -k2 nul
 run_cmp "debug empty"      --debug empty
 CMP_STDIN=dbg2 run_cmp "debug stdin" --debug -k2
 
+# Merging many inputs costs the logarithm of their number per line (a time
+# limit: comparing every input for every line takes far longer). Equal lines
+# keep the order of the inputs.
+mkdir many; ( cd many
+awk 'BEGIN { for (i = 0; i < 20000; i++) { f = sprintf("f%05d", i); for (j = 0; j < 10; j++) printf "%06d %d\n", j * 1000 + i % 997, i > f; close(f); printf "%s%c", f, 0 } }' > list )
+for o in "" "-s -k1,1" "-u -k1,1"; do
+    exp=$(cd many && LC_ALL=C timeout 60 /usr/bin/sort -m $o --files0-from=list | cksum)
+    act=$(cd many && LC_ALL=C timeout 10 "$BIN_DIR/sort" -m $o --files0-from=list | cksum)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS merge of 20000 files $o"
+    else FAIL=$((FAIL + 1)); echo "FAIL merge of 20000 files $o"; fi
+done
+rm -rf many
+
+# A hexadecimal zero is zero whatever its exponent.
+printf '1\n0x0p99999\n-1\n0x.0p100000\n-0x0p5000\n0\n0x1p-99999\n' > hexzero
+run_cmp "-g hex zero, large exponent" -g -s hexzero
+printf '0x0p99999\n1\n' > hexzero2
+run_cmp "-g hex zero before one" -g hexzero2
+
+# Options that cannot be combined, or given twice with different values.
+printf 'b\na\n' > confl
+for o in "-c -o cout" "-C -o cout" "-c -C" "-C -c" "-c -c" "-C -C" "--check=quiet -c" "--check --check=silent" "--check=quiet -C" "-o o1 -o o2" "-o o1 --output=o2" "-c -n -h -o cout"; do
+    run_cmp "conflict $o" $o confl
+done
+run_cmp "the same -o twice" -o same -o same confl
+
+# The disorder report is longer than 256 bytes here (INFRA-012).
+long=$(printf '%0200d' 0); mkdir "$long"; printf 'b\na\n' > "$long/$long"
+run_cmp "-c long file name" -c "$long/$long"
+
+# Key positions beyond any line, in the obsolete syntax too.
+printf 'b 2\na 1\n' > hugekey; N=99999999999999999999
+for a in "+0 -$N.1" "+$N" "+0.$N" "+0 -1.$N" "+0 -$N" "-k$N" "-k1.$N,$N.$N"; do run_cmp "huge key $a" $a hugekey; done
+for a in "--debug +$N" "--debug +0 -$N.1"; do
+    if "$BIN_DIR/sort" $a hugekey >/dev/null 2>&1; then PASS=$((PASS + 1)); echo "PASS huge key $a"
+    else FAIL=$((FAIL + 1)); echo "FAIL huge key $a"; fi
+done
+
 print_summary

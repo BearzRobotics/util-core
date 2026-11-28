@@ -12,6 +12,7 @@ const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const sys = @import("../sys.zig");
 const date = @import("../lib/date.zig");
+const common = @import("../lib/common.zig");
 const Io = std.Io;
 
 const help_text = @embedFile("../help/date.txt");
@@ -199,21 +200,27 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         };
         defer cli.closeInput(ctx.io, file);
-        var data: std.ArrayList(u8) = .empty;
+        var rep: BatchReport = .{ .ctx = ctx, .out = &stdout.interface };
+        // Dates are shown as their lines arrive.
+        var batches: common.Batcher = .{};
+        defer batches.deinit(gpa);
         var chunk: [65536]u8 = undefined;
-        while (true) {
+        var ok_all = true;
+        var at_end = false;
+        while (!at_end) {
             const n = cli.readChunk(ctx.io, file, &chunk) catch {
                 cli.warn(ctx, "{f}: read error", .{cli.quote(bf)});
                 return 1;
             };
-            if (n == 0) break;
-            data.appendSlice(arena, chunk[0..n]) catch return 1;
+            at_end = n == 0;
+            const lines = if (at_end) batches.rest() else (batches.add(gpa, chunk[0..n], "\n") catch return dateOom(ctx)) orelse continue;
+            const shown = d.showLines(&stdout.interface, lines, .{ .context = &rep, .func = BatchReport.report }) catch |e| switch (e) {
+                error.OutOfMemory => return dateOom(ctx),
+                error.WriteFailed, error.FormatFailed => return writeFailed(&stdout),
+            };
+            if (!shown) ok_all = false;
+            stdout.interface.flush() catch return writeFailed(&stdout);
         }
-        var rep: BatchReport = .{ .ctx = ctx, .out = &stdout.interface };
-        const ok_all = d.showLines(&stdout.interface, data.items, .{ .context = &rep, .func = BatchReport.report }) catch |e| switch (e) {
-            error.OutOfMemory => return 1,
-            error.WriteFailed, error.FormatFailed => return writeFailed(&stdout),
-        };
         if (!cli.flushWriter(&stdout)) return 1;
         return if (ok_all) 0 else 1;
     }
@@ -252,9 +259,14 @@ pub fn main(ctx: cli.Context) u8 {
     }
     d.show(&stdout.interface, when) catch |e| switch (e) {
         error.FormatFailed => ok = false,
-        error.OutOfMemory => ok = false,
+        error.OutOfMemory => return dateOom(ctx),
         error.WriteFailed => return writeFailed(&stdout),
     };
     if (!cli.flushWriter(&stdout)) return 1;
     return if (ok) 0 else 1;
+}
+
+fn dateOom(ctx: cli.Context) u8 {
+    cli.warn(ctx, "memory exhausted", .{});
+    return 1;
 }

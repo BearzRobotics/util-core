@@ -8,7 +8,7 @@ Status: implemented from the GNU source and the GNU manual; differential tests a
 - GNU coreutils `src/dircolors.c` and `src/dircolors.hin`, master branch, from https://raw.githubusercontent.com/coreutils/coreutils/master/ (the cgit URLs returned 404). The source was read for behaviour only. Its copyright header is Free Software Foundation / H. Peter Anvin, GPLv3 or later; no code or comment text was copied. Our database file contains the same data (terminal names, color values, extensions) with our own comments.
 - POSIX does not specify dircolors.
 
-The installed `/usr/bin/dircolors` is GNU coreutils 9.7. Our built-in database follows GNU master (see above), which is newer than 9.7: the `-b`/`-c`/`--print-ls-colors` output for terminals with colors therefore differs from 9.7 in the extension list (measured: 9.7 has `*.ace *.alz *.arc *.arj *.bz *.tbz *.zoo`, which master dropped; master has `*.bz3 *.tbz3`, which 9.7 lacks). Output for terminals without colors (`dumb`, unlisted TERM) is identical. `--print-database` differs because our comments are our own; the GNU comments are copyrighted and not copied.
+The installed `/usr/bin/dircolors` is GNU coreutils 9.7. Our built-in database follows GNU master (see above), which is newer than 9.7: the `-b`/`-c`/`--print-ls-colors` output for terminals with colors therefore differs from 9.7 in the extension list (measured: 9.7 has `*.ace *.alz *.arc *.arj *.bz *.tbz *.zoo`, which master dropped; master has `*.bz3 *.tbz3`, which 9.7 lacks). Output for terminals without colors (`dumb`, unlisted TERM) is identical. The other difference from 9.7, for any database, is that `-c` output writes `!` as `\\!` (as master does, so that csh does not expand it); 9.7 leaves it as it is. `--print-database` differs because our comments are our own; the GNU comments are copyrighted and not copied.
 
 ## Supported
 
@@ -16,7 +16,7 @@ The installed `/usr/bin/dircolors` is GNU coreutils 9.7. Our built-in database f
 - FILE, `-` for standard input, built-in database when omitted.
 - The database format: keywords (case-insensitive), `.ext` and `*pattern` entries, ignored OPTIONS / COLOR / EIGHTBIT, comments, TERM / COLORTERM state machine with cancelling, CRLF.
 - Option conflict checks and messages in GNU's order; shell guess from $SHELL (basename exactly csh / tcsh; empty or unset SHELL is an error); all database problems reported, no output on error; `<internal>` for the built-in database.
-- Quoting as GNU's `append_quoted` (`'`, `:`, `=`, `\`, `^`, and `!` for C shell); `--print-ls-colors` output unquoted.
+- Quoting as master's `append_quoted` (`'`, `:`, `=`, `\`, `^`, and `!` for C shell); `--print-ls-colors` output unquoted.
 
 ## Differences found in the earlier uutils reference (historical; we follow GNU)
 

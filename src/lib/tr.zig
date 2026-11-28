@@ -276,6 +276,8 @@ fn inClass(c: Class, b: u8) bool {
 
 /// Expand constructs to bytes, at most `cap` of them. A fill repeat (`[c*]`,
 /// n == 0) expands to nothing here; see expandFill.
+const longest_repeat = 1 << 20;
+
 fn expand(arena: std.mem.Allocator, items: []const Item, cap: usize) ![]u8 {
     var list: std.ArrayList(u8) = .empty;
     for (items) |it| {
@@ -290,7 +292,10 @@ fn expand(arena: std.mem.Allocator, items: []const Item, cap: usize) ![]u8 {
                 if (inClass(cl, @intCast(i))) try list.append(arena, @intCast(i));
             },
             .repeat => |r| {
-                const want = @min(r.n, cap - list.items.len);
+                // STRING1 is uncapped, but is only used as a set and as
+                // positions in a translation, for which a repeat longer than
+                // this adds nothing (short of an equally huge one in STRING2).
+                const want = @min(r.n, cap - list.items.len, longest_repeat);
                 try list.appendNTimes(arena, r.c, @intCast(want));
             },
         }
@@ -443,6 +448,13 @@ fn parseBracket(ob: Observer, toks: []const Token, i: usize) ?BracketResult {
                         return .fail;
                     }
                     n = n *| (if (octal) @as(u64, 8) else 10) +| (d.b - '0');
+                }
+                // As in GNU, the count must be less than the largest one.
+                if (n == std.math.maxInt(u64)) {
+                    var buf: [64]u8 = undefined;
+                    for (digits, 0..) |dd, k| buf[@min(k, buf.len - 1)] = dd.b;
+                    ob.emit(.{ .invalid_repeat = buf[0..@min(digits.len, buf.len)] });
+                    return .fail;
                 }
             }
             return .{ .ok = .{ .item = .{ .repeat = .{ .c = nx.b, .n = n } }, .next = j + 1 } };

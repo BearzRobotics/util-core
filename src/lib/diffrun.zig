@@ -61,6 +61,8 @@ const Driver = struct {
     status: u8 = 0,
     dir_mode: bool = false,
     json_first: bool = true,
+    /// The directories now being compared, outermost first, each side's own.
+    open_dirs: std.ArrayList([2]?sys.FileStat) = .empty,
 
     fn raise(d: *Driver, st: u8) void {
         if (st > d.status) d.status = st;
@@ -76,7 +78,7 @@ const Driver = struct {
         d.raise(2);
     }
 
-    fn statPath(d: *Driver, path: []const u8) !Info {
+    noinline fn statPath(d: *Driver, path: []const u8) !Info {
         const io = d.env.io;
         if (std.mem.eql(u8, path, "-")) {
             const st = try Io.File.stdin().stat(io);
@@ -90,7 +92,10 @@ const Driver = struct {
 
     /// Whether the two names lead to one file. `statPath` has no device
     /// number, so equal inode numbers are only a hint until this.
-    fn sameFile(d: *Driver, real: [2][]const u8, infos: [2]Info) bool {
+    noinline fn sameFile(d: *Driver, real: [2][]const u8, infos: [2]Info) bool {
+        // Standard input that has been partly read is not what the other name
+        // holds. (Twice standard input is the same from wherever it is.)
+        if (infos[0].stdin != infos[1].stdin and sys.filePosition(Io.File.stdin().handle) != 0) return false;
         var ids: [2]sys.FileStat = undefined;
         for (&ids, real, infos) |*id, path, info| {
             var e: std.os.linux.E = .SUCCESS;
@@ -108,16 +113,24 @@ const Driver = struct {
             o.style != .ifdef and o.style != .side_by_side;
     }
 
-    fn streamEqual(d: *Driver, p0: []const u8, p1: []const u8) !bool {
+    /// Whether the files hold the same bytes. On an error `failed` says which
+    /// of the two it was.
+    noinline fn streamEqual(d: *Driver, p0: []const u8, p1: []const u8, failed: *usize) !bool {
         const io = d.env.io;
+        failed.* = 0;
         const f0 = try Io.Dir.cwd().openFile(io, p0, .{});
         defer f0.close(io);
-        const f1 = try Io.Dir.cwd().openFile(io, p1, .{});
+        const f1 = f1: {
+            errdefer failed.* = 1;
+            break :f1 try Io.Dir.cwd().openFile(io, p1, .{});
+        };
         defer f1.close(io);
         var b0: [65536]u8 = undefined;
         var b1: [65536]u8 = undefined;
         while (true) {
+            failed.* = 0;
             const n0 = try common.readChunk(io, f0, &b0);
+            failed.* = 1;
             // Fill the second buffer to the same length.
             var n1: usize = 0;
             while (n1 < n0) {
@@ -126,11 +139,12 @@ const Driver = struct {
                 n1 += k;
             }
             if (n0 != n1 or !std.mem.eql(u8, b0[0..n0], b1[0..n1])) return false;
-            if (n0 == 0) return true;
+            // The first has ended; so must the second.
+            if (n0 == 0) return try common.readChunk(io, f1, &b1) == 0;
         }
     }
 
-    fn readAll(d: *Driver, path: []const u8, info: Info) ![]u8 {
+    noinline fn readAll(d: *Driver, path: []const u8, info: Info) ![]u8 {
         const io = d.env.io;
         const gpa = d.env.gpa;
         if (!info.exists) return gpa.alloc(u8, 0);
@@ -162,14 +176,14 @@ const Driver = struct {
         try json.writeString(d.w, dn[1]);
     }
 
-    fn identical(d: *Driver, dn: [2][]const u8) Io.Writer.Error!void {
+    noinline fn identical(d: *Driver, dn: [2][]const u8) Io.Writer.Error!void {
         if (d.options.json) {
             try d.jsonHead("diff", dn);
             try d.w.writeAll(",\"equal\":true,\"binary\":false,\"hunks\":[]}");
         } else try d.w.print("Files {s} and {s} are identical\n", .{ dn[0], dn[1] });
     }
 
-    fn typeMismatch(d: *Driver, dn: [2][]const u8, infos: [2]Info) Io.Writer.Error!void {
+    noinline fn typeMismatch(d: *Driver, dn: [2][]const u8, infos: [2]Info) Io.Writer.Error!void {
         if (d.options.json) {
             try d.jsonHead("type_mismatch", dn);
             try d.w.print(",\"old_type\":\"{s}\",\"new_type\":\"{s}\"}}", .{ kindName(infos[0]), kindName(infos[1]) });
@@ -198,7 +212,7 @@ const Driver = struct {
         return false;
     }
 
-    fn readDir(d: *Driver, path: []const u8, list: *std.ArrayList([]u8), top: bool) !void {
+    noinline fn readDir(d: *Driver, path: []const u8, list: *std.ArrayList([]u8), top: bool) !void {
         const gpa = d.env.gpa;
         var dir = try Io.Dir.cwd().openDir(d.env.io, path, .{ .iterate = true });
         defer dir.close(d.env.io);
@@ -221,7 +235,8 @@ const Driver = struct {
 
     /// Compare two operands. `real` are the paths to open, `disp` the names
     /// shown; `only` is the one side that exists for a -N comparison.
-    fn compareFiles(d: *Driver, nested: bool, real_in: [2][]const u8, disp_in: [2][]const u8, only: ?usize) anyerror!void {
+    fn compareFiles(d: *Driver, nested: bool, real_in: [2][]const u8, disp_in: [2][]const u8, only_in: ?usize) anyerror!void {
+        var only = only_in;
         const gpa = d.env.gpa;
         const o = d.options;
         var real = real_in;
@@ -235,11 +250,32 @@ const Driver = struct {
                 continue;
             }
             infos[f] = d.statPath(real[f]) catch |e| {
+                // An operand that is not there counts as empty with -N, the
+                // first one also with -P, as long as the other is there.
+                const absent = e == error.FileNotFound or e == error.NotDir;
+                if (!nested and absent and (o.new_file or (o.unidirectional_new_file and f == 0))) {
+                    infos[f] = .{ .exists = false };
+                    continue;
+                }
                 d.fileError(real[f], e);
                 return;
             };
         }
-        if (!nested) {
+        if (!nested and (!infos[0].exists or !infos[1].exists)) {
+            if (!infos[0].exists and !infos[1].exists) return d.fileError(real[0], error.FileNotFound);
+            const there: usize = if (infos[0].exists) 0 else 1;
+            if (infos[there].kind == .directory) {
+                // GNU takes a missing directory in second place only.
+                if (there == 1) return d.fileError(real[there], error.IsDir);
+                infos[1].kind = .directory;
+                d.dir_mode = true;
+            }
+            // And with the first one missing, its -u and -c headers date both
+            // files at the Epoch (inside directories it does not).
+            if (there == 1) infos[1].mtime = .{ .sec = 0, .nsec = 0 };
+            only = there;
+        }
+        if (!nested and only == null) {
             const d0 = infos[0].kind == .directory;
             const d1 = infos[1].kind == .directory;
             if (d0 != d1) {
@@ -265,13 +301,9 @@ const Driver = struct {
         if (only) |ex| {
             if (is_dir[ex]) {
                 // -N: a directory missing on one side is compared as an empty one.
-                if (o.recursive) {
+                if (o.recursive or !nested) {
                     try d.compareDirs(nested, real, disp, only);
-                } else {
-                    const parent = std.fs.path.dirname(disp[ex]) orelse ".";
-                    try d.w.print("Only in {s}: {s}\n", .{ parent, std.fs.path.basename(disp[ex]) });
-                    d.raise(1);
-                }
+                } else try d.commonSubdirectory(dn, disp);
                 return;
             }
         }
@@ -283,12 +315,7 @@ const Driver = struct {
             if (!nested or o.recursive) {
                 if (!nested) d.dir_mode = true;
                 try d.compareDirs(nested, real, disp, only);
-            } else {
-                if (o.json) {
-                    try d.jsonHead("common_subdirectory", dn);
-                    try d.w.writeAll("}");
-                } else try d.w.print("Common subdirectories: {s} and {s}\n", .{ dn[0], dn[1] });
-            }
+            } else try d.commonSubdirectory(dn, disp);
             return;
         }
         if (is_dir[0] or is_dir[1] or (nested and infos[0].exists and infos[1].exists and infos[0].kind != infos[1].kind)) {
@@ -296,22 +323,7 @@ const Driver = struct {
             d.raise(1);
             return;
         }
-        if (infos[0].kind == .sym_link and infos[1].kind == .sym_link) {
-            var b0: [4096]u8 = undefined;
-            var b1: [4096]u8 = undefined;
-            const n0 = Io.Dir.cwd().readLink(d.env.io, real[0], &b0) catch |e| return d.fileError(real[0], e);
-            const n1 = Io.Dir.cwd().readLink(d.env.io, real[1], &b1) catch |e| return d.fileError(real[1], e);
-            if (std.mem.eql(u8, b0[0..n0], b1[0..n1])) {
-                if (o.report_identical or o.json) try d.identical(dn);
-            } else {
-                if (o.json) {
-                    try d.jsonHead("symlinks_differ", dn);
-                    try d.w.writeAll("}");
-                } else try d.w.print("Symbolic links '{s}' -> '{s}' and '{s}' -> '{s}' differ\n", .{ dn[0], b0[0..n0], dn[1], b1[0..n1] });
-                d.raise(1);
-            }
-            return;
-        }
+        if (infos[0].kind == .sym_link and infos[1].kind == .sym_link) return d.compareLinks(real, dn);
         if (nested and infos[0].exists and infos[1].exists and infos[0].kind != .file) {
             if (o.report_identical or o.json) try d.identical(dn);
             return;
@@ -327,16 +339,77 @@ const Driver = struct {
         try d.compareContents(nested, real, dn, infos);
     }
 
+    /// Without -r, a directory met inside the operands is only named.
+    /// As GNU, the message names the directories themselves, whatever --label
+    /// says; the JSON entry is labelled like the others.
+    noinline fn commonSubdirectory(d: *Driver, dn: [2][]const u8, disp: [2][]const u8) !void {
+        if (d.options.json) {
+            try d.jsonHead("common_subdirectory", dn);
+            try d.w.writeAll("}");
+        } else try d.w.print("Common subdirectories: {s} and {s}\n", .{ disp[0], disp[1] });
+    }
+
     /// `-l`: format the finished output of one file with the page formatter,
     /// titled `diff OPTIONS NAME1 NAME2`, as GNU's `pr -h` pipe does.
-    fn paginate(d: *Driver, text: []const u8, title: []const u8) !void {
+    noinline fn paginate(d: *Driver, text: []const u8, title: []const u8) !void {
         const pr = @import("pr.zig");
         _ = try pr.run(d.env, .{ .custom_header = title, .stdin_data = text }, &.{}, d.w, .none);
+    }
+
+    /// The identities of the directories about to be compared; null, after
+    /// the report, when one is already among those above it: a link has led
+    /// back, and the walk would never end. Each side is checked against its own.
+    noinline fn entering(d: *Driver, real: [2][]const u8, disp: [2][]const u8, only: ?usize) !?[2]?sys.FileStat {
+        var ids: [2]?sys.FileStat = .{ null, null };
+        for (&ids, real, 0..) |*id, path, f| {
+            if (only != null and only.? != f) continue;
+            var e: std.os.linux.E = .SUCCESS;
+            id.* = sys.fileStat(path, true, &e);
+            const here = id.* orelse continue;
+            for (d.open_dirs.items) |above| if (above[f]) |a| if (sys.isSameFile(a, here)) {
+                const text = try std.fmt.allocPrint(d.env.gpa, "{s}: recursive directory loop", .{disp[if (only == 1) 1 else 0]});
+                defer d.env.gpa.free(text);
+                d.fatal(text);
+                return null;
+            };
+        }
+        return ids;
+    }
+
+    noinline fn compareLinks(d: *Driver, real: [2][]const u8, dn: [2][]const u8) anyerror!void {
+        const o = d.options;
+        var b0: [4096]u8 = undefined;
+        var b1: [4096]u8 = undefined;
+        const n0 = Io.Dir.cwd().readLink(d.env.io, real[0], &b0) catch |e| return d.fileError(real[0], e);
+        const n1 = Io.Dir.cwd().readLink(d.env.io, real[1], &b1) catch |e| return d.fileError(real[1], e);
+        if (std.mem.eql(u8, b0[0..n0], b1[0..n1])) {
+            if (o.report_identical or o.json) try d.identical(dn);
+        } else {
+            if (o.json) {
+                try d.jsonHead("symlinks_differ", dn);
+                try d.w.writeAll("}");
+            } else try d.w.print("Symbolic links '{s}' -> '{s}' and '{s}' -> '{s}' differ\n", .{ dn[0], b0[0..n0], dn[1], b1[0..n1] });
+            d.raise(1);
+        }
+    }
+
+    noinline fn onlyIn(d: *Driver, first: bool, dir: []const u8, name: []const u8) !void {
+        if (d.options.json) {
+            try d.jsonSep();
+            try d.w.print("{{\"kind\":\"only_in\",\"side\":\"{s}\",\"dir\":", .{if (first) "old" else "new"});
+            try json.writeString(d.w, dir);
+            try d.w.writeAll(",\"name\":");
+            try json.writeString(d.w, name);
+            try d.w.writeAll("}");
+        } else try d.w.print("Only in {s}: {s}\n", .{ dir, name });
     }
 
     fn compareDirs(d: *Driver, nested: bool, real: [2][]const u8, disp: [2][]const u8, only: ?usize) anyerror!void {
         const gpa = d.env.gpa;
         const o = d.options;
+        const ids = (try d.entering(real, disp, only)) orelse return;
+        try d.open_dirs.append(gpa, ids);
+        defer _ = d.open_dirs.pop();
         var lists: [2]std.ArrayList([]u8) = .{ .empty, .empty };
         defer for (&lists) |*l| {
             for (l.items) |n| gpa.free(n);
@@ -358,14 +431,7 @@ const Driver = struct {
             const missing_ok = o.new_file or (o.unidirectional_new_file and side > 0);
             if (side != 0 and !missing_ok) {
                 const sd = if (side < 0) disp[0] else disp[1];
-                if (o.json) {
-                    try d.jsonSep();
-                    try d.w.print("{{\"kind\":\"only_in\",\"side\":\"{s}\",\"dir\":", .{if (side < 0) "old" else "new"});
-                    try json.writeString(d.w, sd);
-                    try d.w.writeAll(",\"name\":");
-                    try json.writeString(d.w, name);
-                    try d.w.writeAll("}");
-                } else try d.w.print("Only in {s}: {s}\n", .{ sd, name });
+                try d.onlyIn(side < 0, sd, name);
                 d.raise(1);
             } else {
                 const p0 = try joinPath(gpa, real[0], name);
@@ -384,7 +450,7 @@ const Driver = struct {
         }
     }
 
-    fn compareContents(d: *Driver, nested: bool, real: [2][]const u8, dn: [2][]const u8, infos: [2]Info) anyerror!void {
+    noinline fn compareContents(d: *Driver, nested: bool, real: [2][]const u8, dn: [2][]const u8, infos: [2]Info) anyerror!void {
         const gpa = d.env.gpa;
         const o = d.options;
         if (d.quickBrief() and infos[0].exists and infos[1].exists and infos[0].kind == .file and infos[1].kind == .file and
@@ -392,8 +458,12 @@ const Driver = struct {
         {
             // Only the answer is wanted: differing sizes settle it, otherwise
             // compare in blocks and stop at the first difference.
-            const same = infos[0].size == infos[1].size and (d.streamEqual(real[0], real[1]) catch |e| {
-                d.fileError(real[0], e);
+            // As GNU, a size of 0 is not believed: files in /proc report it
+            // whatever they hold. Reading them costs little.
+            const differ_in_size = infos[0].size != infos[1].size and infos[0].size != 0 and infos[1].size != 0;
+            var failed: usize = 0;
+            const same = !differ_in_size and (d.streamEqual(real[0], real[1], &failed) catch |e| {
+                d.fileError(real[failed], e);
                 return;
             });
             if (same) {
@@ -529,6 +599,7 @@ pub fn run(env: Env, options: Options, name0: []const u8, name1: []const u8, w: 
     };
     defer d.zone.deinit();
     defer d.matchers.deinit();
+    defer d.open_dirs.deinit(env.gpa);
     try d.compareFiles(false, .{ name0, name1 }, .{ name0, name1 }, null);
     if (options.json) {
         if (d.dir_mode) try w.writeAll(if (d.json_first) "[]\n" else "\n]\n") else try w.writeByte('\n');

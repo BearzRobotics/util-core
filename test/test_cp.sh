@@ -58,7 +58,9 @@ for o in "-r" "-R" "-rv" "-rp" "-ra" "-a" "-rL" "-rH" "-rP" "-rd" "-rl" "-rs" "-
 done
 run_tree "cp -r into self" "$SETUP" -r d d/sub
 run_tree "cp -r into self 2" "$SETUP" -r e e/x
-run_tree "cp -r . into" "$SETUP" -r . e
+# Nothing but the destination here: what else is copied before cp meets it
+# depends on the order of the inode numbers, which differs between two trees.
+run_tree "cp -r . into" "mkdir e" -r . e
 run_tree "cp -a hard links" "$SETUP; ln a d/h2" -a . z
 run_tree "cp -r hard links" "$SETUP; ln a d/h2" -r d e
 run_tree "cp -rd hard links" "$SETUP; ln a d/h2" -rd d a e

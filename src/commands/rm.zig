@@ -165,11 +165,13 @@ fn report(context: ?*anyopaque, ev: rm.Event) void {
 /// Ask the question GNU rm would ask for this removal.
 fn confirm(context: ?*anyopaque, p: rm.Prompt) bool {
     const st: *State = @ptrCast(@alignCast(context.?));
-    var buf: [4400]u8 = undefined;
+    // Without memory for the question the answer is no.
+    const gpa = st.ctx.gpa;
     const q = switch (p.action) {
-        .descend => std.fmt.bufPrint(&buf, "descend into directory {f}? ", .{cli.quoteA(p.path)}) catch return false,
-        .remove => std.fmt.bufPrint(&buf, "remove {s}{s} {f}? ", .{ if (p.write_protected) "write-protected " else "", kindWords(p.kind, p.size), cli.quoteA(p.path) }) catch return false,
+        .descend => std.fmt.allocPrint(gpa, "descend into directory {f}? ", .{cli.quoteA(p.path)}) catch return false,
+        .remove => std.fmt.allocPrint(gpa, "remove {s}{s} {f}? ", .{ if (p.write_protected) "write-protected " else "", kindWords(p.kind, p.size), cli.quoteA(p.path) }) catch return false,
     };
+    defer gpa.free(q);
     return ask(st.ctx, q);
 }
 
@@ -181,22 +183,8 @@ fn matchWord(w: []const u8, options: []const []const u8) bool {
 
 /// Print `ctx.name: text` to stderr (no newline) and read a y/n answer.
 fn ask(ctx: cli.Context, text: []const u8) bool {
-    var buf: [4400]u8 = undefined;
-    const prompt = std.fmt.bufPrint(&buf, "{s}: {s}", .{ ctx.name, text }) catch return false;
-    Io.File.stderr().writeStreamingAll(ctx.io, prompt) catch {};
-    var line: [256]u8 = undefined;
-    var n: usize = 0;
-    // Read one line byte by byte so nothing past it is consumed.
-    while (n < line.len) {
-        var b: [1]u8 = undefined;
-        const got = cli.readChunk(ctx.io, Io.File.stdin(), &b) catch 0;
-        if (got == 0) break;
-        if (b[0] == '\n') break;
-        line[n] = b[0];
-        n += 1;
-    }
-    if (n == 0) return false;
-    return line[0] == 'y' or line[0] == 'Y';
+    cli.writeStderrNoNl(ctx, "{s}: {s}", .{ ctx.name, text });
+    return cli.readYes(ctx.io, Io.File.stdin());
 }
 
 fn kindWords(kind: Io.File.Kind, size: u64) []const u8 {

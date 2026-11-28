@@ -15,6 +15,7 @@ const std = @import("std");
 const common = @import("common.zig");
 const fu = @import("fu_common.zig");
 const sys = @import("../sys.zig");
+const dirat = @import("../dirat.zig");
 const fnmatch = @import("../fnmatch.zig");
 const filevercmp = @import("../filevercmp.zig");
 const unicode = @import("../unicode.zig");
@@ -98,7 +99,28 @@ pub const Entry = struct {
     is_dir: bool, // directory (or link to one)
     target: ?[]const u8 = null,
     du: u64 = 0,
+    /// The directory it was listed in, held open; null for an operand.
+    /// `name` is relative to it.
+    at: ?*dirat.Level = null,
 };
+
+/// Open the directory `e` as `level`, from the directory it was listed in and
+/// only if it is still what was examined there: a name that someone has since
+/// made to lead elsewhere is refused, so that the listing stays in the tree
+/// that was named. `path` is only a name for messages, but one too long to
+/// name a file is not entered, as in tree.
+noinline fn openDirectory(level: *dirat.Level, e: *const Entry) ?LX.E {
+    if (e.path.len >= std.fs.max_path_bytes) return .NAMETOOLONG;
+    // An operand may be a link; below it, only what was listed as one.
+    const follow = e.at == null or e.lst.isLink();
+    return dirat.enter(level, e.at, e.name, .{ .follow = follow, .expect = if (follow) e.st orelse e.lst else e.lst });
+}
+
+/// Give back a directory opened by `openDirectory`. When its parent cannot be
+/// had back (moved meanwhile), what is left of the parent shows as unreadable.
+fn closeDirectory(t: *T, level: *dirat.Level) void {
+    if (dirat.leave(level) != null) t.exit_code = 2;
+}
 
 const T = struct {
     env: Env,
@@ -337,11 +359,11 @@ fn putInfo(t: *T, e: *const Entry) void {
     }.go;
     if (o.inodes) {
         sep(t, &first);
-        putFmt(t, "{d}", .{s.ino});
+        putFmt(t, "{d: >7}", .{s.ino});
     }
     if (o.device) {
         sep(t, &first);
-        putFmt(t, "{d}", .{(@as(u64, s.dev_major) << 8) | s.dev_minor});
+        putFmt(t, "{d: >3}", .{(@as(u64, s.dev_major) << 8) | s.dev_minor});
     }
     if (o.perms) {
         sep(t, &first);
@@ -422,8 +444,8 @@ fn lessThan(t: *T, a: Entry, b: Entry) bool {
     return r == .lt;
 }
 
-fn listDir(t: *T, path: []const u8, err: *LX.E) ?[]Entry {
-    const raw = sys.readDirRaw(t.gpa, path, err) orelse return null;
+noinline fn listDir(t: *T, level: *dirat.Level, path: []const u8, err: *LX.E) ?[]Entry {
+    const raw = sys.readDirNamesFd(t.gpa, level.fd, err) orelse return null;
     defer {
         for (raw) |x| t.gpa.free(x.name);
         t.gpa.free(raw);
@@ -440,26 +462,37 @@ fn listDir(t: *T, path: []const u8, err: *LX.E) ?[]Entry {
             t.nomem();
             continue;
         };
+        // An entry whose path is too long to name a file is left out, as
+        // tree leaves it out.
+        if (child.len >= std.fs.max_path_bytes) {
+            t.gpa.free(child);
+            continue;
+        }
         var e2: LX.E = .SUCCESS;
-        const lst = sys.fileStat(child, false, &e2) orelse continue;
+        const lst = sys.fileStatAt(level.fd, r.name, false, &e2) orelse {
+            t.gpa.free(child);
+            continue;
+        };
         var st: ?sys.FileStat = lst;
         var is_dir = lst.isDir();
         var target: ?[]const u8 = null;
         if (lst.isLink()) {
             var buf: [4096]u8 = undefined;
             var e3: LX.E = .SUCCESS;
-            if (sys.readlinkPath(child, &buf, &e3)) |k| {
+            if (sys.readlinkAt(level.fd, r.name, &buf, &e3)) |k| {
                 target = t.gpa.dupe(u8, buf[0..k]) catch null;
                 if (target == null) t.nomem();
             }
-            st = sys.fileStat(child, true, &e3);
+            st = sys.fileStatAt(level.fd, r.name, true, &e3);
             is_dir = if (st) |s| s.isDir() else false;
         }
         const name = t.gpa.dupe(u8, r.name) catch {
             t.nomem();
+            t.gpa.free(child);
+            if (target) |tg| t.gpa.free(tg);
             continue;
         };
-        list.append(t.gpa, .{ .name = name, .path = child, .lst = lst, .st = st, .is_dir = is_dir, .target = target }) catch t.nomem();
+        list.append(t.gpa, .{ .name = name, .path = child, .lst = lst, .st = st, .is_dir = is_dir, .target = target, .at = level }) catch t.nomem();
     }
     const items = list.toOwnedSlice(t.gpa) catch {
         t.nomem();
@@ -481,7 +514,7 @@ fn visibleEntry(t: *T, e: *const Entry, level: i64, unf: bool) bool {
     const o = &t.o;
     if (matchList(t, o.ignores, e.name)) return false;
     if (e.lst.isDir()) {
-        if (o.prune and !o.dirs_only) return hasVisible(t, e.path, level + 1, unf);
+        if (o.prune and !o.dirs_only) return hasVisible(t, e, level + 1, unf);
         return true;
     }
     if (o.dirs_only) {
@@ -496,9 +529,12 @@ fn passes(t: *T, e: *const Entry) bool {
     return visibleEntry(t, e, 0, false);
 }
 
-fn hasVisible(t: *T, path: []const u8, level: i64, unf: bool) bool {
+fn hasVisible(t: *T, dir: *const Entry, level: i64, unf: bool) bool {
+    var below: dirat.Level = undefined;
+    if (openDirectory(&below, dir) != null) return false;
+    defer closeDirectory(t, &below);
     var err: LX.E = .SUCCESS;
-    const items = listDir(t, path, &err) orelse return false;
+    const items = listDir(t, &below, dir.path, &err) orelse return false;
     defer freeEntries(t, items);
     for (items) |*e| {
         if (!visibleEntry(t, e, level, unf)) continue;
@@ -580,8 +616,11 @@ fn sizeBelow(t: *T, e: *Entry, level: i64, unf: bool) u64 {
     // As in the listing, a link back into what has been seen is not followed.
     if (e.lst.isLink() and seen(t, e.st.?)) return total;
     visit(t, e.lst, e.st);
+    var below: dirat.Level = undefined;
+    if (openDirectory(&below, e) != null) return total;
+    defer closeDirectory(t, &below);
     var err: LX.E = .SUCCESS;
-    const items = listDir(t, e.path, &err) orelse return total;
+    const items = listDir(t, &below, e.path, &err) orelse return total;
     defer freeEntries(t, items);
     var child_unf = unf;
     if (t.o.matchdirs and t.o.patterns.len > 0 and matchList(t, t.o.patterns, e.name)) child_unf = true;
@@ -751,16 +790,19 @@ fn loadDb(t: *T) void {
     }
 }
 
-fn canOpen(path: []const u8) bool {
-    var err: LX.E = .SUCCESS;
-    const fd = sys.openFd(path, sys.O.RDONLY | sys.O.DIRECTORY, 0, &err) orelse return false;
-    _ = sys.closeFd(fd);
+fn canOpen(t: *T, e: *const Entry) bool {
+    var below: dirat.Level = undefined;
+    if (openDirectory(&below, e) != null) return false;
+    closeDirectory(t, &below);
     return true;
 }
 
-fn countVisible(t: *T, path: []const u8) i64 {
+fn countVisible(t: *T, e: *const Entry) i64 {
+    var below: dirat.Level = undefined;
+    if (openDirectory(&below, e) != null) return 0;
+    defer closeDirectory(t, &below);
     var err: LX.E = .SUCCESS;
-    const rd = sys.readDirRaw(t.gpa, path, &err) orelse return 0;
+    const rd = sys.readDirNamesFd(t.gpa, below.fd, &err) orelse return 0;
     var n: i64 = 0;
     for (rd) |x| {
         if (!std.mem.eql(u8, x.name, ".") and !std.mem.eql(u8, x.name, "..") and (t.o.all or x.name[0] != '.')) n += 1;
@@ -785,10 +827,13 @@ fn visit(t: *T, lst: sys.FileStat, target: ?sys.FileStat) void {
     t.visited.append(t.gpa, .{ .dev = (@as(u64, s.dev_major) << 32) | s.dev_minor, .ino = s.ino }) catch t.nomem();
 }
 
-fn walk(t: *T, path: []const u8, level: i64, frames: *std.ArrayList(Frame), dev: u64, unf: bool) void {
+fn walk(t: *T, dir: *const Entry, level: i64, frames: *std.ArrayList(Frame), dev: u64, unf: bool) void {
     const o = &t.o;
+    var below: dirat.Level = undefined;
+    if (openDirectory(&below, dir) != null) return;
+    defer closeDirectory(t, &below);
     var err: LX.E = .SUCCESS;
-    const items = listDir(t, path, &err) orelse return;
+    const items = listDir(t, &below, dir.path, &err) orelse return;
     defer freeEntries(t, items);
     var shown: std.ArrayList(*Entry) = .empty;
     defer shown.deinit(t.gpa);
@@ -816,14 +861,14 @@ fn walk(t: *T, path: []const u8, level: i64, frames: *std.ArrayList(Frame), dev:
             }
         }
         var note_buf: [96]u8 = undefined;
-        if (descend and !canOpen(e.path)) {
+        if (descend and !canOpen(t, e)) {
             t.observer.emit(.{ .unreadable = e.path });
             note = "[error opening dir]";
             descend = false;
             if (!o.du and !(o.matchdirs and o.patterns.len > 0)) t.exit_code = 2;
         }
         if (descend and o.filelimit > 0) {
-            const n = countVisible(t, e.path);
+            const n = countVisible(t, e);
             if (n > o.filelimit) {
                 note = std.fmt.bufPrint(&note_buf, "[{d} entries exceeds filelimit, not opening dir]", .{n}) catch null;
                 descend = false;
@@ -837,24 +882,27 @@ fn walk(t: *T, path: []const u8, level: i64, frames: *std.ArrayList(Frame), dev:
         frames.append(t.gpa, .{ .last = last }) catch t.nomem();
         var child_unf = unf;
         if (o.matchdirs and o.patterns.len > 0 and matchList(t, o.patterns, e.name)) child_unf = true;
-        walk(t, e.path, level + 1, frames, dev, child_unf);
+        walk(t, e, level + 1, frames, dev, child_unf);
         _ = frames.pop();
     }
 }
 
 // ---- structured output
 
-fn walkStruct(t: *T, path: []const u8, level: i64, indent: usize, json: bool, dev: u64) void {
+fn walkStruct(t: *T, dir: *const Entry, level: i64, indent: usize, json: bool, dev: u64) void {
     const o = &t.o;
+    var below: dirat.Level = undefined;
+    if (openDirectory(&below, dir) != null) return;
+    defer closeDirectory(t, &below);
     var err: LX.E = .SUCCESS;
-    const items = listDir(t, path, &err) orelse return;
+    const items = listDir(t, &below, dir.path, &err) orelse return;
     defer freeEntries(t, items);
     var shown: std.ArrayList(*Entry) = .empty;
     defer shown.deinit(t.gpa);
     for (items) |*e| {
         if (!passes(t, e)) continue;
         if (o.prune and e.is_dir and !(e.lst.isLink() and !o.follow)) {
-            if (!hasVisible(t, e.path, level, false)) continue;
+            if (!hasVisible(t, e, level, false)) continue;
         }
         shown.append(t.gpa, e) catch t.nomem();
     }
@@ -873,6 +921,20 @@ fn walkStruct(t: *T, path: []const u8, level: i64, indent: usize, json: bool, de
     }
 }
 
+/// Whether the directory `dir` holds anything that would be listed.
+noinline fn anyListed(t: *T, dir: *const Entry) bool {
+    var below: dirat.Level = undefined;
+    if (openDirectory(&below, dir) != null) return false;
+    defer closeDirectory(t, &below);
+    var err: LX.E = .SUCCESS;
+    const items = listDir(t, &below, dir.path, &err) orelse return false;
+    defer freeEntries(t, items);
+    for (items) |*c| {
+        if (passes(t, c)) return true;
+    }
+    return false;
+}
+
 fn pad(t: *T, n: usize) void {
     t.out.appendNTimes(t.gpa, ' ', n * 4) catch t.nomem();
 }
@@ -882,20 +944,14 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
     pad(t, indent);
     var has_children = false;
     var unreadable = false;
-    if (descend and !canOpen(e.path)) {
+    if (descend and !canOpen(t, e)) {
         t.observer.emit(.{ .unreadable = e.path });
         unreadable = true;
         // With --du tree reports the unreadable directory but exits 0 (as the text listing does).
         if (!t.o.du) t.exit_code = 2;
     }
     if (descend and !unreadable) {
-        var err: LX.E = .SUCCESS;
-        if (listDir(t, e.path, &err)) |ch| {
-            defer freeEntries(t, ch);
-            for (ch) |*c| {
-                if (passes(t, c)) has_children = true;
-            }
-        }
+        has_children = anyListed(t, e);
     }
     if (json) {
         put(t, "{\"type\":\"");
@@ -919,7 +975,7 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
             t.json_err = true;
         } else if (descend and has_children) {
             put(t, ",\"contents\":[\n");
-            walkStruct(t, e.path, level + 1, indent + 1, true, dev);
+            walkStruct(t, e, level + 1, indent + 1, true, dev);
             pad(t, indent);
             put(t, "]}");
         } else if (t.json_err and !t.o.du and !e.lst.isDir()) {
@@ -946,7 +1002,7 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
             put(t, "<error>error opening dir</error>");
         } else if (descend and has_children) {
             put(t, "\n");
-            walkStruct(t, e.path, level + 1, indent + 1, false, dev);
+            walkStruct(t, e, level + 1, indent + 1, false, dev);
             pad(t, indent);
         }
         put(t, "</");
@@ -957,19 +1013,39 @@ fn structEntry(t: *T, e: *Entry, indent: usize, json: bool, last: bool, descend:
 
 // --------------------------------------------------------------- options
 
-fn parseColors(t: *T) void {
-    const ls_colors = t.env.getenv("LS_COLORS") orelse return;
-    if (ls_colors.len == 0) {
-        t.colors.fi = "00";
-        t.colors.tw = "";
-        t.colors.ow = "";
-        t.colors.st = "";
-        t.colors.su = "";
-        t.colors.sg = "";
-        return;
+/// The table of the environment: $TREE_COLORS when set, else $LS_COLORS; null
+/// when that is unset or empty.
+pub fn colorSpec(env: Env) ?[]const u8 {
+    const spec = env.getenv("TREE_COLORS") orelse env.getenv("LS_COLORS") orelse return null;
+    return if (spec.len > 0) spec else null;
+}
+
+/// GNU tree's own table, used when colour is wanted and the environment has
+/// none. In pieces: the plain entries, then the extensions by colour.
+const builtin_colors = ":no=00:rs=0:fi=00:di=01;34:ln=01;36:pi=40;33:so=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:ex=01;32" ++
+    extensionColors("01;32", "bat BAT btm BTM cmd CMD com COM dll DLL exe EXE") ++
+    extensionColors("01;31", "arj bz2 deb gz lzh rpm tar taz tb2 tbz2 tbz tgz tz2 z Z zip ZIP zoo") ++
+    extensionColors("01;35", "asf ASF avi AVI bmp BMP flac FLAC gif GIF jpg JPG jpeg JPEG m2a M2a m2v M2V mov MOV mp3 MP3 mpeg MPEG mpg MPG ogg OGG ppm rm RM tga TGA tif TIF wav WAV wmv WMV xbm xpm");
+
+fn extensionColors(comptime code: []const u8, comptime names: []const u8) []const u8 {
+    comptime {
+        @setEvalBranchQuota(20000);
+        var out: []const u8 = "";
+        var it = std.mem.tokenizeScalar(u8, names, ' ');
+        while (it.next()) |name| out = out ++ ":*." ++ name ++ "=" ++ code;
+        return out;
     }
+}
+
+fn parseColors(t: *T) void {
+    const ls_colors = colorSpec(t.env) orelse builtin_colors;
     t.colors = .{ .di = "", .ln = "", .pi = "", .so = "", .bd = "", .cd = "", .or_ = "", .mi = "", .su = "", .sg = "", .tw = "", .ow = "", .st = "", .ex = "" };
     var it = std.mem.splitScalar(u8, ls_colors, ':');
+    // The target of a broken link takes "mi", else "no".
+    var no: []const u8 = "";
+    defer if (t.colors.mi.len == 0) {
+        t.colors.mi = no;
+    };
     while (it.next()) |item| {
         const eq = std.mem.indexOfScalar(u8, item, '=') orelse continue;
         const k = item[0..eq];
@@ -980,7 +1056,7 @@ fn parseColors(t: *T) void {
             if (!std.ascii.isDigit(ch) and ch != ';') plain = false;
         }
         if (!plain) continue;
-        if (std.mem.eql(u8, k, "fi")) c.fi = v else if (std.mem.eql(u8, k, "di")) c.di = v else if (std.mem.eql(u8, k, "ln")) c.ln = v else if (std.mem.eql(u8, k, "pi")) c.pi = v else if (std.mem.eql(u8, k, "so")) c.so = v else if (std.mem.eql(u8, k, "bd")) c.bd = v else if (std.mem.eql(u8, k, "cd")) c.cd = v else if (std.mem.eql(u8, k, "or")) c.or_ = v else if (std.mem.eql(u8, k, "mi")) c.mi = v else if (std.mem.eql(u8, k, "su")) c.su = v else if (std.mem.eql(u8, k, "sg")) c.sg = v else if (std.mem.eql(u8, k, "tw")) c.tw = v else if (std.mem.eql(u8, k, "ow")) c.ow = v else if (std.mem.eql(u8, k, "st")) c.st = v else if (std.mem.eql(u8, k, "ex")) c.ex = v else if (k.len > 1 and k[0] == '*') {
+        if (std.mem.eql(u8, k, "no")) no = v else if (std.mem.eql(u8, k, "fi")) c.fi = v else if (std.mem.eql(u8, k, "di")) c.di = v else if (std.mem.eql(u8, k, "ln")) c.ln = v else if (std.mem.eql(u8, k, "pi")) c.pi = v else if (std.mem.eql(u8, k, "so")) c.so = v else if (std.mem.eql(u8, k, "bd")) c.bd = v else if (std.mem.eql(u8, k, "cd")) c.cd = v else if (std.mem.eql(u8, k, "or")) c.or_ = v else if (std.mem.eql(u8, k, "mi")) c.mi = v else if (std.mem.eql(u8, k, "su")) c.su = v else if (std.mem.eql(u8, k, "sg")) c.sg = v else if (std.mem.eql(u8, k, "tw")) c.tw = v else if (std.mem.eql(u8, k, "ow")) c.ow = v else if (std.mem.eql(u8, k, "st")) c.st = v else if (std.mem.eql(u8, k, "ex")) c.ex = v else if (k.len > 1 and k[0] == '*') {
             c.ext.append(t.gpa, .{ .suffix = k[1..], .code = v }) catch {};
         }
     }
@@ -1049,7 +1125,7 @@ pub fn run(env: Env, options: Options, roots_in: []const []const u8, writer: *Io
             t.total_du += e.du;
         }
         var root_unreadable = !is_dir;
-        if (is_dir and !canOpen(root)) {
+        if (is_dir and !canOpen(&t, &e)) {
             root_unreadable = true;
             t.observer.emit(.{ .unreadable = root });
         }
@@ -1073,7 +1149,7 @@ pub fn run(env: Env, options: Options, roots_in: []const []const u8, writer: *Io
                     skip_root = true;
                 }
                 if (is_dir and !skip_root and t.o.filelimit > 0) {
-                    const n = countVisible(&t, root);
+                    const n = countVisible(&t, &e);
                     if (n > t.o.filelimit) {
                         putFmt(&t, "  [{d} entries exceeds filelimit, not opening dir]", .{n});
                         skip_root = true;
@@ -1081,7 +1157,7 @@ pub fn run(env: Env, options: Options, roots_in: []const []const u8, writer: *Io
                     }
                 }
                 put(&t, "\n");
-                if (is_dir and !skip_root) walk(&t, root, 0, &frames, dev, t.o.matchdirs and t.o.patterns.len > 0 and matchList(&t, t.o.patterns, root));
+                if (is_dir and !skip_root) walk(&t, &e, 0, &frames, dev, t.o.matchdirs and t.o.patterns.len > 0 and matchList(&t, t.o.patterns, root));
                 if (is_dir and !skip_root and !root_unreadable and t.dirs + t.files > before_count) t.dirs += 1;
             },
             .json, .xml => {
@@ -1090,15 +1166,7 @@ pub fn run(env: Env, options: Options, roots_in: []const []const u8, writer: *Io
                 pad(&t, 1);
                 const last = ri + 1 == roots.len;
                 var has_children = false;
-                if (descend) {
-                    var e2: LX.E = .SUCCESS;
-                    if (listDir(&t, root, &e2)) |ch| {
-                        defer freeEntries(&t, ch);
-                        for (ch) |*c| {
-                            if (passes(&t, c)) has_children = true;
-                        }
-                    }
-                }
+                if (descend) has_children = anyListed(&t, &e);
                 const tn = typeName(&e);
                 if (json) {
                     put(&t, "{\"type\":\"");
@@ -1111,7 +1179,7 @@ pub fn run(env: Env, options: Options, roots_in: []const []const u8, writer: *Io
                         put(&t, if (last) ",\"contents\":[{\"error\": \"error opening dir\"}\n    ]}\n" else ",\"contents\":[{\"error\": \"error opening dir\"},\n    ]},\n");
                     } else if (descend and has_children) {
                         put(&t, ",\"contents\":[\n");
-                        walkStruct(&t, root, 1, 2, true, dev);
+                        walkStruct(&t, &e, 1, 2, true, dev);
                         pad(&t, 1);
                         put(&t, if (last) "]}\n" else "]},\n");
                     } else put(&t, "}\n");
@@ -1127,7 +1195,7 @@ pub fn run(env: Env, options: Options, roots_in: []const []const u8, writer: *Io
                         put(&t, "<error>error opening dir</error>\n    ");
                     } else if (descend) {
                         put(&t, "\n");
-                        if (has_children) walkStruct(&t, root, 1, 2, false, dev);
+                        if (has_children) walkStruct(&t, &e, 1, 2, false, dev);
                         pad(&t, 1);
                     }
                     put(&t, "</");

@@ -127,6 +127,10 @@ pub fn run(env: Env, options: Options, input: Input, writer: *Io.Writer, observe
     var cycles: u32 = 0;
     var remaining: usize = nodes.items.len;
     var queue: std.ArrayList(u32) = .empty;
+    // What breaking one cycle needs, given back before the next: there can
+    // be as many cycles as there are nodes.
+    var scratch: std.heap.ArenaAllocator = .init(env.gpa);
+    defer scratch.deinit();
     while (remaining > 0) {
         queue.clearRetainingCapacity();
         for (sorted) |i| if (!nodes.items[i].done and nodes.items[i].count == 0) try queue.append(arena, i);
@@ -150,7 +154,8 @@ pub fn run(env: Env, options: Options, input: Input, writer: *Io.Writer, observe
             cycles += 1;
             out.flush();
             observer.emit(.{ .kind = .loop, .name = name });
-            try breakCycle(arena, nodes.items, sorted, observer);
+            try breakCycle(scratch.allocator(), nodes.items, sorted, observer);
+            _ = scratch.reset(.retain_capacity);
         }
     }
     try out.finish();
@@ -161,11 +166,11 @@ pub fn run(env: Env, options: Options, input: Input, writer: *Io.Writer, observe
 /// edge. Follows GNU's walk: visit the unfinished nodes in byte order, chaining
 /// each node that has an edge to the current chain end, until a node already
 /// in the chain closes the loop.
-fn breakCycle(arena: std.mem.Allocator, nodes: []Node, sorted: []const u32, observer: Observer) !void {
+fn breakCycle(scratch: std.mem.Allocator, nodes: []Node, sorted: []const u32, observer: Observer) !void {
     var rem: std.ArrayList(u32) = .empty;
     for (sorted) |i| if (!nodes[i].done) {
         nodes[i].qlink = null;
-        try rem.append(arena, i);
+        try rem.append(scratch, i);
     };
     var loop: ?u32 = null;
     var rounds: usize = 0;
@@ -191,18 +196,18 @@ fn breakCycle(arena: std.mem.Allocator, nodes: []Node, sorted: []const u32, obse
                 var chain: std.ArrayList(u32) = .empty;
                 var x: ?u32 = rem.items[0];
                 while (x) |xi| : (x = nodes[xi].qlink) {
-                    try chain.append(arena, xi);
+                    try chain.append(scratch, xi);
                     if (chain.items.len > rem.items.len) break;
                 }
                 const ki = std.mem.indexOfScalar(u32, chain.items, k) orelse 0;
                 const li = std.mem.indexOfScalar(u32, chain.items, cur) orelse ki;
                 observer.emit(.{ .kind = .loop_node, .name = nodes[k].name });
                 var cyc: std.ArrayList(u32) = .empty;
-                try cyc.append(arena, k);
+                try cyc.append(scratch, k);
                 var j = li;
                 while (j > ki) : (j -= 1) {
                     observer.emit(.{ .kind = .loop_node, .name = nodes[chain.items[j]].name });
-                    try cyc.append(arena, chain.items[j]);
+                    try cyc.append(scratch, chain.items[j]);
                 }
                 dropEdge(nodes, cyc.items[cyc.items.len - 1], k);
                 return;

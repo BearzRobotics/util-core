@@ -54,7 +54,20 @@ List contents of directories in a tree-like format.
 
 # ENVIRONMENT
 
-none (locale variables are ignored; behaviour is that of the C locale)
+LC_ALL, LC_CTYPE, LANG
+: A UTF-8 locale selects box-drawing characters and decides which characters of a name are printable.
+
+TZ
+: The time zone of dates.
+
+TERM
+: Without it nothing is coloured, even with `-C`.
+
+TREE_COLORS, LS_COLORS
+: The colour table; the first that is set is used. When it is empty and colour is wanted, tree's built-in table is used.
+
+NO_COLOR, CLICOLOR, CLICOLOR_FORCE
+: Without `-C`, a non-empty NO_COLOR turns colour off. Colour otherwise needs a table (CLICOLOR provides the built-in one) and a terminal (CLICOLOR_FORCE does without).
 
 # STANDARD STREAMS
 
@@ -70,6 +83,8 @@ See docs/compatibility/tree.md for details.
 
 # LIMITATIONS
 
+- User and group names come from `/etc/passwd` and `/etc/group` alone, not through NSS. tree asks the C library, which knows more sources. For accounts that exist only in LDAP, SSSD, systemd-homed or as systemd dynamic users, `-u` and `-g` print numbers.
+- Output that cannot be written (a full disk, with or without `-o`) is reported as `tree: write error: ...` with status 1; tree 2.3.1 is silent and exits 0.
 - Not implemented: `-H` (HTML), `--fromfile`, `--fromtabfile`, `--gitignore`, `--info`, `--hyperlink`, `--compress`, `--condense`, `-R`, `--opt-toggle`, ACL and SELinux display.
 - The multi-root JSON/XML output reproduces tree's separators only for the cases covered by the tests; a symbolic link to the start directory in -J output lacks tree's empty `contents` array.
 - --charset names other than UTF-8 and ASCII only change the last connector (`&middot;--`) like tree does; the 'Valid charsets' list for a missing argument is not printed.
@@ -80,5 +95,5 @@ docs/compatibility/tree.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.
 

@@ -147,4 +147,13 @@ if can_inject; then
 else
     skip_test "concurrent mkdir -p (no usable strace)"
 fi
+# An octal number after an operator, and no "_" among the digits (FSOP-022).
+for m in =755 +111 -022 =7777 =644,u+x +755,-022 u=755 =755x =5=7 =8 7_5_5 1_0 +1_0; do
+    run_tree "-m $m"                  : -m $m d
+done
+
+# A -v line longer than 512 bytes is printed (INFRA-011).
+long=$(printf '%0200d' 0)
+run_tree "-pv long path"           : -pv "$long/$long/$long"
+
 print_summary

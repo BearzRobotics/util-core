@@ -6,6 +6,46 @@ const std = @import("std");
 const Io = std.Io;
 const unicode = @import("unicode.zig");
 
+/// A name for a status line or a heading, where quoting would get in the way:
+/// as it is, except that what a terminal could act on is shown as less shows
+/// it: ^X for a control character (a newline too), <U+009B> for a C1 control,
+/// <9B> for a byte that is not UTF-8. Use with `{f}`.
+pub const Visible = struct {
+    name: []const u8,
+
+    pub fn format(v: Visible, w: *Io.Writer) Io.Writer.Error!void {
+        var i: usize = 0;
+        while (i < v.name.len) {
+            const c = v.name[i];
+            const d = unicode.decode(v.name, i);
+            if (c < 0x20 or c == 0x7f) {
+                try w.print("^{c}", .{@as(u8, if (c == 0x7f) '?' else c + '@')});
+            } else if (!d.valid) {
+                try w.print("<{X:0>2}>", .{c});
+            } else if (d.cp >= 0x80 and d.cp < 0xa0) {
+                try w.print("<U+{X:0>4}>", .{d.cp});
+            } else try w.writeAll(v.name[i .. i + d.len]);
+            i += d.len;
+        }
+    }
+};
+
+test "quoted names in a UTF-8 locale" {
+    var buf: [128]u8 = undefined;
+    for ([_][2][]const u8{
+        .{ "caf\xc3\xa9", "caf\xc3\xa9" },
+        .{ "caf\xc3\xa9 x", "'caf\xc3\xa9 x'" },
+        .{ "c1\xc2\x9bz", "'c1'$'\\302\\233''z'" },
+        .{ "bad\x9b", "'bad'$'\\233'" },
+    }) |c| try std.testing.expectEqualStrings(c[1], try std.fmt.bufPrint(&buf, "{f}", .{Quoted{ .name = c[0], .utf8 = true }}));
+}
+
+test "visible names" {
+    var buf: [128]u8 = undefined;
+    const got = try std.fmt.bufPrint(&buf, "{f}", .{Visible{ .name = "a b\x1b]0;T\x07\n\x7f \xc3\xa9\xc2\x9b\x9b'" }});
+    try std.testing.expectEqualStrings("a b^[]0;T^G^J^? \xc3\xa9<U+009B><9B>'", got);
+}
+
 /// A file name as GNU `quotef` prints it in diagnostics (shell-escape quoting
 /// with ':' treated as special): plain when safe, otherwise in single quotes
 /// (double quotes when the name contains only a ' as the problem), and
@@ -16,6 +56,20 @@ pub const Quoted = struct {
     name: []const u8,
     /// GNU `quoteaf`: quote even when nothing needs it.
     always: bool = false,
+    /// A UTF-8 locale: characters from U+00A0 up are printable.
+    utf8: bool = false,
+
+    const Part = struct { len: usize, escaped: bool };
+
+    /// The byte or character at `name[i]`, and whether it needs a $'...'.
+    fn part(q: Quoted, i: usize) Part {
+        const c = q.name[i];
+        if (c >= 0x80 and q.utf8) {
+            const d = unicode.decode(q.name, i);
+            if (d.valid) return .{ .len = d.len, .escaped = d.cp < 0xa0 };
+        }
+        return .{ .len = 1, .escaped = c < 0x20 or c >= 0x7f };
+    }
 
     pub fn format(q: Quoted, w: *Io.Writer) Io.Writer.Error!void {
         const name = q.name;
@@ -24,11 +78,16 @@ pub const Quoted = struct {
         var needs = false;
         var has_squote = false;
         var has_other = false; // specials other than the single quote
-        for (name, 0..) |c, i| {
-            if (c < 0x20 or c >= 0x7f) {
+        var at: usize = 0;
+        while (at < name.len) {
+            const i = at;
+            const found = q.part(i);
+            at += found.len;
+            if (found.escaped) {
                 has_ctl = true;
                 continue;
             }
+            const c = name[i];
             switch (c) {
                 '\'' => has_squote = true,
                 ' ', '!', '"', '$', '&', '(', ')', '*', ';', '<', '=', '>', '?', '[', '\\', '^', '`', '|', ':' => has_other = true,
@@ -57,9 +116,9 @@ pub const Quoted = struct {
         var i: usize = 0;
         var first = true;
         while (i < name.len) {
-            const ctl = name[i] < 0x20 or name[i] >= 0x7f;
+            const ctl = q.part(i).escaped;
             var j = i;
-            while (j < name.len and ((name[j] < 0x20 or name[j] >= 0x7f) == ctl)) j += 1;
+            while (j < name.len and q.part(j).escaped == ctl) j += q.part(j).len;
             if (ctl) {
                 if (first) try w.writeAll("''");
                 try w.writeAll("$'");

@@ -14,7 +14,7 @@ pub fn main(ctx: cli.Context) u8 {
     var mode: paths.Mode = .canonical;
     var quiet = false;
     var zero = false;
-    var logical = false;
+    var links: realpath.Links = .physical;
     var rel_to: ?[]const u8 = null;
     var rel_base: ?[]const u8 = null;
     var files: std.ArrayList([]const u8) = .empty;
@@ -57,12 +57,12 @@ pub fn main(ctx: cli.Context) u8 {
             switch (k) {
                 0 => mode = .existing,
                 1 => mode = .missing,
-                2 => logical = true,
-                3 => logical = false,
+                2 => links = .logical,
+                3 => links = .physical,
                 4 => quiet = true,
                 5 => rel_to = value,
                 6 => rel_base = value,
-                7, 8 => mode = .logical_only,
+                7, 8 => links = .none,
                 9 => zero = true,
                 10 => return help(ctx),
                 else => return if (cli.printVersion(ctx)) 0 else 1,
@@ -72,10 +72,10 @@ pub fn main(ctx: cli.Context) u8 {
         for (a[1..]) |c| switch (c) {
             'e' => mode = .existing,
             'm' => mode = .missing,
-            'L' => logical = true,
-            'P' => logical = false,
+            'L' => links = .logical,
+            'P' => links = .physical,
             'q' => quiet = true,
-            's' => mode = .logical_only,
+            's' => links = .none,
             'z' => zero = true,
             else => {
                 cli.invalidShort(ctx, c);
@@ -94,7 +94,7 @@ pub fn main(ctx: cli.Context) u8 {
     const env: realpath.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
     const result = realpath.run(env, .{
         .mode = mode,
-        .logical = logical,
+        .links = links,
         .zero = zero,
         .relative_to = rel_to,
         .relative_base = rel_base,

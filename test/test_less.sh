@@ -25,7 +25,8 @@ check "missing file fails"       sh -c "! $BIN_DIR/less $TEST_TMP/nope 2>/dev/nu
 check "missing file still shows the others" sh -c "$BIN_DIR/less $TEST_TMP/nope $F 2>/dev/null | grep -q three; [ \$? -eq 0 ]"
 check "--help"                   sh -c "$BIN_DIR/less --help | grep -q 'Usage: less'"
 check "--version"                sh -c "$BIN_DIR/less --version | grep -q 'less (util-core)'"
-check "bad option"               sh -c "! $BIN_DIR/less --nonsense 2>/dev/null"
+# Status 1 and a reason: a missing or crashing less must not pass (VIEW-028).
+check "bad option"               sh -c "out=\$($BIN_DIR/less --nonsense 2>&1 </dev/null); [ \$? = 1 ] && echo \"\$out\" | grep -q \"unrecognized option '--nonsense'\""
 
 if command -v python3 >/dev/null 2>&1; then
     if python3 "$(dirname "$0")/pty_less.py" "$BIN_DIR" >"$TEST_TMP/pty.out" 2>&1; then
@@ -36,5 +37,17 @@ if command -v python3 >/dev/null 2>&1; then
 else
     SKIP=$((SKIP+1)); echo "SKIP pseudo-terminal session (no python3)"
 fi
+# A read error is not the end of the file (VIEW-027).
+out=$( (ulimit -v 1000000; "$BIN_DIR/less" "$TEST_TMP") </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"Is a directory"*"status 1") PASS=$((PASS + 1)); echo "PASS less of a directory" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL less of a directory: $out" ;;
+esac
+out=$( (ulimit -v 1000000; "$BIN_DIR/less" /proc/self/mem) </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"Input/output error"*"status 1") PASS=$((PASS + 1)); echo "PASS less read error" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL less read error: $out" ;;
+esac
+
 print_summary
 [ "$FAIL" -eq 0 ]

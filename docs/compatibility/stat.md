@@ -23,7 +23,7 @@ Module `util_core.stat` (`src/lib/stat.zig`); the executable `src/commands/stat.
 ## Supported behaviour
 
 - File data comes from statx(2) (including birth time); `-f` uses statfs(2) with GNU's file-system type table.
-- Directives, printf-style flags/width/precision, `%N` quoting (QUOTING_STYLE honoured when a format is given) and the `%X`-style fractional seconds follow GNU stat.c.
+- Directives, printf-style flags/width/precision, `%N` quoting (QUOTING_STYLE honoured when a format is given; the quoting is that of the C locale, so in a UTF-8 locale non-ASCII characters are escaped where GNU prints them, and `locale` and `clocale` use ASCII quotes) and the `%X`-style fractional seconds follow GNU stat.c.
 
 ## Extensions
 
@@ -33,6 +33,7 @@ Per decision 0005 every departure from GNU is listed here.
 
 ## Known deviations and gaps
 
+- User and group names come from `/etc/passwd` and `/etc/group` alone, not through NSS. GNU asks the C library, which knows more sources. For accounts that exist only in LDAP, SSSD, systemd-homed or as systemd dynamic users, `%U` and `%G` print `UNKNOWN`, and the JSON `user` and `group` fields are null.
 - `%C` reads the `security.selinux` attribute; without it GNU's `failed to get security context` diagnostic is reproduced.
 - `%m` walks up the directory tree looking for a device change; bind mounts are not resolved through the mount table.
 - With `-L`, `%m` of a link to a file is the mount point of the target. GNU 9.7 gives the mount point of the directory holding the link.

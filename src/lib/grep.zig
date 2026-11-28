@@ -28,6 +28,7 @@ const unicode = @import("../unicode.zig");
 const fnmatch = @import("../fnmatch.zig");
 const ign = @import("grep_ignore.zig");
 const scan = @import("grep_scan.zig");
+const checks = @import("grep_checks.zig");
 const vec = @import("../bytes.zig");
 const msearch = @import("../multisearch.zig");
 
@@ -464,7 +465,9 @@ pub const Matcher = struct {
     fn buildPre(m: *Matcher, options: Options) void {
         if (m.staged.items.len == 0) return;
         const gpa = m.gpa;
-        const ao: scan.Opts = .{ .icase = options.icase, .utf8 = options.utf8, .eol = if (options.null_data) 0 else '\n' };
+        const native = m.staged.items[0].native;
+        for (m.staged.items) |st| if (st.native != native) return;
+        const ao: scan.Opts = .{ .icase = options.icase, .utf8 = options.utf8, .native = native, .eol = if (options.null_data) 0 else '\n' };
         var all_scan = true;
         var all_exact = !options.word and !options.line;
         var first: scan.Info = .{};
@@ -522,7 +525,7 @@ pub const Matcher = struct {
         var lim = posixre.big_limits;
         lim.max_dfa_cache = 16 << 20;
         const re = gpa.create(regex.Regex) catch return;
-        re.* = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = lim, .engine = .dfa }, null) catch {
+        re.* = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .utf8 = native, .ignore_case = options.icase, .limits = lim, .engine = .dfa }, null) catch {
             gpa.destroy(re);
             return;
         };
@@ -792,15 +795,16 @@ pub const Matcher = struct {
         var src: std.ArrayList(u8) = .empty;
         defer src.deinit(m.gpa);
         src.appendSlice(m.gpa, "(?s)") catch return;
+        const native = m.staged.items[0].native;
         for (m.staged.items, 0..) |st, i| {
-            if (hasBackref(st.inner)) return;
+            if (hasBackref(st.inner) or st.native != native) return;
             if (i > 0) src.append(m.gpa, '|') catch return;
             src.appendSlice(m.gpa, "(?:") catch return;
             src.appendSlice(m.gpa, st.inner) catch return;
             src.append(m.gpa, ')') catch return;
         }
         const re = m.gpa.create(regex.Regex) catch return;
-        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = if (small) small_set_limits else set_limits, .engine = if (small) .dfa else .auto }, null) catch {
+        re.* = regex.Regex.compile(m.gpa, src.items, .{ .dialect = .perl, .utf8 = native, .ignore_case = options.icase, .limits = if (small) small_set_limits else set_limits, .engine = if (small) .dfa else .auto }, null) catch {
             m.gpa.destroy(re);
             return;
         };
@@ -865,8 +869,38 @@ pub const Matcher = struct {
         }
     }
 
+    /// Stage a -P pattern for the regex package's UTF-8 mode. False when that
+    /// mode refuses it (a look-behind of variable width, say): the byte
+    /// translation then stands, where \\w and \\b know only ASCII.
+    fn stageNative(m: *Matcher, options: Options, pat: []const u8) Error!bool {
+        const gpa = m.gpa;
+        const body = try perlNative(gpa, pat);
+        errdefer gpa.free(body);
+        const inner = if (options.line)
+            try std.fmt.allocPrint(gpa, "\\A(?:{s})\\z", .{body})
+        else if (options.word)
+            try std.fmt.allocPrint(gpa, "{s}(?:{s})(?!\\w)", .{ no_word_before, body })
+        else
+            try gpa.dupe(u8, body);
+        errdefer gpa.free(inner);
+        const src = try std.fmt.allocPrint(gpa, "(?s){s}", .{inner});
+        defer gpa.free(src);
+        var re = regex.Regex.compile(gpa, src, .{ .dialect = .perl, .utf8 = true, .ignore_case = options.icase, .limits = posixre.big_limits }, null) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                gpa.free(inner);
+                gpa.free(body);
+                return false;
+            },
+        };
+        re.deinit(gpa);
+        try m.staged.append(gpa, .{ .pat = pat, .body = body, .inner = inner, .flags = .{}, .native = true });
+        return true;
+    }
+
     fn stage(m: *Matcher, options: Options, pat: []const u8, observer: Observer, diag: *CompileError) Error!void {
         const gpa = m.gpa;
+        if (options.syntax == .perl and options.utf8 and try m.stageNative(options, pat)) return;
         var flags: posixre.Flags = .{};
         const body = try m.translate(options, pat, &flags, observer, diag);
         errdefer gpa.free(body);
@@ -921,7 +955,7 @@ pub const Matcher = struct {
         try src.appendSlice(gpa, "(?s)");
         try src.appendSlice(gpa, st.inner);
         var rd: regex.Diagnostic = .{};
-        const re = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .ignore_case = options.icase, .limits = posixre.big_limits }, &rd) catch {
+        const re = regex.Regex.compile(gpa, src.items, .{ .dialect = .perl, .utf8 = st.native, .ignore_case = options.icase, .limits = posixre.big_limits }, &rd) catch {
             diag.* = .{ .kind = if (options.syntax == .perl) .invalid_perl else .syntax, .pattern = st.pat, .extended = options.syntax == .extended, .detail = rd.message, .offset = rd.pos -| 4 };
             return error.BadPattern;
         };
@@ -1132,7 +1166,77 @@ fn hasUpper(keys: []const u8, syntax: Syntax) bool {
     return false;
 }
 
-const Staged = struct { pat: []const u8, body: []u8, inner: []u8, flags: posixre.Flags };
+const Staged = struct {
+    pat: []const u8,
+    body: []u8,
+    inner: []u8,
+    flags: posixre.Flags,
+    /// The source is for the regex package's UTF-8 mode (code points, not
+    /// bytes).
+    native: bool = false,
+};
+
+/// -P in a UTF-8 locale: `pat` as source for the regex package's UTF-8 mode,
+/// where it differs from PCRE2 as GNU grep sets it up. \d and \D mean ASCII
+/// digits only. A look-behind cannot be of variable width, so the two common
+/// ones on a word character are written with \b, \B and a look-ahead.
+fn perlNative(gpa: std.mem.Allocator, pat: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    var in_class = false;
+    var i: usize = 0;
+    while (i < pat.len) {
+        const rest = pat[i..];
+        if (rest[0] == '\\' and rest.len > 1) {
+            if (rest[1] == 'Q') {
+                const end = if (std.mem.indexOf(u8, rest, "\\E")) |e| e + 2 else rest.len;
+                try out.appendSlice(gpa, rest[0..end]);
+                i += end;
+                continue;
+            }
+            try out.appendSlice(gpa, switch (rest[1]) {
+                'd' => if (in_class) "0-9" else "[0-9]",
+                'D' => if (in_class) "\\x00-\\x2f\\x3a-\\x{10ffff}" else "[^0-9]",
+                else => rest[0..2],
+            });
+            i += 2;
+            continue;
+        }
+        if (in_class) {
+            // [:name:] and a ']' straight after the opening do not close.
+            if (std.mem.startsWith(u8, rest, "[:")) {
+                if (std.mem.indexOfPos(u8, rest, 2, ":]")) |e| {
+                    try out.appendSlice(gpa, rest[0 .. e + 2]);
+                    i += e + 2;
+                    continue;
+                }
+            }
+            if (rest[0] == ']') in_class = false;
+        } else if (std.mem.startsWith(u8, rest, "(?<=\\w)")) {
+            try out.appendSlice(gpa, "(?:\\b(?!\\w)|\\B(?=\\w))");
+            i += "(?<=\\w)".len;
+            continue;
+        } else if (std.mem.startsWith(u8, rest, "(?<!\\w)")) {
+            try out.appendSlice(gpa, no_word_before);
+            i += "(?<!\\w)".len;
+            continue;
+        } else if (rest[0] == '[') {
+            in_class = true;
+            var n: usize = 1;
+            if (n < rest.len and rest[n] == '^') n += 1;
+            if (n < rest.len and rest[n] == ']') n += 1;
+            try out.appendSlice(gpa, rest[0..n]);
+            i += n;
+            continue;
+        }
+        try out.append(gpa, rest[0]);
+        i += 1;
+    }
+    return try out.toOwnedSlice(gpa);
+}
+
+/// `(?<!\w)` without a look-behind, which would need a fixed width.
+const no_word_before = "(?:\\b(?=\\w)|\\B(?!\\w))";
 
 /// A back-reference (\1..\9, \k<..>, (?P=..)) would be renumbered when
 /// patterns are joined.
@@ -1289,7 +1393,10 @@ const G = struct {
     pending: i64 = 0,
     used: bool = false,
     outleft: i64 = 0,
+    /// The lines of leading context: those from `before_head` on. The ones
+    /// before it have been dropped and freed.
     before_q: std.ArrayList(CtxLine) = .empty,
+    before_head: usize = 0,
     line_no: u64 = 0,
     offset: u64 = 0, // byte offset of the current line start
     last_printed_end: ?u64 = null, // offset just after the last printed line
@@ -1311,6 +1418,8 @@ const G = struct {
     is_stdin: bool = false,
     ign_stack: std.ArrayList(IgnLevel) = .empty,
     file_mem: ?[]const u8 = null,
+    /// Compressed data too large to hold decoded: it is decoded as it is read.
+    file_stream: ?*Inflater = null,
     /// Read buffer, kept across files.
     buf: std.ArrayList(u8) = .empty,
     /// Stat of the file about to be opened by grepOpened (saves an fstat).
@@ -1527,6 +1636,17 @@ fn encFail(g: *G, text: []const u8) bool {
     return false;
 }
 
+/// `cut`, moved back to the start of the UTF-8 character it falls inside.
+/// Bytes that are not part of a whole character are cut where asked.
+fn characterStart(text: []const u8, cut: usize) usize {
+    var start = cut;
+    while (start > 0 and cut - start < 3 and text[start] & 0xc0 == 0x80) start -= 1;
+    const len = std.unicode.utf8ByteSequenceLength(text[start]) catch return cut;
+    if (start + len <= cut or start + len > text.len) return cut;
+    if (!std.unicode.utf8ValidateSlice(text[start .. start + len])) return cut;
+    return start;
+}
+
 fn prline(g: *G, text: []const u8, no: u64, off: u64, sep: u8) Err!bool {
     const o = &g.o;
     if (o.json) {
@@ -1537,7 +1657,7 @@ fn prline(g: *G, text: []const u8, no: u64, off: u64, sep: u8) Err!bool {
     if (!o.only) try printLineHead(g, no, off, text.len, sep);
     if (!o.only and o.max_columns > 0 and text.len + 1 > o.max_columns) {
         if (o.max_columns_preview) {
-            try emit(g, text[0..o.max_columns]);
+            try emit(g, text[0..characterStart(text, o.max_columns)]);
             try emit(g, " [... omitted end of long line]");
         } else try emit(g, if (sep == ':') "[Omitted long matching line]" else "[Omitted long context line]");
         try emitByte(g, g.eol);
@@ -1796,8 +1916,9 @@ fn printStats(g: *G) Err!void {
 }
 
 fn flushBefore(g: *G) void {
-    for (g.before_q.items) |c| g.gpa.free(c.text);
+    for (g.before_q.items[g.before_head..]) |c| g.gpa.free(c.text);
     g.before_q.clearRetainingCapacity();
+    g.before_head = 0;
 }
 
 // --------------------------------------------------------------- scanning
@@ -1850,7 +1971,7 @@ fn doLine(g: *G, text: []const u8, known_match: bool) Err!Stop {
                 g.pending = 0;
             }
             var first_ctx_no: u64 = no;
-            if (g.before_q.items.len > 0) first_ctx_no = g.before_q.items[0].no;
+            if (g.before_q.items.len > g.before_head) first_ctx_no = g.before_q.items[g.before_head].no;
             if ((o.before >= 0 or o.after >= 0) and g.used and (g.lastout_line < 0 or g.lastout_line + 1 != @as(i64, @intCast(first_ctx_no)))) {
                 if (o.group_sep) |gs| {
                     if (o.color) try sgrStart(g, g.colors.se);
@@ -1859,7 +1980,7 @@ fn doLine(g: *G, text: []const u8, known_match: bool) Err!Stop {
                     try emitByte(g, '\n');
                 }
             }
-            for (g.before_q.items) |c| {
+            for (g.before_q.items[g.before_head..]) |c| {
                 if (try prline(g, c.text, c.no, c.off, '-')) g.lastout_line = @intCast(c.no);
             }
             flushBefore(g);
@@ -1885,9 +2006,14 @@ fn doLine(g: *G, text: []const u8, known_match: bool) Err!Stop {
             g.pending -= 1;
         } else if (o.before > 0) {
             const copy = try g.gpa.dupe(u8, text);
-            if (g.before_q.items.len >= @as(usize, @intCast(o.before))) {
-                g.gpa.free(g.before_q.items[0].text);
-                _ = g.before_q.orderedRemove(0);
+            if (g.before_q.items.len - g.before_head >= @as(usize, @intCast(o.before))) {
+                g.gpa.free(g.before_q.items[g.before_head].text);
+                g.before_head += 1;
+                // The dropped places are given back once they are half of all.
+                if (g.before_head > g.before_q.items.len / 2) {
+                    g.before_q.replaceRangeAssumeCapacity(0, g.before_head, &.{});
+                    g.before_head = 0;
+                }
             }
             try g.before_q.append(g.gpa, .{ .text = copy, .no = no, .off = off });
         }
@@ -2042,6 +2168,11 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                 @memcpy(room[0..k], mem[mem_pos .. mem_pos + k]);
                 mem_pos += k;
                 break :blk k;
+            } else if (g.file_stream) |stream| stream.read(room) catch {
+                // It decoded and passed its checks a moment ago.
+                g.obs.emit(.{ .decompress_failed = g.fname });
+                g.errseen = true;
+                break;
             } else sys.readFd(fd, room, &err) orelse {
                 g.obs.emit(.{ .read_error = .{ .name = g.fname, .errno = err } });
                 g.errseen = true;
@@ -2052,7 +2183,7 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                 continue;
             }
             total_read += n;
-            if (g.file_mem == null) if (g.cur_size) |sz| {
+            if (g.file_mem == null and g.file_stream == null) if (g.cur_size) |sz| {
                 if (total_read >= sz) size_reached = true;
             };
             if (!g.binary and o.binary_files != .text and !o.null_data) {
@@ -2311,39 +2442,161 @@ fn pushIgnore(g: *G, dir: sys.Handle, display: []const u8, prefix_len: usize) Er
 const Decompressed = union(enum) {
     raw,
     data: struct { bytes: []u8, trailing: bool },
+    /// Sound, but more than is held in memory: decode it again to read it.
+    /// The value says whether something follows the compressed data.
+    large: bool,
     failed,
 };
 
+/// The most gzip, zlib or zstd data may decode to and still be held whole.
+const max_held = 32 << 20;
+
 const gzip_magic = [_]u8{ 0x1f, 0x8b };
 const xz_magic = [_]u8{ 0xFD, '7', 'z', 'X', 'Z', 0x00 };
+const zstd_magic = [_]u8{ 0x28, 0xb5, 0x2f, 0xfd };
 
 fn isZlib(data: []const u8) bool {
     return data.len >= 2 and data[0] == 0x78 and (data[1] == 0x01 or data[1] == 0x5e or data[1] == 0x9c or data[1] == 0xda) and ((@as(u16, data[0]) << 8) | data[1]) % 31 == 0;
 }
 
-/// Decompress gzip, zlib, xz or zstd data (by magic number).
+/// Whether the regular file `fd` starts as something --decompress has to look
+/// at; any other is read like any file. Leaves it at its start.
+fn mayBeCompressed(fd: sys.Handle) bool {
+    var head: [6]u8 = undefined;
+    var err: LX.E = .SUCCESS;
+    var have: usize = 0;
+    while (have < head.len) {
+        const n = sys.readFd(fd, head[have..], &err) orelse break;
+        if (n == 0) break;
+        have += n;
+    }
+    var se: LX.E = .SUCCESS;
+    // If it cannot go back, only the whole-file path still has what was read.
+    if (sys.seekFd(fd, 0, 0, &se) == null) return true;
+    const data = head[0..have];
+    for ([_][]const u8{ &gzip_magic, &xz_magic, &zstd_magic, "BZh" }) |magic| {
+        if (std.mem.startsWith(u8, data, magic)) return true;
+    }
+    return isZlib(data);
+}
+
+/// gzip, zlib or zstd data in memory, decoded a piece at a time and checked
+/// against the trailer of each member or frame.
+const Inflater = struct {
+    gpa: std.mem.Allocator,
+    data: []const u8,
+    kind: enum { gzip, zlib, zstd },
+    window: []u8,
+    in: Io.Reader,
+    /// The member or frame being decoded, when `open`.
+    decoder: union { flate: std.compress.flate.Decompress, zstd: std.compress.zstd.Decompress } = undefined,
+    frame: checks.ZstdFrame = undefined,
+    /// zstd: where the next frame starts.
+    at: usize = 0,
+    running: checks.Running = .{},
+    open: bool = false,
+    done: bool = false,
+    /// Set when `done`: something follows the compressed data.
+    trailing: bool = false,
+
+    fn init(gpa: std.mem.Allocator, data: []const u8) error{OutOfMemory}!Inflater {
+        const std_c = std.compress;
+        const kind: @FieldType(Inflater, "kind") = if (std.mem.startsWith(u8, data, &gzip_magic)) .gzip else if (std.mem.startsWith(u8, data, &zstd_magic)) .zstd else .zlib;
+        const len: usize = if (kind == .zstd) std_c.zstd.default_window_len + std_c.zstd.block_size_max else std_c.flate.max_window_len;
+        return .{ .gpa = gpa, .data = data, .kind = kind, .window = try gpa.alloc(u8, len), .in = Io.Reader.fixed(data) };
+    }
+
+    fn deinit(f: *Inflater) void {
+        f.gpa.free(f.window);
+    }
+
+    /// Fill some of `out`; 0 at the end. `Damaged` data is not to be trusted.
+    fn read(f: *Inflater, out: []u8) error{Damaged}!usize {
+        while (!f.done) {
+            if (!f.open) try f.start();
+            if (f.done) break;
+            const reader = if (f.kind == .zstd) &f.decoder.zstd.reader else &f.decoder.flate.reader;
+            const n = reader.readSliceShort(out) catch return error.Damaged;
+            if (n > 0) {
+                f.running.update(out[0..n]);
+                return n;
+            }
+            try f.finish();
+        }
+        return 0;
+    }
+
+    fn start(f: *Inflater) error{Damaged}!void {
+        f.running = .{};
+        if (f.kind == .zstd) {
+            if (f.at >= f.data.len) {
+                f.done = true;
+                return;
+            }
+            // A frame at a time, so that each one's checksum can be verified.
+            f.frame = checks.zstdFrame(f.data[f.at..]) orelse return error.Damaged;
+            f.in = Io.Reader.fixed(f.data[f.at..][0..f.frame.len]);
+            f.decoder = .{ .zstd = std.compress.zstd.Decompress.init(&f.in, f.window, .{}) };
+            f.at += f.frame.len;
+        } else {
+            f.decoder = .{ .flate = std.compress.flate.Decompress.init(&f.in, if (f.kind == .gzip) .gzip else .zlib, f.window) };
+        }
+        f.open = true;
+    }
+
+    fn finish(f: *Inflater) error{Damaged}!void {
+        f.open = false;
+        if (f.kind == .zstd) {
+            if (!checks.zstdOk(f.frame, &f.running)) return error.Damaged;
+            return;
+        }
+        if (!checks.flateOk(f.decoder.flate.container_metadata, &f.running)) return error.Damaged;
+        // gzip files may be concatenated ("members"); zlib data may not.
+        const rest = f.data[f.in.seek..];
+        if (f.kind == .gzip and std.mem.startsWith(u8, rest, &gzip_magic)) return;
+        // As gzip, accept zeros that fill up the last block.
+        f.trailing = if (f.kind == .gzip) !std.mem.allEqual(u8, rest, 0) else rest.len != 0;
+        f.done = true;
+    }
+};
+
+/// What the xz decoder's `init` consumes.
+const xz_stream_header_len = 12;
+
+/// Decompress gzip, zlib, xz or zstd data (by magic number). xz is always held
+/// whole, since Zig's decoder keeps all it has decoded.
 fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
     const std_c = std.compress;
     const gzip = std.mem.startsWith(u8, data, &gzip_magic);
     const xz = std.mem.startsWith(u8, data, &xz_magic);
-    const zstd = std.mem.startsWith(u8, data, &.{ 0x28, 0xb5, 0x2f, 0xfd });
+    const zstd = std.mem.startsWith(u8, data, &zstd_magic);
     if (!gzip and !xz and !zstd and !isZlib(data)) {
         if (std.mem.startsWith(u8, data, "BZh")) {
             g.obs.emit(.{ .unsupported_compression = .{ .name = g.fname, .format = "bzip2" } });
         }
         return .raw;
     }
-    var in = Io.Reader.fixed(data);
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
     var trailing = false;
-    if (zstd) {
-        // The decoder goes on from frame to frame by itself.
-        const zbuf = gpa.alloc(u8, std_c.zstd.default_window_len + std_c.zstd.block_size_max) catch return .failed;
-        defer gpa.free(zbuf);
-        var d = std_c.zstd.Decompress.init(&in, zbuf, .{});
-        d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
-    } else if (xz) {
+    if (!xz) {
+        var stream = Inflater.init(gpa, data) catch return .failed;
+        defer stream.deinit();
+        var piece: [64 * 1024]u8 = undefined;
+        var held = true;
+        while (true) {
+            const n = stream.read(&piece) catch return .failed;
+            if (n == 0) break;
+            if (held and n > max_held - out.items.len) {
+                held = false;
+                out.clearAndFree(gpa);
+            }
+            if (held) out.appendSlice(gpa, piece[0..n]) catch return .failed;
+        }
+        if (!held) return .{ .large = stream.trailing };
+        trailing = stream.trailing;
+    } else {
+        var in = Io.Reader.fixed(data);
         // A file may hold several streams, with zeros between and after
         // them in multiples of four ("Stream Padding").
         while (true) {
@@ -2353,7 +2606,10 @@ fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
                 return .failed;
             };
             defer d.deinit();
+            const start = out.items.len;
+            const from = in.seek - xz_stream_header_len;
             d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
+            if (!checks.xzOk(data[from..in.seek], out.items[start..])) return .failed;
             const rest = data[in.seek..];
             const padding = std.mem.findNone(u8, rest, &.{0}) orelse rest.len;
             if (padding % 4 == 0 and std.mem.startsWith(u8, rest[padding..], &xz_magic)) {
@@ -2361,18 +2617,6 @@ fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
                 continue;
             }
             trailing = padding != rest.len or padding % 4 != 0;
-            break;
-        }
-    } else {
-        // gzip files may be concatenated ("members"); zlib data may not.
-        var win: [std_c.flate.max_window_len]u8 = undefined;
-        while (true) {
-            var d = std_c.flate.Decompress.init(&in, if (gzip) .gzip else .zlib, &win);
-            d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
-            const rest = data[in.seek..];
-            if (gzip and std.mem.startsWith(u8, rest, &gzip_magic)) continue;
-            // As gzip, accept zeros that fill up the last block.
-            trailing = if (gzip) !std.mem.allEqual(u8, rest, 0) else rest.len != 0;
             break;
         }
     }
@@ -2462,28 +2706,31 @@ fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8,
         0 => false,
         else => in_dir,
     };
-    if (o.decompress and st.isReg()) {
+    if (o.decompress and st.isReg() and mayBeCompressed(fd)) {
         const raw = slurp(g.gpa, fd, std.math.maxInt(usize)) orelse {
             g.obs.emit(.{ .read_error = .{ .name = display, .errno = .IO } });
             g.errseen = true;
             return false;
         };
+        defer g.gpa.free(raw);
         g.fname = display;
-        switch (decompressBuf(g.gpa, raw, g)) {
+        const decoded = decompressBuf(g.gpa, raw, g);
+        const trailing = switch (decoded) {
+            .raw, .failed => false,
+            .data => |d| d.trailing,
+            .large => |trailing| trailing,
+        };
+        if (trailing) {
+            g.obs.emit(.{ .decompress_trailing = display });
+            g.errseen = true;
+        }
+        switch (decoded) {
             .raw => {
                 g.file_mem = raw;
-                defer {
-                    g.file_mem = null;
-                    g.gpa.free(raw);
-                }
+                defer g.file_mem = null;
                 return try grepOpened(g, fd, display, false, false);
             },
             .data => |d| {
-                g.gpa.free(raw);
-                if (d.trailing) {
-                    g.obs.emit(.{ .decompress_trailing = display });
-                    g.errseen = true;
-                }
                 g.file_mem = d.bytes;
                 defer {
                     g.file_mem = null;
@@ -2491,8 +2738,14 @@ fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8,
                 }
                 return try grepOpened(g, fd, display, false, false);
             },
+            .large => {
+                var stream = Inflater.init(g.gpa, raw) catch return error.OutOfMemory;
+                defer stream.deinit();
+                g.file_stream = &stream;
+                defer g.file_stream = null;
+                return try grepOpened(g, fd, display, false, false);
+            },
             .failed => {
-                g.gpa.free(raw);
                 g.obs.emit(.{ .decompress_failed = display });
                 g.errseen = true;
                 return false;

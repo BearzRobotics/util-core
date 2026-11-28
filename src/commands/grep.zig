@@ -4,6 +4,7 @@
 //! output are in src/lib/grep.zig. Reference: GNU grep 3.12.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const posixre = @import("../posixre.zig");
@@ -331,7 +332,10 @@ pub fn main(ctx: cli.Context) u8 {
                     var data: std.ArrayList(u8) = .empty;
                     var buf: [65536]u8 = undefined;
                     while (true) {
-                        const n = sys.readFd(fd, &buf, &err) orelse break;
+                        const n = sys.readFd(fd, &buf, &err) orelse {
+                            cli.warn(ctx, "{s}: {s}", .{ name, sys.errnoText(err) });
+                            return 2;
+                        };
                         if (n == 0) break;
                         data.appendSlice(arena, buf[0..n]) catch return oom(ctx);
                     }
@@ -391,7 +395,7 @@ pub fn main(ctx: cli.Context) u8 {
                     return if (cli.writeStdout(ctx.io, ob.items)) 0 else 2;
                 },
                 2013 => {
-                    o.max_columns = std.fmt.parseInt(usize, opt.arg.?, 10) catch {
+                    o.max_columns = numparse.parseInt(usize, opt.arg.?, 10) catch {
                         cli.warn(ctx, "{s}: invalid --max-columns value", .{opt.arg.?});
                         return 2;
                     };

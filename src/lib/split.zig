@@ -133,7 +133,10 @@ pub fn run(env: Env, opts: Options, input: Input, stdout: *Io.Writer, obs: Obser
     }
     var sfx: Suffix = .{ .gpa = gpa, .alphabet = alphabet, .auto = auto };
     defer sfx.free.deinit(gpa);
-    sfx.free.resize(gpa, slen) catch return result;
+    sfx.free.resize(gpa, slen) catch {
+        obs.emit(.out_of_memory);
+        return result;
+    };
     for (sfx.free.items) |*f| f.* = 0;
     if (opts.suffix_start) |ns| {
         // Start value: digits in the suffix alphabet, right aligned.
@@ -316,16 +319,22 @@ const State = struct {
         return true;
     }
 
+    /// Report it and fail.
+    fn noMemory(st: *State) bool {
+        st.obs.emit(.out_of_memory);
+        return false;
+    }
+
     fn nextName(st: *State) bool {
         st.cur_name.clearRetainingCapacity();
-        const ok = st.suffix.advance() catch return false;
+        const ok = st.suffix.advance() catch return st.noMemory();
         if (!ok) {
             st.obs.emit(.suffixes_exhausted);
             return false;
         }
-        st.cur_name.appendSlice(st.env.gpa, st.prefix) catch return false;
-        st.suffix.current(&st.cur_name) catch return false;
-        st.cur_name.appendSlice(st.env.gpa, st.additional) catch return false;
+        st.cur_name.appendSlice(st.env.gpa, st.prefix) catch return st.noMemory();
+        st.suffix.current(&st.cur_name) catch return st.noMemory();
+        st.cur_name.appendSlice(st.env.gpa, st.additional) catch return st.noMemory();
         return true;
     }
 
@@ -640,7 +649,7 @@ const Spool = struct {
 fn runMode(st: *State, file: Io.File, mode: Mode, size: u64, chunks: u64, chunk_k: u64, sep: u8) bool {
     const gpa = st.env.gpa;
     const io = st.env.io;
-    const buf = gpa.alloc(u8, 1 << 17) catch return false;
+    const buf = gpa.alloc(u8, 1 << 17) catch return st.noMemory();
     defer gpa.free(buf);
 
     switch (mode) {
@@ -791,7 +800,7 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
     defer gpa.free(first);
     var total: u64 = 0;
     if (mode != .chunk_rr) {
-        first = gpa.alloc(u8, buf.len) catch return false;
+        first = gpa.alloc(u8, buf.len) catch return st.noMemory();
         total = input.measure(st.env, first) catch |e| {
             st.obs.emit(.{ .cannot_determine_size = .{ .name = st.input_name, .err = e } });
             return false;
@@ -877,7 +886,7 @@ fn runChunks(st: *State, file: Io.File, mode: Mode, n: u64, k: u64, sep: u8, buf
                 gpa.free(outs);
             }
             if (mode == .chunk_rr and !to_stdout) {
-                outs = gpa.alloc(?RrOutput, @intCast(n)) catch return false;
+                outs = gpa.alloc(?RrOutput, @intCast(n)) catch return st.noMemory();
                 for (outs) |*o| o.* = null;
                 st.rr = outs;
             }
@@ -1005,7 +1014,8 @@ fn writeChunkBytes(st: *State, dest: RecordDest, bytes: []const u8) bool {
         .stdout => {
             st.out.?.write(bytes);
             if (st.unbuffered) st.out.?.flush();
-            return true;
+            // Nothing else ends the run of an endless input.
+            return !st.out.?.failed or stdoutOkImpl(st);
         },
         .current => return st.write(bytes),
         .rr => |i| {

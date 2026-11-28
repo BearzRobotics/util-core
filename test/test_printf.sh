@@ -97,6 +97,7 @@ pf '%5d|%-5d|%05d|%+d|% d\n' -42 -42 -42 -42 -42
 pf '%.3d|%.0d|%.0d|%5.3d|%-5.3d|%05.3d\n' 5 0 1 5 5 5
 pf '%+.3d|% .3d|%+5.3d\n' 5 5 5
 pf '%#x|%#X|%#o|%#x|%#o\n' 255 255 8 0 0
+for p in '' . .0 .1 .2 .5; do for v in 0 1 8 64; do pf "%#${p}o|%#6${p}o|%#-6${p}o|%#06${p}o|%${p}o\n" $v $v $v $v $v; done; done
 pf '%#10x|%#-10x|%#010x|%#.5x\n' 255 255 255 255
 pf '%10o|%-10o|%010o|%.5o\n' 8 8 8 8
 pf '%x|%X|%o\n' -1 -255 -8
@@ -202,4 +203,35 @@ pf '%q' "$long"
 pf '%q|\n' "$long" short
 pf '%q' "$(awk 'BEGIN { while (n++ < 3000) printf "x\047 \t" }')"
 pf '%q' "$(awk 'BEGIN { while (n++ < 20000) printf "y" }')"
+printf "\n[ widths and precisions ]\n"
+for p in 200 5000 17000 30000; do
+    pf "%.${p}f|" 0.1
+    pf "%.${p}e|" 0x1p-16382
+    pf "%#.${p}g|" 1.5
+    pf "%.${p}a|" 1
+    pf "%.${p}a|" 0
+done
+pf '%.99999999999999999999s|\n' abc
+# Too large for C to print: left out, the rest printed, status 1. GNU only
+# says "write error", so the reason is checked apart. These used to crash.
+wide() { # ARGS...
+    g=$( (ulimit -v 500000; timeout 10 "${GNU_BIN:-/usr/bin}/printf" "$@" 2>/dev/null; echo " rc=$?"))
+    u=$( (ulimit -v 500000; timeout 10 "$BIN_DIR/printf" "$@" 2>"$TEST_TMP/err"; echo " rc=$?"))
+    if [ "$g" = "$u" ] && grep -q 'field width or precision too large' "$TEST_TMP/err"; then PASS=$((PASS + 1)); echo "PASS wide $1 $2"
+    else FAIL=$((FAIL + 1)); echo "FAIL wide $*: GNU $g, ours $u"; fi
+}
+wide 'a%99999999999999999999s|b' z
+wide '%.99999999999999999999d|' -1
+wide '%.99999999999999999999f|' 1
+wide '%-99999999999999999999d|' 1
+wide '%2147483647x|' 1
+wide '%.2147483648a|' 1
+wide '%*d|' 2147483647 1
+wide '%*d|' -2147483648 1
+wide '%.*f|' 2147483647 1
+for n in 2147483648 -2147483649 -9223372036854775808 9223372036854775808; do
+    pf '%*d|' "$n" 1
+done
+pf '%.*d|' 2147483648 1
+pf '%.*d|' -9223372036854775808 1
 print_summary

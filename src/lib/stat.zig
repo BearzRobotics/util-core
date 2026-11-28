@@ -11,6 +11,7 @@
 //! are in src/commands/stat.zig.
 
 const std = @import("std");
+const quotearg = @import("../quotearg.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const Sink = @import("sink.zig").Sink;
@@ -19,7 +20,6 @@ const tzmod = @import("../tz.zig");
 const strftime = @import("../strftime.zig");
 const userdb = @import("../userdb.zig");
 const fileinfo = @import("../fileinfo.zig");
-const Quoted = @import("../quote.zig").Quoted;
 
 pub const Env = common.Env;
 
@@ -51,7 +51,27 @@ const Flags = struct {
     zero: bool = false,
     width: usize = 0,
     prec: ?usize = null,
+
+    /// C's printf cannot take a width or precision past INT_MAX; GNU then
+    /// prints nothing for the directive.
+    fn unprintable(f: Flags) bool {
+        return f.width > max_field or (f.prec orelse 0) > max_field;
+    }
 };
+
+const max_field = std.math.maxInt(i32);
+
+/// `n` times `byte`, however many that is, giving up when output fails.
+fn repeat(out: *Sink, byte: u8, n: usize) void {
+    var block: [4096]u8 = undefined;
+    @memset(&block, byte);
+    var left = n;
+    while (left > 0 and !out.failed) {
+        const k = @min(left, block.len);
+        out.write(block[0..k]);
+        left -= k;
+    }
+}
 
 fn parseFlags(spec: []const u8) Flags {
     var f: Flags = .{};
@@ -68,11 +88,11 @@ fn parseFlags(spec: []const u8) Flags {
             else => break,
         }
     }
-    while (i < spec.len and std.ascii.isDigit(spec[i])) : (i += 1) f.width = f.width * 10 + (spec[i] - '0');
+    while (i < spec.len and std.ascii.isDigit(spec[i])) : (i += 1) f.width = f.width *| 10 +| (spec[i] - '0');
     if (i < spec.len and spec[i] == '.') {
         i += 1;
         var p: usize = 0;
-        while (i < spec.len and std.ascii.isDigit(spec[i])) : (i += 1) p = p * 10 + (spec[i] - '0');
+        while (i < spec.len and std.ascii.isDigit(spec[i])) : (i += 1) p = p *| 10 +| (spec[i] - '0');
         f.prec = p;
     }
     return f;
@@ -100,6 +120,7 @@ const Ctx = struct {
 };
 
 fn padStr(out: *Sink, f: Flags, text: []const u8) void {
+    if (f.unprintable()) return;
     var t = text;
     if (f.prec) |p| if (p < t.len) {
         t = t[0..p];
@@ -107,18 +128,17 @@ fn padStr(out: *Sink, f: Flags, text: []const u8) void {
     if (t.len < f.width) {
         if (f.minus) {
             out.write(t);
-            var n = f.width - t.len;
-            while (n > 0) : (n -= 1) out.writeByte(' ');
+            repeat(out, ' ', f.width - t.len);
             return;
         }
-        var n = f.width - t.len;
-        while (n > 0) : (n -= 1) out.writeByte(' ');
+        repeat(out, ' ', f.width - t.len);
     }
     out.write(t);
 }
 
 /// printf %ju / %jd / %jo / %jx with the allowed flags.
 fn outNum(out: *Sink, f: Flags, value: i128, base: u8, signed: bool) void {
+    if (f.unprintable()) return;
     var buf: [48]u8 = undefined;
     const neg = value < 0;
     const mag: u128 = @intCast(if (neg) -value else value);
@@ -144,23 +164,21 @@ fn outNum(out: *Sink, f: Flags, value: i128, base: u8, signed: bool) void {
     const total = sign.len + prefix.len + zeros + digits.len;
     if (f.zero and !f.minus and f.prec == null and total < f.width) zeros += f.width - total;
     const total2 = sign.len + prefix.len + zeros + digits.len;
-    if (!f.minus and total2 < f.width) {
-        var n = f.width - total2;
-        while (n > 0) : (n -= 1) out.writeByte(' ');
-    }
+    if (!f.minus and total2 < f.width) repeat(out, ' ', f.width - total2);
     out.write(sign);
     out.write(prefix);
-    var z = zeros;
-    while (z > 0) : (z -= 1) out.writeByte('0');
+    repeat(out, '0', zeros);
     out.write(digits);
-    if (f.minus and total2 < f.width) {
-        var n = f.width - total2;
-        while (n > 0) : (n -= 1) out.writeByte(' ');
-    }
+    if (f.minus and total2 < f.width) repeat(out, ' ', f.width - total2);
 }
 
 fn humanTime(s: *Ctx, sec: i64, nsec: u32, buf: *std.ArrayList(u8)) void {
     const tm = tzmod.localtime(&s.zone, sec);
+    // GNU shows the seconds when the year does not fit.
+    if (!tzmod.fitsStructTm(&tm)) {
+        buf.print(s.env.gpa, "{d}.{d:0>9}", .{ sec, nsec }) catch {};
+        return;
+    }
     strftime.format(buf, s.env.gpa, "%Y-%m-%d %H:%M:%S.%N %z", &tm, sec, nsec) catch {};
 }
 
@@ -186,14 +204,16 @@ fn epochSec(out: *Sink, spec: []const u8, sec: i64, nsec: i64) void {
         var k = d + 1;
         if (k < spec.len and std.ascii.isDigit(spec[k])) {
             while (k < spec.len and std.ascii.isDigit(spec[k])) : (k += 1) pv = pv *| 10 +| (spec[k] - '0');
-            precision = pv;
+            // A longer fraction than this is cut to it, as in GNU.
+            precision = @min(pv, max_field);
         } else precision = 9;
         if (precision != 0 and d > 0 and std.ascii.isDigit(spec[d - 1])) {
             var p = d;
             while (p > 0 and std.ascii.isDigit(spec[p - 1])) p -= 1;
             var wv: usize = 0;
             for (spec[p..d]) |c| wv = wv *| 10 +| (c - '0');
-            width = wv;
+            // With a fraction, a longer width than this is cut to it.
+            width = @min(wv, max_field);
             if (width > 1) {
                 if (p < d and spec[p] == '0') p += 1;
                 sec_spec = spec[0..p];
@@ -261,11 +281,10 @@ fn epochSec(out: *Sink, spec: []const u8, sec: i64, nsec: i64) void {
         const tw: i64 = if (int_len < width and 1 < width - int_len) @as(i64, @intCast(width)) - @as(i64, @intCast(int_len)) - 1 - @as(i64, @intCast(prec)) else 0;
         var pad: usize = @intCast(@abs(tw));
         if (precision > 9) {
-            var z = precision - 9;
-            while (z > 0) : (z -= 1) out.writeByte('0');
+            repeat(out, '0', precision - 9);
             pad = 0;
         }
-        while (pad > 0) : (pad -= 1) out.writeByte(' ');
+        repeat(out, ' ', pad);
     }
 }
 
@@ -275,38 +294,18 @@ fn outStrPad(out: *Sink, f: Flags, text: []const u8) void {
     padStr(out, ff, text);
 }
 
-/// Write `name` in the QUOTING_STYLE in use. Escaping can make it several
+/// Write `name` in the QUOTING_STYLE in use, as gnulib quotearg (the port ls
+/// uses, which knows the C locale only). Escaping can make a name several
 /// times as long, so the writer must not have a fixed size.
-fn quoteName(s: *Ctx, name: []const u8, w: *Io.Writer) Io.Writer.Error!void {
-    const st = s.quoting;
-    if (std.mem.eql(u8, st, "literal")) return try w.writeAll(name);
-    if (std.mem.eql(u8, st, "c") or std.mem.eql(u8, st, "clocale") or std.mem.eql(u8, st, "escape")) {
-        const quoted = !std.mem.eql(u8, st, "escape");
-        if (quoted) try w.writeByte('"');
-        for (name) |ch| switch (ch) {
-            '\\' => try w.writeAll("\\\\"),
-            '"' => if (quoted) try w.writeAll("\\\"") else try w.writeByte('"'),
-            7 => try w.writeAll("\\a"),
-            8 => try w.writeAll("\\b"),
-            9 => try w.writeAll("\\t"),
-            10 => try w.writeAll("\\n"),
-            11 => try w.writeAll("\\v"),
-            12 => try w.writeAll("\\f"),
-            13 => try w.writeAll("\\r"),
-            ' ' => if (quoted) try w.writeByte(' ') else try w.writeAll("\\ "),
-            else => if (ch < 0x20 or ch >= 0x7f) try w.print("\\{o:0>3}", .{ch}) else try w.writeByte(ch),
-        };
-        if (quoted) try w.writeByte('"');
-    } else if (std.mem.eql(u8, st, "shell") or std.mem.eql(u8, st, "shell-always") or std.mem.eql(u8, st, "locale")) {
-        const needs = std.mem.eql(u8, st, "shell-always") or std.mem.eql(u8, st, "locale") or std.mem.indexOfAny(u8, name, " \t\n'\"\\$`!&|;<>()*?[]{}~#^=") != null or name.len == 0;
-        if (needs) {
-            try w.writeByte('\'');
-            for (name) |ch| if (ch == '\'') try w.writeAll("'\\''") else try w.writeByte(ch);
-            try w.writeByte('\'');
-        } else try w.writeAll(name);
-    } else {
-        try (Quoted{ .name = name, .always = std.mem.eql(u8, st, "shell-escape-always") }).format(w);
+fn quoteName(s: *Ctx, name: []const u8, w: *Io.Writer) (Io.Writer.Error || std.mem.Allocator.Error)!void {
+    var style: quotearg.Style = .shell_escape_always;
+    for (quotearg.style_names, quotearg.style_values) |known, value| {
+        if (std.mem.eql(u8, known, s.quoting)) style = value;
     }
+    var quoted: std.ArrayList(u8) = .empty;
+    defer quoted.deinit(s.env.gpa);
+    try quotearg.quote(&quoted, s.env.gpa, name, style, null);
+    try w.writeAll(quoted.items);
 }
 
 fn printStat(s: *Ctx, spec: []const u8, mod: u8, m: u8, filename: []const u8, st: *const sys.FileStat, follow: bool) bool {

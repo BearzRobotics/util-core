@@ -175,25 +175,32 @@ pub fn run(env: Env, o: Options, input: Input, w: *Io.Writer, observer: Observer
             }
         },
         .reader => |r| {
-            const data = r.allocRemaining(env.gpa, .unlimited) catch |e| switch (e) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.ReadFailed,
-            };
-            defer env.gpa.free(data);
-            var pos: usize = 0;
+            var batches: common.Batcher = .{};
+            defer batches.deinit(env.gpa);
             var header = st.header;
-            while (header > 0 and pos < data.len) : (header -= 1) {
-                const e = std.mem.indexOfScalarPos(u8, data, pos, st.line_delim);
-                const stop = if (e) |x| x + 1 else data.len;
-                st.out.write(data[pos..stop]);
-                pos = stop;
-            }
-            while (pos < data.len) {
-                const e = std.mem.indexOfScalarPos(u8, data, pos, st.line_delim);
-                const stop = e orelse data.len;
-                if (!processLine(&st, data[pos..stop], e != null)) valid_numbers = false;
-                if (st.aborted) break;
-                pos = if (e) |x| x + 1 else data.len;
+            var at_end = false;
+            while (!at_end and !st.aborted and !st.out.failed) {
+                // What is converted goes out before a read that may wait.
+                st.out.flush();
+                const got: []const u8 = r.peekGreedy(1) catch |e| switch (e) {
+                    error.EndOfStream => "",
+                    error.ReadFailed => return error.ReadFailed,
+                };
+                at_end = got.len == 0;
+                const data = if (at_end) batches.rest() else try batches.add(env.gpa, got, &.{st.line_delim}) orelse "";
+                r.toss(got.len);
+                var pos: usize = 0;
+                while (pos < data.len and !st.out.failed) {
+                    const e = std.mem.indexOfScalarPos(u8, data, pos, st.line_delim);
+                    const stop = e orelse data.len;
+                    const next = if (e) |x| x + 1 else data.len;
+                    if (header > 0) {
+                        header -= 1;
+                        st.out.write(data[pos..next]);
+                    } else if (!processLine(&st, data[pos..stop], e != null)) valid_numbers = false;
+                    if (st.aborted) break;
+                    pos = next;
+                }
             }
         },
     }
@@ -614,8 +621,10 @@ pub fn parseUnit(text: []const u8) ?u64 {
             }
         }
     }
-    const total = v * mult;
-    if (!ok or total == 0 or total > std.math.maxInt(u64)) return null;
+    if (!ok) return null;
+    // Up to 2^64 times up to 1024^10: more than even a u128 holds.
+    const total = std.math.mul(u128, v, mult) catch return null;
+    if (total == 0 or total > std.math.maxInt(u64)) return null;
     return @intCast(total);
 }
 

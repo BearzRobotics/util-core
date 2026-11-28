@@ -8,6 +8,7 @@
 //! `Observer`, so the caller decides how to word and where to send them.
 
 const std = @import("std");
+const sys = @import("../sys.zig");
 const Io = std.Io;
 
 /// What every library entry point needs from its host.
@@ -79,4 +80,64 @@ pub fn readChunk(io: Io, file: Io.File, buf: []u8) !usize {
         error.EndOfStream => 0,
         else => e,
     };
+}
+
+/// Cuts input that arrives in pieces into batches of whole records, so that
+/// it can be worked through as it comes and may be endless. Only a record that
+/// is not complete yet is held.
+pub const Batcher = struct {
+    buf: std.ArrayList(u8) = .empty,
+    /// Bytes at the front of `buf` that have been handed out.
+    taken: usize = 0,
+
+    pub fn deinit(b: *Batcher, gpa: std.mem.Allocator) void {
+        b.buf.deinit(gpa);
+    }
+
+    /// Add what was read. The records it completes, each with the delimiter
+    /// (any byte of `delims`) that ends it, or null when there are none.
+    /// Valid until the next call.
+    pub fn add(b: *Batcher, gpa: std.mem.Allocator, bytes: []const u8, delims: []const u8) error{OutOfMemory}!?[]const u8 {
+        b.drop();
+        const held = b.buf.items.len;
+        try b.buf.appendSlice(gpa, bytes);
+        const last = std.mem.lastIndexOfAny(u8, b.buf.items[held..], delims) orelse return null;
+        b.taken = held + last + 1;
+        return b.buf.items[0..b.taken];
+    }
+
+    /// At the end of the input: a last record that has no delimiter.
+    pub fn rest(b: *Batcher) []const u8 {
+        b.drop();
+        return b.buf.items;
+    }
+
+    fn drop(b: *Batcher) void {
+        const left = b.buf.items.len - b.taken;
+        std.mem.copyForwards(u8, b.buf.items[0..left], b.buf.items[b.taken..]);
+        b.buf.shrinkRetainingCapacity(left);
+        b.taken = 0;
+    }
+};
+
+test "Batcher" {
+    const t = std.testing;
+    var b: Batcher = .{};
+    defer b.deinit(t.allocator);
+    try t.expect(try b.add(t.allocator, "ab", "\n") == null);
+    try t.expectEqualStrings("abc\nd\n", (try b.add(t.allocator, "c\nd\ne", "\n")).?);
+    try t.expect(try b.add(t.allocator, "f", "\n") == null);
+    try t.expectEqualStrings("ef", b.rest());
+}
+
+/// Whether the size of a regular file can be trusted. /proc reports size 0
+/// for files with contents, and sysfs one block (4096) for a few bytes; as in
+/// GNU only a size over a block is trusted, and then only if its last byte can
+/// be read. Reading such a short file through costs nothing.
+pub fn sizeIsReal(io: Io, file: Io.File, size: u64) !bool {
+    var e: std.os.linux.E = .SUCCESS;
+    const block: u64 = if (sys.fstatFd(file.handle, &e)) |st| st.blksize else 0;
+    if (size <= @max(block, 4096)) return false;
+    var last: [1]u8 = undefined;
+    return try file.readPositionalAll(io, &last, size - 1) == 1;
 }

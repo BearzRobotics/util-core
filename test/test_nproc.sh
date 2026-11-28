@@ -28,4 +28,8 @@ for v in 1 2 4 8 100 0 -1 x "3,4" " 5" "2,"; do
 done
 unset OMP_NUM_THREADS
 OMP_THREAD_LIMIT=2; export OMP_THREAD_LIMIT; run_cmp "OMP_THREAD_LIMIT=2 alone"; unset OMP_THREAD_LIMIT
+# "1_0" is not 10: the digit separators of Zig source are refused (MISC-021).
+run_cmp "--ignore=1_0" --ignore=1_0
+OMP_NUM_THREADS=1_0 run_cmp "OMP_NUM_THREADS=1_0"
+
 print_summary

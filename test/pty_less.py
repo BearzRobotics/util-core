@@ -31,6 +31,7 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdi
     os.close(r_in)
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
     out = bytearray()
+    last_output = [0.0]
     def drain(t):
         end = time.time() + t
         while time.time() < end:
@@ -43,7 +44,22 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdi
                 if not d:
                     return
                 out.extend(d)
+                last_output[0] = time.time()
+    def settle(quiet=0.3, limit=10.0):
+        """Read until nothing has arrived for `quiet` seconds."""
+        end = time.time() + limit
+        while time.time() < end and time.time() - last_output[0] < quiet:
+            drain(0.05)
     drain(0.3)
+    # A key sent before the pager has taken the terminal is thrown away when
+    # it does, so on a busy machine a fixed delay is not enough (MISC-039).
+    # Wait for the program to show something and then be done. (A program
+    # reading the terminal itself may have nothing to show first.)
+    if not tty_stdin and any(keys for keys, _ in steps):
+        end = time.time() + 10
+        while not out and time.time() < end:
+            drain(0.05)
+        settle()
     if stdin_feed is not None:
         for chunk in stdin_feed:
             os.write(w_in, chunk)
@@ -56,8 +72,11 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdi
         if keys:
             os.write(master, keys)
         drain(wait)
+        if not tty_stdin:
+            settle()
     status = None
-    end = time.time() + 3
+    # No cost when the program ends as it should.
+    end = time.time() + 15
     while time.time() < end:
         try:
             wpid, st = os.waitpid(pid, os.WNOHANG)
@@ -74,6 +93,11 @@ def session(argv, steps, rows=24, cols=80, stdin_feed=None, delay=0.05, tty_stdi
 
 def visible(s):
     return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', s)
+
+def screen(s):
+    """The rows of the last frame that was drawn, without the status row."""
+    frame = s.split('\x1b[H')[-1].split('\x1b[?1049l')[0]
+    return [visible(r).rstrip('\r ') for r in frame.split('\r\n')[:-1]]
 
 less = os.path.join(BIN, 'less')
 cat = os.path.join(BIN, 'cat')
@@ -97,9 +121,31 @@ check("less: space scrolls a screen (row 25 appears)", 'row 25' in out)
 check("less: G reaches the end (row 199 and (END))", 'row 199' in out and '(END)' in out)
 check("less: q exits with status 0", st == 0)
 
-# Search
-out, st, _ = session([less, big], [(b'/row 150', 0.1), (b'\r', 0.4), (b'q', 0.5)])
-check("less: / search jumps to the match", 'row 150' in out)
+# Search. The typed pattern shows on the status row, so only the text rows of
+# the last frame tell whether the view moved (VIEW-028).
+out, st, _ = session([less, big], [(b'/150 x', 0.2), (b'\r', 0.5), (b'q', 0.5)])
+check("less: / search puts the match at the top", screen(out)[:2] == ['row 150 xxx', 'row 151 xxxx'])
+out, st, _ = session([less, big], [(b'G', 0.3), (b'?w 42', 0.2), (b'\r', 0.5), (b'q', 0.5)])
+check("less: ? searches backwards", screen(out)[:2] == ['row 42', 'row 43 x'])
+
+# The whole of a long line is searched (VIEW-024).
+long2 = os.path.join(tmp, 'pty_long2.txt')
+with open(long2, 'w') as f:
+    f.write(''.join('before %d\n' % i for i in range(50)) + 'a' * 5000 + 'NEEDLE\n' + ''.join('after %d\n' % i for i in range(50)))
+out, st, _ = session([less, '-S', long2], [(b'/NEEDLE', 0.2), (b'\r', 0.5), (b'q', 0.5)])
+check('less: search finds text past 4096 bytes of a line', screen(out)[1:2] == ['after 0'] and 'Pattern not found' not in out)
+
+# A signal that ends the pager leaves the screen and the terminal modes as they
+# were (VIEW-023). The outer shell asks stty afterwards.
+for name, number in [('HUP', 1), ('INT', 2), ('QUIT', 3), ('TERM', 15)]:
+    for program in (less, cat):
+        inner = '(sleep 1; kill -%s $$) & exec "$0" "$1"' % name
+        out, st, _ = session(['/bin/sh', '-c', 'trap "" INT QUIT; ( trap - INT QUIT; /bin/sh -c \'%s\' "$1" "$2" ); echo "status $?"; stty -a < /dev/tty' % inner,
+                              'sh', program, big], [(b'', 1.5)])
+        after = out.split('status ')[-1]
+        words = after.split()
+        check('%s: SIG%s restores the screen and the modes' % (os.path.basename(program), name),
+              '\x1b[?1049l' in out and words[:1] == [str(128 + number)] and 'icanon' in words and 'echo' in words)
 
 # Wrapping versus chopping
 out, st, _ = session([less, long_line], [(b'q', 0.5)], cols=40)
@@ -160,6 +206,43 @@ check('less -F -N: lines are numbered', st == 0 and '     2 ' in visible(out) an
 out, st, _ = session([cat, '-p', '--color=never', hostile], [])
 check('cat: a short file is written as it is', st == 0 and 'hi\x1b]0;OWNED\x07\x1b[2J' in out)
 
+# C1 controls and bytes that are not UTF-8 are shown: a terminal would obey
+# U+009B as it does ESC [.
+c1 = os.path.join(tmp, 'pty_c1.txt')
+with open(c1, 'wb') as f:
+    f.write(b'a\xc2\x9b2Jb c\x9bd caf\xc3\xa9\n')
+for flags in [[], ['-R'], ['-F'], ['-F', '-R']]:
+    out, st, _ = session([less, *flags, c1], [] if '-F' in flags else [(b'q', 0.5)])
+    check('less %s: C1 controls are shown, not sent' % ' '.join(flags),
+          st == 0 and 'a<U+009B>2Jb c<9B>d caf\u00e9' in out and '\x9b' not in out)
+
+# -R lets colours and links through, and nothing that moves, erases or asks.
+csi = os.path.join(tmp, 'pty_csi.txt')
+with open(csi, 'wb') as f:
+    f.write(b'x\x1b[6ny\x1b[2;1Hz\x1b[3Jw \x1b[32mgreen\x1b[m\n')
+for flags in [['-R'], ['-r'], ['-F', '-R']]:
+    out, st, _ = session([less, *flags, csi], [] if '-F' in flags else [(b'q', 0.5)])
+    check('less %s: only colour sequences pass' % ' '.join(flags),
+          st == 0 and 'x^[[6ny^[[2;1Hz^[[3Jw \x1b[32mgreen' in out
+          and not any(s in out for s in ('\x1b[6n', '\x1b[2;1H', '\x1b[3J')))
+
+# A file name is shown, not sent: in the header of cat's view and in less's
+# position line.
+evil = os.path.join(tmp, 'n\x1b]0;PWN\x07\nforged')
+with open(evil, 'w') as f:
+    f.write('x\n')
+out, st, _ = session([cat, '--decorations=always', '--paging=never', '--color=never', evil], [])
+check('cat: the header shows control characters of a name', st == 0 and 'n^[]0;PWN^G^Jforged' in out and '\x1b]0;' not in out)
+named = os.path.join(tmp, 'n\x1b]0;T\x07.t')
+with open(named, 'w') as f:
+    f.write(''.join('line %d\n' % i for i in range(100)))
+# From its own directory: only a short name is put in that line.
+out, st, _ = session(['/bin/sh', '-c', 'cd "$1" && exec "$2" "$3"', 'sh', tmp, os.path.abspath(less), os.path.basename(named)],
+                     [(b'=', 0.5), (b'q', 0.5)])
+check('less: = does not send control characters of a name', st == 0 and 'n^[]0;T^G.tline 1/' in out and '\x1b]0;' not in out)
+os.remove(evil)
+os.remove(named)
+
 # cat: a long file is paged, a short one is not
 out, st, _ = session([cat, big], [(b'q', 0.5)])
 check("cat: long view is paged and quits with q", '\x1b[?1049h' in out and st == 0)
@@ -169,6 +252,20 @@ out, st, _ = session([cat, '-P', big], [])
 check("cat -P: no paging", st == 0 and '\x1b[?1049h' not in out and 'row 199' in out)
 out, st, _ = session([cat, '--paging=never', big], [])
 check("cat --paging=never: no paging", st == 0 and '\x1b[?1049h' not in out)
+
+# A match in the last screenful goes to the top too, so that repeating the
+# search moves on and then says there is nothing more (VIEW-025).
+tail_hits = os.path.join(tmp, 'pty_tail.txt')
+with open(tail_hits, 'w') as f:
+    f.write(''.join('NEEDLE %d\n' % i if i in (95, 98) else 'row %d\n' % i for i in range(100)))
+for repeats, top in [(0, 'NEEDLE 95'), (1, 'NEEDLE 98'), (2, 'NEEDLE 98')]:
+    steps = [(b'/NEEDLE', 0.2), (b'\r', 0.3)] + [(b'n', 0.3)] * repeats + [(b'q', 0.5)]
+    out, st, _ = session([less, tail_hits], steps)
+    check('less: search near the end, %d repeats' % repeats, screen(out)[:1] == [top] and screen(out)[-1:] == ['~'])
+    if repeats == 2:
+        check('less: no further match is said', 'Pattern not found' in out)
+out, st, _ = session([less, tail_hits], [(b'/NEEDLE', 0.2), (b'\r', 0.3), (b'n', 0.3), (b'N', 0.3), (b'q', 0.5)])
+check('less: search back near the end', screen(out)[:1] == ['NEEDLE 95'])
 
 # cat: highlighting of a source file through the built-in grammars
 src = os.path.join(tmp, 'pty_sample.zig')
@@ -188,11 +285,13 @@ for label, argv in [('cat', [cat]), ('cat -', [cat, '-']), ('cat /dev/tty', [cat
 prompt = os.path.join(tmp, 'pty_prompt.sh')
 with open(prompt, 'w') as f:
     f.write('printf "Password: " > /dev/tty\nIFS= read -r pw < /dev/tty\necho "producer got [$pw]"\n')
-out, st, _ = session(['/bin/sh', '-c', 'sh "%s" | "%s"' % (prompt, cat)], [(b'hunter2\r', 0.8)], tty_stdin=True)
+# (A named theme: by default cat asks the terminal for its background colour,
+# and what is typed while it does is lost. These two look at the pager.)
+out, st, _ = session(['/bin/sh', '-c', 'sh "%s" | "%s" --theme=ansi' % (prompt, cat)], [(b'hunter2\r', 0.8)], tty_stdin=True)
 check('cat: a prompt earlier in the pipeline gets the keyboard', st == 0 and 'producer got [hunter2]' in out)
 
 # What is typed while a short output is produced stays for the next reader.
-for label, command in [('cat', '"%s"' % cat), ('less -F', '"%s" -F' % less)]:
+for label, command in [('cat', '"%s" --theme=ansi' % cat), ('less -F', '"%s" -F' % less)]:
     out, st, _ = session(['/bin/sh', '-c', '{ sleep 1; echo short; } | %s; IFS= read -r x; echo "next got [$x]"' % command],
                          [(b'typed ahead\r', 1.5)], tty_stdin=True)
     check('%s: input typed ahead is not consumed' % label, st == 0 and 'next got [typed ahead]' in out)

@@ -5,6 +5,7 @@
 //! src/lib/pr.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const pr = @import("../lib/pr.zig");
@@ -13,7 +14,7 @@ const Io = std.Io;
 const help_text = @embedFile("../help/pr.txt");
 
 fn parseNum(ctx: cli.Context, text: []const u8, min: i64, err: []const u8) ?i32 {
-    const v = std.fmt.parseInt(i64, text, 10) catch |e| {
+    const v = numparse.parseInt(i64, text, 10) catch |e| {
         cli.warn(ctx, "{s}: {f}{s}", .{ err, cli.quoteC(text), if (e == error.Overflow) ": Value too large for defined data type" else "" });
         return null;
     };
@@ -37,7 +38,7 @@ fn getoptarg(ctx: cli.Context, arg: []const u8, sw: u8, character: *u8, number: 
         a = a[1..];
     }
     if (a.len > 0) {
-        const v = std.fmt.parseInt(i64, a, 10) catch -1;
+        const v = numparse.parseInt(i64, a, 10) catch -1;
         if (v <= 0 or v > std.math.maxInt(i32)) {
             getopt.usageError(ctx, "'-{c}' extra characters or invalid number in the argument: {f}", .{ sw, cli.quoteC(a) });
             return false;

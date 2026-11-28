@@ -319,5 +319,13 @@ if can_inject; then
 else
     skip_test "close errors (no strace)"
 fi
+# Running out of memory is said (DISK-018).
+seq 3 > "$TEST_TMP/mem"
+out=$( (ulimit -v 1000000; "$BIN_DIR/split" -a 100000000000 "$TEST_TMP/mem" "$TEST_TMP/mem_") </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"memory exhausted"*"status 1") PASS=$((PASS + 1)); echo "PASS split -a too large" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL split -a too large: $out" ;;
+esac
+
 print_summary
 [ "$FAIL" -eq 0 ]

@@ -20,6 +20,9 @@ const std = @import("std");
 pub const Opts = struct {
     icase: bool,
     utf8: bool,
+    /// The source is for the regex package's UTF-8 mode: a quantifier takes
+    /// a whole character, and `\xHH` is a code point.
+    native: bool = false,
     /// The line terminator; a literal never contains it.
     eol: u8,
 };
@@ -38,6 +41,15 @@ pub const Info = struct {
         i.* = .{};
     }
 };
+
+/// In native source, whether `b[i]` is part of a non-ASCII character that a
+/// quantifier applies to. Byte by byte the analysis would get that wrong.
+fn quantifiedChar(b: []const u8, i: usize) bool {
+    if (b[i] < 0x80) return false;
+    var j = i + 1;
+    while (j < b.len and b[j] & 0xc0 == 0x80) j += 1;
+    return j < b.len and std.mem.indexOfScalar(u8, "*+?{", b[j]) != null;
+}
 
 fn hexVal(c: u8) ?u8 {
     return std.fmt.charToDigit(c, 16) catch null;
@@ -228,6 +240,7 @@ const Lang = struct {
                     const inner = l.src[l.i + 1 .. e - 1];
                     l.i = e;
                     if (inner.len == 0 or inner[0] == '^' or inner.len > 40) return null;
+                    if (l.o.native) for (inner) |x| if (x >= 0x80) return null;
                     var k: usize = 0;
                     while (k < inner.len) {
                         const lo = inner[k];
@@ -250,6 +263,7 @@ const Lang = struct {
                 },
                 '.', '^', '$', '*', '+', '?', '{' => return null,
                 else => {
+                    if (l.o.native and quantifiedChar(l.src, l.i)) return null;
                     var b = c;
                     l.i += 1;
                     if (c == '\\') {
@@ -261,6 +275,7 @@ const Lang = struct {
                             const hi = hexVal(l.src[l.i]) orelse return null;
                             const lo = hexVal(l.src[l.i + 1]) orelse return null;
                             b = hi * 16 + lo;
+                            if (l.o.native and b >= 0x80) return null;
                             l.i += 2;
                         } else if (std.ascii.isAlphanumeric(n)) return null else b = n;
                     }
@@ -362,6 +377,7 @@ pub fn analyze(gpa: std.mem.Allocator, raw_body: []const u8, o: Opts) std.mem.Al
                     const lo = hexVal(body[i + 3]) orelse return bail(&best, gpa);
                     lit = hi * 16 + lo;
                     end = i + 4;
+                    if (o.native and lit.? >= 0x80) lit = null;
                 } else if (std.ascii.isAlphanumeric(n)) {
                     switch (n) {
                         'd', 'D', 'w', 'W', 's', 'S' => {},
@@ -392,7 +408,10 @@ pub fn analyze(gpa: std.mem.Allocator, raw_body: []const u8, o: Opts) std.mem.Al
             },
             '.' => {},
             '^', '$' => scannable = false,
-            else => lit = c,
+            else => {
+                if (o.native and quantifiedChar(body, i)) return bail(&best, gpa);
+                lit = c;
+            },
         }
         // a quantifier on this atom
         var min: usize = 1;
@@ -470,6 +489,19 @@ fn literalOk(b: u8, o: Opts) bool {
         if (o.utf8 and std.ascii.isAlphabetic(b) and std.ascii.toLower(b) == 's') return false;
     }
     return true;
+}
+
+test "in UTF-8 source a quantifier takes the whole character" {
+    const gpa = std.testing.allocator;
+    const o: Opts = .{ .icase = false, .utf8 = true, .native = true, .eol = '\n' };
+    for ([_][]const u8{ "a\xc3\xa9?b", "a\xc3\xa9*", "\\xe9" }) |body| {
+        var info = try analyze(gpa, body, o);
+        defer info.deinit(gpa);
+        try std.testing.expect(std.mem.indexOfScalar(u8, info.lit, 0xc3) == null);
+        try std.testing.expect(std.mem.indexOfScalar(u8, info.lit, 0xe9) == null);
+        try std.testing.expect(!info.exact);
+    }
+    try expectInfo("a\xc3\xa9b", o, "a\xc3\xa9b", true, true);
 }
 
 fn expectInfo(body: []const u8, o: Opts, lit: []const u8, exact: bool, scannable: bool) !void {

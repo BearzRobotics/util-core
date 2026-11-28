@@ -15,7 +15,7 @@ tree 2.3.1 by Steve Baker, Thomas Moore, Francesc Rocher, Florian Sesser and Kyo
 - `-p, -u, -g, -s, -h, --si, --du, -D, --timefmt FMT, -F, --inodes, --device`: Per-entry information and classification characters.
 - `-v, -t, -c, -U, -r, --sort=KEY, --dirsfirst, --filesfirst`: Sorting (name, version, size, mtime, ctime, none).
 - `-q, -N, -Q`: Replace unprintable characters, print raw, or quote names.
-- `-i, -A, -S, -n, -C, --charset=NAME, --noreport`: Indentation, line-drawing character sets, colours (LS_COLORS), report line.
+- `-i, -A, -S, -n, -C, --charset=NAME, --noreport`: Indentation, line-drawing character sets, colours, report line. Colour is chosen as tree does: never without `$TERM`; `-C` always; otherwise not with `-n` or a non-empty `$NO_COLOR`, and only on a terminal (or with `$CLICOLOR_FORCE`) when there is a table or `$CLICOLOR` is set. The table is `$TREE_COLORS`, else `$LS_COLORS`; when that is empty and colour is wanted, tree's built-in one.
 - `-X, -J`: XML and JSON output.
 - `-o FILE`: Write the listing to FILE.
 - `--version, --help`: Print version or the option summary.
@@ -33,8 +33,11 @@ None added by util-core: tree is not a GNU program and its own options (`-J`, `-
 
 ## Known deviations and gaps
 
+- User and group names come from `/etc/passwd` and `/etc/group` alone, not through NSS. tree asks the C library, which knows more sources. For accounts that exist only in LDAP, SSSD, systemd-homed or as systemd dynamic users, `-u` and `-g` print numbers.
+- Output that cannot be written (a full disk, with or without `-o`) is reported as `tree: write error: ...` with status 1; tree 2.3.1 is silent and exits 0.
 - Not implemented: `-H` (HTML), `--fromfile`, `--fromtabfile`, `--gitignore`, `--info`, `--hyperlink`, `--compress`, `--condense`, `-R`, `--opt-toggle`, ACL and SELinux display.
 - The multi-root JSON/XML output reproduces tree's separators only for the cases covered by the tests; a symbolic link to the start directory in -J output lacks tree's empty `contents` array.
+- With `--du -l` and links that lead into each other, which link is followed and which is `recursive, not followed` depends on the order of the walk. tree 2.3.1 takes the order in which the file system returns the names; ours takes the order of the listing, so the result is the same everywhere. The total is not affected.
 - `-J` and `-X` differences from tree 2.3.1 that are left as they are: with `-i` tree writes the JSON on one line (ours keeps the indentation); tree prints inode and device `0` for the start directory and for symbolic links under `--inodes`/`--device` (ours prints the real numbers, which is more useful); with `-J -l -f` tree 2.3.1 names a link that it does not follow `DIR/.` (ours prints its path). With `-l` a link to an already-listed directory is `recursive, not followed` in every output mode and for `--du`, as in tree.
 - A modification time whose year does not fit a `struct tm` is shown as seconds since the Epoch (`--timefmt` is not applied to it). tree 2.3.1 crashes on such a file.
 - --charset names other than UTF-8 and ASCII only change the last connector (`&middot;--`) like tree does; the 'Valid charsets' list for a missing argument is not printed.

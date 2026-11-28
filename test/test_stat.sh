@@ -18,7 +18,8 @@ FILES="file empty big dir lnk dangling dlnk fifo hard /dev/null /dev/zero /dev/t
 export TZ=UTC
 
 printf "\n[ Default and terse ]\n"
-for f in file empty big dir lnk dangling dlnk fifo hard /dev/null /dev/zero / /proc sock "we ird" "q'uote"; do
+# /proc/sys, not /proc: the link count of /proc follows the running processes.
+for f in file empty big dir lnk dangling dlnk fifo hard /dev/null /dev/zero / /proc/sys sock "we ird" "q'uote"; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     run_cmp "default $f"     "$f"
     run_cmp "-L $f"          -L "$f"
@@ -140,5 +141,27 @@ for style in shell-escape-always c escape shell literal; do
     QUOTING_STYLE=$style run_cmp "%N long link target $style" --printf '%N|END\n' longlink
 done
 /usr/bin/rm -rf long longlink
+# %N in every quoting style, as GNU; no style but literal and shell may pass a
+# control character on (DISK-030). C locale: the quoting knows no other.
+mkdir "$TEST_TMP/quoting"
+for n in a 'a b' "it's" 'q"q' "$(printf 'a\033]0;pwn\007b')" "$(printf 'n\nl')" 'back\slash' '#h' '{' 'a{b}' 'x:y' "'" "$(printf "b|\033'![")"; do : > "$TEST_TMP/quoting/$n"; done
+for qs in literal shell shell-always shell-escape shell-escape-always c c-maybe escape locale clocale; do
+    exp=$(cd "$TEST_TMP/quoting" && LC_ALL=C QUOTING_STYLE=$qs gnu -c %N -- * | od -c)
+    act=$(cd "$TEST_TMP/quoting" && LC_ALL=C QUOTING_STYLE=$qs ours -c %N -- * | od -c)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS %N QUOTING_STYLE=$qs"
+    else FAIL=$((FAIL + 1)); echo "FAIL %N QUOTING_STYLE=$qs"; fi
+done
+
+# Widths and precisions past INT_MAX: the directive prints nothing, as GNU's
+# printf fails; they used to crash (DISK-028).
+N=99999999999999999999
+for f in "%${N}n" "%.${N}n" "%-${N}s|" "%${N}Y|" "[%.2147483648n]" "%0${N}a|" "[%.${N}A]" "%+${N}i|" "%.100000Y" "%100000.3X|" "%100000n|" "%-100000s|" "%0100000a|"; do
+    run_cmp "huge field $f" -c "$f" file
+done
+run_cmp "huge field, -f" -f -c "%${N}b|" .
+
+# A year that struct tm cannot hold is shown as seconds (DISK-041).
+touch -d @-100000000000000000 ancient 2>/dev/null && run_cmp "year out of range" -c '%y|%Y' ancient
+
 print_summary
 [ "$FAIL" -eq 0 ]

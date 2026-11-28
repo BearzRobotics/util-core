@@ -3,7 +3,8 @@
 Releases are built by `.github/workflows/release.yml` when a tag `v*` is pushed. The
 workflow installs Zig 0.17.1 (pinned), calls `scripts/package.sh` for each target, writes
 `SHA256SUMS`, takes the release notes from the `CHANGELOG.md` section of the version and
-creates the GitHub release. Running the workflow by hand (workflow_dispatch) is a dry run:
+creates the GitHub release, only after every job of `ci.yml` has passed on the tagged
+commit. Running the workflow by hand (workflow_dispatch) is a dry run:
 it builds the archives as workflow artifacts and publishes nothing.
 
 ## Assets
@@ -12,8 +13,7 @@ it builds the archives as workflow artifacts and publishes nothing.
 |---|---|
 | `util-core-VERSION-linux-x86_64.tar.gz` | x86_64-linux-musl (static) |
 | `util-core-VERSION-linux-aarch64.tar.gz` | aarch64-linux-musl (static) |
-| `util-core-VERSION-windows-x86_64.zip` | x86_64-windows |
-| `util-core-VERSION-windows-aarch64.zip` | aarch64-windows |
+| `util-core-VERSION-vendored.tar.gz` (attached by hand) | sources with the dependencies, builds offline |
 | `SHA256SUMS` | checksums of the above |
 
 Each archive holds one directory with `bin/` (all standalone commands and the `util-core`
@@ -27,10 +27,15 @@ maintain that platform.
 
 ## Checklist
 
-1. `main` is green in CI (`zig build`, `zig build test`, all three modes, all cross targets).
-2. Run the full differential suites locally (`sh test/run_all_tests.sh` after
-   `zig build -Doptimize=ReleaseSafe`). Do not run the `sync` global-flush cases.
-3. **Windows recheck on the real VM (manual, maintainer):** build
+1. `main` is green in CI (`zig build`, `zig build test`, the differential suites, all
+   three modes, all cross targets).
+2. To run the suites locally, after `zig build -Doptimize=ReleaseSafe`, use the container
+   described in `scripts/suites-container.sh`, or `sh scripts/run-suites.sh` on a machine
+   with the same GNU versions. CI does not run `sync` and `df` (they call sync on the
+   whole system), `rm` (it needs a read-only root) or the wine suite. Do not use
+   `test/run_all_tests.sh`.
+3. **Only when Windows archives are published again** (none since 0.3.0; add the two
+   targets back to `release.yml`): recheck on the real VM. Build
    `zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSafe`, copy `zig-out/bin` to the
    Windows 11 VM and run the Windows suite there (`test/test_windows_wine.sh` lists the 79
    cases; run them in cmd.exe and PowerShell): `--version`, text commands, file commands,

@@ -176,5 +176,93 @@ if command -v bwrap > /dev/null && [ "$(two_fs 'stat -c %i "$1/m1/f" "$1/m2/f" |
 else
     skip_test "equal inodes on two file systems (needs bwrap and matching inode numbers)"
 fi
+# Links that lead back into the tree end the walk (VIEW-013).
+mkdir -p "$TEST_TMP/loopA" "$TEST_TMP/loopB" "$TEST_TMP/upA/s" "$TEST_TMP/upB/s"
+for d in loopA loopB; do ln -s . "$TEST_TMP/$d/a"; ln -s . "$TEST_TMP/$d/b"; done
+ln -s .. "$TEST_TMP/upA/s/up"; ln -s .. "$TEST_TMP/upB/s/up"
+for o in -r -rq -rN -ru "-r --no-dereference"; do
+    for pair in "loopA loopB" "upA upB" "loopA upB" "loopA nothing"; do
+        run_cmp "$o loop: $pair" $o "$TEST_TMP/${pair% *}" "$TEST_TMP/${pair#* }"
+    done
+done
+
+# A tree as deep as a path can be does not exhaust the stack (VIEW-014). It is
+# built a level at a time, for the whole path is near PATH_MAX.
+for side in deepA deepB; do
+    ( cd "$TEST_TMP" && mkdir $side && cd $side && i=0 && while [ $i -lt 1850 ]; do mkdir a && cd -P a || exit 1; i=$((i + 1)); done && echo $side > f ) 2>/dev/null
+done
+for o in -r -rq -ruN; do
+    exp=$( cd "$TEST_TMP" && ulimit -s 8192 && LC_ALL=C gnu $o deepA deepB 2>&1 | cksum; echo )
+    act=$( cd "$TEST_TMP" && ulimit -s 8192 && LC_ALL=C ours $o deepA deepB 2>&1 | cksum; echo )
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS $o 1850 levels"
+    else FAIL=$((FAIL + 1)); echo "FAIL $o 1850 levels: GNU $exp, ours $act"; fi
+done
+/usr/bin/rm -rf "$TEST_TMP/deepA" "$TEST_TMP/deepB"
+
+# -N, -P: an operand that is not there is empty.
+printf 'q\n' > "$TEST_TMP/there"; mkdir -p "$TEST_TMP/dirthere/sub"; echo z > "$TEST_TMP/dirthere/file"
+for o in -N -P -Nq -uN -cN -ruN --unidirectional-new-file; do
+    for pair in "there nofile" "nofile there" "nofile/x there" "there/x there" "dirthere nofile" "nofile dirthere"; do
+        a=$TEST_TMP/${pair% *}; b=$TEST_TMP/${pair#* }
+        run_cmp "$o missing operand: $pair" $o "$a" "$b"
+    done
+    # (Not -u or -c: standard input is dated now.)
+    case $o in *[uc]*) ;; *) CMP_STDIN="$TEST_TMP/there" run_cmp "$o missing operand: - nofile" $o - "$TEST_TMP/nofile" ;; esac
+done
+
+# -N without -r: a subdirectory on one side only (VIEW-012).
+( cd "$TEST_TMP" && mkdir -p n1/onlysub n2/other && echo q > n1/onlysub/f && echo a > n1/x && echo b > n2/x )
+for o in -N -P -Nq -Ns "-N --label A --label B" "-r -N" "-r -P"; do
+    run_cmp "$o one-sided subdirectories" $o "$TEST_TMP/n1" "$TEST_TMP/n2"
+    run_cmp "$o one-sided subdirectories, reversed" $o "$TEST_TMP/n2" "$TEST_TMP/n1"
+done
+if "$BIN_DIR/diff" --json -N "$TEST_TMP/n1" "$TEST_TMP/n2" | python3 -c 'import json,sys; k=[e["kind"] for e in json.load(sys.stdin)]; sys.exit(0 if k.count("common_subdirectory") == 2 else 1)'; then
+    PASS=$((PASS + 1)); echo "PASS --json -N one-sided subdirectories"
+else FAIL=$((FAIL + 1)); echo "FAIL --json -N one-sided subdirectories"; fi
+
+# -q must not go by sizes that files do not have (VIEW-010).
+for f in /proc/version /proc/filesystems /sys/kernel/mm/transparent_hugepage/enabled; do
+    [ -r "$f" ] || continue
+    cat "$f" > "$TEST_TMP/copy"; { cat "$f"; echo more; } > "$TEST_TMP/longer"; head -c 5 "$f" > "$TEST_TMP/shorter"
+    for other in copy longer shorter; do
+        run_cmp "-q $f $other" -q "$f" "$TEST_TMP/$other"
+        run_cmp "-q $other $f" -q "$TEST_TMP/$other" "$f"
+        run_cmp "-qs $f $other" -qs "$f" "$TEST_TMP/$other"
+    done
+done
+: > "$TEST_TMP/empty"; printf 'x\n' > "$TEST_TMP/one"; head -c 4096 /dev/zero > "$TEST_TMP/page"; { cat "$TEST_TMP/page"; echo; } > "$TEST_TMP/page1"
+for a in "empty one" "one empty" "page page1" "page1 page" "page page" "empty empty"; do
+    run_cmp "-q sizes $a" -q "$TEST_TMP/${a% *}" "$TEST_TMP/${a#* }"
+done
+
+# Standard input that is the other file, partly read already (VIEW-009): its
+# contents differ from the file's. (The last case also skips back into step.)
+printf 'xx\nabc\n' > "$TEST_TMP/pos"
+for args in '- pos' 'pos -' '- -' '-s - pos'; do
+    case $args in -s*) [ diff = cmp ] || continue ;; esac
+    for start in 0 3; do
+        exp=$( cd "$TEST_TMP" && { [ $start = 0 ] || dd bs=1 count=$start of=/dev/null status=none; LC_ALL=C gnu $args 2>&1; echo "status $?"; } < pos )
+        act=$( cd "$TEST_TMP" && { [ $start = 0 ] || dd bs=1 count=$start of=/dev/null status=none; LC_ALL=C ours $args 2>&1; echo "status $?"; } < pos )
+        if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS stdin from $start: $args"
+        else FAIL=$((FAIL + 1)); echo "FAIL stdin from $start: $args"; echo "     GNU : $exp"; echo "     OURS: $act"; fi
+    done
+done
+
+# Numbers past any size used to overflow (VIEW-015).
+printf 'a\nb\n' > "$TEST_TMP/big1"; printf 'a\nc\n' > "$TEST_TMP/big2"
+B=99999999999999999999
+for o in "-U $B --label x --label y" "-C $B --label x --label y" "--horizon-lines=$B" "-y --tabsize=$B" "--tabsize=$B" "-y --tabsize=1000" "-U 9223372036854775807 --label x --label y"; do
+    run_cmp "huge $o" $o "$TEST_TMP/big1" "$TEST_TMP/big2"
+done
+for f in "%c'\\77777777777'" "%c'\\101'|" "%c'\\1011'|"; do run_cmp "line format $f" "--line-format=$f" "$TEST_TMP/big1" "$TEST_TMP/big2"; done
+
+# -q names the file that cannot be read (VIEW-011).
+printf 'abcd\n' > "$TEST_TMP/q1"; printf 'abce\n' > "$TEST_TMP/q2"; chmod 000 "$TEST_TMP/q2"
+if [ ! -r "$TEST_TMP/q2" ]; then
+    run_cmp "-q the second unreadable" -q "$TEST_TMP/q1" "$TEST_TMP/q2"
+    run_cmp "-q the first unreadable" -q "$TEST_TMP/q2" "$TEST_TMP/q1"
+fi
+chmod 600 "$TEST_TMP/q2"
+
 print_summary
 [ "$FAIL" -eq 0 ]

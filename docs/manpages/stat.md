@@ -58,6 +58,7 @@ See docs/compatibility/stat.md for details.
 
 # LIMITATIONS
 
+- User and group names come from `/etc/passwd` and `/etc/group` alone, not through NSS. GNU asks the C library, which knows more sources. For accounts that exist only in LDAP, SSSD, systemd-homed or as systemd dynamic users, `%U` and `%G` print `UNKNOWN`, and the JSON `user` and `group` fields are null.
 - `%C` reads the `security.selinux` attribute; without it GNU's `failed to get security context` diagnostic is reproduced.
 - `%m` walks up the directory tree looking for a device change; bind mounts are not resolved through the mount table.
 - With `-L`, `%m` of a link to a file is the mount point of the target. GNU 9.7 gives the mount point of the directory holding the link.
@@ -69,5 +70,5 @@ docs/compatibility/stat.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.
 

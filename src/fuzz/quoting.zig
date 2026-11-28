@@ -25,5 +25,6 @@ fn quotedNeverFails(_: void, smith: *std.testing.Smith) anyerror!void {
 }
 
 test "fuzz: Quoted formats any byte string" {
-    try engine.fuzz({}, quotedNeverFails, .{ .corpus = &.{ "", "a b", "it's", "\x00\xff\n", "\"$`\\" } });
+    // max_len is the size of the target's buffer.
+    try engine.fuzz({}, quotedNeverFails, .{ .corpus = &.{ "", "a b", "it's", "\x00\xff\n", "\"$`\\" }, .max_len = 256, .name = "Quoted" });
 }

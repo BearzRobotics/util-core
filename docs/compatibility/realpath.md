@@ -9,7 +9,7 @@ GNU coreutils 9.7 (`/usr/bin/realpath --version` on the development machine, ins
 ## Supported options
 
 - `-e, -m`: All components must exist / none need to.
-- `-s, --strip, --no-symlinks`: Do not expand symbolic links (existence and loops are still diagnosed as GNU does); overridden by -L.
+- `-s, --strip, --no-symlinks`: Do not expand symbolic links (existence and loops are still diagnosed as GNU does). Of -s, -L and -P the last one given counts.
 - `-L, -P`: Resolve `..` before symbolic links / as encountered (default).
 - `-q`: Quiet.
 - `-z`: NUL-terminated.
@@ -30,7 +30,7 @@ None. Output, diagnostics and exit status follow GNU (decision 0005).
 
 ## Known deviations and gaps
 
-- `-L` is accepted and resolves like `-P` apart from its interaction with `-s`; the difference matters only when `..` follows a symbolic link.
+None known.
 
 ## Tests
 

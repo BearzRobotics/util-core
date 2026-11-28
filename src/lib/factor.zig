@@ -61,17 +61,28 @@ pub fn run(env: Env, options: Options, numbers: []const []const u8, w: *Io.Write
 
 /// Read all of `r` and factor each blank-separated number in it.
 pub fn runReader(env: Env, options: Options, r: *Io.Reader, w: *Io.Writer, observer: Observer) Error!Result {
-    const data = r.allocRemaining(env.gpa, .unlimited) catch |e| switch (e) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return error.ReadFailed,
-    };
-    defer env.gpa.free(data);
     var out = Sink.init(w);
     var ok = true;
-    var it = std.mem.tokenizeAny(u8, data, " \t\n");
-    while (it.next()) |tok| if (!one(env, observer, &out, tok, options.exponents)) {
-        ok = false;
-    };
+    const blanks = " \t\n";
+    var batches: common.Batcher = .{};
+    defer batches.deinit(env.gpa);
+    var at_end = false;
+    while (!at_end and !out.failed) {
+        // What is done goes out before a read that may wait.
+        out.flush();
+        const got: []const u8 = r.peekGreedy(1) catch |e| switch (e) {
+            error.EndOfStream => "",
+            error.ReadFailed => return error.ReadFailed,
+        };
+        at_end = got.len == 0;
+        const batch = if (at_end) batches.rest() else try batches.add(env.gpa, got, blanks) orelse "";
+        r.toss(got.len);
+        var it = std.mem.tokenizeAny(u8, batch, blanks);
+        while (it.next()) |tok| {
+            if (out.failed) break;
+            if (!one(env, observer, &out, tok, options.exponents)) ok = false;
+        }
+    }
     out.flush();
     if (out.failed) return error.WriteFailed;
     return .{ .ok = ok };

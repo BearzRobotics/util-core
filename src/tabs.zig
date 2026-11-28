@@ -23,15 +23,15 @@ pub const Stops = struct {
     /// The first stop strictly after `col`, or null when `col` is beyond the
     /// last stop and the list does not repeat.
     pub fn next(s: Stops, col: usize) ?usize {
-        if (s.list.len == 0) return col + s.every - col % s.every;
+        if (s.list.len == 0) return col - col % s.every +| s.every;
         for (s.list) |t| if (t > col) return t;
         if (s.every == 0) return null;
         return switch (s.extend) {
             .none => null,
-            .multiple => col + s.every - col % s.every,
+            .multiple => col - col % s.every +| s.every,
             .offset => blk: {
                 const last = s.list[s.list.len - 1];
-                break :blk last + ((col - last) / s.every + 1) * s.every;
+                break :blk last +| ((col - last) / s.every + 1) *| s.every;
             },
         };
     }
@@ -63,22 +63,19 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8, err: *ParseError) ?Stop
             continue;
         }
         var spec: u8 = 0;
-        const start = i;
         if (c == '/' or c == '+') {
             spec = c;
             i += 1;
         }
         const num_start = i;
         var v: usize = 0;
-        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {
-            v = std.math.mul(usize, v, 10) catch {
-                err.* = .{ .too_large = text[start..] };
-                return null;
-            };
-            v = std.math.add(usize, v, text[i] - '0') catch {
-                err.* = .{ .too_large = text[start..] };
-                return null;
-            };
+        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) v = v *| 10 +| (text[i] - '0');
+        // GNU's limit is that of a signed offset.
+        if (v > std.math.maxInt(isize)) {
+            var end = i;
+            while (end < text.len and std.ascii.isDigit(text[end])) end += 1;
+            err.* = .{ .too_large = text[num_start..end] };
+            return null;
         }
         if (i < text.len and text[i] != ',' and text[i] != ' ' and text[i] != '\t') {
             if (text[i] == '/' or text[i] == '+') {

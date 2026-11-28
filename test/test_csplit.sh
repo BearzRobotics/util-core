@@ -149,5 +149,10 @@ run_tree "big regex {*}"        "$BIG" big '/0 some/' '{*}'
 run_tree "big neg offset"       "$BIG" big '/^line 9000 /-100' 
 run_tree "big -n 5 {*}"         "$BIG" -n 5 big 100 '{*}'
 run_tree "big past end"         "$BIG" big 20001
+# "1_0" is not 10: the digit separators of Zig source are refused (MISC-021).
+seq 20 > "$TEST_TMP/us"
+run_cmp "line 1_0" -f "$TEST_TMP/us_" "$TEST_TMP/us" 1_0
+run_cmp "repeat {0_1}" -f "$TEST_TMP/us_" "$TEST_TMP/us" 2 '{0_1}'
+
 print_summary
 [ "$FAIL" -eq 0 ]

@@ -20,6 +20,7 @@
 //! `buildDatabase` returns the encoded database without touching the output.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const rx = @import("../regexutil.zig");
 const LX = std.os.linux;
 const common = @import("common.zig");
@@ -401,7 +402,7 @@ fn build(env: Env, options: Options, observer: Observer, status: *u8, stale_tmp:
         const m = std.mem.eql;
         if (m(u8, o, "-xdev") or m(u8, o, "-mount")) u.xdev = true else if (m(u8, o, "-depth") or m(u8, o, "-d")) u.depth_first = true else if (m(u8, o, "-noleaf") or m(u8, o, "-ignore_readdir_race") or m(u8, o, "-noignore_readdir_race") or m(u8, o, "-nowarn") or m(u8, o, "-warn")) {} else if (m(u8, o, "-maxdepth") or m(u8, o, "-mindepth")) {
             const v = oit.next() orelse "(";
-            const n = std.fmt.parseInt(i64, v, 10) catch {
+            const n = numparse.parseInt(i64, v, 10) catch {
                 observer.emit(.{ .find_bad_number = .{ .option = o, .value = v } });
                 find_failed = true;
                 break;

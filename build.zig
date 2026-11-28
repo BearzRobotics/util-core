@@ -151,7 +151,9 @@ pub fn build(b: *std.Build) void {
             .imports = &.{ .{ .name = "regex", .module = regex_mod }, .{ .name = "yaml", .module = yaml_mod } },
         }),
     });
-    b.installArtifact(probe); // run zig-out/bin/syntax-probe GRAMMAR... -- FILE
+    // Not part of an installation: `zig build syntax-probe`.
+    b.step("syntax-probe", "Build the grammar tool zig-out/bin/syntax-probe GRAMMAR... -- FILE")
+        .dependOn(&b.addInstallArtifact(probe, .{}).step);
 
     // Unit tests: every file under src/ reachable from the registry.
     const unit = b.addTest(.{

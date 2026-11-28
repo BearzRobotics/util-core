@@ -270,9 +270,18 @@ fn catchList() [7]u8 {
 }
 
 pub fn catchSignals() void {
+    catchWhere(false);
+}
+
+pub fn catchTerminationSignals() void {
+    catchWhere(true);
+}
+
+fn catchWhere(termination_only: bool) void {
     if (comptime !is_libc_posix) return;
     const list = catchList();
     for (list, 0..) |num, i| {
+        if (termination_only and (num == sys.signo.PIPE or num == sys.signo.ALRM or num == sys.signo.TSTP)) continue;
         const sg: c.SIG = @enumFromInt(num);
         var old: c.Sigaction = undefined;
         if (c.sigaction(sg, null, &old) != 0) continue;
@@ -656,9 +665,12 @@ pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?
         }
         return rc;
     }
+    // Windows lets a handle opened for writing alone be asked nothing about
+    // the file, and what writes a file also examines it (cp does at once).
+    const windows = builtin.os.tag == .windows;
     const file = if (flags & O.CREAT != 0)
         dirOf(dir).createFile(io(), path, .{
-            .read = acc == O.RDWR,
+            .read = acc == O.RDWR or windows,
             .truncate = flags & O.TRUNC != 0,
             .exclusive = flags & O.EXCL != 0,
             .permissions = sys.permissionsFromMode(mode),
@@ -666,7 +678,7 @@ pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?
     else
         dirOf(dir).openFile(io(), path, .{
             .mode = switch (acc) {
-                O.WRONLY => .write_only,
+                O.WRONLY => if (windows) .read_write else .write_only,
                 O.RDWR => .read_write,
                 else => .read_only,
             },
@@ -871,6 +883,12 @@ pub fn openAppendMode(path: []const u8, mode: u32) !Io.File {
 pub fn dup2(old: Handle, new: i32) ?E {
     if (comptime is_libc_posix) return cerr(c.dup2(old, new));
     return .NOSYS;
+}
+
+pub fn dupCloexec(fd: Handle) ?Handle {
+    if (comptime !is_libc_posix) return null;
+    const rc = c.fcntl(fd, c.F.DUPFD_CLOEXEC, @as(c_int, 3));
+    return if (rc >= 0) rc else null;
 }
 
 pub fn dupFd(fd: Handle, err: *E) ?Handle {

@@ -16,27 +16,29 @@ const help_text = @embedFile("../help/nice.txt");
 
 pub fn main(ctx: cli.Context) u8 {
     var adjustment: ?[]const u8 = null;
-    // Obsolete "-N" / "--N" forms (adjustment N / -N) are recognised only as
-    // the first argument, before getopt sees them.
-    var args = ctx.args;
-    if (nice.obsoleteAdjustment(args)) |ob| {
-        adjustment = ob.adjustment;
-        args = ob.rest;
-    }
-    var c2 = ctx;
-    c2.args = args;
-    var p = getopt.Parser.init(c2, "+n:", &.{.{ .name = "adjustment", .arg = .required, .id = 'n' }});
+    var p = getopt.Parser.init(ctx, "+n:", &.{.{ .name = "adjustment", .arg = .required, .id = 'n' }});
     defer p.deinit();
-    while (true) switch (p.next()) {
-        .done => break,
-        .bad => return 125,
-        .opt => |o| switch (o.id) {
-            'n' => adjustment = o.arg,
-            getopt.help_id => return if (cli.writeStdout(ctx.io, help_text ++ "\n")) 0 else 125,
-            getopt.version_id => return if (cli.printVersion(ctx)) 0 else 125,
-            else => unreachable,
-        },
-    };
+    while (true) {
+        // The obsolete "-N" / "-+N" / "--N" forms (adjustment N, N, -N) may
+        // stand wherever an option may; getopt must not see them.
+        if (p.sub == 0 and !p.ended and p.index < ctx.args.len) {
+            if (nice.obsoleteAdjustment(ctx.args[p.index..])) |ob| {
+                adjustment = ob.adjustment;
+                p.index += 1;
+                continue;
+            }
+        }
+        switch (p.next()) {
+            .done => break,
+            .bad => return 125,
+            .opt => |o| switch (o.id) {
+                'n' => adjustment = o.arg,
+                getopt.help_id => return if (cli.writeStdout(ctx.io, help_text ++ "\n")) 0 else 125,
+                getopt.version_id => return if (cli.printVersion(ctx)) 0 else 125,
+                else => unreachable,
+            },
+        }
+    }
     const command = p.operands.items;
     if (command.len == 0) {
         if (adjustment != null) {

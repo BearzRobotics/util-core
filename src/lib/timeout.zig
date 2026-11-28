@@ -4,8 +4,9 @@
 //!
 //! The child is started with std.process.spawn. The supervisor then waits on
 //! a pidfd and a signalfd (`sys.Watcher`) with a poll timeout, so no signal
-//! handler is ever installed: TERM, INT, HUP and QUIT sent to timeout are read
-//! from the signalfd and forwarded to the command. Exit status: 124 on timeout
+//! handler is ever installed: TERM, INT, HUP, QUIT, ALRM and the --signal
+//! signal sent to timeout are read from the signalfd and forwarded to the
+//! command (ALRM as a timeout). Exit status: 124 on timeout
 //! (unless --preserve-status), 125 on timeout's own failure, 126/127 when the
 //! command cannot be run, otherwise the command's status.
 //!
@@ -17,6 +18,8 @@
 //! `src/commands/timeout.zig`) and hands the ready `Watcher` to `supervise`.
 
 const std = @import("std");
+const subprog = @import("subprog.zig");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const common = @import("common.zig");
 const sys = @import("../sys.zig");
@@ -24,8 +27,31 @@ const sys = @import("../sys.zig");
 pub const Env = common.Env;
 
 /// Signals that terminate or interrupt timeout and are passed to the
-/// command; the caller creates the Watcher for these.
-pub const watched_signals = [_]u8{ sys.signo.HUP, sys.signo.INT, sys.signo.QUIT, sys.signo.TERM };
+/// command (ALRM instead makes the time limit expire at once).
+pub const base_signals = [_]u8{ sys.signo.HUP, sys.signo.INT, sys.signo.QUIT, sys.signo.TERM, sys.signo.ALRM };
+
+/// The signals the caller creates the Watcher for.
+pub const Watched = struct {
+    buf: [base_signals.len + 1]u8,
+    len: usize,
+
+    /// `base_signals` and, as in GNU, the signal chosen with --signal, which
+    /// is passed on too when it can be caught.
+    pub fn init(signal: u8) Watched {
+        var w: Watched = .{ .buf = undefined, .len = base_signals.len };
+        @memcpy(w.buf[0..base_signals.len], &base_signals);
+        const uncatchable = signal == 0 or signal == sys.signo.KILL or signal == sys.signo.STOP;
+        if (!uncatchable and std.mem.indexOfScalar(u8, &base_signals, signal) == null) {
+            w.buf[w.len] = signal;
+            w.len += 1;
+        }
+        return w;
+    }
+
+    pub fn list(w: *const Watched) []const u8 {
+        return w.buf[0..w.len];
+    }
+};
 
 pub const Options = struct {
     /// --foreground: do not signal the whole process group.
@@ -71,17 +97,36 @@ pub fn parseDuration(text: []const u8) ?u64 {
         else => {},
     }
     if (num.len == 0 or num[0] == '-') return null;
-    const v = std.fmt.parseFloat(f64, num) catch return null;
+    const v = numparse.parseFloat(f64, num) catch return null;
     if (std.math.isNan(v) or v < 0) return null;
     const ns = v * mult * 1e9;
     if (ns >= 1.8e19) return std.math.maxInt(u64);
-    return @intFromFloat(ns);
+    // Rounded up, as in GNU: 0 means no limit, so a duration that is not
+    // zero must not become one, however small.
+    const whole: u64 = @intFromFloat(@ceil(ns));
+    return if (whole == 0 and !writtenAsZero(num)) 1 else whole;
+}
+
+/// Whether the digits before any exponent are all zeros. A number too small
+/// for a float reads as 0 without being zero.
+fn writtenAsZero(num: []const u8) bool {
+    var i: usize = 0;
+    if (i < num.len and num[i] == '+') i += 1;
+    const hex = num.len >= i + 2 and num[i] == '0' and std.ascii.toLower(num[i + 1]) == 'x';
+    if (hex) i += 2;
+    while (i < num.len) : (i += 1) {
+        const c = std.ascii.toLower(num[i]);
+        if (c == (if (hex) @as(u8, 'p') else 'e')) break;
+        if ((c >= '1' and c <= '9') or (hex and c >= 'a' and c <= 'f')) return false;
+    }
+    return true;
 }
 
 /// Start the command. The caller makes itself a group leader first unless
 /// --foreground.
 pub fn spawn(env: Env, command: []const []const u8) std.process.SpawnError!std.process.Child {
-    return std.process.spawn(env.io, .{ .argv = command });
+    // (As execvp: a script without a "#!" line goes to the shell.)
+    return subprog.spawn(env, .{ .argv = command });
 }
 
 /// Exit status when the command cannot be started.
@@ -111,6 +156,7 @@ const Supervisor = struct {
     obs: Observer,
     verbose: bool,
     foreground: bool,
+    watched: []const u8,
     /// Copies of our own signals still to arrive on the signalfd.
     self_signals: u32 = 0,
     last_self: u8 = 0,
@@ -122,7 +168,7 @@ const Supervisor = struct {
             // The whole group includes timeout itself; its copy will arrive on
             // the signalfd and must not be forwarded again.
             _ = sys.signalOwnGroup(sig);
-            for (watched_signals) |ws| if (ws == sig) {
+            for (s.watched) |ws| if (ws == sig) {
                 s.last_self = sig;
                 s.self_signals += 1;
             };
@@ -139,7 +185,10 @@ const Supervisor = struct {
 /// Wait for the started command (`pid`), enforcing the time limit and
 /// forwarding signals read from `w`. Does not close `w`.
 pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Observer) Outcome {
-    var sup: Supervisor = .{ .obs = obs, .verbose = opts.verbose, .foreground = opts.foreground };
+    const watched: Watched = .init(opts.signal);
+    var sup: Supervisor = .{ .obs = obs, .verbose = opts.verbose, .foreground = opts.foreground, .watched = watched.list() };
+    // As in GNU, a kill delay of 0 means no follow-up KILL.
+    const kill_after: ?u64 = if (opts.kill_after) |k| (if (k == 0) null else k) else null;
     var timed_out = false;
     var sent_kill = false;
     var deadline: ?i96 = if (opts.duration == 0) null else nowNs(env.io) + @as(i96, opts.duration);
@@ -160,7 +209,7 @@ pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Obs
                 if (!sent_kill and !timed_out) {
                     timed_out = true;
                     sup.sendTo(pid, opts.signal);
-                    deadline = if (opts.kill_after) |k| nowNs(env.io) + @as(i96, k) else null;
+                    deadline = if (kill_after) |k| nowNs(env.io) + @as(i96, k) else null;
                 } else {
                     sent_kill = true;
                     sup.sendTo(pid, sys.signo.KILL);
@@ -172,8 +221,13 @@ pub fn supervise(env: Env, opts: Options, pid: sys.Pid, w: sys.Watcher, obs: Obs
                     sup.self_signals -= 1;
                     continue;
                 }
-                sup.sendTo(pid, s);
-                if (opts.kill_after) |k| if (deadline == null) {
+                // As in GNU, ALRM times the command out now.
+                if (s == sys.signo.ALRM) {
+                    timed_out = true;
+                    sup.sendTo(pid, opts.signal);
+                    deadline = null;
+                } else sup.sendTo(pid, s);
+                if (kill_after) |k| if (deadline == null) {
                     deadline = nowNs(env.io) + @as(i96, k);
                 };
             },
@@ -201,6 +255,10 @@ test "parseDuration" {
     try std.testing.expectEqual(@as(?u64, 1_000_000_000), parseDuration("1"));
     try std.testing.expectEqual(@as(?u64, 120_000_000_000), parseDuration("2m"));
     try std.testing.expectEqual(@as(?u64, 500_000_000), parseDuration("0.5s"));
+    for ([_][]const u8{ "1e-10", "1e-400", "0.0000000001s", "0x1p-99999" }) |t|
+        try std.testing.expectEqual(@as(?u64, 1), parseDuration(t));
+    for ([_][]const u8{ "0", "0.0", "0e5", "0x0p3", "+0d" }) |t|
+        try std.testing.expectEqual(@as(?u64, 0), parseDuration(t));
     try std.testing.expectEqual(@as(?u64, null), parseDuration("-1"));
     try std.testing.expectEqual(@as(?u64, null), parseDuration(""));
     try std.testing.expectEqual(@as(?u64, null), parseDuration("s"));

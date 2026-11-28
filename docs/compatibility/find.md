@@ -40,6 +40,7 @@ GNU findutils 4.10.0 (`/usr/bin/find --version` on the development machine). Con
 
 ## Known deviations and gaps
 
+- User and group names come from `/etc/passwd` and `/etc/group` alone, not through NSS. GNU asks the C library, which knows more sources. For accounts that exist only in LDAP, SSSD, systemd-homed or as systemd dynamic users, `-user NAME` and `-group NAME` do not know them, `-nouser` and `-nogroup` take them for missing, and `-ls` and `-printf` give numbers.
 - Only the C locale and UTF-8 quoting of file names in messages are handled; there is no multibyte-aware matching in -name.
 - `-regex` accepts Emacs, POSIX basic and extended syntax by translating them to the regex-zig Perl dialect; leftmost-longest alternation is not emulated (the whole path must match, so results are the same except for rare cases with back-references).
 - -files0-from, -context (SELinux), -D tracing output and the optimiser (-O) are not implemented.

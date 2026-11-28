@@ -78,4 +78,4 @@ available to compare against.
 ## Tests
 
 `zig build test` (aliases and their limits, toy grammar end to end including state across lines,
-lookup, loop termination, warnings). Manual: `zig-out/bin/syntax-probe`.
+lookup, loop termination, warnings). Manual: `zig build syntax-probe`, then `zig-out/bin/syntax-probe`.

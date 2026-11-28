@@ -31,10 +31,12 @@ pub fn main(ctx: cli.Context) u8 {
     var only_operands = false;
     for (ctx.args) |a_z| {
         const a: []const u8 = a_z;
-        // A lone "-" and anything not starting with '-' are operands; so is
-        // everything after "--".
+        // A lone "-" and anything not starting with '-' are operands. As in
+        // GNU, so is everything after the first operand, or after "--":
+        // STRING2 may start with '-'.
         if (only_operands or a.len < 2 or a[0] != '-') {
             operands.append(ctx.gpa, a) catch return oom(ctx);
+            only_operands = true;
             continue;
         }
         if (std.mem.eql(u8, a, "--")) {

@@ -19,7 +19,7 @@ tee - read from standard input and write to standard output and files
 : Same as --output-error=warn-nopipe.
 
 --output-error[=MODE]
-: MODE is warn, warn-nopipe (default for the option), exit or exit-nopipe. Without the option SIGPIPE keeps its default action.
+: MODE is warn, warn-nopipe (default for the option), exit or exit-nopipe. Without the option SIGPIPE stays as tee was started with it, normally the default action; if it was ignored, an output whose reader has gone is dropped without a diagnostic and does not change the exit status.
 
 --help, --version
 : Print help or version and exit.
@@ -34,7 +34,7 @@ tee - read from standard input and write to standard output and files
 
 # ENVIRONMENT
 
-none (SIGINT and SIGPIPE dispositions are changed as described)
+none (SIGINT and SIGPIPE dispositions are as described)
 
 # STANDARD STREAMS
 
@@ -59,5 +59,5 @@ docs/compatibility/tee.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.
 

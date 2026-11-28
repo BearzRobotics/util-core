@@ -246,6 +246,14 @@ gd 'utf8 -F -i' u8 -Fi 'É' u8
 gd 'utf8 -w' u8 -w 'caf' u8
 gd 'utf8 -wo' u8 -wo '\w*' u8
 gd 'utf8 -P .' u8 -Po '.' u8
+# -P in UTF-8 matches characters, not bytes (REGX-032).
+printf 'é\naéa\ncafé\ncaf é\nÉ_1 x\n\302\240x\n\331\243 5\n中文\néé ab\nplain\n' > "$TEST_TMP/p8"
+for opts in -o -c -ow -x -oi -vn; do
+    for pat in '\B' '\bé' 'é\b' '\bcaf\b' '^\w$' '\w+' '\W' '\s' '\S+' '\d' '\D' '[\w ]+' '[^\w]' '[\D]' '[é]' '[^é]+' '[à-ü]' \
+        '\p{L}+' '\x{e9}' '\xe9' '(?i)É' 'é?x' 'é+ ' 'aé{0,1}a' '(?:é|ab)' '(?<=\w)é' '(?<!\w)é' '(?<=é)_' 'caf.' '[[:alpha:]]+'; do
+        CMP_LOCALE=C.UTF-8 CMP_STDIN="$TEST_TMP/p8" run_cmp "utf8 -P $opts '$pat'" $opts -P -e "$pat"
+    done
+done
 gd 'utf8 binary bad' u8 '' u8
 gd 'utf8 binary bad -c' u8 -c '' u8
 gd 'utf8 binary bad -a' u8 -a match u8
@@ -432,4 +440,34 @@ many=$(awk 'BEGIN { for (i = 0; i < 600; i++) printf "%s(w%d)+x", i ? "|" : "", 
 printf 'w5x\nw599x\nnone\n' > "$TEST_TMP/many"
 gd "600 alternatives with a group each" "$TEST_TMP/many" -E "$many"
 help_cmp
+# An exclusion list that cannot be read must not be taken for empty (REGX-026).
+out=$( (ulimit -v 1000000; "$BIN_DIR/grep" --exclude-from="$TEST_TMP" a /dev/null) </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"Is a directory"*"status 2") PASS=$((PASS + 1)); echo "PASS grep --exclude-from a directory" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL grep --exclude-from a directory: $out" ;;
+esac
+
+# --max-columns-preview does not cut a character in two (REGX-029).
+for cut in 1 2 3 4; do
+    out=$(printf '\303\251\303\251\303\251 foo\n' | LC_ALL=C.UTF-8 "$BIN_DIR/grep" --max-columns=$cut --max-columns-preview foo)
+    want=$(printf '\303\251\303\251' | head -c $((cut / 2 * 2)))' [... omitted end of long line]'
+    if [ "$out" = "$want" ]; then PASS=$((PASS + 1)); echo "PASS preview cut at $cut"
+    else FAIL=$((FAIL + 1)); echo "FAIL preview cut at $cut: $out"; fi
+done
+
+# Leading context stays right however often its queue is refilled (REGX-024).
+awk 'BEGIN { for (i = 1; i <= 3000; i++) print (i % 97 == 0 || i % 101 == 0 ? "hit " : "line ") i }' > "$TEST_TMP/manyctx"
+for before in 1 2 7 50 1000; do
+    run_cmp "-B $before, long input" -n -B $before hit "$TEST_TMP/manyctx"
+done
+
+# Broken intervals and operators with nothing to repeat (REGX-025).
+printf 'a{x}\na+b\na?b\n{1}\n:alpha:\n+a\n' > "$TEST_TMP/bre"
+for pattern in 'a\{x\}' 'a\{\}' 'a\{1,2,3\}' '\+' '\?' '\{' '\{1\}' '^\+' '[::]' '[^:alpha:]'; do
+    CMP_STDIN="$TEST_TMP/bre" run_cmp "basic $pattern" "$pattern"
+done
+for pattern in 'a{}' 'a{,}' 'a{1,2,3}' 'a{x}'; do
+    CMP_STDIN="$TEST_TMP/bre" run_cmp "extended $pattern" -E "$pattern"
+done
+
 cd /; print_summary

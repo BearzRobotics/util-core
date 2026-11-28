@@ -112,5 +112,33 @@ check "metrics hyperfine names"       $BIN_DIR/time --bench --runs=2 --metrics=t
 check "bad --metrics rejected"        sh -c "! $BIN_DIR/time --bench --metrics=bogus true >/dev/null 2>&1"
 check "--min-runs and --max-runs"     $BIN_DIR/time --bench --duration=50 --min-runs=2 --max-runs=5 true
 check "bench option without --bench rejected" sh -c "! $BIN_DIR/time --warmup=2 true >/dev/null 2>&1"
+# Bounds that do not fit a whole number, or a step that does not move them
+# (MISC-037).
+for spec in x:1e19:1e19 x:inf:inf x:0:inf x:-inf:0 x:nan:1 x:1:2:inf x:1:2:nan x:1e16:1e16; do
+    out=$("$BIN_DIR/time" --bench --runs 1 --parameter-scan "$spec" 'true {x}' 2>&1 >/dev/null; echo "status $?")
+    case $out in
+    *"invalid --parameter-scan"*"status 125") PASS=$((PASS + 1)); echo "PASS refused $spec" ;;
+    *) FAIL=$((FAIL + 1)); echo "FAIL $spec: $out" ;;
+    esac
+done
+
+# As execvp, a script without a "#!" line is run by the shell (MISC-007).
+printf 'echo no-shebang "$@"; exit 3\n' > "$TEST_TMP/nsh"; chmod +x "$TEST_TMP/nsh"
+exp=$(cd "$TEST_TMP" && LC_ALL=C gnu -f done:%x ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+act=$(cd "$TEST_TMP" && LC_ALL=C ours -f done:%x ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+rm -f "$TEST_TMP/nohup.out"
+if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
+else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
+
+# A report file that cannot be opened stops the command being run (MISC-035).
+out=$("$BIN_DIR/time" -o "$TEST_TMP/nosuch/report" "$BIN_DIR/echo" ran 2>/dev/null; echo "status $?")
+if [ "$out" = "status 125" ]; then PASS=$((PASS + 1)); echo "PASS -o unwritable: not run"
+else FAIL=$((FAIL + 1)); echo "FAIL -o unwritable: $out"; fi
+
+# --export-json is valid UTF-8 whatever the command holds (MISC-036).
+"$BIN_DIR/time" --bench --runs 2 --export-json "$TEST_TMP/bench.json" "true $(printf '\377')" > /dev/null 2>&1
+if iconv -f UTF-8 -t UTF-8 "$TEST_TMP/bench.json" > /dev/null 2>&1 && grep -q 'true \\ufffd' "$TEST_TMP/bench.json"; then PASS=$((PASS + 1)); echo "PASS JSON is UTF-8"
+else FAIL=$((FAIL + 1)); echo "FAIL JSON is UTF-8"; fi
+
 print_summary
 [ "$FAIL" -eq 0 ]

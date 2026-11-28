@@ -320,7 +320,8 @@ fn charLiteral(fmt: []const u8, lit: usize) ?Literal {
                 const d = at(fmt, p);
                 p += 1;
                 if (d == '\'') break;
-                if (d < '0' or d > '7') return null;
+                // Three digits at most: more would not even fit.
+                if (d < '0' or d > '7' or p - lit - 2 > 3) return null;
                 value = value * 8 + (d - '0');
             }
             const digits = p - lit - 2;

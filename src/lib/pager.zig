@@ -20,6 +20,8 @@
 //! = position; r R ^L redraw; h help line; q Q ^C quit.
 
 const std = @import("std");
+const unicode = @import("../unicode.zig");
+const quote = @import("../quote.zig");
 const Io = std.Io;
 
 pub const Key = union(enum) {
@@ -149,7 +151,16 @@ pub const Pager = struct {
     input: std.ArrayList(u8) = .empty,
     pattern: std.ArrayList(u8) = .empty,
     message: []const u8 = "",
-    msg_buf: [96]u8 = undefined,
+    msg_buf: [256]u8 = undefined,
+    /// Where counting the rows of a line, and finding a row of it to draw, got
+    /// to: so that a line that is still growing is not walked from its start
+    /// again each time.
+    counted: ?RowMark = null,
+    drawn: ?RowMark = null,
+    /// A line without its escape sequences, for searching.
+    stripped: std.ArrayList(u8) = .empty,
+    /// A search could not look at a line for want of memory.
+    search_failed: bool = false,
     name: []const u8 = "",
 
     pub fn init(gpa: std.mem.Allocator, opts: Options, rows: usize, cols: usize) Pager {
@@ -162,6 +173,7 @@ pub const Pager = struct {
         p.rowc.deinit(p.gpa);
         p.input.deinit(p.gpa);
         p.pattern.deinit(p.gpa);
+        p.stripped.deinit(p.gpa);
     }
 
     pub fn lineCount(p: *const Pager) usize {
@@ -218,21 +230,63 @@ pub const Pager = struct {
         return p.text.items[a..b];
     }
 
-    /// Display width of one byte at column `col` (0 for the continuation
-    /// bytes of a UTF-8 character).
-    fn byteWidth(_: *const Pager, b: u8, col: usize) usize {
-        if (b == '\t') return tab_stop - col % tab_stop;
-        if (b >= 0x80) return if (b >= 0xc0) 1 else 0;
-        if (b < 0x20 or b == 0x7f) return 2; // ^X
-        return 1;
+    /// One thing to show: a byte, or a whole UTF-8 character.
+    const Unit = struct {
+        len: usize,
+        width: usize,
+        form: enum {
+            text,
+            tab,
+            /// ^X
+            caret,
+            /// <U+009B>: a C1 control, which a terminal would obey.
+            code,
+            /// <9B>: a byte that is not part of any UTF-8 character.
+            byte,
+        },
+    };
+
+    /// What starts at `s[0]`, shown at column `col`.
+    fn unitAt(s: []const u8, col: usize) Unit {
+        const b = s[0];
+        if (b == '\t') return .{ .len = 1, .width = tab_stop - col % tab_stop, .form = .tab };
+        if (b < 0x20 or b == 0x7f) return .{ .len = 1, .width = 2, .form = .caret };
+        if (b < 0x80) return .{ .len = 1, .width = 1, .form = .text };
+        const d = unicode.decode(s, 0);
+        if (!d.valid) return .{ .len = 1, .width = "<9B>".len, .form = .byte };
+        if (d.cp < 0xa0) return .{ .len = d.len, .width = "<U+009B>".len, .form = .code };
+        return .{ .len = d.len, .width = 1, .form = .text };
     }
 
-    /// Length in bytes of an escape sequence at the start of `s` (0 if none).
-    fn escLen(s: []const u8) usize {
-        if (s.len < 2 or s[0] != 0x1b or s[1] != '[') return 0;
-        var k: usize = 2;
-        while (k < s.len and !(s[k] >= 0x40 and s[k] <= 0x7e)) k += 1;
-        return if (k < s.len) k + 1 else s.len;
+    /// Length of the escape sequence at the start of `s` that raw mode lets
+    /// through (0 if there is none): a colour or style, ESC [ ... m, or an
+    /// OSC 8 hyperlink. Anything else could move the cursor, erase, or make
+    /// the terminal answer, and is shown as text.
+    fn escLen(rest: []const u8) usize {
+        const s = rest[0..@min(rest.len, max_escape)];
+        if (s.len < 3 or s[0] != 0x1b) return 0;
+        if (s[1] == '[') {
+            var k: usize = 2;
+            while (k < s.len and (std.ascii.isDigit(s[k]) or s[k] == ';' or s[k] == ':')) k += 1;
+            return if (k < s.len and s[k] == 'm') k + 1 else 0;
+        }
+        if (!std.mem.startsWith(u8, s[1..], link_start)) return 0;
+        var k: usize = 1 + link_start.len;
+        while (k < s.len and s[k] >= 0x20 and s[k] <= 0x7e) k += 1;
+        if (k >= s.len) return 0;
+        if (s[k] == 0x07) return k + 1;
+        return if (s[k] == 0x1b and k + 1 < s.len and s[k + 1] == '\\') k + 2 else 0;
+    }
+
+    /// Longer than this is not taken for an escape sequence. It bounds how far
+    /// back text that is added to a line can change what is already there.
+    const max_escape = 4096;
+    const link_start = "]8;";
+    const link_end = "\x1b]8;;\x1b\\";
+
+    /// Whether `ln` may leave a hyperlink open behind it.
+    fn hasLink(ln: []const u8) bool {
+        return std.mem.indexOf(u8, ln, "\x1b" ++ link_start) != null;
     }
 
     /// Byte offset where the screen row that starts at `start` ends.
@@ -248,26 +302,46 @@ pub const Pager = struct {
                     continue;
                 }
             }
-            const w = p.byteWidth(ln[i], col);
-            if (col + w > width and col > 0) break;
-            col += w;
-            i += 1;
+            const u = unitAt(ln[i..], col);
+            if (col + u.width > width and col > 0) break;
+            col += u.width;
+            i += u.len;
         }
         return i;
+    }
+
+    /// Row `row` of line `line` starts at byte `at`.
+    const RowMark = struct { line: usize, row: usize, at: usize };
+
+    /// Whether more text added to `ln` can no longer move a row start at `at`.
+    fn settled(p: *const Pager, ln: []const u8, at: usize) bool {
+        // At the end there may be part of a character, a CR that goes when its
+        // newline comes, or with `raw` the start of an escape sequence.
+        const open_end: usize = if (p.opts.raw) max_escape else 4;
+        return ln.len >= open_end and at <= ln.len - open_end;
+    }
+
+    /// The start of row `want` of line `i`, or of its last row if it has fewer:
+    /// the row found, and the offset. `mark` is where to go on from.
+    fn findRow(p: *const Pager, mark: *?RowMark, i: usize, want: usize) RowMark {
+        const ln = p.line(i);
+        var here: RowMark = .{ .line = i, .row = 0, .at = 0 };
+        if (mark.*) |m| if (m.line == i and m.row <= want) {
+            here = m;
+        };
+        while (here.row < want) {
+            const e = p.rowEnd(ln, here.at);
+            if (e >= ln.len) break;
+            here = .{ .line = i, .row = here.row + 1, .at = e };
+            if (p.settled(ln, e)) mark.* = here;
+        }
+        return here;
     }
 
     fn rowsOf(p: *Pager, i: usize) usize {
         if (p.opts.chop) return 1;
         if (p.rowc.items[i] != 0) return p.rowc.items[i];
-        const ln = p.line(i);
-        var n: usize = 1;
-        var at: usize = 0;
-        while (true) {
-            const e = p.rowEnd(ln, at);
-            if (e >= ln.len) break;
-            at = e;
-            n += 1;
-        }
+        const n = p.findRow(&p.counted, i, std.math.maxInt(usize)).row + 1;
         p.rowc.items[i] = @intCast(n);
         return n;
     }
@@ -349,6 +423,8 @@ pub const Pager = struct {
         if (nc != p.cols) {
             p.cols = nc;
             @memset(p.rowc.items, 0);
+            p.counted = null;
+            p.drawn = null;
             p.sub = 0;
         }
         if (p.atBottom()) p.toBottom();
@@ -408,8 +484,8 @@ pub const Pager = struct {
                 },
                 'n' => p.findNext(p.forward),
                 'N' => p.findNext(!p.forward),
-                '=' => p.message = std.fmt.bufPrint(&p.msg_buf, "{s}line {d}/{d}{s}", .{
-                    if (p.name.len > 0 and p.name.len < 40) p.name else "",
+                '=' => p.message = std.fmt.bufPrint(&p.msg_buf, "{f}line {d}/{d}{s}", .{
+                    quote.Visible{ .name = if (p.name.len < 40) p.name else "" },
                     p.top + 1,
                     p.lineCount(),
                     if (p.eof) "" else "+",
@@ -466,22 +542,29 @@ pub const Pager = struct {
     }
 
     /// Does line `i`, with escape sequences removed, contain the pattern?
-    fn lineMatches(p: *const Pager, i: usize) bool {
-        var buf: [4096]u8 = undefined;
+    fn lineMatches(p: *Pager, i: usize) bool {
         const raw = p.line(i);
-        var n: usize = 0;
-        var k: usize = 0;
-        while (k < raw.len and n < buf.len) {
-            const e = escLen(raw[k..]);
-            if (e > 0) {
-                k += e;
-                continue;
+        var hay = raw;
+        if (std.mem.indexOfScalar(u8, raw, 0x1b) != null) {
+            // Without its sequences the line is a copy, in a buffer that is
+            // kept from line to line.
+            p.stripped.clearRetainingCapacity();
+            var k: usize = 0;
+            while (k < raw.len) {
+                const e = escLen(raw[k..]);
+                if (e > 0) {
+                    k += e;
+                    continue;
+                }
+                const next = std.mem.indexOfScalarPos(u8, raw, k + 1, 0x1b) orelse raw.len;
+                p.stripped.appendSlice(p.gpa, raw[k..next]) catch {
+                    p.search_failed = true;
+                    return false;
+                };
+                k = next;
             }
-            buf[n] = raw[k];
-            n += 1;
-            k += 1;
+            hay = p.stripped.items;
         }
-        const hay = buf[0..n];
         if (p.ignoreCase()) return std.ascii.findIgnoreCase(hay, p.pattern.items) != null;
         return std.mem.indexOf(u8, hay, p.pattern.items) != null;
     }
@@ -493,6 +576,7 @@ pub const Pager = struct {
         }
         const n = p.lineCount();
         if (n == 0) return;
+        p.search_failed = false;
         var i = p.top;
         var step: usize = 0;
         while (step + 1 < n) : (step += 1) {
@@ -504,13 +588,36 @@ pub const Pager = struct {
                 i -= 1;
             }
             if (p.lineMatches(i)) {
+                // At the top even in the last screenful, as less does: the
+                // next search goes on from here.
                 p.top = i;
                 p.sub = 0;
-                if (p.top > p.bottomPos().line) p.toBottom();
                 return;
             }
         }
-        p.message = "Pattern not found";
+        p.message = if (p.search_failed) "Out of memory: not every line was searched" else "Pattern not found";
+    }
+
+    /// The hyperlink open at byte `upto` of `ln`, to restore on a wrapped
+    /// row; empty when there is none.
+    fn activeLink(ln: []const u8, upto: usize) []const u8 {
+        var link: []const u8 = "";
+        var i: usize = 0;
+        while (i < upto) {
+            const e = escLen(ln[i..upto]);
+            if (e == 0) {
+                i += 1;
+                continue;
+            }
+            const seq = ln[i .. i + e];
+            i += e;
+            if (seq[1] != ']') continue;
+            // ESC ] 8 ; params ; URI end: an empty URI closes the link.
+            const semi = std.mem.indexOfScalarPos(u8, seq, 1 + link_start.len, ';') orelse continue;
+            const first = seq[semi + 1];
+            link = if (first == 0x07 or first == 0x1b) "" else seq;
+        }
+        return link;
     }
 
     /// The control sequences that are in effect at byte `upto` of `ln`
@@ -540,7 +647,8 @@ pub const Pager = struct {
     }
 
     /// Write bytes [start, end) of `ln` as one screen row: tabs expanded,
-    /// control characters as ^X unless `raw`, clipped at the row width.
+    /// control characters as ^X (C1 controls as <U+009B>, bytes that are not
+    /// UTF-8 as <9B>), colours passed with `raw`, clipped at the row width.
     fn emitRow(p: *const Pager, w: *Io.Writer, ln: []const u8, start: usize, end: usize) Io.Writer.Error!void {
         const width = p.textCols();
         var col: usize = 0;
@@ -554,19 +662,23 @@ pub const Pager = struct {
                     continue;
                 }
             }
-            const b = ln[i];
-            const cw = p.byteWidth(b, col);
-            if (col + cw > width and cw > 0) {
+            const u = unitAt(ln[i..], col);
+            if (col + u.width > width) {
                 if (p.opts.chop) break; // clipped
             }
-            if (b == '\t') {
-                try w.splatByteAll(' ', cw);
-            } else if (b < 0x20 or b == 0x7f) {
-                try w.writeByte('^');
-                try w.writeByte(if (b == 0x7f) '?' else b + '@');
-            } else try w.writeByte(b);
-            col += cw;
-            i += 1;
+            const b = ln[i];
+            switch (u.form) {
+                .text => try w.writeAll(ln[i .. i + u.len]),
+                .tab => try w.splatByteAll(' ', u.width),
+                .caret => {
+                    try w.writeByte('^');
+                    try w.writeByte(if (b == 0x7f) '?' else b + '@');
+                },
+                .code => try w.print("<U+{X:0>4}>", .{unicode.decode(ln[i..], 0).cp}),
+                .byte => try w.print("<{X:0>2}>", .{b}),
+            }
+            col += u.width;
+            i += u.len;
         }
     }
 
@@ -579,6 +691,7 @@ pub const Pager = struct {
             if (p.opts.numbers) try w.print("\x1b[90m{d: >6} \x1b[0m", .{i + 1});
             try p.emitRow(w, ln, 0, ln.len);
             if (p.opts.raw and std.mem.indexOfScalar(u8, ln, 0x1b) != null) try w.writeAll("\x1b[0m");
+            if (p.opts.raw and hasLink(ln)) try w.writeAll(link_end);
             // The last line may still be without its newline.
             if (i + 1 < p.lineCount() or p.at_line_start) try w.writeByte('\n');
         }
@@ -598,9 +711,7 @@ pub const Pager = struct {
             if (have) {
                 const ln = p.line(pos.line);
                 // Where does this screen row start and end inside the line?
-                var start: usize = 0;
-                var k: usize = 0;
-                while (k < pos.sub and !p.opts.chop) : (k += 1) start = p.rowEnd(ln, start);
+                const start = if (p.opts.chop) 0 else p.findRow(&p.drawn, pos.line, pos.sub).at;
                 const end = if (p.opts.chop) ln.len else p.rowEnd(ln, start);
                 if (p.opts.numbers) {
                     if (pos.sub == 0) try w.print("\x1b[90m{d: >6} \x1b[0m", .{pos.line + 1}) else try w.splatByteAll(' ', number_cols);
@@ -608,9 +719,11 @@ pub const Pager = struct {
                 if (start > 0 and p.opts.raw) {
                     var sb: [256]u8 = undefined;
                     try w.writeAll(activeStyle(ln, start, &sb));
+                    try w.writeAll(activeLink(ln, start));
                 }
                 try p.emitRow(w, ln, start, end);
                 try w.writeAll("\x1b[0m");
+                if (p.opts.raw and hasLink(ln)) try w.writeAll(link_end);
                 have = p.stepDown(&pos);
             } else try w.writeAll("~");
             try w.writeAll("\r\n");
@@ -631,16 +744,139 @@ pub const Pager = struct {
         } else try w.writeByte(':');
     }
 
+    pub const enter_sequence = "\x1b[?1049h\x1b[?7l\x1b[2J";
+    pub const leave_sequence = "\x1b[?7h\x1b[?1049l";
+
     /// Switch to the alternate screen with line wrapping off.
     pub fn enter(w: *Io.Writer) Io.Writer.Error!void {
-        try w.writeAll("\x1b[?1049h\x1b[?7l\x1b[2J");
+        try w.writeAll(enter_sequence);
     }
 
     /// Back to the normal screen.
     pub fn leave(w: *Io.Writer) Io.Writer.Error!void {
-        try w.writeAll("\x1b[?7h\x1b[?1049l");
+        try w.writeAll(leave_sequence);
     }
 };
+
+/// How many bytes at the end of `s` begin a UTF-8 character that `s` does not
+/// finish. Input shown a piece at a time keeps them for the next piece.
+pub fn partialTail(s: []const u8) usize {
+    var n: usize = 1;
+    while (n <= @min(s.len, 3)) : (n += 1) {
+        const b = s[s.len - n];
+        if (b & 0xc0 == 0x80) continue;
+        const need: usize = if (b >= 0xc2 and b <= 0xdf) 2 else if (b >= 0xe0 and b <= 0xef) 3 else if (b >= 0xf0 and b <= 0xf4) 4 else 0;
+        return if (need > n) n else 0;
+    }
+    return 0;
+}
+
+test "pager: C1 controls and stray bytes are shown, not sent" {
+    const gpa = std.testing.allocator;
+    for ([_]bool{ false, true }) |raw| {
+        var p = Pager.init(gpa, .{ .raw = raw }, 5, 80);
+        defer p.deinit();
+        _ = try p.append("a\xc2\x9b2J c\x9b d\xe2\x82 \xc0\xaf \xc3\xa9\xc2\xa0\n");
+        var aw: Io.Writer.Allocating = .init(gpa);
+        defer aw.deinit();
+        try p.print(&aw.writer);
+        try std.testing.expectEqualStrings("a<U+009B>2J c<9B> d<E2><82> <C0><AF> \xc3\xa9\xc2\xa0\n", aw.written());
+    }
+    // The replacement text takes its own width when lines wrap.
+    var p = Pager.init(gpa, .{}, 5, 10);
+    defer p.deinit();
+    _ = try p.append("ab\xc2\x9bcd\n");
+    try std.testing.expectEqual(@as(usize, 2), p.rowsOf(0));
+}
+
+test "pager: raw mode passes colours and links, nothing else" {
+    const gpa = std.testing.allocator;
+    const pass = [_][]const u8{ "\x1b[m", "\x1b[0m", "\x1b[31;1m", "\x1b[38:5:1m", "\x1b]8;;http://x/\x07", "\x1b]8;id=1;file:///a\x1b\\", "\x1b]8;;\x1b\\" };
+    for (pass) |s| try std.testing.expectEqual(s.len, Pager.escLen(s));
+    const refuse = [_][]const u8{ "\x1b[6n", "\x1b[2;1H", "\x1b[3J", "\x1b[?25l", "\x1b[?1m", "\x1b[>4;2m", "\x1b[31", "\x1b[31 hello m", "\x1bc", "\x1b]0;T\x07", "\x1b]52;c;aGk=\x07", "\x1b]8;;http://x/", "\x1b]8;;a\x1b[2J\x07", "\x1b]8;;a\nb\x07", "\x1b" };
+    for (refuse) |s| try std.testing.expectEqual(@as(usize, 0), Pager.escLen(s));
+
+    var p = Pager.init(gpa, .{ .raw = true }, 5, 80);
+    defer p.deinit();
+    _ = try p.append("x\x1b[6ny\x1b[31mz\x1b[3Jw\n");
+    var aw: Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    try p.print(&aw.writer);
+    try std.testing.expectEqualStrings("x^[[6ny\x1b[31mz^[[3Jw\x1b[0m\n", aw.written());
+}
+
+test "pager: a link is closed at the end of a row and reopened on the next" {
+    const gpa = std.testing.allocator;
+    var p = Pager.init(gpa, .{ .raw = true }, 5, 4);
+    defer p.deinit();
+    _ = try p.append("\x1b]8;;u\x07abcdefgh\x1b]8;;\x07\n");
+    p.finish();
+    var aw: Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    try p.render(&aw.writer);
+    const frame = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, frame, "\x1b]8;;u\x07abcd\x1b[0m\x1b]8;;\x1b\\\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, frame, "\x1b[K\x1b]8;;u\x07efgh") != null);
+}
+
+test "pager: search looks at the whole of a long line" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ "", "\x1b[1m" }) |style| {
+        var p = Pager.init(gpa, .{ .raw = true }, 4, 80);
+        defer p.deinit();
+        for (0..20) |_| _ = try p.append("short\n");
+        _ = try p.append(style);
+        const filler: [9000]u8 = @splat('a');
+        _ = try p.append(&filler);
+        _ = try p.append("NEE\x1b[0mDLE\n");
+        for (0..20) |_| _ = try p.append("short\n");
+        p.finish();
+        _ = p.key(.{ .char = '/' });
+        for ("NEEDLE") |c| _ = p.key(.{ .char = c });
+        _ = p.key(.enter);
+        try std.testing.expectEqual(@as(usize, 20), p.top);
+        try std.testing.expectEqualStrings("", p.message);
+    }
+}
+
+test "pager: a line fed in pieces wraps as one fed at once" {
+    const gpa = std.testing.allocator;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    // Characters of every width, sequences, and some that only look like one
+    // until more has come.
+    const parts = [_][]const u8{ "a", "bc ", "\t", "\x01", "\xc3\xa9", "\xe2\x82\xac", "\xc2\x9b", "\xff", "\r", "\x1b[31m", "\x1b[0m", "\x1b]8;;http://x/\x07", "\x1b]8;;\x07", "\x1b[2J", "\x1b[31", "long plain text " };
+    var prng = std.Random.DefaultPrng.init(7);
+    const random = prng.random();
+    while (text.items.len < 40000) try text.appendSlice(gpa, parts[random.uintLessThan(usize, parts.len)]);
+    for ([_]bool{ false, true }) |raw| {
+        var whole = Pager.init(gpa, .{ .raw = raw }, 6, 13);
+        defer whole.deinit();
+        _ = try whole.append(text.items);
+        var pieces = Pager.init(gpa, .{ .raw = raw }, 6, 13);
+        defer pieces.deinit();
+        var at: usize = 0;
+        while (at < text.items.len) {
+            const n = @min(1 + random.uintLessThan(usize, 700), text.items.len - at);
+            _ = try pieces.append(text.items[at..][0..n]);
+            at += n;
+            const rows = pieces.rowsOf(0);
+            // The same count as from the start.
+            var fresh: ?Pager.RowMark = null;
+            try std.testing.expectEqual(pieces.findRow(&fresh, 0, std.math.maxInt(usize)).row + 1, rows);
+            var from_start: ?Pager.RowMark = null;
+            const wanted = random.uintLessThan(usize, rows);
+            try std.testing.expectEqual(pieces.findRow(&from_start, 0, wanted).at, pieces.findRow(&pieces.drawn, 0, wanted).at);
+        }
+        try std.testing.expectEqual(whole.rowsOf(0), pieces.rowsOf(0));
+    }
+}
+
+test "partial UTF-8 at the end" {
+    for ([_]struct { []const u8, usize }{ .{ "", 0 }, .{ "a", 0 }, .{ "a\xc3", 1 }, .{ "a\xc3\xa9", 0 }, .{ "\xe2\x82", 2 }, .{ "\xf0\x9f\x98", 3 }, .{ "\xf0\x9f\x98\x80", 0 }, .{ "\x80\x80\x80", 0 }, .{ "\xff", 0 } }) |c| {
+        try std.testing.expectEqual(c[1], partialTail(c[0]));
+    }
+}
 
 test "key parser: sequences and plain keys" {
     var p: KeyParser = .{};

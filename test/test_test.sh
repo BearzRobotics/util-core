@@ -60,5 +60,13 @@ awk 'BEGIN {
         printf "both \"rnd %d\"%s\n", i, line
     } }' > rnd_cases.sh
 . ./rnd_cases.sh
+# "-l STRING" is the length of STRING (MISC-017).
+for e in '-l abc -eq 3' '3 -eq -l abc' '-l ab -lt -l abc' '-l abc = 3' 'abc = -l abc' \
+    '-l a -nt x' 'x -ef -l x' '-l -eq 2' '-l = -l' '-l abc -eq 3 -a -l x -eq 1' '! -l abc -eq 3' \
+    '-l abc -eq' '-l -l -eq 2' '-n -l'; do
+    # shellcheck disable=SC2086
+    both "length $e" $e
+done
+
 cd /; rm -rf "$W"
 print_summary

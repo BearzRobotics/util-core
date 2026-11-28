@@ -33,6 +33,8 @@ None.
 
 ## Known deviations and gaps
 
+- When `-n -N` or `-c -N` holds back everything, so that nothing is written, a seekable standard input is left where it was. GNU head 9.7 leaves it up to one read buffer further on.
+
 - `-c -N` / `-n -N` hold the last N items in memory (as GNU does for non-seekable input).
 - `--help` text is shorter than GNU's; diagnostics use ASCII quotes (GNU uses curly quotes in UTF-8 locales).
 - Multibyte characters are not interpreted: -c counts bytes and lines are split on a single delimiter byte, as in GNU.

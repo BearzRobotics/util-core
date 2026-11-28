@@ -44,13 +44,13 @@ of each `src/lib/*.zig`.
 ## Download
 
 Prebuilt archives are attached to each [release](https://github.com/BearzRobotics/util-core/releases):
-`util-core-VERSION-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` (static musl),
-`-windows-x86_64.zip` and `-windows-aarch64.zip`, with `SHA256SUMS`. Each holds
+`util-core-VERSION-linux-x86_64.tar.gz` and `-linux-aarch64.tar.gz` (static musl),
+with `SHA256SUMS`. Each holds
 `bin/` (every command plus the `util-core` multicall binary) and `share/man/man1/`.
 
 ```
 sha256sum -c --ignore-missing SHA256SUMS
-tar xzf util-core-0.2.0-linux-x86_64.tar.gz
+tar xzf util-core-0.3.0-linux-x86_64.tar.gz
 ```
 
 ## Supported platforms
@@ -58,8 +58,8 @@ tar xzf util-core-0.2.0-linux-x86_64.tar.gz
 | Platform | Prebuilt download | Tested |
 |---|---|---|
 | Linux x86_64, aarch64 | yes (static musl) | x86_64: every test suite, differential against GNU |
-| Windows x86_64 | yes | 79 cases under wine; not yet rechecked on real Windows (planned for 0.1.1) |
-| Windows aarch64 | yes | compiled only |
+| Windows x86_64 | no | builds from source; several commands fail or crash on real Windows (see `docs/portability.md`) |
+| Windows aarch64 | no | compiled only |
 | macOS x86_64, aarch64 | no | compile-checked in CI only |
 
 macOS builds from source (`zig build`, or `-Dtarget=aarch64-macos` from another host) and is

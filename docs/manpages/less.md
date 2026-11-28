@@ -19,7 +19,7 @@ It is a small implementation, built into util-core so that paging works on every
 : Quit at once, printing the text, if it fits on one screen. The terminal is not touched until the text is longer than that, so what is typed meanwhile is left for others. The text is shown as the pager would show it: without `-R`, control characters appear as `^X` and are not sent to the terminal.
 
 -R, --RAW-CONTROL-CHARS, -r
-: Pass colour escape sequences through. Without it, control characters are shown as `^X`.
+: Pass colour escape sequences (`ESC [` digits, `;` or `:`, `m`) and OSC 8 hyperlinks through; every other escape sequence is shown as `^[` and the text that follows it. Without it, control characters are shown as `^X`. With or without it, the control characters U+0080 to U+009F are shown as `<U+009B>` and bytes that are not part of a UTF-8 character as `<9B>`; valid UTF-8 is passed in every locale. A file name in a message or in the `=` line is shown the same way.
 
 -S, --chop-long-lines
 : Cut long lines at the screen edge instead of wrapping.
@@ -49,6 +49,10 @@ F goes to the end of the text and shows new data as it arrives, from a pipe or f
 
 Unlike less(1), where no other command works until following is interrupted, scrolling, searching and quitting work while following.
 
+# DIFFERENCES FROM GNU
+
+- A file that cannot be read is reported, with status 1, where GNU less names a directory and exits 0.
+
 # EXIT STATUS
 
 | Status | Meaning |
@@ -62,7 +66,7 @@ none (the `LESS` variable is not read).
 
 # STANDARD STREAMS
 
-The screen is drawn on the alternate screen of the terminal; the keys are read from the terminal itself (`/dev/tty`, or the console on Windows), so standard input may be a pipe.
+A hang-up, interrupt, quit or termination signal leaves the screen and restores the terminal modes before it ends the program; SIGTSTP does so before it stops it, and both are taken again when it goes on (not on Windows). The screen is drawn on the alternate screen of the terminal; the keys are read from the terminal itself (`/dev/tty`, or the console on Windows), so standard input may be a pipe.
 
 # COMPATIBILITY
 
@@ -83,4 +87,4 @@ cat(1), docs/compatibility/less.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.

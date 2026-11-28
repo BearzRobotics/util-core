@@ -30,6 +30,13 @@ for f in %a %A %b %B %c %C %d %D %e %F %g %G %h %H %I %j %k %l %m %M %n %N %p %P
         TZ=America/New_York run_cmp "fmt $f @$e NY" -d @$e "+$f"
     done
 done
+# %z with its flags and widths, in zones named here: the machine's own would
+# decide what the cases above cover. <-00> is an unknown offset, printed "-".
+for tzv in UTC0 '<-00>0' EST5 Asia/Kolkata XXX0:30 XXX-0:00:30; do
+    for f in %z %-z %_z %0z %+z %_+z %+_z %1z %7z %-10z %_10z %010z %:z %-:z %_:z %_8::z %-::z %_:::z %:::z %6:::z; do
+        TZ=$tzv run_cmp "zone $f $tzv" -d @0 "+$f|"
+    done
+done
 run_cmp "-u"                  -u -d @$E1
 run_cmp "--utc"               --utc -d @$E1
 run_cmp "--universal"         --universal -d @$E1
@@ -123,6 +130,61 @@ while IFS= read -r line; do
     run_cmp "rnd '$line' UTC" -u -d "$line" '+%s.%N'
     TZ=America/New_York run_cmp "rnd '$line' NY" -d "$line" '+%s %F %T %Z'
 done < rnd
+
+# Input is worked through as it arrives, in little memory.
+n=$(yes '@0' | (ulimit -v 200000; timeout 60 "$BIN_DIR/date" -u -f - 2>&1) | head -n 200000 | cksum)
+g=$(yes '@0' | LC_ALL=C timeout 60 "${GNU_BIN:-/usr/bin}/date" -u -f - 2>&1 | head -n 200000 | cksum)
+if [ "$n" = "$g" ]; then PASS=$((PASS + 1)); echo "PASS endless input"; else FAIL=$((FAIL + 1)); echo "FAIL endless input: GNU $g, ours $n"; fi
+first=$( (echo '@0'; sleep 3) | timeout 2 "$BIN_DIR/date" -u -f - 2>/dev/null | head -n 1)
+if [ -n "$first" ]; then PASS=$((PASS + 1)); echo "PASS a line is answered before the input ends"; else FAIL=$((FAIL + 1)); echo "FAIL no output before the end of input"; fi
+
+# TZ numbers beyond any clock are limited, as in glibc; they used to crash.
+for z in AAA99999999999 AAA999999 AAA25 AAA-25 AAA1:99 AAA1:00:99 AAA0BBB,J1/167,J200; do
+    n=$(TZ=$z "$BIN_DIR/date" -d @15000000 '+%F %T %z %Z' 2>&1)
+    g=$(TZ=$z LC_ALL=C "${GNU_BIN:-/usr/bin}/date" -d @15000000 '+%F %T %z %Z' 2>&1)
+    if [ "$n" = "$g" ]; then PASS=$((PASS + 1)); echo "PASS TZ=$z"; else FAIL=$((FAIL + 1)); echo "FAIL TZ=$z: GNU $g, ours $n"; fi
+done
+for z in AAA0BBB,J99999,J1 AAA0BBB,M300.1.1,M1.1.1; do
+    if TZ=$z "$BIN_DIR/date" -d @0 >/dev/null 2>&1; then PASS=$((PASS + 1)); echo "PASS TZ=$z"; else FAIL=$((FAIL + 1)); echo "FAIL TZ=$z"; fi
+done
+# A zone file has to be one: TZ, also in a date string, may name anything.
+mkfifo "$TEST_TMP/tzfifo"
+for z in /dev/zero "$TEST_TMP/tzfifo" /proc/self/mem; do
+    n=$( (ulimit -v 500000; TZ=$z timeout 5 "$BIN_DIR/date" -d @0 +%s 2>&1) )
+    m=$( (ulimit -v 500000; timeout 5 "$BIN_DIR/date" -u -d "TZ=\"$z\" 1970-01-01" +%s 2>&1) )
+    if [ "$n,$m" = "0,0" ]; then PASS=$((PASS + 1)); echo "PASS zone file $z"; else FAIL=$((FAIL + 1)); echo "FAIL zone file $z: $n, $m"; fi
+done
+# Numbers no calendar can hold: refused as invalid, where these used to crash.
+for d in '99999999999999999-01-01' '9999999999999999 years' '12:00 +1:9223372036854775807' \
+    'jun -9223372036854775808 -1' '2000-01-01 9223372036854775807 months' '-9223372036854775808.5 seconds' \
+    '2147485548-01-01' '2000-01-01 2147483648 days' '9223372036854775807 monday' '@-9223372036854775808.5'; do
+    run_cmp "huge: $d" -u -d "$d"
+done
+# Field widths past any number used to overflow (MISC-026). With - they do not
+# show; otherwise the field needs gigabytes, which under a memory limit must be
+# said and not be a crash.
+N=99999999999999999999
+for f in "%-${N}d|" "%-${N}Y|" "%-${N}a|" "%-${N}z|" "%100000Y|" "%100000a|" "%100000N|" "%100000z|"; do
+    TZ=UTC0 run_cmp "huge width $f" -d @0 "+$f"
+done
+for f in "%${N}Y" "%${N}a" "%${N}N" "%${N}z" "%${N}F" "%2147483648Y"; do
+    out=$( (ulimit -v 300000; TZ=UTC0 timeout 20 "$BIN_DIR/date" -d @0 "+$f" 2>&1 >/dev/null); echo "status $?" )
+    if [ "$out" = "date: memory exhausted
+status 1" ]; then PASS=$((PASS + 1)); echo "PASS out of memory $f"
+    else FAIL=$((FAIL + 1)); echo "FAIL out of memory $f: $out"; fi
+done
+
+# Flags, widths and modifiers as GNU has them (MISC-034).
+for f in '%P%^P%#P' '%-5N' '%_5N' '%-2N' '%12N' '%+12F' '%12F' '%_12F' '%-F' '%^14F' '%4:q' '%10:q' '%::::z' '%5:Y' '%OF' '%5%' '%-%' \
+    '%+e' '%+3y' '%+3C' '%+5a' '%#a' '%^#p' '%#Z' '%-D' '%_D' '%12D' '%-12T' '%_30R' '%5n|' '%05t|' '%1H' '%_+d' '%+_d' \
+    '%3Oy' '%20Oz' '%25OG' '%+20Ey' '%24EC' '%+19Og' '%14Od' '%#15Eb' '%Ec' '%Ex' '%5Q'; do
+    for when in '2024-03-05 04:05:06.007008009' '@0' '1899-01-02' '0005-06-07' '12345-01-02'; do
+        TZ=EST5 run_cmp "format $f $when" -d "$when" "+$f|"
+    done
+done
+for f in '%Y' '%C' '%y' '%G' '%g' '%F' '%c' '%x' '%D' '%+6Y' '%_6Y' '%10F'; do
+    for when in '@-62198755200' '@-100000000000'; do TZ=UTC0 run_cmp "before year 0, $f $when" -d "$when" "+$f"; done
+done
 
 print_summary
 [ "$FAIL" -eq 0 ]

@@ -76,5 +76,35 @@ done
 GENPASS=$((PASS - START)); GENFAILS=$((FAIL - F0))
 printf "\nGenerated triples: %d/%d agree with GNU diff3\n" "$GENPASS" "$((GENPASS + GENFAILS))"
 
+# The copy of standard input made for --diff-program is private, and a signal
+# does not leave it behind (VIEW-016). GNU makes no copy.
+mkdir "$TEST_TMP/d3"; printf 'a\n' > "$TEST_TMP/s1"; printf 'b\n' > "$TEST_TMP/s2"
+cat > "$TEST_TMP/program.sh" <<EOT
+#!/bin/sh
+for a; do case \$a in */diff3.*) stat -c %a "\$a" >> "$TEST_TMP/mode" ;; esac; done
+[ -z "\$SIG" ] || kill -\$SIG \$PPID
+exec /usr/bin/diff "\$@"
+EOT
+chmod +x "$TEST_TMP/program.sh"
+for sig in '' INT TERM; do
+    rm -f "$TEST_TMP/mode"
+    (printf 'secret\n' | (umask 022; SIG=$sig TMPDIR="$TEST_TMP/d3" ours --diff-program="$TEST_TMP/program.sh" - "$TEST_TMP/s1" "$TEST_TMP/s2")) >/dev/null 2>&1
+    got="status $? mode $(sort -u "$TEST_TMP/mode") left $(ls "$TEST_TMP/d3" | wc -l)"
+    case $sig in '') want=0 ;; INT) want=130 ;; TERM) want=143 ;; esac
+    if [ "$got" = "status $want mode 600 left 0" ]; then PASS=$((PASS + 1)); echo "PASS stdin copy, signal '$sig'"
+    else FAIL=$((FAIL + 1)); echo "FAIL stdin copy, signal '$sig': $got"; fi
+done
+
+# The range of the command that removes the extra dots (VIEW-018).
+dots="$TEST_TMP/dots"; mkdir -p "$dots"
+printf 'd\ny\r\ne' > "$dots/A"; printf 'd\ny\r\n' > "$dots/B"; printf 'y\r\n}\n.\n\n' > "$dots/C"
+printf '..\n' > "$dots/D"; printf 'b\nc\n.\n.\nb\n' > "$dots/E"; printf 'c\ne\n\n.\n}\n' > "$dots/F"
+printf '\n\n' > "$dots/G"; printf '..\ne\nd\n' > "$dots/H"
+for opt in -e -E -A -x -X -3; do
+    run_cmp "dots $opt" $opt "$dots/A" "$dots/B" "$dots/C"
+    run_cmp "dots in a conflict $opt" $opt "$dots/D" "$dots/E" "$dots/F"
+    run_cmp "dots in the old lines $opt" $opt "$dots/G" "$dots/H" "$dots/G"
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]

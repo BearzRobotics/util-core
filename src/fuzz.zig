@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Fuzz-test root (decision 0007). `zig build fuzz` runs every fuzz test once on its
-//! corpus; `zig build fuzz --fuzz` fuzzes continuously with Zig's built-in fuzzer.
-//! `zig build test` also runs them once, as regression tests.
+//! Fuzz-test root (decision 0007). `zig build test` runs every test here as a short
+//! regression test: each corpus entry, then a few mutations. A longer campaign is
+//! `sh tools/fuzz.sh`, which runs `zig build fuzz` under a memory cap and a time
+//! limit; both use src/fuzz/engine.zig. (Zig's built-in `--fuzz` does not work.)
+//! Only file-name quoting is covered so far: text, lang and stream are placeholders.
 //!
 //! One file per area under src/fuzz/, each owned by one author so edits do not
 //! collide; add a file by adding a line here.

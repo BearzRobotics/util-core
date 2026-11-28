@@ -64,6 +64,7 @@ Per decision 0005 every departure from GNU is listed here.
 
 ## Known deviations and gaps
 
+- User and group names come from `/etc/passwd` and `/etc/group` alone, not through NSS. GNU asks the C library, which knows more sources. For accounts that exist only in LDAP, SSSD, systemd-homed or as systemd dynamic users, `ls -l` prints the numbers, and the JSON `user` and `group` fields are null.
 - Only the C locale is modelled: names sort bytewise, only ASCII counts as printable (with `-q` every other byte becomes `?`), `locale` quoting uses `'`, and month names are English. GNU in a UTF-8 locale differs.
 - Capability colouring (`ca=`) is implemented (a regular file with a `security.capability` attribute gets the `ca` colour, after setuid and setgid and before `ex`), but cannot be compared with the reference binary: the Ubuntu GNU ls 9.7 used here is built without libcap and never colours capabilities. Covered by `test/test_ls_extras.sh` against the documented rule only. A GNU ls built with libcap decides with `cap_get_file`; ours checks only that the attribute exists.
 - SELinux contexts are read from the `security.selinux` attribute only; ACLs are detected through the `system.posix_acl_*` attributes, so `+` appears only when the file system exposes them.

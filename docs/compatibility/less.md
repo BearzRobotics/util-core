@@ -20,11 +20,13 @@ Scrolling, searching and quitting work while following; GNU less has to be inter
 
 ## Known deviations and gaps
 
+- A file that cannot be read is reported, with status 1, where GNU less names a directory and exits 0.
 - Search is plain text (smart case with `-i`), not a regular expression, and does not wrap past the end.
 - `:n`, `:p`, `v`, marks, numeric prefixes, `-P` prompts, `+CMD` and the `LESS` variable are not implemented.
 - Several files are one concatenated text.
 - Following keeps the open descriptor: there is no `--follow-name`, so rotated files are not reopened, and truncation is not noticed. `+F` is not implemented.
-- Display widths: bytes count one column, UTF-8 continuation bytes none, tabs go to the next multiple of 8; wide and combining characters are not handled.
+- Display widths: a UTF-8 character counts one column, tabs go to the next multiple of 8; wide and combining characters are not handled.
+- Characters a terminal could act on are shown as text: U+0080 to U+009F as `<U+009B>`, bytes that are not UTF-8 as `<9B>` (GNU less highlights these; with `-R` it takes U+009B as the start of a sequence). With `-R`, escape sequences other than colours and OSC 8 links (and any over 4096 bytes) are shown as text, where GNU less drops them. Valid UTF-8 is passed in every locale, also where GNU less in the C locale shows its bytes as `<C3><A9>`. `-r` is the same as `-R`: GNU's `-r`, which passes everything, is not provided.
 - A lone ESC is a key of its own and swallows the byte after it.
 - The text is kept in memory.
 - Windows and macOS: compiled, not run.

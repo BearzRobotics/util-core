@@ -29,12 +29,12 @@ if command -v script >/dev/null 2>&1; then
         for x in g o; do
             mkdir -p "$D/$x"; rm -rf "$D/$x"/*
             if [ $x = g ]; then bin="$GNU_BIN_DIR/nohup"; else bin="$BIN_DIR/nohup"; fi
-            (cd "$D/$x" && HOME="$D/$x" script -qec "sh -c \"$(printf '%s' "$shell" | sed "s#NOHUP#$bin#g")\"" /dev/null | sed "s#$bin#nohup#g; s#$D/$x#D#g" > ../$x.out; ls -A > ../$x.ls; [ -f nohup.out ] && { wc -c < nohup.out > ../$x.sz; stat -c %a nohup.out >> ../$x.sz; } || echo none > ../$x.sz)
+            (cd "$D/$x" && HOME="$D/$x" script -qec "sh -c \"$(printf '%s' "$shell" | sed "s#NOHUP#$bin#g")\"" /dev/null | sed "s#$bin#nohup#g; s#$D/$x#D#g" > ../$x.out; ls -A > ../$x.ls; [ -f nohup.out ] && { sed "s#$bin#nohup#g; s#$D/$x#D#g" nohup.out > ../$x.sz; stat -c %a nohup.out >> ../$x.sz; } || echo none > ../$x.sz)
         done
         if cmp -s "$D/g.out" "$D/o.out" && cmp -s "$D/g.ls" "$D/o.ls" && cmp -s "$D/g.sz" "$D/o.sz"; then
             PASS=$((PASS + 1)); printf "PASS %s\n" "$desc"
         else
-            FAIL=$((FAIL + 1)); printf "FAIL %s\n" "$desc"; diff "$D/g.out" "$D/o.out" | head -5; diff "$D/g.ls" "$D/o.ls" | head -3
+            FAIL=$((FAIL + 1)); printf "FAIL %s\n" "$desc"; diff "$D/g.out" "$D/o.out" | head -5; diff "$D/g.ls" "$D/o.ls" | head -3; diff "$D/g.sz" "$D/o.sz" | head -3
         fi
     }
     GNU_BIN_DIR="${GNU_BIN:-/usr/bin}"
@@ -53,5 +53,25 @@ if command -v script >/dev/null 2>&1; then
 else
     skip_test "terminal cases (script not installed)"
 fi
+# As execvp, a script without a "#!" line is run by the shell (MISC-007).
+printf 'echo no-shebang "$@"; exit 3\n' > "$TEST_TMP/nsh"; chmod +x "$TEST_TMP/nsh"
+exp=$(cd "$TEST_TMP" && LC_ALL=C gnu  ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+act=$(cd "$TEST_TMP" && LC_ALL=C ours  ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+rm -f "$TEST_TMP/nohup.out"
+if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
+else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
+
+# nohup.out is 0600 whatever the umask, and the command keeps the umask
+# (MISC-013). nohup only writes the file when standard output is a terminal.
+if command -v script >/dev/null 2>&1; then
+    for mask in 000 277 777; do
+        rm -rf "$TEST_TMP/nh" && mkdir "$TEST_TMP/nh"
+        (cd "$TEST_TMP/nh" && umask $mask && script -qec "$BIN_DIR/nohup sh -c umask" /dev/null >/dev/null 2>&1)
+        got="$(stat -c %a "$TEST_TMP/nh/nohup.out" 2>/dev/null) $(cat "$TEST_TMP/nh/nohup.out" 2>/dev/null)"
+        if [ "$got" = "600 0$mask" ]; then PASS=$((PASS + 1)); echo "PASS nohup.out under umask $mask"
+        else FAIL=$((FAIL + 1)); echo "FAIL nohup.out under umask $mask: $got"; fi
+    done
+fi
+
 print_summary
 [ "$FAIL" -eq 0 ]

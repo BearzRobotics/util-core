@@ -799,4 +799,31 @@ stream_case "F and the last line of stdin"       'printf "a\nb\n" | "$S" -e F -e
 stream_case "r /dev/stdin from a file"           '"$S" "1r /dev/stdin" < five'
 stream_case "r /dev/stdin from a pipe"           'cat five | "$S" "1r /dev/stdin"'
 stream_case "a line longer than a read"          '{ head -c 300000 /dev/zero | tr "\0" a; echo; echo end; } | "$S" "s/a\{5\}/b/g" | cksum'
+# A script that cannot be read to its end is not run (REGX-026). GNU sed runs
+# what it got.
+echo a > "$TEST_TMP/rf"
+out=$( (ulimit -v 1000000; "$BIN_DIR/sed" -f /proc/self/mem "$TEST_TMP/rf") </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"read error on /proc/self/mem"*"status 4") PASS=$((PASS + 1)); echo "PASS sed -f read error" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL sed -f read error: $out" ;;
+esac
+
+# R and F use the -z delimiter, and R adds none to a last line that has none
+# (REGX-027).
+printf 'r1\0r2\0' > "$TEST_TMP/rz"; printf 'x1\0x2' > "$TEST_TMP/rz-open"; printf 'p\nq' > "$TEST_TMP/rn-open"
+printf '1\0002\0003\0' > "$TEST_TMP/three-z"; printf '1\n2\n3\n' > "$TEST_TMP/three"
+CMP_STDIN="$TEST_TMP/three-z" run_cmp "-z R" -z "R $TEST_TMP/rz"
+CMP_STDIN="$TEST_TMP/three-z" run_cmp "-z R, open last line" -z "R $TEST_TMP/rz-open"
+CMP_STDIN="$TEST_TMP/three" run_cmp "R, open last line" "R $TEST_TMP/rn-open"
+CMP_STDIN="$TEST_TMP/three-z" run_cmp "-z F" -z F
+
+# Broken intervals, an operator with nothing to repeat, and [:class:] without
+# the outer brackets (REGX-025).
+printf 'a{x}\na+b\na?b\naaa\n:alpha:\n+a\n' > "$TEST_TMP/bre"
+for script in 's/a\{x\}/Y/' 's/a\{1x\}/Y/' 's/a\{\}/Y/' 's/a\{2,1\}/Y/' 's/a\{99999\}/Y/' 's/\+/Y/' 's/^\+/Y/' \
+    's/\?a/Y/' 's/\{/Y/' 's/^\{1\}/Y/' 's/[:alpha:]/Y/' 's/[^:digit:]/Y/' 's/[::]/Y/'; do
+    CMP_STDIN="$TEST_TMP/bre" run_cmp "regex $script" "$script"
+done
+CMP_STDIN="$TEST_TMP/bre" run_cmp "regex -E a{x}" -E 's/a{x}/Y/'
+
 cd /; print_summary

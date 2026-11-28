@@ -464,4 +464,14 @@ for d in dir vdir; do
     done
 done
 
+# Entries that cannot be examined do not upset the layout or the order
+# (DISK-031).
+mkdir "$TEST_TMP/nox"; : > "$TEST_TMP/nox/a"; : > "$TEST_TMP/nox/b"; : > "$TEST_TMP/nox/c"
+mkdir "$TEST_TMP/nox/d"; ln -s a "$TEST_TMP/nox/l"; chmod 444 "$TEST_TMP/nox"
+for opts in -mi -li -S -t '-C -i' '-1 -s -i'; do
+    # shellcheck disable=SC2086
+    run_cmp "unsearchable directory $opts" $opts "$TEST_TMP/nox"
+done
+chmod 755 "$TEST_TMP/nox"
+
 cd /; print_summary

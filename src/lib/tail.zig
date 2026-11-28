@@ -228,7 +228,7 @@ fn fromStart(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, buf: []
 /// Read the last N bytes/lines of a regular file by looking only at its end.
 fn lastFromSeekable(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, buf: []u8) !u64 {
     const size = try file.length(env.io);
-    if (!try sizeIsReal(env, file, size)) return lastFromStream(env, out, file, cfg, buf);
+    if (!try common.sizeIsReal(env.io, file, size)) return lastFromStream(env, out, file, cfg, buf);
     var start: u64 = 0;
     if (cfg.bytes) {
         start = if (size > cfg.count) size - cfg.count else 0;
@@ -268,18 +268,6 @@ fn lastFromSeekable(env: Env, out: *stickyout.Out, file: Io.File, cfg: Options, 
         out.write(buf[0..n]);
         if (out.failed) return off;
     }
-}
-
-/// Whether the reported size can be used to find the end. procfs reports 0
-/// for files with contents, and sysfs one block (4096) for a few bytes; as in
-/// GNU only a size over a block is trusted, and then only if its last byte can
-/// be read. Streaming such a short file costs nothing.
-fn sizeIsReal(env: Env, file: Io.File, size: u64) !bool {
-    var e: std.os.linux.E = .SUCCESS;
-    const block: u64 = if (sys.fstatFd(file.handle, &e)) |st| st.blksize else 0;
-    if (size <= @max(block, 4096)) return false;
-    var last: [1]u8 = undefined;
-    return try file.readPositionalAll(env.io, &last, size - 1) == 1;
 }
 
 /// Stream the input keeping only the last N items.

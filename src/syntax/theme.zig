@@ -309,8 +309,10 @@ pub fn renderSgr(r: Rule, depth: Depth, buf: []u8) ?[]const u8 {
     return w.buffered();
 }
 
-const not_computed: u16 = 0xffff;
-const no_color: u16 = 0xfffe;
+/// Entries of the memo that are no rule's index; a theme file holds far fewer
+/// rules than these.
+const not_computed: u32 = 0xffff_ffff;
+const no_color: u32 = 0xffff_fffe;
 
 const Rendered = struct { buf: [64]u8 = undefined, len: u8 = 0, done: bool = false };
 
@@ -319,7 +321,7 @@ pub const Theme = struct {
     depth: Depth = .ansi16,
     /// `rules` came from `parse` and are freed with the theme.
     owned: bool = false,
-    memo: std.ArrayList(u16) = .empty,
+    memo: std.ArrayList(u32) = .empty,
     rendered: std.ArrayList(Rendered) = .empty,
 
     pub fn deinit(t: *Theme, gpa: std.mem.Allocator) void {

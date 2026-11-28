@@ -12,6 +12,8 @@ const E = std.os.linux.E;
 
 pub const Type = enum { none, simple, numbered_existing, numbered };
 
+const ListError = error{ OutOfMemory, ProcessFdQuotaExceeded, SystemFdQuotaExceeded, ListFailed };
+
 fn dirOf(path: []const u8) []const u8 {
     const slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse return ".";
     var d = slash;
@@ -23,13 +25,24 @@ fn dirOf(path: []const u8) []const u8 {
 /// digits (allocated with `arena`), or "" when there is none. A name is chosen
 /// by whoever can create files in that directory, so the number may be larger
 /// than any integer type; it is kept and incremented as text.
-fn highestNumbered(env: common.Env, arena: std.mem.Allocator, from: sys.Handle, file: []const u8, base: []const u8) error{OutOfMemory}![]const u8 {
+///
+/// A listing that fails is an error, not "none": `--backup=existing` would
+/// then make a simple backup, over an older one. The exception is a directory
+/// that may not be listed, or is not there: GNU too carries on as if it held
+/// no numbered backups.
+fn highestNumbered(env: common.Env, arena: std.mem.Allocator, from: sys.Handle, file: []const u8, base: []const u8) ListError![]const u8 {
     const start: Io.Dir = .{ .handle = from };
-    var dir = start.openDir(env.io, dirOf(file), .{ .iterate = true }) catch return "";
+    var dir = start.openDir(env.io, dirOf(file), .{ .iterate = true }) catch |e| switch (e) {
+        error.AccessDenied, error.PermissionDenied, error.FileNotFound, error.NotDir => return "",
+        error.ProcessFdQuotaExceeded => return error.ProcessFdQuotaExceeded,
+        error.SystemFdQuotaExceeded => return error.SystemFdQuotaExceeded,
+        error.SystemResources => return error.OutOfMemory,
+        else => return error.ListFailed,
+    };
     defer dir.close(env.io);
     var best: []u8 = &.{};
     var it = dir.iterate();
-    while (it.next(env.io) catch null) |entry| {
+    while (it.next(env.io) catch return error.ListFailed) |entry| {
         const nm = entry.name;
         if (nm.len < base.len + 4) continue;
         if (!std.mem.startsWith(u8, nm, base)) continue;
@@ -96,8 +109,13 @@ pub fn backupRename(env: common.Env, suffix: []const u8, arena: std.mem.Allocato
     while (attempts < 1000) : (attempts += 1) {
         var bt = btype_in;
         var ok: bool = true;
-        const name = nameFor(env, suffix, arena, dir, file, &bt, &ok) catch {
-            err.* = .NOMEM;
+        const name = nameFor(env, suffix, arena, dir, file, &bt, &ok) catch |e| {
+            err.* = switch (e) {
+                error.OutOfMemory => .NOMEM,
+                error.ProcessFdQuotaExceeded => .MFILE,
+                error.SystemFdQuotaExceeded => .NFILE,
+                else => .IO,
+            };
             return null;
         };
         var end = file.len;
@@ -112,6 +130,20 @@ pub fn backupRename(env: common.Env, suffix: []const u8, arena: std.mem.Allocato
     }
     err.* = .EXIST;
     return null;
+}
+
+test "a listing that fails is not taken for one without numbered backups" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const env: common.Env = .{ .io = std.testing.io, .gpa = std.testing.allocator, .environ = null };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.symLink(std.testing.io, "loop", "loop", .{});
+    const from = tmp.dir.handle;
+    try std.testing.expectError(error.ListFailed, highestNumbered(env, arena_state.allocator(), from, "loop/f", "f"));
+    // No directory there: the rename that follows will say so.
+    try std.testing.expectEqualStrings("", try highestNumbered(env, arena_state.allocator(), from, "nowhere/f", "f"));
 }
 
 test "backup numbers are incremented as text" {

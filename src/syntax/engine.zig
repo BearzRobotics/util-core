@@ -72,22 +72,28 @@ pub const Highlighter = struct {
         ctx.flattening = true;
         defer ctx.flattening = false;
         var list: std.ArrayList(*MatchRule) = .empty;
+        var seen: std.AutoHashMapUnmanaged(*Context, void) = .empty;
+        defer seen.deinit(h.reg.gpa);
         if (ctx.meta_include_prototype and !std.mem.eql(u8, ctx.name, "prototype")) {
-            if (ctx.syntax.contexts.get("prototype")) |p| try h.collect(&list, p, 0);
+            if (ctx.syntax.contexts.get("prototype")) |p| try h.collect(&list, p, &seen, 0);
         }
-        try h.collect(&list, ctx, 0);
+        try h.collect(&list, ctx, &seen, 0);
         ctx.flat = list.items;
         return list.items;
     }
 
-    fn collect(h: *Highlighter, list: *std.ArrayList(*MatchRule), ctx: *Context, depth: u32) !void {
+    /// A context is taken once: of two copies of a rule only the first can
+    /// win, and contexts that include each other repeatedly would otherwise
+    /// unfold without end.
+    fn collect(h: *Highlighter, list: *std.ArrayList(*MatchRule), ctx: *Context, seen: *std.AutoHashMapUnmanaged(*Context, void), depth: u32) !void {
         if (depth > 32) return;
+        if ((try seen.getOrPut(h.reg.gpa, ctx)).found_existing) return;
         const a = h.reg.arena_state.allocator();
         for (ctx.rules) |rule| switch (rule) {
             .match => |m| try list.append(a, m),
             .include => |inc| {
                 if (h.reg.resolve(inc, ctx.syntax)) |target| {
-                    try h.collect(list, target, depth + 1);
+                    try h.collect(list, target, seen, depth + 1);
                 } else {
                     const msg = try std.fmt.allocPrint(a, "unresolved include '{s}' in context '{s}'", .{ inc.name, ctx.name });
                     try h.reg.warn(ctx.syntax, msg);
@@ -235,7 +241,7 @@ pub const Highlighter = struct {
         try h.points.append(gpa, ms);
         try h.points.append(gpa, me);
         for (rule.captures) |c| {
-            if (2 * c.index + 1 >= regs.len) continue;
+            if (c.index >= regs.len / 2) continue;
             const s = regs[2 * c.index];
             const e = regs[2 * c.index + 1];
             if (s == unset or e == unset or s >= e) continue;
@@ -250,7 +256,7 @@ pub const Highlighter = struct {
             if (p == prev) continue;
             h.scopes.shrinkRetainingCapacity(base_len);
             for (rule.captures) |c| {
-                if (2 * c.index + 1 >= regs.len) continue;
+                if (c.index >= regs.len / 2) continue;
                 const s = regs[2 * c.index];
                 const e = regs[2 * c.index + 1];
                 if (s == unset or e == unset) continue;

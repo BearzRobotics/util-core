@@ -75,5 +75,5 @@ docs/compatibility/cut.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.
 

@@ -4,6 +4,7 @@
 //! parsing, scaling and formatting are in src/lib/numfmt.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const Io = std.Io;
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
@@ -122,7 +123,7 @@ pub fn main(ctx: cli.Context) u8 {
                 o.round = @fromBackingInt(@intCast(k));
             },
             1105 => {
-                const v = std.fmt.parseInt(i64, opt.arg.?, 10) catch |e| blk: {
+                const v = numparse.parseInt(i64, opt.arg.?, 10) catch |e| blk: {
                     if (e == error.Overflow) break :blk @as(i64, if (opt.arg.?[0] == '-') std.math.minInt(i64) else std.math.maxInt(i64));
                     cli.warn(ctx, "invalid padding value {f}", .{cli.quoteC(opt.arg.?)});
                     return 1;
@@ -159,7 +160,7 @@ pub fn main(ctx: cli.Context) u8 {
             1109 => o.debug = true,
             1110 => {
                 if (opt.arg) |a| {
-                    const v = std.fmt.parseInt(u64, a, 10) catch 0;
+                    const v = numparse.parseInt(u64, a, 10) catch 0;
                     if (v == 0) {
                         cli.warn(ctx, "invalid header value {f}", .{cli.quoteC(a)});
                         return 1;
@@ -206,7 +207,10 @@ pub fn main(ctx: cli.Context) u8 {
     var stdin = Io.File.stdin().readerStreaming(ctx.io, &rbuf);
     const input: numfmt.Input = if (operands.len > 0) .{ .operands = operands } else .{ .reader = &stdin.interface };
     const result = numfmt.run(env, o, input, &stdout.interface, observer) catch |e| switch (e) {
-        error.OutOfMemory => return 1,
+        error.OutOfMemory => {
+            cli.warn(ctx, "memory exhausted", .{});
+            return 1;
+        },
         error.ReadFailed => {
             cli.warn(ctx, "error reading input", .{});
             return 1;
@@ -216,8 +220,8 @@ pub fn main(ctx: cli.Context) u8 {
             return 1;
         },
     };
-    // --invalid=abort: output so far is flushed; exit at once with status 2.
-    if (result.aborted) std.process.exit(2);
+    // --invalid=abort: the output so far is flushed, the status is 2.
+    if (result.aborted) return 2;
     if (!result.valid and o.invalid != .warn and o.invalid != .ignore) return 2;
     return 0;
 }

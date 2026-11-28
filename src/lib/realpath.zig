@@ -12,11 +12,10 @@ pub const Env = common.Env;
 pub const Mode = paths.Mode;
 
 pub const Options = struct {
-    /// Canonicalisation mode (default `.canonical`; -e `.existing`, -m
-    /// `.missing`, -s `.logical_only`).
+    /// Which components must exist (default `.canonical`; -e `.existing`, -m
+    /// `.missing`).
     mode: Mode = .canonical,
-    /// -L: apply ".." before symlinks. Overrides -s, as in GNU.
-    logical: bool = false,
+    links: Links = .physical,
     /// -z: terminate with NUL instead of newline.
     zero: bool = false,
     /// --relative-to=DIR.
@@ -24,6 +23,23 @@ pub const Options = struct {
     /// --relative-base=DIR.
     relative_base: ?[]const u8 = null,
 };
+
+/// What is done with symlinks (-P, -L, -s: the last one given counts).
+pub const Links = enum {
+    /// Resolve each as it is met.
+    physical,
+    /// Apply ".." to the name first, then resolve what is left.
+    logical,
+    /// Leave them in the name.
+    none,
+};
+
+fn canonical(env: Env, path: []const u8, mode: Mode, links: Links) paths.Error![]u8 {
+    const first = try paths.resolveLinks(env, path, mode, links == .physical);
+    if (links != .logical) return first;
+    defer env.gpa.free(first);
+    return paths.resolveLinks(env, first, mode, true);
+}
 
 pub const Failure = paths.Error;
 pub const Event = struct { name: []const u8, failure: Failure };
@@ -45,9 +61,7 @@ pub fn isBelow(path: []const u8, base: []const u8) bool {
 
 /// Resolve each name and write it to `out`.
 pub fn run(env: Env, opts: Options, names: []const []const u8, out: *Io.Writer, obs: Observer) (Io.Writer.Error || error{OutOfMemory})!Result {
-    var mode = opts.mode;
-    // -L (logical) overrides -s: symlinks are expanded then.
-    if (opts.logical and mode == .logical_only) mode = .canonical;
+    const mode = opts.mode;
 
     // --relative-to / --relative-base directories are canonicalised first.
     var base_to: ?[]u8 = null;
@@ -55,11 +69,11 @@ pub fn run(env: Env, opts: Options, names: []const []const u8, out: *Io.Writer, 
     var base_base: ?[]u8 = null;
     defer if (base_base) |b| env.gpa.free(b);
     const base_mode: Mode = if (mode == .existing) .existing else .missing;
-    if (opts.relative_to) |d| base_to = paths.resolve(env, d, base_mode) catch |e| switch (e) {
+    if (opts.relative_to) |d| base_to = canonical(env, d, base_mode, opts.links) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .bad_base = .{ .name = d, .failure = e } },
     };
-    if (opts.relative_base) |d| base_base = paths.resolve(env, d, base_mode) catch |e| switch (e) {
+    if (opts.relative_base) |d| base_base = canonical(env, d, base_mode, opts.links) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .bad_base = .{ .name = d, .failure = e } },
     };
@@ -75,7 +89,7 @@ pub fn run(env: Env, opts: Options, names: []const []const u8, out: *Io.Writer, 
 
     var res: Result = .{};
     for (names) |f| {
-        const r = paths.resolveLogical(env, f, mode, opts.logical) catch |e| {
+        const r = canonical(env, f, mode, opts.links) catch |e| {
             obs.emit(.{ .name = f, .failure = e });
             res.failed = true;
             continue;

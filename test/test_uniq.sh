@@ -104,5 +104,12 @@ run_cmp "-f missing arg"      -f
 run_cmp "output unwritable"   basic /nonexistent-dir/x
 run_cmp "-- then file"        -- basic
 
+# -D with -u prints all but the last line of each group.
+printf 'a1\na2\na3\nb1\nc1\nc2\n' > allbutlast
+for o in -D --all-repeated=prepend --all-repeated=separate; do
+    run_cmp "$o -u -w1" $o -u -w1 allbutlast
+    run_cmp "$o -u -d -w1" $o -u -d -w1 allbutlast
+done
+
 cd /; rm -rf "$W"
 print_summary

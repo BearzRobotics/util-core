@@ -240,7 +240,7 @@ run_xdev() { # DESC SETUP ARGS...
     (cd "$base/g" && LC_ALL=C timeout 30 "${GNU_BIN:-/usr/bin}/mv" "$@" < "${TREE_STDIN:-/dev/null}" > "$base/g.out" 2> "$base/g.err"; echo "rc=$?" > "$base/g.rc")
     (cd "$base/o" && LC_ALL=C timeout 30 "$BIN_DIR/mv" "$@" < "${TREE_STDIN:-/dev/null}" > "$base/o.out" 2> "$base/o.err"; echo "rc=$?" > "$base/o.rc")
     for x in g o; do
-        { cat "$base/$x.rc"; sort "$base/$x.out"; echo "-- stderr"; norm_err < "$base/$x.err" | grep -v -e "${XDEV_IGNORE:-^$}" | sort
+        { cat "$base/$x.rc"; sort "$base/$x.out"; echo "-- stderr"; norm_err < "$base/$x.err" | sort
           echo "-- source side"; xdev_tree "$base/$x"; echo "-- other file system"; xdev_tree "$other/$x"; } > "$base/$x.all"
     done
     if cmp -s "$base/g.all" "$base/o.all"; then
@@ -282,11 +282,7 @@ if [ -n "$other" ] && [ "$(stat -c %d "$other")" != "$(stat -c %d "$TEST_TMP")" 
     # Failure: whatever was not copied must stay, and so must the whole source.
     run_xdev "xdev unreadable file"          "$X; chmod 000 src/sub/g" src far/dst
     run_xdev "xdev unreadable file -v"       "$X; chmod 000 src/sub/g" -v src far/dst
-    # ours adds a spurious second diagnostic here (docs/bugs FSOP-035); the
-    # trees, status and every other line are compared.
-    XDEV_IGNORE="preserving permissions for 'far/dst/sub': Bad file descriptor" \
-        run_xdev "xdev unreadable directory" "$X; chmod 000 src/sub" src far/dst
-    XDEV_IGNORE=
+    run_xdev "xdev unreadable directory" "$X; chmod 000 src/sub" src far/dst
     run_xdev "xdev unreadable operand"       "$X; chmod 000 a" a far/a
     run_xdev "xdev one operand of two fails" "$X; chmod 000 a" a src far
     run_xdev "xdev unwritable destination"   "$X; mkdir far/ro; chmod 555 far/ro" src far/ro/dst

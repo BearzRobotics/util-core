@@ -2,23 +2,25 @@
 UTIL="cat"
 . "$(dirname "$0")/testlib.sh"
 
-echo "hello world" > /tmp/test_cat1.txt
-printf "line1\nline2\nline3\n" > /tmp/test_cat2.txt
-printf "line with\ttabs\n" > /tmp/test_cat3.txt
-printf "\n\n\nblank lines\n" > /tmp/test_cat4.txt
+echo "hello world" > $TEST_TMP/test_cat1.txt
+printf "line1\nline2\nline3\n" > $TEST_TMP/test_cat2.txt
+printf "line with\ttabs\n" > $TEST_TMP/test_cat3.txt
+printf "\n\n\nblank lines\n" > $TEST_TMP/test_cat4.txt
+# Without its inputs a comparison would compare two "no such file" messages.
+for f in 1 2 3 4; do [ -s "$TEST_TMP/test_cat$f.txt" ] || { echo "test_cat: cannot create the inputs" >&2; exit 2; }; done
 
 printf "\n[ Basic output ]\n"
-run_test_file "single file"          /tmp/test_cat1.txt
-run_test "multiple files"            /tmp/test_cat1.txt /tmp/test_cat2.txt
+run_test_file "single file"          $TEST_TMP/test_cat1.txt
+run_test "multiple files"            $TEST_TMP/test_cat1.txt $TEST_TMP/test_cat2.txt
 
 printf "\n[ Flags ]\n"
-run_test_file "-n number lines"      /tmp/test_cat2.txt -n
-run_test_file "-b number nonblank"   /tmp/test_cat4.txt -b
-run_test_file "-s squeeze blank"     /tmp/test_cat4.txt -s
-run_test_file "-A show all"          /tmp/test_cat3.txt -A
-run_test_file "-E show line ends"    /tmp/test_cat2.txt -E
-run_test_file "-T show tabs"         /tmp/test_cat3.txt -T
-run_test_file "-v show nonprint"     /tmp/test_cat3.txt -v
+run_test_file "-n number lines"      $TEST_TMP/test_cat2.txt -n
+run_test_file "-b number nonblank"   $TEST_TMP/test_cat4.txt -b
+run_test_file "-s squeeze blank"     $TEST_TMP/test_cat4.txt -s
+run_test_file "-A show all"          $TEST_TMP/test_cat3.txt -A
+run_test_file "-E show line ends"    $TEST_TMP/test_cat2.txt -E
+run_test_file "-T show tabs"         $TEST_TMP/test_cat3.txt -T
+run_test_file "-v show nonprint"     $TEST_TMP/test_cat3.txt -v
 
 printf "\n[ bat view (no GNU equivalent; compared to fixed output) ]\n"
 check_ours() {
@@ -32,15 +34,15 @@ check_ours() {
 }
 check_ours "--style=numbers" "   1 line1
    2 line2
-   3 line3" --decorations=always --color=never --style=numbers /tmp/test_cat2.txt
-check_ours "-p is raw" "$(cat /tmp/test_cat2.txt)" --decorations=always -p /tmp/test_cat2.txt
-check_ours "pipe stays GNU" "$(cat /tmp/test_cat2.txt)" /tmp/test_cat2.txt
-check_ours "GNU flag beats bat view" "$(gnu -n /tmp/test_cat2.txt)" --decorations=always -n /tmp/test_cat2.txt
-check_ours "bad --style rejected" "cat: invalid argument 'x' for '--style'" --style=x /tmp/test_cat2.txt
+   3 line3" --decorations=always --color=never --style=numbers $TEST_TMP/test_cat2.txt
+check_ours "-p is raw" "$(cat $TEST_TMP/test_cat2.txt)" --decorations=always -p $TEST_TMP/test_cat2.txt
+check_ours "pipe stays GNU" "$(cat $TEST_TMP/test_cat2.txt)" $TEST_TMP/test_cat2.txt
+check_ours "GNU flag beats bat view" "$(gnu -n $TEST_TMP/test_cat2.txt)" --decorations=always -n $TEST_TMP/test_cat2.txt
+check_ours "bad --style rejected" "cat: invalid argument 'x' for '--style'" --style=x $TEST_TMP/test_cat2.txt
 
 printf "\n[ syntax highlighting (toy grammar) ]\n"
-mkdir -p /tmp/test_cat_syn
-cat > /tmp/test_cat_syn/Toy.sublime-syntax <<'GRAMMAR'
+mkdir -p $TEST_TMP/test_cat_syn
+cat > $TEST_TMP/test_cat_syn/Toy.sublime-syntax <<'GRAMMAR'
 %YAML 1.2
 ---
 name: Toy
@@ -59,28 +61,28 @@ contexts:
       scope: punctuation.end
       pop: true
 GRAMMAR
-printf 'if "a\nb" else\n' > /tmp/test_cat5.toy
+printf 'if "a\nb" else\n' > $TEST_TMP/test_cat5.toy
 ESC=$(printf '\033')
-SYN="--syntax-dir=/tmp/test_cat_syn --decorations=always --color=always --theme=ansi -p"
+SYN="--syntax-dir=$TEST_TMP/test_cat_syn --decorations=always --color=always --theme=ansi -p"
 check_ours "highlight by extension" "${ESC}[35mif${ESC}[0m ${ESC}[32m\"${ESC}[0m${ESC}[32ma${ESC}[0m
-${ESC}[32mb${ESC}[0m${ESC}[32m\"${ESC}[0m ${ESC}[35melse${ESC}[0m" $SYN /tmp/test_cat5.toy
+${ESC}[32mb${ESC}[0m${ESC}[32m\"${ESC}[0m ${ESC}[35melse${ESC}[0m" $SYN $TEST_TMP/test_cat5.toy
 actual=$(printf 'if\n' | ours $SYN -l toy 2>&1)
 if [ "$actual" = "${ESC}[35mif${ESC}[0m" ]; then PASS=$((PASS + 1)); printf "PASS highlight stdin with -l\n"; else FAIL=$((FAIL + 1)); printf "FAIL highlight stdin with -l\n"; fi
 check_ours "no color, no escapes" "if \"a
-b\" else" --syntax-dir=/tmp/test_cat_syn --decorations=always --color=never -p /tmp/test_cat5.toy
-check_ours "unknown language" "cat: unknown language 'zzz' (see --list-languages)" $SYN -l zzz /tmp/test_cat5.toy
+b\" else" --syntax-dir=$TEST_TMP/test_cat_syn --decorations=always --color=never -p $TEST_TMP/test_cat5.toy
+check_ours "unknown language" "cat: unknown language 'zzz' (see --list-languages)" $SYN -l zzz $TEST_TMP/test_cat5.toy
 # The built-in grammars are listed too; the user's toy grammar must be among them.
-if [ "$(ours --syntax-dir=/tmp/test_cat_syn --list-languages 2>&1 | grep '^Toy')" = "Toy	toy" ]; then
+if [ "$(ours --syntax-dir=$TEST_TMP/test_cat_syn --list-languages 2>&1 | grep '^Toy')" = "Toy	toy" ]; then
     PASS=$((PASS + 1)); printf "PASS list languages\n"
 else
     FAIL=$((FAIL + 1)); printf "FAIL list languages\n"
 fi
-check_ours "pipe ignores highlighting" "$(cat /tmp/test_cat5.toy)" --syntax-dir=/tmp/test_cat_syn /tmp/test_cat5.toy
+check_ours "pipe ignores highlighting" "$(cat $TEST_TMP/test_cat5.toy)" --syntax-dir=$TEST_TMP/test_cat_syn $TEST_TMP/test_cat5.toy
 # NO_COLOR (SPEC 5.4) needs a terminal on stdout, so run under script(1).
 if command -v script >/dev/null 2>&1; then
     tty_run() { # "ENV=val ...", then extra cat options; prints output with CRs removed
         envs="$1"; shift
-        script -qec "env $envs $BIN_DIR/cat --syntax-dir=/tmp/test_cat_syn $* /tmp/test_cat5.toy" /dev/null | tr -d '\r'
+        script -qec "env $envs $BIN_DIR/cat --syntax-dir=$TEST_TMP/test_cat_syn $* $TEST_TMP/test_cat5.toy" /dev/null | tr -d '\r'
     }
     has_esc() { printf '%s' "$1" | grep -q "$ESC"; }
     # SGR parameters that set a foreground/background color.
@@ -98,9 +100,9 @@ if command -v script >/dev/null 2>&1; then
 else
     SKIP=$((SKIP + 7)); printf "SKIP NO_COLOR tests (script(1) not found)\n"
 fi
-rm -rf /tmp/test_cat_syn /tmp/test_cat5.toy
+rm -rf $TEST_TMP/test_cat_syn $TEST_TMP/test_cat5.toy
 
-rm -f /tmp/test_cat1.txt /tmp/test_cat2.txt /tmp/test_cat3.txt /tmp/test_cat4.txt
+rm -f $TEST_TMP/test_cat1.txt $TEST_TMP/test_cat2.txt $TEST_TMP/test_cat3.txt $TEST_TMP/test_cat4.txt
 # What has been read is written before cat waits for more.
 for o in -u -n -A; do
     got=$( { printf 'early\n'; sleep 3; } | { timeout 2 "$BIN_DIR/cat" $o > "$TEST_TMP/stream"; true; }; cat "$TEST_TMP/stream" )
@@ -160,7 +162,7 @@ actual=$(printf 'return\n' | COLORTERM=truecolor ours --decorations=always --col
 if [ "$actual" = "${ESC}[38;2;247;118;142mreturn${ESC}[0m" ]; then PASS=$((PASS + 1)); printf "PASS truecolor theme\n"; else FAIL=$((FAIL + 1)); printf "FAIL truecolor theme\n"; fi
 actual=$(printf 'return\n' | env -u COLORTERM TERM=xterm-256color "$BIN_DIR/$UTIL" --decorations=always --color=always --theme=night -p -l lua 2>&1)
 if [ "$actual" = "${ESC}[38;5;210mreturn${ESC}[0m" ]; then PASS=$((PASS + 1)); printf "PASS 256-color theme\n"; else FAIL=$((FAIL + 1)); printf "FAIL 256-color theme\n"; fi
-check_ours "unknown theme" "cat: unknown theme 'nope' (see --list-themes)" --syntax-dir=/tmp/test_cat_syn --decorations=always --color=always --theme=nope -p /tmp/test_cat5.toy
+check_ours "unknown theme" "cat: unknown theme 'nope' (see --list-themes)" --syntax-dir=$TEST_TMP/test_cat_syn --decorations=always --color=always --theme=nope -p $TEST_TMP/test_cat5.toy
 if command -v git >/dev/null 2>&1; then
     G=$(mktemp -d)
     ( cd "$G" && git init -q . && printf 'one\ntwo\nthree\nfour\n' > f.txt && git add f.txt &&
@@ -245,6 +247,83 @@ if command -v git >/dev/null 2>&1; then
     gc remote.origin.uploadpack "$H/uploadpack"
     untouched "hostile repository: lazy fetch with uploadpack" l.txt
     rm -rf "$H"
+fi
+
+# Grammars and themes never come from the current directory (VIEW-021).
+mkdir -p "$TEST_TMP/cwd/cat/syntaxes" "$TEST_TMP/cwd/.config/cat/syntaxes" "$TEST_TMP/cwd/rel/cat/syntaxes"
+for d in cat .config/cat rel/cat; do
+    printf '%%YAML 1.2\n---\nname: FromCwd\nfile_extensions: [cwdx]\nscope: source.cwd\ncontexts:\n  main: []\n' > "$TEST_TMP/cwd/$d/syntaxes/c.sublime-syntax"
+done
+for e in "XDG_CONFIG_HOME= HOME=" "HOME=" "XDG_CONFIG_HOME=. HOME=." "XDG_CONFIG_HOME=rel HOME=rel" "XDG_CONFIG_HOME= HOME=/nonexistent APPDATA="; do
+    if ( cd "$TEST_TMP/cwd" && env -u XDG_CONFIG_HOME -u APPDATA $e "$BIN_DIR/cat" --list-languages ) | grep -q FromCwd; then
+        FAIL=$((FAIL + 1)); echo "FAIL a grammar of the current directory is loaded: $e"
+    else PASS=$((PASS + 1)); echo "PASS no grammar from the current directory: $e"; fi
+done
+if ( cd / && XDG_CONFIG_HOME="$TEST_TMP/cwd" "$BIN_DIR/cat" --list-languages ) | grep -q FromCwd; then
+    PASS=$((PASS + 1)); echo "PASS an absolute XDG_CONFIG_HOME is used"
+else FAIL=$((FAIL + 1)); echo "FAIL an absolute XDG_CONFIG_HOME is not used"; fi
+
+# A message longer than any buffer is still printed (INFRA-010).
+run_cmp "a 9000 byte name" "$(head -c 9000 /dev/zero | tr '\0' x)"
+
+# Names in messages are quoted, as GNU does, so that none reaches the terminal
+# as it is (VIEW-007).
+for name in "$(printf 'n\033]0;T\007x')" "$(printf 'a\nb')" "$(printf 'c1\302\233z')" "$(printf 'bad\233')" "$(printf 'caf\303\251 x')" "it's" 'sp ace' 'a:b'; do
+    CMP_LOCALE=C run_cmp "missing name, C" "./$name"
+    CMP_LOCALE=C.UTF-8 run_cmp "missing name, UTF-8" "./$name"
+done
+
+# A capture index past any group, and a theme of more rules than 16 bits count,
+# used to crash the highlighted view (VIEW-019).
+mkdir -p "$TEST_TMP/vgr" "$TEST_TMP/vcfg/cat/themes"
+printf '%%YAML 1.2\n---\nname: Bad\nfile_extensions: [bad]\nscope: source.bad\ncontexts:\n  main:\n    - match: a\n      captures:\n        2147483648: keyword\n        4294967295: string\n' > "$TEST_TMP/vgr/Bad.sublime-syntax"
+printf 'aaa\n' > "$TEST_TMP/v.bad"; printf '# hi\n' > "$TEST_TMP/v.sh"
+check_ours "huge capture index" "aaa" --syntax-dir="$TEST_TMP/vgr" --decorations=always --color=always --theme=ansi -p "$TEST_TMP/v.bad"
+awk 'BEGIN { for (i = 0; i < 65540; i++) printf "a%d=1\n", i; print "comment=2" }' > "$TEST_TMP/vcfg/cat/themes/big.theme"
+got=$(XDG_CONFIG_HOME="$TEST_TMP/vcfg" "$BIN_DIR/cat" --decorations=always --color=always --theme=big -p "$TEST_TMP/v.sh" 2>&1; echo "status $?")
+if [ "$got" = "$(printf '\033[32m# hi\033[0m\nstatus 0')" ]; then PASS=$((PASS + 1)); echo "PASS a theme of 65541 rules"
+else FAIL=$((FAIL + 1)); echo "FAIL a theme of 65541 rules: $got"; fi
+
+# A name containing "writ" does not stand for a report of the write error (INFRA-013).
+if [ -c /dev/full ]; then
+    printf 'x\n' > "$TEST_TMP/some"
+    exp=$(cd "$TEST_TMP" && LC_ALL=C gnu nonexistent-rewrite some 2>&1 >/dev/full | sed 's|/usr/bin/||'; echo end)
+    act=$(cd "$TEST_TMP" && LC_ALL=C ours nonexistent-rewrite some 2>&1 >/dev/full; echo end)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS write error after a name with writ"
+    else FAIL=$((FAIL + 1)); echo "FAIL write error after a name with writ: $act"; fi
+fi
+
+# A small grammar cannot unfold without end: contexts that include each other
+# repeatedly, and variables made of each other (VIEW-020).
+bomb="$TEST_TMP/bomb"; mkdir -p "$bomb/inc" "$bomb/var"
+bomb_head='%%%%YAML 1.2\n---\nname: Bomb\nfile_extensions: [bomb]\nscope: source.bomb\n'
+# shellcheck disable=SC2059
+{ printf "${bomb_head}contexts:\n"; printf '  main:\n    - include: main\n    - include: other\n    - include: other\n    - match: a\n      scope: keyword\n  other:\n    - include: main\n    - include: main\n'; } > "$bomb/inc/b.sublime-syntax"
+# shellcheck disable=SC2059
+{ printf "${bomb_head}variables:\n"
+    i=0; while [ $i -lt 14 ]; do j=$((i + 1)); printf "  v$i: '{{v$j}}{{v$j}}{{v$j}}{{v$j}}{{v$j}}{{v$j}}{{v$j}}{{v$j}}'\n"; i=$j; done
+    printf "  v14: ''\ncontexts:\n  main:\n    - match: '{{v0}}'\n      scope: keyword\n    - match: a\n      scope: keyword\n"; } > "$bomb/var/b.sublime-syntax"
+printf 'a b a\n' > "$bomb/f.bomb"
+for kind in inc var; do
+    out=$( (ulimit -v 600000; timeout 30 "$BIN_DIR/cat" --syntax-dir="$bomb/$kind" --decorations=always --color=always --theme=ansi -p "$bomb/f.bomb") 2>&1 | cat -v)
+    if [ "$out" = '^[[35ma^[[0m b ^[[35ma^[[0m' ]; then PASS=$((PASS + 1)); echo "PASS grammar bomb: $kind"
+    else FAIL=$((FAIL + 1)); echo "FAIL grammar bomb: $kind: $out"; fi
+done
+
+# The pager command is quoted as for a shell, and a pager that fails is
+# reported (VIEW-022). script gives cat a terminal.
+if command -v script > /dev/null 2>&1; then
+    printf 'hello world\n' > "$TEST_TMP/paged"
+    paged() { PAGER="$1" TERM=xterm script -qec "'$BIN_DIR/cat' --paging=always --theme=ansi -p '$TEST_TMP/paged'; echo status \$?" /dev/null < /dev/null | tr -d '\r' | tr '\n' ' '; }
+    for pair in "false|cat: the pager failed (status 1); --paging=never shows the text without it status 1 " \
+        'sed -e "s/world/two words/"|hello two words status 0 ' \
+        'sed -e s/o/0/ -e s/l/1/ -e s/h/H/ -e s/w/W/ -e s/r/R/ -e s/d/D/|He1l0 WoRlD status 0 '; do
+        got=$(paged "${pair%%|*}")
+        if [ "$got" = "${pair#*|}" ]; then PASS=$((PASS + 1)); echo "PASS pager: ${pair%%|*}"
+        else FAIL=$((FAIL + 1)); echo "FAIL pager: ${pair%%|*}: $got"; fi
+    done
+else
+    echo "SKIP pager commands (no script)"
 fi
 
 print_summary

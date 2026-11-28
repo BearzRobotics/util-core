@@ -4,6 +4,7 @@
 //! generation is in src/lib/ptx.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const ptx = @import("../lib/ptx.zig");
@@ -20,11 +21,11 @@ fn parseBase0(text: []const u8) isize {
         t = t[1..];
     }
     const v: isize = if (t.len > 2 and t[0] == '0' and (t[1] == 'x' or t[1] == 'X'))
-        std.fmt.parseInt(isize, t[2..], 16) catch 0
+        numparse.parseInt(isize, t[2..], 16) catch 0
     else if (t.len > 1 and t[0] == '0')
-        std.fmt.parseInt(isize, t[1..], 8) catch 0
+        numparse.parseInt(isize, t[1..], 8) catch 0
     else
-        std.fmt.parseInt(isize, t, 10) catch 0;
+        numparse.parseInt(isize, t, 10) catch 0;
     return if (neg) -v else v;
 }
 

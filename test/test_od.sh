@@ -17,6 +17,17 @@ printf '\0\0\0\0\0\0\370\177\0\0\0\0\0\0\370\377\0\0\0\0\0\0\360\177\0\0\0\0\0\0
 printf 'x' > one
 
 printf "\n[ Defaults and traditional formats ]\n"
+# Powers of two, where the shortest text that reads back is not always the one
+# GNU prints.
+printf '\200\017\000\153\200\154\200\217' > pow16
+printf '\000\000\200\017\000\000\000\153\000\000\200\154\000\000\200\217' > pow32
+printf '\000\000\000\000\000\000\140\000\000\000\000\000\000\000\020\001' > pow64
+printf '\000\000\000\000\000\000\000\200\117\000\000\000\000\000\000\000\000\000\000\000\000\000\000\200\152\000\000\000\000\000\000\000' > pow80
+run_cmp "-t fB powers of two" -t fB pow16
+run_cmp "-t fF powers of two" -t fF pow32
+run_cmp "-t fD powers of two" -t fD pow64
+run_cmp "-t fL powers of two" -t fL pow80
+
 for f in small rnd r64 one zeros dups strs empty; do
     run_cmp "default $f" $f
 done
@@ -197,6 +208,22 @@ run_cmp "-- file"            -- small
 run_cmp "long abbrev"        --skip=3 small
 run_cmp "--address abbrev"   --address=x small
 run_cmp "ambiguous"          --e small
+
+# A -w of any size that fits in memory is used as given.
+printf 'a b c\n' > widew
+for w in 1048576 1048577 2000000 100000000; do run_cmp "-w$w" -w$w -tx1 -An widew; done
+run_cmp "-w too large for memory" -w100000000000 -tx1 -An widew
+
+# Formats of different natural widths: the padding is spread over the fields.
+printf 'abcdefghijklmnop' > spread; printf 'aA\215a\000\000\245' > spread2
+for o in "-tx1 -tfD" "-An -tu4 -tfD" "-tx2z -tu4z" "-tu8 -tx2" "-tx1 -td2 -An" "-tfD -tx4" "-td8z -tx2" "-w24 -tx2 -tfD" "-to1z -td8"; do
+    run_cmp "padding $o" $o spread
+    run_cmp "padding, short block $o" $o spread2
+done
+
+# Sizes too large for any type.
+printf 'ab\n' > typed
+for t in x2147483647 x2147483648 x99999999999999999999 f2147483648 f99999999999999999999 d99999999999999999999z; do run_cmp "-t $t" -t $t typed; done
 
 print_summary
 [ "$FAIL" -eq 0 ]

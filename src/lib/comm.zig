@@ -58,6 +58,10 @@ const Side = struct {
     cur: std.ArrayList(u8) = .empty,
     prev: std.ArrayList(u8) = .empty,
     present: bool = false,
+    /// The line before `prev`, for the check made when the input ends.
+    before: std.ArrayList(u8) = .empty,
+    /// Lines read so far.
+    count: u64 = 0,
     warned: bool = false,
     file: Io.File,
     owned: bool,
@@ -72,6 +76,7 @@ pub fn run(env: Env, options: Options, first: Input, second: Input, writer: *Io.
     defer for (sides[0..opened]) |*s| {
         s.cur.deinit(env.gpa);
         s.prev.deinit(env.gpa);
+        s.before.deinit(env.gpa);
         s.reader.deinit();
         if (s.owned) s.file.close(env.io);
     };
@@ -92,11 +97,13 @@ pub fn run(env: Env, options: Options, first: Input, second: Input, writer: *Io.
 }
 
 fn advance(env: Env, s: *Side) !void {
+    std.mem.swap(std.ArrayList(u8), &s.before, &s.prev);
     std.mem.swap(std.ArrayList(u8), &s.prev, &s.cur);
     s.cur.clearRetainingCapacity();
     if (try s.reader.next()) |l| {
         try s.cur.appendSlice(env.gpa, l.text);
         s.present = true;
+        s.count += 1;
     } else s.present = false;
 }
 
@@ -110,7 +117,7 @@ fn compare(env: Env, out: *stickyout.Out, sides: *[2]Side, options: Options, sep
     // Prime both sides; the first line of each input is never order-checked.
     for (sides) |*s| advance(env, s) catch return readFail(out, observer);
 
-    while (sides[0].present or sides[1].present) {
+    while (!out.failed and (sides[0].present or sides[1].present)) {
         const order: i32 = if (!sides[0].present) 1 else if (!sides[1].present) -1 else switch (std.mem.order(u8, sides[0].cur.items, sides[1].cur.items)) {
             .lt => -1,
             .eq => 0,
@@ -133,7 +140,13 @@ fn compare(env: Env, out: *stickyout.Out, sides: *[2]Side, options: Options, sep
             const move = if (k == 0) order <= 0 else order >= 0;
             if (!move) continue;
             advance(env, s) catch return readFail(out, observer);
-            if (checking and s.present and !s.warned and std.mem.order(u8, s.prev.items, s.cur.items) == .gt) {
+            // As in GNU, when an input ends its last two lines are checked
+            // again: they may have been read before anything was unpairable.
+            const out_of_order = if (s.present)
+                std.mem.order(u8, s.prev.items, s.cur.items) == .gt
+            else
+                s.count >= 2 and std.mem.order(u8, s.before.items, s.prev.items) == .gt;
+            if (checking and !s.warned and out_of_order) {
                 out.flush();
                 observer.emit(.{ .kind = .file_disorder, .file = @intCast(k + 1) });
                 s.warned = true;

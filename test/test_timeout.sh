@@ -143,5 +143,55 @@ if [ -n "$got" ] && [ "$got" = "$ref" ]; then
 else
     FAIL=$((FAIL + 1)); echo "FAIL command does not inherit ignored terminal stops ($got, GNU $ref)"
 fi
+# -k 0 is no follow-up KILL at all.
+for k in 0 0s; do
+    got=$("$BIN_DIR/timeout" -k $k 0.3 sh -c 'trap "" TERM; sleep 1; echo survived'; echo "rc=$?")
+    if [ "$got" = "survived
+rc=124" ]; then PASS=$((PASS + 1)); echo "PASS -k $k sends no KILL"
+    else FAIL=$((FAIL + 1)); echo "FAIL -k $k sends no KILL: $got"; fi
+done
+# Any duration that is not zero is a limit, however small.
+for d in 1e-10 0.0000000001s 1e-400; do run_cmp "tiny duration $d" "$d" sleep 3; done
+for d in 0 0.0 0e5; do run_cmp "no limit $d" "$d" sleep 0.2; done
+# Signals sent to timeout reach the command, the --signal one too; ALRM
+# makes the limit expire at once.
+sent() { # BINARY SIGNAL-TO-SEND TIMEOUT-ARGS...
+    t=$1; sig=$2; shift 2
+    "$t" "$@" sh -c 'for s in USR1 HUP TERM; do trap "echo child-got-$s; exit 3" $s; done; sleep 2 & wait; echo untouched' > "$TEST_TMP/sent" 2>/dev/null &
+    p=$!; sleep 0.5; kill -$sig $p; wait $p; echo "status $?"; cat "$TEST_TMP/sent"
+}
+for c in "USR1 -s USR1 3" "TERM -s USR2 3" "ALRM 3" "ALRM -s USR1 3" "ALRM --preserve-status -s USR1 3" "USR1 --foreground -s USR1 3" "HUP -s USR1 3" "ALRM 0"; do
+    exp=$(sent "${GNU_BIN:-/usr/bin}/timeout" $c); act=$(sent "$BIN_DIR/timeout" $c)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS signal $c"
+    else FAIL=$((FAIL + 1)); echo "FAIL signal $c: GNU [$exp] ours [$act]"; fi
+done
+# As execvp, a script without a "#!" line is run by the shell (MISC-007).
+printf 'echo no-shebang "$@"; exit 3\n' > "$TEST_TMP/nsh"; chmod +x "$TEST_TMP/nsh"
+exp=$(cd "$TEST_TMP" && LC_ALL=C gnu 3 ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+act=$(cd "$TEST_TMP" && LC_ALL=C ours 3 ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+rm -f "$TEST_TMP/nohup.out"
+if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
+else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
+
+# An inherited "ignore SIGCHLD" does not lose the status (MISC-011).
+"$BIN_DIR/env" --ignore-signal=CHLD "$BIN_DIR/timeout" 3 sh -c 'exit 7'; st=$?
+if [ "$st" = 7 ]; then PASS=$((PASS + 1)); echo "PASS SIGCHLD ignored"
+else FAIL=$((FAIL + 1)); echo "FAIL SIGCHLD ignored: status $st"; fi
+
+# A signal that arrives just as the command starts is passed on to it, not left
+# to kill timeout alone (MISC-014). strace delivers it right after the fork.
+if command -v strace > /dev/null 2>&1 &&
+    strace -o "$TEST_TMP/start.trace" -e trace=rt_sigaction "$BIN_DIR/timeout" 5 true 2> /dev/null &&
+    when=$(grep -n 'SIGTTIN, {sa_handler=SIG_IGN' "$TEST_TMP/start.trace" | cut -d: -f1) && [ -n "$when" ]; then
+    rm -f "$TEST_TMP/survived"
+    ( strace -o "$TEST_TMP/start.trace" -e trace=rt_sigaction -e inject=rt_sigaction:signal=SIGTERM:when="$when" \
+        "$BIN_DIR/timeout" 5 sh -c "sleep 1; : > '$TEST_TMP/survived'" ) 2> /dev/null
+    sleep 2
+    if [ ! -e "$TEST_TMP/survived" ]; then PASS=$((PASS + 1)); echo "PASS a signal during startup reaches the command"
+    else FAIL=$((FAIL + 1)); echo "FAIL a signal during startup left the command running"; fi
+else
+    echo "SKIP a signal during startup (no strace)"
+fi
+
 print_summary
 [ "$FAIL" -eq 0 ]

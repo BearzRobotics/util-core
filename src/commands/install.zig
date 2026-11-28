@@ -6,6 +6,7 @@
 //! accepted and ignored.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const sys = @import("../sys.zig");
@@ -207,7 +208,7 @@ fn run(ctx: cli.Context, out: *cli.Out) u8 {
         if (db.userByName(on)) |u| {
             s.owner_id = u.uid;
         } else {
-            const v = std.fmt.parseInt(u32, on, 0) catch {
+            const v = numparse.parseInt(u32, on, 0) catch {
                 cli.warn(ctx, "invalid user {f}", .{cli.quoteA(on)});
                 return 1;
             };
@@ -218,7 +219,7 @@ fn run(ctx: cli.Context, out: *cli.Out) u8 {
         if (db.groupByName(gn)) |g| {
             s.group_id = g.gid;
         } else {
-            const v = std.fmt.parseInt(u32, gn, 0) catch {
+            const v = numparse.parseInt(u32, gn, 0) catch {
                 cli.warn(ctx, "invalid group {f}", .{cli.quoteA(gn)});
                 return 1;
             };
@@ -240,8 +241,8 @@ fn run(ctx: cli.Context, out: *cli.Out) u8 {
         .{ .file = .{ .make_ancestors = mkdir_and_install } };
     const operand_list: []const []const u8 = if (dir_arg) operands else if (target_directory != null) operands[0..n_files] else operands[0..2];
     const ok = install.run(env, s, operand_list, plan, routing.sink()) catch |err| switch (err) {
-        // GNU exits at once, leaving buffered standard output unwritten.
-        error.Fatal => std.process.exit(1),
+        // As GNU, which exits at once: buffered standard output is not written.
+        error.Fatal => return 1,
         error.OutOfMemory => return 1,
     };
     return if (ok) 0 else 1;

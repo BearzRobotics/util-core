@@ -244,4 +244,19 @@ empty_repl "-I '' with an empty argument" -I '' echo ''
 empty_repl "-I '' with empty arguments then another" -I '' echo '' y
 empty_repl "--replace= with -t" -t --replace= echo x
 rm -f two
+# Input that cannot be read is not simply at its end (FIND-027).
+out=$( (ulimit -v 1000000; sh -c 'exec "$0" echo ran < "$1"' "$BIN_DIR/xargs" "$TEST_TMP") </dev/null 2>&1 >/dev/null; echo "status $?")
+case $out in
+*"error reading the input"*"status 1") PASS=$((PASS + 1)); echo "PASS xargs reading a directory" ;;
+*) FAIL=$((FAIL + 1)); echo "FAIL xargs reading a directory: $out" ;;
+esac
+
+# -s limits a command made with -I too (FIND-023).
+printf 'aaaaaaaaaaaaaaaaaaaaaaaa\nb\n' > "$TEST_TMP/long-item"
+for s in 4 24 25 26 29 30 54 55; do
+    CMP_STDIN="$TEST_TMP/long-item" run_cmp "-I -s $s" -s $s -I{} echo {} {}
+done
+printf 'abc\n' > "$TEST_TMP/short-item"
+CMP_STDIN="$TEST_TMP/short-item" run_cmp "-I -s smaller than the command" -s 4 -I{} echo '{}{}'
+
 cd /; print_summary

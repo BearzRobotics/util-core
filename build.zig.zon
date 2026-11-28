@@ -1,7 +1,7 @@
 .{
     .name = .util_core,
     .fingerprint = 0xe5b5c900044091c9,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .minimum_zig_version = "0.17.1",
     .dependencies = .{
         .regex = .{

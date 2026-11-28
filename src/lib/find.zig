@@ -21,6 +21,7 @@
 //! Extensions (docs/compatibility/find.md): the `-json` action.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const rx = @import("../regexutil.zig");
 const Io = std.Io;
 const LX = std.os.linux;
@@ -455,7 +456,7 @@ const Parser = struct {
 
     fn numArg(p: *Parser, name: []const u8, comptime bad_fmt: []const u8) Error!i64 {
         const a = try p.needArg(name);
-        return std.fmt.parseInt(i64, a, 10) catch return fail(p.st, bad_fmt, .{ a });
+        return numparse.parseInt(i64, a, 10) catch return fail(p.st, bad_fmt, .{ a });
     }
 
     fn cmpNum(p: *Parser, name: []const u8, text: []const u8, node: *Node) Error!void {
@@ -468,7 +469,7 @@ const Parser = struct {
             node.cmp = .lt;
             s = s[1..];
         }
-        node.num = std.fmt.parseInt(i64, s, 10) catch return fail(p.st, "invalid argument `{s}' to `{s}'", .{ text, name });
+        node.num = numparse.parseInt(i64, s, 10) catch return fail(p.st, "invalid argument `{s}' to `{s}'", .{ text, name });
         if (s.len == 0 or !std.ascii.isDigit(s[0])) return fail(p.st, "invalid argument `{s}' to `{s}'", .{ text, name });
     }
 
@@ -529,7 +530,7 @@ const Parser = struct {
         if (eq(u8, a, "-maxdepth") or eq(u8, a, "-mindepth")) {
             p.globOpt(a);
             const v = try p.needArg(a);
-            const n = std.fmt.parseInt(i64, v, 10) catch -1;
+            const n = numparse.parseInt(i64, v, 10) catch -1;
             if (n < 0 or v.len == 0 or !std.ascii.isDigit(v[0])) return fail(st, "Expected a positive decimal integer argument to {s}, but got {s}", .{ a, try quoteInner(st, v) });
             if (eq(u8, a, "-maxdepth")) st.maxdepth = n else st.mindepth = n;
             return try p.mk(.true_);
@@ -608,7 +609,7 @@ const Parser = struct {
                 if (std.mem.indexOfScalar(u8, "bcwkMG", s[0]) != null) return fail(st, "Invalid argument `{s}' to -size", .{v});
                 return fail(st, "invalid -size type `{c}'", .{s[0]});
             }
-            n.num = std.fmt.parseInt(i64, s[0..end], 10) catch return fail(st, "invalid argument `{s}' to `-size'", .{v});
+            n.num = numparse.parseInt(i64, s[0..end], 10) catch return fail(st, "invalid argument `{s}' to `-size'", .{v});
             if (end == s.len) {
                 n.size_unit = 'b';
             } else if (end + 1 == s.len and std.mem.indexOfScalar(u8, "bcwkMG", s[end]) != null) {
@@ -627,10 +628,12 @@ const Parser = struct {
                 n.perm_kind = s[0];
                 s = s[1..];
             }
-            if (s.len > 0 and s[0] == '+' and false) {}
-            const parsed: ?u32 = blk: {
+            // "+644" was an older spelling of "/644" and GNU find refuses it,
+            // though as a mode elsewhere it is one.
+            const old_form = v.len > 1 and v[0] == '+' and std.ascii.isDigit(v[1]);
+            const parsed: ?u32 = if (old_form) null else blk: {
                 if (s.len > 0 and std.ascii.isDigit(s[0])) {
-                    const o = std.fmt.parseInt(u32, s, 8) catch break :blk null;
+                    const o = numparse.parseInt(u32, s, 8) catch break :blk null;
                     if (o > 0o7777) break :blk null;
                     break :blk o;
                 }
@@ -660,7 +663,7 @@ const Parser = struct {
                 return n;
             }
             if (v.len > 0 and (std.ascii.isDigit(v[0]) or (v[0] == '+' and v.len > 1 and std.ascii.isDigit(v[1])))) {
-                n.num = std.fmt.parseInt(i64, v, 10) catch return fail(st, "invalid {s} name or {s} argument to {s}: {s}", .{ if (is_user) "user" else "group", if (is_user) "UID" else "GID", a, try quoteInner(st, v) });
+                n.num = numparse.parseInt(i64, v, 10) catch return fail(st, "invalid {s} name or {s} argument to {s}: {s}", .{ if (is_user) "user" else "group", if (is_user) "UID" else "GID", a, try quoteInner(st, v) });
                 return n;
             }
             return fail(st, "invalid {s} name or {s} argument to {s}: {s}", .{ if (is_user) "user" else "group", if (is_user) "UID" else "GID", a, try quoteInner(st, v) });
@@ -684,7 +687,7 @@ const Parser = struct {
             for (s) |ch| {
                 if (!std.ascii.isDigit(ch)) return fail(st, "non-numeric argument to {s}: {s}", .{ a, try quoteInner(st, v) });
             }
-            n.num = std.fmt.parseInt(i64, s, 10) catch return fail(st, "invalid argument `{s}' to `{s}'", .{ v, a });
+            n.num = numparse.parseInt(i64, s, 10) catch return fail(st, "invalid argument `{s}' to `{s}'", .{ v, a });
             return n;
         }
         if (eq(u8, a, "-amin") or eq(u8, a, "-cmin") or eq(u8, a, "-mmin") or eq(u8, a, "-atime") or eq(u8, a, "-ctime") or eq(u8, a, "-mtime") or eq(u8, a, "-used")) {
@@ -987,13 +990,13 @@ const Parser = struct {
             var width: ?usize = null;
             var w0 = i;
             while (i < f.len and std.ascii.isDigit(f[i])) i += 1;
-            if (i > w0) width = std.fmt.parseInt(usize, f[w0..i], 10) catch 0;
+            if (i > w0) width = numparse.parseInt(usize, f[w0..i], 10) catch 0;
             var prec: ?usize = null;
             if (i < f.len and f[i] == '.') {
                 i += 1;
                 w0 = i;
                 while (i < f.len and std.ascii.isDigit(f[i])) i += 1;
-                prec = if (i > w0) (std.fmt.parseInt(usize, f[w0..i], 10) catch 0) else 0;
+                prec = if (i > w0) (numparse.parseInt(usize, f[w0..i], 10) catch 0) else 0;
             }
             if (i >= f.len) return fail(st, "error: % at end of format string", .{});
             const d = f[i];
@@ -1725,9 +1728,21 @@ fn printJson(st: *State) void {
     emit(st, aw.written());
 }
 
+/// A name as -ls writes it (findutils' own spelling, not a quoting style).
+fn appendLsName(out: *std.ArrayList(u8), gpa: std.mem.Allocator, name: []const u8) !void {
+    for (name) |c| switch (c) {
+        ' ', '"', '\\' => try out.appendSlice(gpa, &.{ '\\', c }),
+        8 => try out.appendSlice(gpa, "\\b"),
+        12 => try out.appendSlice(gpa, "\\f"),
+        '\n' => try out.appendSlice(gpa, "\\n"),
+        '\r' => try out.appendSlice(gpa, "\\r"),
+        '\t' => try out.appendSlice(gpa, "\\t"),
+        '!', '#'...'[', ']'...'~' => try out.append(gpa, c),
+        else => try out.print(gpa, "\\{o:0>3}", .{c}),
+    };
+}
+
 fn printLs(st: *State, o: ?*OutFile) void {
-    var space_set: quotearg.ExtraSet = .{};
-    space_set.add(' ');
     const s = getSt(st) orelse return;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(st.gpa);
@@ -1751,13 +1766,13 @@ fn printLs(st: *State, o: ?*OutFile) void {
     } else out.print(st.gpa, "{d: >8} ", .{s.size}) catch st.nomem();
     out.appendSlice(st.gpa, tbuf.items) catch st.nomem();
     out.append(st.gpa, ' ') catch st.nomem();
-    quotearg.quote(&out, st.gpa, st.cur_path, .escape, &space_set) catch st.nomem();
+    appendLsName(&out, st.gpa, st.cur_path) catch st.nomem();
     if (s.isLink()) {
         var buf: [4096]u8 = undefined;
         var err: LX.E = .SUCCESS;
         if (sys.readlinkAt(st.at().dir, st.at().name, &buf, &err)) |k| {
             out.appendSlice(st.gpa, " -> ") catch st.nomem();
-            quotearg.quote(&out, st.gpa, buf[0..k], .escape, &space_set) catch st.nomem();
+            appendLsName(&out, st.gpa, buf[0..k]) catch st.nomem();
         }
     }
     out.append(st.gpa, '\n') catch st.nomem();

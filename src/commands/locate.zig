@@ -4,6 +4,7 @@
 //! database decoding, matching and reports are in src/lib/locate.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const locate = @import("../lib/locate.zig");
@@ -112,7 +113,7 @@ pub fn main(ctx: cli.Context) u8 {
                     if (opt.is_long) cli.warn(ctx, "invalid --limit argument {f}", .{q(ctx, a)}) else cli.warn(ctx, "invalid -l argument {f}", .{q(ctx, a)});
                     return 1;
                 }
-                const v = std.fmt.parseInt(u64, a[0..dend], 10) catch {
+                const v = numparse.parseInt(u64, a[0..dend], 10) catch {
                     if (opt.is_long) cli.warn(ctx, "--limit argument {f} too large", .{q(ctx, a)}) else cli.warn(ctx, "-l argument {f} too large", .{q(ctx, a)});
                     return 1;
                 };
@@ -131,7 +132,7 @@ pub fn main(ctx: cli.Context) u8 {
                     cli.warn(ctx, "The argument for option --max-database-age must not be empty", .{});
                     return 1;
                 }
-                o.max_age_days = std.fmt.parseInt(u64, a, 10) catch {
+                o.max_age_days = numparse.parseInt(u64, a, 10) catch {
                     cli.warn(ctx, "Invalid argument {f} for option --max-database-age", .{q(ctx, a)});
                     return 1;
                 };

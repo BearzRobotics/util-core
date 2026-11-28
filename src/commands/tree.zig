@@ -4,6 +4,7 @@
 //! sorting, filtering and the XML/JSON forms are in src/lib/tree.zig.
 
 const std = @import("std");
+const numparse = @import("../numparse.zig");
 const cli = @import("../cli.zig");
 const getopt = @import("../getopt.zig");
 const sys = @import("../sys.zig");
@@ -19,6 +20,20 @@ const help_text = @embedFile("../help/tree.txt");
 fn oom(ctx: cli.Context) u8 {
     cli.warn(ctx, "memory exhausted", .{});
     return 2;
+}
+
+/// Whether to colour, as GNU decides it: never without $TERM. -C always does;
+/// else -n and $NO_COLOR forbid it, and it takes a terminal (or
+/// $CLICOLOR_FORCE) and a table, which $CLICOLOR also provides.
+fn wantColor(ctx: cli.Context, forced: bool, forbidden: bool) bool {
+    if (cli.getenv(ctx, "TERM") == null) return false;
+    if (forced) return true;
+    if (forbidden) return false;
+    if (cli.getenv(ctx, "NO_COLOR")) |v| if (v.len > 0) return false;
+    const clicolor_force = cli.getenv(ctx, "CLICOLOR_FORCE") != null;
+    if (!clicolor_force and !(Io.File.stdout().isTty(ctx.io) catch false)) return false;
+    const env: tree.Env = .{ .io = ctx.io, .gpa = ctx.gpa, .environ = ctx.environ };
+    return clicolor_force or cli.getenv(ctx, "CLICOLOR") != null or tree.colorSpec(env) != null;
 }
 
 pub fn main(ctx: cli.Context) u8 {
@@ -70,7 +85,8 @@ pub fn main(ctx: cli.Context) u8 {
     });
     defer p.deinit();
     p.silent = true;
-    var force_no_color = false;
+    var no_color = false;
+    var color_forced = false;
     while (true) switch (p.next()) {
         .done => break,
         .bad => {
@@ -96,7 +112,7 @@ pub fn main(ctx: cli.Context) u8 {
             'f' => o.full_path = true,
             'x' => o.xdev = true,
             'L' => {
-                const v = std.fmt.parseInt(i64, opt.arg.?, 10) catch {
+                const v = numparse.parseInt(i64, opt.arg.?, 10) catch {
                     cli.warn(ctx, "Invalid level, must be greater than 0.", .{});
                     return 1;
                 };
@@ -130,8 +146,8 @@ pub fn main(ctx: cli.Context) u8 {
             'i' => o.no_indent = true,
             'A' => o.ansi = true,
             'S' => o.cp437 = true,
-            'n' => force_no_color = true,
-            'C' => o.color = true,
+            'n' => no_color = true,
+            'C' => color_forced = true,
             'X' => o.mode = .xml,
             'J' => o.mode = .json,
             'T', 'H', 'R' => {},
@@ -165,7 +181,7 @@ pub fn main(ctx: cli.Context) u8 {
             },
             2013 => o.icase = true,
             2014 => charset = opt.arg.?,
-            2015 => o.filelimit = std.fmt.parseInt(i64, opt.arg.?, 10) catch -1,
+            2015 => o.filelimit = numparse.parseInt(i64, opt.arg.?, 10) catch -1,
             2016 => {
                 o.timefmt = opt.arg.?;
                 o.date = true;
@@ -186,7 +202,7 @@ pub fn main(ctx: cli.Context) u8 {
         o.use_utf8_lines = std.ascii.eqlIgnoreCase(cs, "utf-8") or std.ascii.eqlIgnoreCase(cs, "utf8");
         o.entity_lines = !o.use_utf8_lines and !std.ascii.eqlIgnoreCase(cs, "ascii") and !std.ascii.eqlIgnoreCase(cs, "us-ascii");
     }
-    if (force_no_color) o.color = false;
+    o.color = wantColor(ctx, color_forced, no_color);
     o.patterns = patterns.items;
     o.ignores = ignores.items;
 
@@ -203,13 +219,21 @@ pub fn main(ctx: cli.Context) u8 {
 
     var buf: [8192]u8 = undefined;
     var w = (out_file_handle orelse Io.File.stdout()).writerStreaming(ctx.io, &buf);
-    // A failed write is dropped: tree has always ignored it.
+    // tree itself ignores a failed write; a report that was cut off is not a
+    // success here.
     const result = tree.run(env, o, p.operands.items, &w.interface, .{}) catch |e| switch (e) {
         error.OutOfMemory => return oom(ctx),
-        error.WriteFailed => return 0,
+        error.WriteFailed => return writeFailed(ctx, w.err),
     };
-    w.interface.flush() catch {};
+    w.interface.flush() catch return writeFailed(ctx, w.err);
     return result.exit_status;
+}
+
+fn writeFailed(ctx: cli.Context, err: ?Io.File.Writer.Error) u8 {
+    // A reader that has gone has seen all it wanted.
+    if (err) |e| if (e == error.BrokenPipe) return 0;
+    cli.warn(ctx, "write error: {s}", .{cli.errText(err orelse error.WriteFailed)});
+    return 1;
 }
 
 fn usageErr() u8 {

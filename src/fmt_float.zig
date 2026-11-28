@@ -191,7 +191,14 @@ fn digitsOf(gpa: Allocator, n: *const big.int.Managed) ![]u8 {
     return n.toString(gpa, 10, .lower);
 }
 
-fn fixed(gpa: Allocator, body: *std.ArrayList(u8), v: Dec, prec: usize, alt: bool) !void {
+/// The decimal places beyond which `v` has only zeros. A larger precision is
+/// reached by adding zeros, not by computing with ten to that power.
+fn exactPlaces(v: Dec) usize {
+    return if (v.exp < 0) @intCast(-v.exp) else 0;
+}
+
+fn fixed(gpa: Allocator, body: *std.ArrayList(u8), v: Dec, wanted: usize, alt: bool) !void {
+    const prec = @min(wanted, exactPlaces(v));
     var q = try scaledRound(gpa, v, @intCast(prec));
     defer q.deinit();
     const digits = try digitsOf(gpa, &q);
@@ -201,15 +208,18 @@ fn fixed(gpa: Allocator, body: *std.ArrayList(u8), v: Dec, prec: usize, alt: boo
         int_len = digits.len - prec;
         try body.appendSlice(gpa, digits[0..int_len]);
     } else try body.append(gpa, '0');
-    if (prec > 0 or alt) try body.append(gpa, '.');
+    if (wanted > 0 or alt) try body.append(gpa, '.');
     if (prec > 0) {
         if (digits.len < prec) try body.appendNTimes(gpa, '0', prec - digits.len);
         try body.appendSlice(gpa, digits[int_len..]);
     }
+    try body.appendNTimes(gpa, '0', wanted - prec);
 }
 
 /// Appends d.ddde±XX and returns the decimal exponent printed.
-fn expo(gpa: Allocator, body: *std.ArrayList(u8), v: Dec, prec: usize, alt: bool, upper: bool) !i64 {
+fn expo(gpa: Allocator, body: *std.ArrayList(u8), v: Dec, wanted: usize, alt: bool, upper: bool) !i64 {
+    // The largest long double has 4933 digits before the point.
+    const prec = @min(wanted, exactPlaces(v) + 5000);
     var x: i64 = 0;
     var digits: []u8 = &.{};
     defer if (digits.len > 0) gpa.free(digits);
@@ -231,8 +241,9 @@ fn expo(gpa: Allocator, body: *std.ArrayList(u8), v: Dec, prec: usize, alt: bool
         @memset(digits, '0');
     }
     try body.append(gpa, digits[0]);
-    if (prec > 0 or alt) try body.append(gpa, '.');
+    if (wanted > 0 or alt) try body.append(gpa, '.');
     try body.appendSlice(gpa, digits[1..]);
+    try body.appendNTimes(gpa, '0', wanted - prec);
     try body.append(gpa, if (upper) 'E' else 'e');
     try body.append(gpa, if (x < 0) '-' else '+');
     var buf: [24]u8 = undefined;

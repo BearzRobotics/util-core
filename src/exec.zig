@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const cli = @import("cli.zig");
+const sys = @import("sys.zig");
 const Io = std.Io;
 
 /// Find `prog` the way execvp does. A name containing '/' is used as is;
@@ -47,18 +48,34 @@ pub fn exec(ctx: cli.Context, prog: []const u8, argv: []const []const u8, env: ?
 }
 
 pub fn execStyled(ctx: cli.Context, prog: []const u8, argv: []const []const u8, env: ?*const std.process.Environ.Map, style: Style) u8 {
+    return execReporting(ctx, prog, argv, env, style, null);
+}
+
+/// `execStyled` in nohup's style for a caller that has redirected standard
+/// error: a failure is reported on `terminal`, the stream it had before.
+pub fn execRestoring(ctx: cli.Context, prog: []const u8, argv: []const []const u8, terminal: ?sys.Handle) u8 {
+    return execReporting(ctx, prog, argv, null, .run, terminal);
+}
+
+fn execReporting(ctx: cli.Context, prog: []const u8, argv: []const []const u8, env: ?*const std.process.Environ.Map, style: Style, terminal: ?sys.Handle) u8 {
     var arena = std.heap.ArenaAllocator.init(ctx.gpa);
     defer arena.deinit();
     var denied = false;
     const path = resolve(ctx, arena.allocator(), env orelse ctx.environ, prog, &denied) orelse {
+        if (terminal) |fd| _ = sys.dup2(fd, 2);
         report(ctx, style, prog, if (denied) "Permission denied" else "No such file or directory");
         return if (denied) 126 else 127;
     };
-    const err = std.process.replace(ctx.io, .{
+    var err = std.process.replace(ctx.io, .{
         .exe = .{ .explicit = .{ .dir = Io.Dir.cwd(), .path = path } },
         .argv = argv,
         .environ_map = env orelse ctx.environ,
     });
+    // As execvp, a file the kernel cannot execute (a script without a "#!"
+    // line) is given to the shell.
+    if (err == error.InvalidExe and @import("builtin").os.tag != .windows) {
+        err = replaceWithShell(ctx, arena.allocator(), path, argv, env orelse ctx.environ);
+    }
     const text: []const u8 = switch (err) {
         error.FileNotFound => "No such file or directory",
         error.AccessDenied, error.PermissionDenied => "Permission denied",
@@ -69,6 +86,7 @@ pub fn execStyled(ctx: cli.Context, prog: []const u8, argv: []const []const u8, 
         error.SystemResources, error.OutOfMemory => "Cannot allocate memory",
         else => @errorName(err),
     };
+    if (terminal) |fd| _ = sys.dup2(fd, 2);
     report(ctx, style, prog, text);
     return if (err == error.FileNotFound) 127 else 126;
 }
@@ -78,4 +96,16 @@ fn report(ctx: cli.Context, style: Style, prog: []const u8, text: []const u8) vo
         .env => cli.warn(ctx, "{f}: {s}", .{ cli.quoteC(prog), text }),
         .run => cli.warn(ctx, "failed to run command {f}: {s}", .{ cli.quoteC(prog), text }),
     }
+}
+
+/// Run `sh PATH ARG...` in this process's place; returns only on failure.
+fn replaceWithShell(ctx: cli.Context, arena: std.mem.Allocator, path: []const u8, argv: []const []const u8, env: ?*const std.process.Environ.Map) std.process.ReplaceError {
+    // Not to be taken for an option of the shell.
+    const script = if (path.len > 0 and path[0] == '-') std.fmt.allocPrint(arena, "./{s}", .{path}) catch return error.OutOfMemory else path;
+    const shell = std.mem.concat(arena, []const u8, &.{ &.{ "/bin/sh", script }, argv[@min(argv.len, 1)..] }) catch return error.OutOfMemory;
+    return std.process.replace(ctx.io, .{
+        .exe = .{ .explicit = .{ .dir = Io.Dir.cwd(), .path = "/bin/sh" } },
+        .argv = shell,
+        .environ_map = env,
+    });
 }

@@ -92,4 +92,18 @@ run_cmp "-b missing arg"           -b
 run_cmp "missing file only"        -b 1 nope
 
 cd /; rm -rf "$W"
+# A line of any length is cut as it is read (under a memory limit, since
+# holding it would take all the memory there is).
+for o in "-b1" "-c5-10" "--complement -b2" "-f1" "-f1 -d:"; do
+    exp=$(head -c 400000000 /dev/zero | /usr/bin/cut $o | cksum)
+    act=$( (ulimit -v 200000; head -c 400000000 /dev/zero | timeout 60 "$BIN_DIR/cut" $o) | cksum)
+    if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS 400 MB line $o"
+    else FAIL=$((FAIL + 1)); echo "FAIL 400 MB line $o"; fi
+done
+# Pieces of a line that cross the reads give what the whole line would.
+awk 'BEGIN { for (l = 0; l < 3; l++) { for (i = 0; i < 30000; i++) printf "ab%s", i % 97 ? "" : ":"; print "" } }' > "$TEST_TMP/longlines"
+for o in "-b65530-65545" "-b1,65536,65537-" "-f2 -d:" "-f1,300- -d:" "-f2- -d: -s" "--complement -f3 -d:" "-b2-4,70000 --output-delimiter=<>"; do
+    run_cmp "long lines $o" $o "$TEST_TMP/longlines"
+done
+
 print_summary

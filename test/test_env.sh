@@ -94,5 +94,19 @@ run_cmp "default KILL"             --default-signal=KILL true
 run_cmp "ignored seen by child"    --ignore-signal=INT sh -c 'trap'
 run_cmp "list nothing"             --list-signal-handling true
 
+# Not signals env can act on: 0 used to crash it.
+for o in block ignore default; do
+    for sig in 0 00 INT,0 32 33; do
+        run_cmp "--$o-signal=$sig" --$o-signal=$sig true
+    done
+done
+# As execvp, a script without a "#!" line is run by the shell (MISC-007).
+printf 'echo no-shebang "$@"; exit 3\n' > "$TEST_TMP/nsh"; chmod +x "$TEST_TMP/nsh"
+exp=$(cd "$TEST_TMP" && LC_ALL=C gnu  ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+act=$(cd "$TEST_TMP" && LC_ALL=C ours  ./nsh a b </dev/null 2>/dev/null; echo "status $?")
+rm -f "$TEST_TMP/nohup.out"
+if [ "$exp" = "$act" ]; then PASS=$((PASS + 1)); echo "PASS script without a #! line"
+else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $act"; fi
+
 print_summary
 [ "$FAIL" -eq 0 ]
