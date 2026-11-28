@@ -19,6 +19,39 @@ zig build test                 # unit tests
 
 Needs Zig 0.17.1. Release builds are stripped (`-Dstrip=false` keeps debug info).
 
+## Binary size
+
+The programs are larger than you might expect, and most of that is a fixed
+cost of Zig's standard library, above all its new I/O layer, not of what the
+commands do. We accept it for now and expect it to shrink as Zig improves.
+
+Upstream issues, both open on 2026-11-28:
+
+* [ziglang/zig #31421](https://codeberg.org/ziglang/zig/issues/31421): unused
+  `std.Io` functions are not optimized out. This is the one to follow.
+* [ziglang/zig #31073](https://codeberg.org/ziglang/zig/issues/31073): an empty
+  program grew after Zig 0.15.2. Related; the issue does not settle the cause.
+
+A program that does nothing, built with Zig 0.17.1 and stripped (bytes):
+
+| Program | Build | x86_64 Linux (musl) | x86_64 Windows |
+|---|---|---|---|
+| `pub fn main() u8` | ReleaseSmall | 4,840 | 4,608 |
+| takes `std.process.Init`, which sets up `std.Io` | ReleaseSmall | 148,016 | 439,296 |
+| `pub fn main() u8` | ReleaseSafe | 298,648 | 548,864 |
+| takes `std.process.Init` | ReleaseSafe, as released | 349,672 | 603,648 |
+
+ReleaseSafe is large even without `std.Io` in the signature, from the safety
+and crash-reporting code it brings in. With that and `std.Io` both switched off,
+an empty program is under 5 KB again, but the commands need them.
+
+Every standalone command pays that last figure: `true` is 353 KB on Linux and
+641 KB on Windows. With about 100 programs, all of `bin/` comes to 58 MB on
+Linux and 89 MB on Windows. For a small install, build only the multicall
+binary (`-Dmode=multicall`) and link the command names to it;
+`-Doptimize=ReleaseSmall` makes it smaller still, without ReleaseSafe's runtime
+safety checks.
+
 ## Manual pages
 
 The pages are Markdown in the dkman layout (`docs/manpages/`). `-Dman` (on by default,
