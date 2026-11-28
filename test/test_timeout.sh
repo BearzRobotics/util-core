@@ -178,5 +178,20 @@ else FAIL=$((FAIL + 1)); echo "FAIL script without a #! line: GNU $exp, ours $ac
 if [ "$st" = 7 ]; then PASS=$((PASS + 1)); echo "PASS SIGCHLD ignored"
 else FAIL=$((FAIL + 1)); echo "FAIL SIGCHLD ignored: status $st"; fi
 
+# A signal that arrives just as the command starts is passed on to it, not left
+# to kill timeout alone (MISC-014). strace delivers it right after the fork.
+if command -v strace > /dev/null 2>&1 &&
+    strace -o "$TEST_TMP/start.trace" -e trace=rt_sigaction "$BIN_DIR/timeout" 5 true 2> /dev/null &&
+    when=$(grep -n 'SIGTTIN, {sa_handler=SIG_IGN' "$TEST_TMP/start.trace" | cut -d: -f1) && [ -n "$when" ]; then
+    rm -f "$TEST_TMP/survived"
+    ( strace -o "$TEST_TMP/start.trace" -e trace=rt_sigaction -e inject=rt_sigaction:signal=SIGTERM:when="$when" \
+        "$BIN_DIR/timeout" 5 sh -c "sleep 1; : > '$TEST_TMP/survived'" ) 2> /dev/null
+    sleep 2
+    if [ ! -e "$TEST_TMP/survived" ]; then PASS=$((PASS + 1)); echo "PASS a signal during startup reaches the command"
+    else FAIL=$((FAIL + 1)); echo "FAIL a signal during startup left the command running"; fi
+else
+    echo "SKIP a signal during startup (no strace)"
+fi
+
 print_summary
 [ "$FAIL" -eq 0 ]

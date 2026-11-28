@@ -1736,6 +1736,30 @@ pub fn catchTerminationSignals() void {
     for ([_]usize{ 0, 1, 3, 4 }) |i| catchOne(i);
 }
 
+/// Record rather than act on each of `signals` that is not ignored, until the
+/// caller blocks them. For a supervisor about to start its child: a signal that
+/// comes before it is ready does not end it, and the child, which exec gives
+/// the default actions, is not affected. Linux only.
+pub fn holdSignals(signals: []const u8) void {
+    if (comptime !is_linux) return;
+    const L = std.os.linux;
+    for (signals) |n| {
+        const sig: L.SIG = @enumFromInt(n);
+        var old: L.Sigaction = undefined;
+        if (L.errno(L.sigaction(sig, null, &old)) != .SUCCESS) continue;
+        if (old.handler.handler == L.SIG.IGN) continue;
+        const act: L.Sigaction = .{ .handler = .{ .handler = catchHandler }, .mask = L.sigemptyset(), .flags = L.SA.RESTART };
+        _ = L.sigaction(sig, &act, null);
+    }
+}
+
+/// Send `sig` to this process again, to be read from a `Watcher` that has
+/// blocked it.
+pub fn raiseHeld(sig: u8) void {
+    if (comptime !is_linux) return;
+    _ = std.os.linux.kill(std.os.linux.getpid(), @enumFromInt(sig));
+}
+
 /// Put back the actions that were in place before `catchSignals`.
 pub fn restoreCaughtSignals() void {
     if (comptime !is_linux) return other.restoreCaughtSignals();
