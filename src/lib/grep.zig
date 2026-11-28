@@ -1418,6 +1418,8 @@ const G = struct {
     is_stdin: bool = false,
     ign_stack: std.ArrayList(IgnLevel) = .empty,
     file_mem: ?[]const u8 = null,
+    /// Compressed data too large to hold decoded: it is decoded as it is read.
+    file_stream: ?*Inflater = null,
     /// Read buffer, kept across files.
     buf: std.ArrayList(u8) = .empty,
     /// Stat of the file about to be opened by grepOpened (saves an fstat).
@@ -2166,6 +2168,11 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                 @memcpy(room[0..k], mem[mem_pos .. mem_pos + k]);
                 mem_pos += k;
                 break :blk k;
+            } else if (g.file_stream) |stream| stream.read(room) catch {
+                // It decoded and passed its checks a moment ago.
+                g.obs.emit(.{ .decompress_failed = g.fname });
+                g.errseen = true;
+                break;
             } else sys.readFd(fd, room, &err) orelse {
                 g.obs.emit(.{ .read_error = .{ .name = g.fname, .errno = err } });
                 g.errseen = true;
@@ -2176,7 +2183,7 @@ fn grepFd(g: *G, fd: sys.Handle, seekable_stdin: bool) Err!u64 {
                 continue;
             }
             total_read += n;
-            if (g.file_mem == null) if (g.cur_size) |sz| {
+            if (g.file_mem == null and g.file_stream == null) if (g.cur_size) |sz| {
                 if (total_read >= sz) size_reached = true;
             };
             if (!g.binary and o.binary_files != .text and !o.null_data) {
@@ -2435,50 +2442,161 @@ fn pushIgnore(g: *G, dir: sys.Handle, display: []const u8, prefix_len: usize) Er
 const Decompressed = union(enum) {
     raw,
     data: struct { bytes: []u8, trailing: bool },
+    /// Sound, but more than is held in memory: decode it again to read it.
+    /// The value says whether something follows the compressed data.
+    large: bool,
     failed,
 };
 
+/// The most gzip, zlib or zstd data may decode to and still be held whole.
+const max_held = 32 << 20;
+
 const gzip_magic = [_]u8{ 0x1f, 0x8b };
 const xz_magic = [_]u8{ 0xFD, '7', 'z', 'X', 'Z', 0x00 };
+const zstd_magic = [_]u8{ 0x28, 0xb5, 0x2f, 0xfd };
 
 fn isZlib(data: []const u8) bool {
     return data.len >= 2 and data[0] == 0x78 and (data[1] == 0x01 or data[1] == 0x5e or data[1] == 0x9c or data[1] == 0xda) and ((@as(u16, data[0]) << 8) | data[1]) % 31 == 0;
 }
 
-/// Decompress gzip, zlib, xz or zstd data (by magic number).
+/// Whether the regular file `fd` starts as something --decompress has to look
+/// at; any other is read like any file. Leaves it at its start.
+fn mayBeCompressed(fd: sys.Handle) bool {
+    var head: [6]u8 = undefined;
+    var err: LX.E = .SUCCESS;
+    var have: usize = 0;
+    while (have < head.len) {
+        const n = sys.readFd(fd, head[have..], &err) orelse break;
+        if (n == 0) break;
+        have += n;
+    }
+    var se: LX.E = .SUCCESS;
+    // If it cannot go back, only the whole-file path still has what was read.
+    if (sys.seekFd(fd, 0, 0, &se) == null) return true;
+    const data = head[0..have];
+    for ([_][]const u8{ &gzip_magic, &xz_magic, &zstd_magic, "BZh" }) |magic| {
+        if (std.mem.startsWith(u8, data, magic)) return true;
+    }
+    return isZlib(data);
+}
+
+/// gzip, zlib or zstd data in memory, decoded a piece at a time and checked
+/// against the trailer of each member or frame.
+const Inflater = struct {
+    gpa: std.mem.Allocator,
+    data: []const u8,
+    kind: enum { gzip, zlib, zstd },
+    window: []u8,
+    in: Io.Reader,
+    /// The member or frame being decoded, when `open`.
+    decoder: union { flate: std.compress.flate.Decompress, zstd: std.compress.zstd.Decompress } = undefined,
+    frame: checks.ZstdFrame = undefined,
+    /// zstd: where the next frame starts.
+    at: usize = 0,
+    running: checks.Running = .{},
+    open: bool = false,
+    done: bool = false,
+    /// Set when `done`: something follows the compressed data.
+    trailing: bool = false,
+
+    fn init(gpa: std.mem.Allocator, data: []const u8) error{OutOfMemory}!Inflater {
+        const std_c = std.compress;
+        const kind: @FieldType(Inflater, "kind") = if (std.mem.startsWith(u8, data, &gzip_magic)) .gzip else if (std.mem.startsWith(u8, data, &zstd_magic)) .zstd else .zlib;
+        const len: usize = if (kind == .zstd) std_c.zstd.default_window_len + std_c.zstd.block_size_max else std_c.flate.max_window_len;
+        return .{ .gpa = gpa, .data = data, .kind = kind, .window = try gpa.alloc(u8, len), .in = Io.Reader.fixed(data) };
+    }
+
+    fn deinit(f: *Inflater) void {
+        f.gpa.free(f.window);
+    }
+
+    /// Fill some of `out`; 0 at the end. `Damaged` data is not to be trusted.
+    fn read(f: *Inflater, out: []u8) error{Damaged}!usize {
+        while (!f.done) {
+            if (!f.open) try f.start();
+            if (f.done) break;
+            const reader = if (f.kind == .zstd) &f.decoder.zstd.reader else &f.decoder.flate.reader;
+            const n = reader.readSliceShort(out) catch return error.Damaged;
+            if (n > 0) {
+                f.running.update(out[0..n]);
+                return n;
+            }
+            try f.finish();
+        }
+        return 0;
+    }
+
+    fn start(f: *Inflater) error{Damaged}!void {
+        f.running = .{};
+        if (f.kind == .zstd) {
+            if (f.at >= f.data.len) {
+                f.done = true;
+                return;
+            }
+            // A frame at a time, so that each one's checksum can be verified.
+            f.frame = checks.zstdFrame(f.data[f.at..]) orelse return error.Damaged;
+            f.in = Io.Reader.fixed(f.data[f.at..][0..f.frame.len]);
+            f.decoder = .{ .zstd = std.compress.zstd.Decompress.init(&f.in, f.window, .{}) };
+            f.at += f.frame.len;
+        } else {
+            f.decoder = .{ .flate = std.compress.flate.Decompress.init(&f.in, if (f.kind == .gzip) .gzip else .zlib, f.window) };
+        }
+        f.open = true;
+    }
+
+    fn finish(f: *Inflater) error{Damaged}!void {
+        f.open = false;
+        if (f.kind == .zstd) {
+            if (!checks.zstdOk(f.frame, &f.running)) return error.Damaged;
+            return;
+        }
+        if (!checks.flateOk(f.decoder.flate.container_metadata, &f.running)) return error.Damaged;
+        // gzip files may be concatenated ("members"); zlib data may not.
+        const rest = f.data[f.in.seek..];
+        if (f.kind == .gzip and std.mem.startsWith(u8, rest, &gzip_magic)) return;
+        // As gzip, accept zeros that fill up the last block.
+        f.trailing = if (f.kind == .gzip) !std.mem.allEqual(u8, rest, 0) else rest.len != 0;
+        f.done = true;
+    }
+};
+
 /// What the xz decoder's `init` consumes.
 const xz_stream_header_len = 12;
 
+/// Decompress gzip, zlib, xz or zstd data (by magic number). xz is always held
+/// whole, since Zig's decoder keeps all it has decoded.
 fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
     const std_c = std.compress;
     const gzip = std.mem.startsWith(u8, data, &gzip_magic);
     const xz = std.mem.startsWith(u8, data, &xz_magic);
-    const zstd = std.mem.startsWith(u8, data, &.{ 0x28, 0xb5, 0x2f, 0xfd });
+    const zstd = std.mem.startsWith(u8, data, &zstd_magic);
     if (!gzip and !xz and !zstd and !isZlib(data)) {
         if (std.mem.startsWith(u8, data, "BZh")) {
             g.obs.emit(.{ .unsupported_compression = .{ .name = g.fname, .format = "bzip2" } });
         }
         return .raw;
     }
-    var in = Io.Reader.fixed(data);
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
     var trailing = false;
-    if (zstd) {
-        // A frame at a time, so that each one's checksum can be verified.
-        const zbuf = gpa.alloc(u8, std_c.zstd.default_window_len + std_c.zstd.block_size_max) catch return .failed;
-        defer gpa.free(zbuf);
-        var at: usize = 0;
-        while (at < data.len) {
-            const frame = checks.zstdFrame(data[at..]) orelse return .failed;
-            var one = Io.Reader.fixed(data[at..][0..frame.len]);
-            var d = std_c.zstd.Decompress.init(&one, zbuf, .{});
-            const start = out.items.len;
-            d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
-            if (!checks.zstdOk(frame, out.items[start..])) return .failed;
-            at += frame.len;
+    if (!xz) {
+        var stream = Inflater.init(gpa, data) catch return .failed;
+        defer stream.deinit();
+        var piece: [64 * 1024]u8 = undefined;
+        var held = true;
+        while (true) {
+            const n = stream.read(&piece) catch return .failed;
+            if (n == 0) break;
+            if (held and n > max_held - out.items.len) {
+                held = false;
+                out.clearAndFree(gpa);
+            }
+            if (held) out.appendSlice(gpa, piece[0..n]) catch return .failed;
         }
-    } else if (xz) {
+        if (!held) return .{ .large = stream.trailing };
+        trailing = stream.trailing;
+    } else {
+        var in = Io.Reader.fixed(data);
         // A file may hold several streams, with zeros between and after
         // them in multiples of four ("Stream Padding").
         while (true) {
@@ -2499,20 +2617,6 @@ fn decompressBuf(gpa: std.mem.Allocator, data: []const u8, g: *G) Decompressed {
                 continue;
             }
             trailing = padding != rest.len or padding % 4 != 0;
-            break;
-        }
-    } else {
-        // gzip files may be concatenated ("members"); zlib data may not.
-        var win: [std_c.flate.max_window_len]u8 = undefined;
-        while (true) {
-            var d = std_c.flate.Decompress.init(&in, if (gzip) .gzip else .zlib, &win);
-            const start = out.items.len;
-            d.reader.appendRemaining(gpa, &out, .unlimited) catch return .failed;
-            if (!checks.flateOk(d.container_metadata, out.items[start..])) return .failed;
-            const rest = data[in.seek..];
-            if (gzip and std.mem.startsWith(u8, rest, &gzip_magic)) continue;
-            // As gzip, accept zeros that fill up the last block.
-            trailing = if (gzip) !std.mem.allEqual(u8, rest, 0) else rest.len != 0;
             break;
         }
     }
@@ -2602,28 +2706,31 @@ fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8,
         0 => false,
         else => in_dir,
     };
-    if (o.decompress and st.isReg()) {
+    if (o.decompress and st.isReg() and mayBeCompressed(fd)) {
         const raw = slurp(g.gpa, fd, std.math.maxInt(usize)) orelse {
             g.obs.emit(.{ .read_error = .{ .name = display, .errno = .IO } });
             g.errseen = true;
             return false;
         };
+        defer g.gpa.free(raw);
         g.fname = display;
-        switch (decompressBuf(g.gpa, raw, g)) {
+        const decoded = decompressBuf(g.gpa, raw, g);
+        const trailing = switch (decoded) {
+            .raw, .failed => false,
+            .data => |d| d.trailing,
+            .large => |trailing| trailing,
+        };
+        if (trailing) {
+            g.obs.emit(.{ .decompress_trailing = display });
+            g.errseen = true;
+        }
+        switch (decoded) {
             .raw => {
                 g.file_mem = raw;
-                defer {
-                    g.file_mem = null;
-                    g.gpa.free(raw);
-                }
+                defer g.file_mem = null;
                 return try grepOpened(g, fd, display, false, false);
             },
             .data => |d| {
-                g.gpa.free(raw);
-                if (d.trailing) {
-                    g.obs.emit(.{ .decompress_trailing = display });
-                    g.errseen = true;
-                }
                 g.file_mem = d.bytes;
                 defer {
                     g.file_mem = null;
@@ -2631,8 +2738,14 @@ fn grepFile(g: *G, parent: ?*dirat.Level, name: []const u8, display: []const u8,
                 }
                 return try grepOpened(g, fd, display, false, false);
             },
+            .large => {
+                var stream = Inflater.init(g.gpa, raw) catch return error.OutOfMemory;
+                defer stream.deinit();
+                g.file_stream = &stream;
+                defer g.file_stream = null;
+                return try grepOpened(g, fd, display, false, false);
+            },
             .failed => {
-                g.gpa.free(raw);
                 g.obs.emit(.{ .decompress_failed = display });
                 g.errseen = true;
                 return false;

@@ -7,12 +7,27 @@ const std = @import("std");
 const flate = std.compress.flate;
 const zstd = std.compress.zstd;
 
-/// Whether `out`, all that was decoded from one gzip member or zlib stream,
-/// agrees with its trailer.
-pub fn flateOk(metadata: flate.Container.Metadata, out: []const u8) bool {
+/// What the trailers check, kept up as one member or frame is decoded.
+pub const Running = struct {
+    crc: std.hash.Crc32 = .init(),
+    adler: std.hash.Adler32 = .{},
+    xxh: std.hash.XxHash64 = .init(0),
+    count: u64 = 0,
+
+    pub fn update(r: *Running, bytes: []const u8) void {
+        r.crc.update(bytes);
+        r.adler.update(bytes);
+        r.xxh.update(bytes);
+        r.count += bytes.len;
+    }
+};
+
+/// Whether `all`, taken over what was decoded from one gzip member or zlib
+/// stream, agrees with its trailer.
+pub fn flateOk(metadata: flate.Container.Metadata, all: *Running) bool {
     return switch (metadata) {
-        .gzip => |m| m.crc == std.hash.Crc32.hash(out) and m.count == @as(u32, @truncate(out.len)),
-        .zlib => |m| m.adler == std.hash.Adler32.hash(out),
+        .gzip => |m| m.crc == all.crc.final() and m.count == @as(u32, @truncate(all.count)),
+        .zlib => |m| m.adler == all.adler.adler,
         .raw => true,
     };
 }
@@ -96,8 +111,8 @@ pub fn zstdFrame(data: []const u8) ?ZstdFrame {
     return .{ .len = in.seek, .checksum = checksum };
 }
 
-/// Whether `out`, decoded from one zstd frame, has the frame's checksum.
-pub fn zstdOk(frame: ZstdFrame, out: []const u8) bool {
+/// Whether what was decoded from one zstd frame has the frame's checksum.
+pub fn zstdOk(frame: ZstdFrame, all: *Running) bool {
     const want = frame.checksum orelse return true;
-    return want == @as(u32, @truncate(std.hash.XxHash64.hash(0, out)));
+    return want == @as(u32, @truncate(all.xxh.final()));
 }

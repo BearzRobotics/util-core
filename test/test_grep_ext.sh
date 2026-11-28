@@ -340,6 +340,18 @@ if [ -s p.zlib ] && python3 -c 'import zlib' 2>/dev/null; then
     cmp 'decompress zlib' "echo 2" "\$G --decompress -c needle p.zlib"
 fi
 
+# Data that decodes to more than 32 MB is not held whole (REGX-019): it is
+# decoded once to be checked and again as it is searched.
+yes 'a line with nothing in it' | head -c 200000000 | gzip -1 > bomb.gz
+cmp 'decompress a large file in bounded memory' "echo 0; exit 1" "(ulimit -v 150000; \$G --decompress -c needle bomb.gz)"
+(yes 'a line with nothing in it' | head -c 39999986; echo needle) > large.txt
+gzip -1 -c large.txt > large.gz; zstd -q -1 -c large.txt > large.zst
+for f in large.gz large.zst; do
+    cmp "decompress large $f" "echo 1538462:needle" "\$G --decompress -n needle $f"
+done
+bad large.gz large-crc.gz 8; damaged large-crc.gz
+rm -f bomb.gz large.txt large.gz large.zst large-crc.gz
+
 # ------------------------------------------------------------- diagnostics
 cmp 'diag: invalid -P pattern, stdout and status as GNU' "/usr/bin/grep -P '(' a.txt 2>/dev/null; echo rc=\$?" "\$G -P '(' a.txt 2>/dev/null; echo rc=\$?" ""
 cmp 'diag: invalid -P pattern names the pattern and offset' "echo yes" "\$G -P '(' a.txt 2>&1 >/dev/null | /usr/bin/grep -c \"invalid Perl regular expression: .* (at offset [0-9]* in '(')\" | sed 's/1/yes/'; true" ""
