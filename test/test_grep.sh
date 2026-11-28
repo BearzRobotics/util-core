@@ -461,4 +461,13 @@ for before in 1 2 7 50 1000; do
     run_cmp "-B $before, long input" -n -B $before hit "$TEST_TMP/manyctx"
 done
 
+# Broken intervals and operators with nothing to repeat (REGX-025).
+printf 'a{x}\na+b\na?b\n{1}\n:alpha:\n+a\n' > "$TEST_TMP/bre"
+for pattern in 'a\{x\}' 'a\{\}' 'a\{1,2,3\}' '\+' '\?' '\{' '\{1\}' '^\+' '[::]' '[^:alpha:]'; do
+    CMP_STDIN="$TEST_TMP/bre" run_cmp "basic $pattern" "$pattern"
+done
+for pattern in 'a{}' 'a{,}' 'a{1,2,3}' 'a{x}'; do
+    CMP_STDIN="$TEST_TMP/bre" run_cmp "extended $pattern" -E "$pattern"
+done
+
 cd /; print_summary

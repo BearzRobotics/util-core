@@ -817,4 +817,13 @@ CMP_STDIN="$TEST_TMP/three-z" run_cmp "-z R, open last line" -z "R $TEST_TMP/rz-
 CMP_STDIN="$TEST_TMP/three" run_cmp "R, open last line" "R $TEST_TMP/rn-open"
 CMP_STDIN="$TEST_TMP/three-z" run_cmp "-z F" -z F
 
+# Broken intervals, an operator with nothing to repeat, and [:class:] without
+# the outer brackets (REGX-025).
+printf 'a{x}\na+b\na?b\naaa\n:alpha:\n+a\n' > "$TEST_TMP/bre"
+for script in 's/a\{x\}/Y/' 's/a\{1x\}/Y/' 's/a\{\}/Y/' 's/a\{2,1\}/Y/' 's/a\{99999\}/Y/' 's/\+/Y/' 's/^\+/Y/' \
+    's/\?a/Y/' 's/\{/Y/' 's/^\{1\}/Y/' 's/[:alpha:]/Y/' 's/[^:digit:]/Y/' 's/[::]/Y/'; do
+    CMP_STDIN="$TEST_TMP/bre" run_cmp "regex $script" "$script"
+done
+CMP_STDIN="$TEST_TMP/bre" run_cmp "regex -E a{x}" -E 's/a{x}/Y/'
+
 cd /; print_summary

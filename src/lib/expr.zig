@@ -23,6 +23,8 @@ pub const Event = union(enum) {
     expecting_close_after: []const u8,
     expecting_close_instead: []const u8,
     unexpected_argument: []const u8,
+    /// A ")" where an operand belongs.
+    unexpected_close,
     /// Other errors.
     non_integer_argument,
     division_by_zero,
@@ -32,7 +34,7 @@ pub const Event = union(enum) {
 
     pub fn isSyntax(e: Event) bool {
         return switch (e) {
-            .missing_argument_after, .expecting_close_after, .expecting_close_instead, .unexpected_argument => true,
+            .missing_argument_after, .expecting_close_after, .expecting_close_instead, .unexpected_argument, .unexpected_close => true,
             else => false,
         };
     }
@@ -223,6 +225,7 @@ const Parser = struct {
 
     fn primary(p: *Parser) Error![]const u8 {
         const t = p.peek() orelse return p.missingAfter();
+        if (std.mem.eql(u8, t, ")")) return p.syntax(.unexpected_close);
         p.pos += 1;
         if (std.mem.eql(u8, t, "(")) {
             if (p.pos >= p.toks.len) return p.missingAfter();
@@ -237,22 +240,22 @@ const Parser = struct {
             p.pos += 1;
             return q;
         }
-        if (std.mem.eql(u8, t, "length") and p.pos < p.toks.len) {
+        if (std.mem.eql(u8, t, "length")) {
             const s = try p.primary();
             return std.fmt.allocPrint(p.alloc(), "{d}", .{s.len}) catch return error.Fatal;
         }
-        if (std.mem.eql(u8, t, "match") and p.pos + 1 < p.toks.len + 0) {
+        if (std.mem.eql(u8, t, "match")) {
             const s = try p.primary();
             const r = try p.primary();
             return p.regexMatch(s, r);
         }
-        if (std.mem.eql(u8, t, "index") and p.pos < p.toks.len) {
+        if (std.mem.eql(u8, t, "index")) {
             const s = try p.primary();
             const chars = try p.primary();
             for (s, 0..) |c, i| if (std.mem.indexOfScalar(u8, chars, c) != null) return std.fmt.allocPrint(p.alloc(), "{d}", .{i + 1}) catch return error.Fatal;
             return "0";
         }
-        if (std.mem.eql(u8, t, "substr") and p.pos < p.toks.len) {
+        if (std.mem.eql(u8, t, "substr")) {
             const s = try p.primary();
             const pos_v = try p.primary();
             const len_v = try p.primary();
@@ -298,7 +301,7 @@ const Parser = struct {
     fn regexMatch(p: *Parser, subject: []const u8, pattern: []const u8) Error![]const u8 {
         if (p.skip > 0) return "0";
         const gpa = p.alloc();
-        var c = posixre.compileFull(gpa, pattern, false, false, true, .{ .dot_newline = true }) catch |e| switch (e) {
+        var c = posixre.compileFull(gpa, pattern, false, false, true, .{ .dot_newline = true, .stacked_ok = true }) catch |e| switch (e) {
             error.BadPattern => return p.fatal(.{ .regex_error = posixre.diagnose(pattern) }),
             else => return error.Fatal,
         };

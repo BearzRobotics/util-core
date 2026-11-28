@@ -115,5 +115,14 @@ for s in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     done
 done
 
+# Words that need operands, a stray ")" and regex corner cases (REGX-025).
+for words in length 'length )' ')' match substr index 'length length' '1 = )' '+ )' '+ length'; do
+    # shellcheck disable=SC2086
+    run_cmp "syntax: $words" $words
+done
+for pattern in 'a**' '.**' '\(a\)**' '\+' '\+a' '^\+' '\{1\}' 'a\{x\}' 'a\{\}' 'a\{1,2,3\}'; do
+    run_cmp "pattern $pattern" 'aaa+a{1}' : "$pattern"
+done
+
 print_summary
 [ "$FAIL" -eq 0 ]

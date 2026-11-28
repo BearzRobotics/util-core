@@ -42,7 +42,18 @@ pub const Opts = struct {
     /// default because GNU's other users of these patterns (ptx, for one)
     /// ask glibc for the opposite.
     dot_newline: bool = false,
+    /// BRE: accept "a**" and the like, as glibc does for expr.
+    stacked_ok: bool = false,
+    /// BRE: refuse a "\{" with nothing to repeat, as sed does; elsewhere it
+    /// is the character "{".
+    strict_interval_start: bool = false,
 };
+
+/// The text between the braces of an interval, which must be "n", "n,",
+/// ",m", "n,m" or ",", with no number too large or out of order.
+fn badInterval(body: []const u8) bool {
+    return body.len == 0 or intervalProblem(body) != null;
+}
 
 /// `rest` follows a `{`: true for `n}`, `n,}`, `,m}` and `n,m}`.
 fn validInterval(rest: []const u8) bool {
@@ -158,9 +169,17 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                 at_start = false;
                 continue;
             }
+            if (!ere and at_start and (n == '+' or n == '?' or (n == '{' and !opts.strict_interval_start))) {
+                // With nothing before it to repeat, the character itself.
+                try literal(gpa, &out, n);
+                at_start = false;
+                continue;
+            }
             if (!ere and n == '{') {
+                if (at_start) return error.BadPattern;
                 // interval up to \}
                 const close = std.mem.indexOfPos(u8, pat, i, "\\}") orelse return error.BadPattern;
+                if (badInterval(pat[i..close])) return error.BadPattern;
                 try out.append(gpa, '{');
                 if (close > i and pat[i] == ',') try out.append(gpa, '0');
                 try out.appendSlice(gpa, pat[i..close]);
@@ -277,7 +296,7 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                     i += 0;
                     continue;
                 } else {
-                    if (!ere and !opts.lenient_brace and out.items.len > 0 and out.items[out.items.len - 1] == '*' and (out.items.len < 2 or out.items[out.items.len - 2] != '\\')) return error.BadPattern;
+                    if (!ere and !opts.lenient_brace and !opts.stacked_ok and out.items.len > 0 and out.items[out.items.len - 1] == '*' and (out.items.len < 2 or out.items[out.items.len - 2] != '\\')) return error.BadPattern;
                     try out.append(gpa, '*');
                 }
                 at_start = false;
@@ -340,7 +359,12 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                 at_start = false;
             },
             '{' => {
-                if (ere and opts.lenient_brace and !validInterval(pat[i..])) {
+                if (ere and opts.lenient_brace and !validInterval(pat[i..]) and !std.mem.startsWith(u8, pat[i..], ",}")) {
+                    // Literal to GNU grep unless it can only have been meant
+                    // as an interval: "{}", "{1,2,3}".
+                    if (std.mem.indexOfScalarPos(u8, pat, i, '}')) |close| {
+                        if (std.mem.indexOfNone(u8, pat[i..close], "0123456789,") == null) return error.BadPattern;
+                    }
                     try out.appendSlice(gpa, "\\{");
                 } else if (ere and at_start and opts.lenient_brace) {
                     if (flags.leading_op == 0) flags.leading_op = '{';
@@ -348,6 +372,7 @@ pub fn translateFlags(gpa: std.mem.Allocator, pat: []const u8, ere: bool, opts: 
                     continue;
                 } else if (ere and !at_start) {
                     const close = std.mem.indexOfScalarPos(u8, pat, i, '}') orelse return error.BadPattern;
+                    if (badInterval(pat[i..close])) return error.BadPattern;
                     try out.append(gpa, '{');
                     if (close > i and pat[i] == ',') try out.append(gpa, '0');
                     try out.appendSlice(gpa, pat[i..close]);
@@ -939,8 +964,7 @@ pub fn diagnoseMode(pat: []const u8, ere: bool) []const u8 {
                 '{' => {
                     if (at_start) return "Invalid preceding regular expression";
                     const close = std.mem.indexOfScalarPos(u8, pat, i, '}') orelse return "Unmatched { or \\{";
-                    _ = close;
-                    return "Invalid content of \\{\\}";
+                    return intervalProblem(pat[i + 1 .. close]) orelse "Invalid content of \\{\\}";
                 },
                 else => at_start = false,
             }
@@ -965,9 +989,11 @@ pub fn diagnoseMode(pat: []const u8, ere: bool) []const u8 {
                         if (depth < 0) return "Unmatched ) or \\)";
                     },
                     '{' => {
+                        const before = pat[0 .. i - 1];
+                        if (before.len == 0 or std.mem.endsWith(u8, before, "^") or std.mem.endsWith(u8, before, "\\(") or std.mem.endsWith(u8, before, "\\|"))
+                            return "Invalid preceding regular expression";
                         const close = std.mem.indexOfPos(u8, pat, i, "\\}") orelse return "Unmatched \\{";
-                        _ = close;
-                        return "Invalid content of \\{\\}";
+                        return intervalProblem(pat[i + 1 .. close]) orelse "Invalid content of \\{\\}";
                     },
                     else => {},
                 }
@@ -1092,6 +1118,14 @@ pub fn diagnoseGrep(pat: []const u8, ere: bool) []const u8 {
                 open -= 1;
                 closed += 1;
             }
+            if (c == '{') {
+                if (std.mem.indexOfScalarPos(u8, pat, i + 1, '}')) |close| {
+                    const body = pat[i + 1 .. close];
+                    if (std.mem.indexOfNone(u8, body, "0123456789,") == null and !std.mem.eql(u8, body, ",")) {
+                        if (intervalProblem(body)) |m| return m;
+                    }
+                }
+            }
             if (c == '{' and validInterval(pat[i + 1 ..])) {
                 const close = std.mem.indexOfScalarPos(u8, pat, i, '}').?;
                 if (intervalProblem(pat[i + 1 .. close])) |m| return m;
@@ -1104,6 +1138,7 @@ pub fn diagnoseGrep(pat: []const u8, ere: bool) []const u8 {
 }
 
 fn intervalProblem(body: []const u8) ?[]const u8 {
+    if (body.len == 0) return "Invalid content of \\{\\}";
     var lo: u64 = 0;
     var hi: ?u64 = null;
     var comma = false;
@@ -1137,9 +1172,10 @@ pub fn bareClass(pat: []const u8) bool {
             i += 1;
             continue;
         }
-        if (pat[i] == '[' and i + 1 < pat.len and pat[i + 1] == ':') {
-            const close = std.mem.indexOfScalarPos(u8, pat, i + 2, ']') orelse return false;
-            if (close >= 2 and pat[close - 1] == ':') return true;
+        const inner = i + 1 + @intFromBool(i + 1 < pat.len and pat[i + 1] == '^');
+        if (pat[i] == '[' and inner < pat.len and pat[inner] == ':') {
+            const close = std.mem.indexOfScalarPos(u8, pat, inner + 1, ']') orelse return false;
+            if (close >= inner + 3 and pat[close - 1] == ':') return true;
             i = close;
         } else if (pat[i] == '[') {
             const close = std.mem.indexOfScalarPos(u8, pat, i + 1, ']') orelse return false;

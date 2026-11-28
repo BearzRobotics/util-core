@@ -111,6 +111,8 @@ pub const CompileError = struct {
         unmatched_brace,
         /// A `w` file could not be created: "couldn't open file NAME: ERRNO".
         open_output,
+        /// "[:alpha:]" written without the outer brackets.
+        bare_class,
         /// "can't find label for jump to `NAME'".
         missing_label,
     };
@@ -555,8 +557,12 @@ const Parser = struct {
         const s = p.s;
         if (pat.len == 0) return null;
         const conv = try convertEscapes(s.arena, pat, true);
+        if (posixre.bareClass(conv)) {
+            s.diag.* = .{ .kind = .bare_class };
+            return error.BadProg;
+        }
         var rflags: posixre.Flags = .{};
-        const body = posixre.translateFlags(s.arena, conv, s.opts.ere, .{ .utf8 = s.opts.utf8, .icase = icase }, &rflags) catch |e| switch (e) {
+        const body = posixre.translateFlags(s.arena, conv, s.opts.ere, .{ .utf8 = s.opts.utf8, .icase = icase, .strict_interval_start = true }, &rflags) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             error.BadPattern => return p.fail("{s}", .{posixre.diagnoseMode(conv, s.opts.ere)}),
         };

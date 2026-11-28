@@ -196,6 +196,10 @@ fn reportCompileError(ctx: cli.Context, d: *const sed.CompileError) u8 {
             cli.warn(ctx, "couldn't open file {s}: {s}", .{ d.name(), sys.errnoText(d.errno) });
             return 4;
         },
+        .bare_class => {
+            cli.warn(ctx, "character class syntax is [[:space:]], not [:space:]", .{});
+            return 4;
+        },
         .missing_label => {
             cli.warn(ctx, "can't find label for jump to `{s}'", .{d.name()});
             return 4;
