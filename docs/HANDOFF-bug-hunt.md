@@ -22,15 +22,18 @@ functionality, and assume the logic is wrong until it is proven good.
 
 ## State
 
-- Branch `bug-fixes`; the last fix is `07a9a74` (date format flags).
+- Branch `bug-fixes`; every report in `docs/bugs/` has a Status section (none
+  open, 2026-11-27). The last code fix is `cd6600a`.
+- Partly done, as their Status sections say: REGX-019 (xz output is still held
+  whole, a limit of Zig's decoder, and so is the compressed file), REGX-025
+  (a repeat count stacked on a repetition, `a*\{2\}`, is accepted where GNU
+  sed refuses it), INFRA-014 (leaving the built-in pager while its input is
+  blocked, and dd on SIGINT, end the process), DISK-032 (documented; names are
+  not looked up through NSS).
 - `main` is at `8b435a0`, behind `bug-fixes`. Merge with the release, as
   `git merge --no-ff -F MSGFILE bug-fixes` (`git merge -F -` does not read
   standard input).
-- All TEXT-*, high and medium reports are done. 66 report files have no Status
-  section, all low, as of 07a9a74. Some may be fixed already or be duplicates
-  (DISK-006/040, FSOP-022/031, MISC-007/041, MISC-021/DISK-039): reproduce
-  each one first.
-- Next: the other crash reports (MISC-037, VIEW-015, VIEW-019), then the rest.
+- Next: the release, at the end of this file.
 
 ### CI
 
@@ -69,6 +72,10 @@ printf '\n## Status\n\nFixed in %s.\n' HASH >> docs/bugs/ID-*.md
 
 ## Seen, not changed
 
+- diff3 -e, -E and -A, when two of the files differ only in a final newline:
+  GNU treats them differently from its own default and -m output; we do not.
+- timeout leaves a signal that was ignored ignored in the command; GNU's
+  handlers make exec reset it.
 - `grep '[&&]'` fails in the C locale (also with regex-zig 0.4.0); GNU accepts.
 - `cut -z -f...`: when the last record has no terminator and ends in the field
   delimiter, GNU writes no final NUL; we write one.
@@ -89,8 +96,6 @@ printf '\n## Status\n\nFixed in %s.\n' HASH >> docs/bugs/ID-*.md
   `date -d 'seconds 1 jan +2147483647'` gives year 2147483647 in GNU and
   "invalid date" here (the new range check refuses the parsed year
   -2147483647); `'-4294967296 minutes -'` in EST5EDT differs around DST.
-- Windows and macOS cross-builds were last checked at fec5e91; later commits
-  change shared code.
 - `tree --du` (and `--prune` with `-P`) lists each subtree once per level
   above it. Since FSOP-033 it finishes 1500 levels, but 2040 take over 60 s on a
   busy machine, where tree 2.3.1 is quick. Not in the audit.
@@ -109,12 +114,15 @@ printf '\n## Status\n\nFixed in %s.\n' HASH >> docs/bugs/ID-*.md
 
 ## The release, at the end
 
-1. Update the docs, including CHANGELOG.md and the central deviation index.
-2. Choose the version (`build.zig.zon` says 0.2.0; tags v0.0.0 to v0.2.0).
-3. Earlier releases attached a vendored source archive; see "Release" under
-   State in `docs/HANDOFF.md`. That recipe predates the yaml-zig dependency:
-   both `regex` and `yaml` need vendoring, and the result must build with an
-   empty `ZIG_GLOBAL_CACHE_DIR`. `scripts/package.sh` builds binary archives.
-   Look at what the v0.2.0 GitHub release has attached, and ask the maintainer
-   if "vendor a new release" is unclear.
-4. Merge into main, tag, `gh release create`.
+Version 0.3.0 (CHANGELOG, `build.zig.zon`, `src/cli.zig`, manual pages). The
+steps are in `docs/release.md`. Pushing the tag makes `release.yml` create the
+GitHub release with the four binary archives. v0.0.0 also carried a vendored
+source archive, as did v0.1.0 (v0.2.0 did not); attach one with
+`gh release upload`.
+Both `regex` and `yaml` must be copied to `vendor/`, and the result must build
+with an empty `ZIG_GLOBAL_CACHE_DIR` (the recipe under "Release" in
+`docs/HANDOFF.md` predates `yaml`).
+
+Ask the maintainer before merging into `main` and tagging: the version number,
+and the manual Windows 11 VM check of `docs/release.md` step 3 (needs the
+password of `aimgr`; never store it).

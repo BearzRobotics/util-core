@@ -49,6 +49,10 @@ F goes to the end of the text and shows new data as it arrives, from a pipe or f
 
 Unlike less(1), where no other command works until following is interrupted, scrolling, searching and quitting work while following.
 
+# DIFFERENCES FROM GNU
+
+- A file that cannot be read is reported, with status 1, where GNU less names a directory and exits 0.
+
 # EXIT STATUS
 
 | Status | Meaning |
@@ -83,4 +87,4 @@ cat(1), docs/compatibility/less.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.

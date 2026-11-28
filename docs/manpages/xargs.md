@@ -43,6 +43,10 @@ Build and execute command lines from standard input.
 --help, --version
 : Print help or version and exit.
 
+# DIFFERENCES FROM GNU
+
+- An error reading the input ends xargs with a message and status 1; the whole items read before it still run, a cut-off one does not.
+
 # EXIT STATUS
 
 | Status | Meaning |
@@ -77,5 +81,5 @@ docs/compatibility/xargs.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.
 

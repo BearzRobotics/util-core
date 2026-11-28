@@ -25,12 +25,12 @@ through `std.Io` except the documented exceptions. Read `ai/AGENTS.md` first
   tree 2.3.1 is /usr/bin/tree (`ORACLE_OK=1`). locate/updatedb/xargs oracles are
   built from the findutils-4.10.0 tarball by `tools/build-gnu-findutils.sh` into
   `~/.cache/util-core/findutils` (suites skip if absent; `GNU_BIN` overrides).
-- Release: GitHub release `v0.0.0` carries `util-core-0.0.0-vendored.tar.gz`
-  (main at d823cf7 plus regex-zig copied to `vendor/regex`, `build.zig.zon`
-  pointing at the copy; builds offline). To cut another: `git archive` HEAD into
-  a staging dir, copy `zig-pkg/regex-*` to `vendor/regex`, change the zon
-  dependency to `.path = "vendor/regex"` and add `"vendor"` to `.paths`, build it
-  with an empty `ZIG_GLOBAL_CACHE_DIR`, tar it, `gh release create`.
+- Release: besides the binary archives, a release carries
+  `util-core-VERSION-vendored.tar.gz`: `git archive` of the tag with both
+  dependencies (`regex`, `yaml`) copied from `zig-pkg/` to `vendor/`, each
+  `build.zig.zon` dependency changed to `.path = "vendor/NAME"` and `"vendor"`
+  added to `.paths`. It must build with an empty `ZIG_GLOBAL_CACHE_DIR` and an
+  empty `zig-pkg`. Attach it with `gh release upload`.
 - Stress pass (started 2026-11-08): 58 MB inputs through the core filters,
   grep/sed regexes, pathological regexes, write failures to /dev/full, SIGPIPE,
   and option fuzzing against GNU for most commands. Found and fixed: write

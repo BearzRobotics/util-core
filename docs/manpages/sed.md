@@ -57,6 +57,7 @@ Stream editor for filtering and transforming text.
 
 # DIFFERENCES FROM GNU
 
+- A script file that cannot be read to its end (any error but reading a directory) ends sed with status 4; GNU sed runs the part it read.
 - A range `ADDR,+N` whose end is past the largest line number goes to the end of the input; GNU's sum wraps around and ends it at once.
 - `-i`, when the new file cannot be given the old one's group: GNU says nothing and keeps the group permission bits, which then apply to another group. We limit that group to what others had, drop the set-group-ID bit and warn on standard error. The set-user-ID bit is likewise dropped when the owner cannot be kept. Output and exit status are as in GNU.
 - `-i`, when the mode or access ACL cannot be set on the new file: we warn on standard error; the new file allows nobody more than the old one did.
@@ -101,5 +102,5 @@ docs/compatibility/sed.md, docs/architecture.md
 
 # VERSION
 
-This manual describes util-core 0.2.0.
+This manual describes util-core 0.3.0.
 

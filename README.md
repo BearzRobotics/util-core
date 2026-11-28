@@ -50,7 +50,7 @@ Prebuilt archives are attached to each [release](https://github.com/BearzRobotic
 
 ```
 sha256sum -c --ignore-missing SHA256SUMS
-tar xzf util-core-0.2.0-linux-x86_64.tar.gz
+tar xzf util-core-0.3.0-linux-x86_64.tar.gz
 ```
 
 ## Supported platforms
