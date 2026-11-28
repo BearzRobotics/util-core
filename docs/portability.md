@@ -13,25 +13,27 @@ failure status; it never silently succeeds. WASI is not supported.
 | Target | Compiles (multicall and standalone) | Run | Test status |
 |---|---|---|---|
 | x86_64-linux-musl, aarch64-linux-musl | yes | yes | every `test/test_*.sh` suite (differential against GNU coreutils) |
-| x86_64-windows | yes | partly | the 79 cases of `test/test_windows_wine.sh` (a smoke test of 27 commands) pass under wine 10.0 and on Windows 11; wider checks fail, see "Known to fail on Windows" |
+| x86_64-windows | yes | yes | `test/test_windows_wine.sh` (79 cases, a smoke test) under wine; `test/test_windows_vm.sh` on Windows 11, see "Known to fail on Windows" |
 | aarch64-windows | yes | no | compiled only |
 | aarch64-macos, x86_64-macos | yes | no | compiled only; no Mac was available. The libc code in `src/sys/other.zig` is unexecuted |
 
 ### Known to fail on Windows
 
-Found on Windows 11 (2026-11-27), not yet examined. No Windows archives are
-published while these stand.
+`test/test_windows_vm.sh` runs 304 cases on a real Windows machine over SSH and
+compares them with the Linux build: 301 pass on Windows 11 (2026-11-27). Most
+commands have only a few cases, and nothing interactive is covered (paging on a
+console, Ctrl-C, prompts), nor PowerShell. No Windows archives are published
+yet. Still failing:
 
-- `cp -a`, `touch` and `install` crash: Zig 0.17.1's standard library has not
-  implemented setting file times or permissions on Windows.
-- `split` fails to create its output; `shred` reports that it cannot sync the
-  directory; `ln` and `link` cannot make hard links.
-- `env` does not find a program named by its full path; `whoami` finds no name
-  for the user.
-- `cp` could not copy any file in 0.2.0 and earlier ("cannot fstat"); that is
-  fixed in 0.3.0.
+- Wildcards: cmd.exe passes `*.txt` to the program as it is, and util-core does
+  not expand it.
+- `df` does not list the file systems.
 
-Only a few of the commands have been run on real Windows.
+Fixed since 0.3.0: setting file times and permissions crashed (`touch`,
+`install`, `mkdir -m`, `cp -p`, `cp -a`); `dd oflag=append` overwrote instead
+of appending; `split`, `link`, `ln`, `cp -l`, `shred -u`, `whoami`, changing
+the case of a name with `mv`, and the commands that run another program (`env`,
+`nice` and the rest) failed.
 
 "Compiles" means `zig build -Dtarget=T -Doptimize=ReleaseSmall` with both
 `-Dmode=multicall` and `-Dmode=standalone`, all commands.
