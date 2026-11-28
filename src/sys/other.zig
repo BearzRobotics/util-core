@@ -15,6 +15,7 @@
 //! available); Windows runs under wine.
 
 const std = @import("std");
+const winapi = @import("windows.zig");
 const builtin = @import("builtin");
 const Io = std.Io;
 const sys = @import("../sys.zig");
@@ -668,6 +669,14 @@ pub fn openFdAt(dir: Handle, path: []const u8, flags: u32, mode: u32, err: *E) ?
     // Windows lets a handle opened for writing alone be asked nothing about
     // the file, and what writes a file also examines it (cp does at once).
     const windows = builtin.os.tag == .windows;
+    if (comptime builtin.os.tag == .windows) {
+        if (flags & O.APPEND != 0 and acc == O.WRONLY) {
+            return winapi.openAppend(dir, path, flags & O.CREAT != 0, flags & O.EXCL != 0, flags & O.TRUNC != 0, follow) catch |e| {
+                err.* = errFrom(e);
+                return null;
+            };
+        }
+    }
     const file = if (flags & O.CREAT != 0)
         dirOf(dir).createFile(io(), path, .{
             .read = acc == O.RDWR or windows,
@@ -872,8 +881,11 @@ pub fn openAppendMode(path: []const u8, mode: u32) !Io.File {
         if (fd < 0) return error.AccessDenied;
         return fileOf(fd);
     }
-    // Windows: open without truncating and seek to the end. Not atomic with
-    // concurrent writers (documented in docs/portability.md).
+    if (comptime builtin.os.tag == .windows) {
+        return fileOf(try winapi.openAppend(cwd().handle, path, true, false, false, true));
+    }
+    // Elsewhere without O_APPEND: open without truncating and seek to the end.
+    // Not atomic with concurrent writers.
     const f = try cwd().createFile(io(), path, .{ .truncate = false, .permissions = sys.permissionsFromMode(mode) });
     const len = try f.length(io());
     try io().vtable.fileSeekTo(io().userdata, f, len);
@@ -930,6 +942,10 @@ pub fn renameAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const 
 }
 
 pub fn linkAt(old_dir: Handle, old: []const u8, new_dir: Handle, new: []const u8, follow: bool) ?E {
+    if (comptime builtin.os.tag == .windows) {
+        winapi.hardLink(old_dir, old, new_dir, new, follow) catch |e| return errFrom(e);
+        return null;
+    }
     Io.Dir.hardLink(dirOf(old_dir), old, dirOf(new_dir), new, io(), .{ .follow_symlinks = follow }) catch |e| return errFrom(e);
     return null;
 }
@@ -952,6 +968,10 @@ pub fn readlinkAt(dir: Handle, path: []const u8, buf: []u8, err: *E) ?usize {
 }
 
 pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?E {
+    if (comptime builtin.os.tag == .windows) {
+        winapi.setReadOnly(cwd().handle, path, mode & 0o222 == 0, !nofollow) catch |e| return errFrom(e);
+        return null;
+    }
     cwd().setFilePermissions(io(), path, sys.permissionsFromMode(mode), .{ .follow_symlinks = !nofollow }) catch |e| return errFrom(e);
     return null;
 }
@@ -959,7 +979,11 @@ pub fn chmodPath(path: []const u8, mode: u32, nofollow: bool) ?E {
 /// chmod of `name` in `dir`. Windows has no links to guard against here (and
 /// std cannot change permissions without following one).
 pub fn chmodAt(dir: Handle, name: []const u8, mode: u32, follow: bool) ?E {
-    dirOf(dir).setFilePermissions(io(), name, sys.permissionsFromMode(mode), .{ .follow_symlinks = follow or is_win }) catch |e| return errFrom(e);
+    if (comptime builtin.os.tag == .windows) {
+        winapi.setReadOnly(dir, name, mode & 0o222 == 0, follow) catch |e| return errFrom(e);
+        return null;
+    }
+    dirOf(dir).setFilePermissions(io(), name, sys.permissionsFromMode(mode), .{ .follow_symlinks = follow }) catch |e| return errFrom(e);
     return null;
 }
 
@@ -982,6 +1006,10 @@ pub fn setTimesAt(dir: Handle, path: []const u8, times: ?[2]sys.TimeSpec, nofoll
     const T = Io.File.SetTimestamp;
     const at: T = if (times) |t| conv(t[0]) else .now;
     const mt: T = if (times) |t| conv(t[1]) else .now;
+    if (comptime builtin.os.tag == .windows) {
+        winapi.setTimes(io(), dir, path, at, mt, !nofollow) catch |e| return errFrom(e);
+        return null;
+    }
     dirOf(dir).setTimestamps(io(), path, .{ .follow_symlinks = !nofollow, .access_timestamp = at, .modify_timestamp = mt }) catch |e| return errFrom(e);
     return null;
 }
@@ -1005,6 +1033,7 @@ pub fn getNice() i32 {
 
 pub fn setNice(value: i32) ?E {
     if (comptime is_libc_posix) return cerr(setpriority(0, 0, value));
+    if (comptime builtin.os.tag == .windows) return if (winapi.setNice(value)) null else .PERM;
     return .NOSYS;
 }
 
