@@ -10,6 +10,8 @@ Windows (still no Windows downloads):
 - New `windows/init.ps1` for PowerShell 7.4 and later: puts the commands on
   `PATH`, removes the aliases that hide them and expands wildcards typed at the
   prompt. Windows PowerShell 5.1 is not supported.
+- The Windows archive now carries `init.cmd` and `init.ps1`, to use the
+  commands from wherever it is unpacked.
 - Tested under `cmd.exe`, PowerShell 7.7.0 and Windows PowerShell 5.1;
   docs/portability.md says what to watch for in PowerShell.
 - Fixed: setting file times and permissions crashed (`touch`, `install`,

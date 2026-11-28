@@ -15,6 +15,7 @@
 #   bin/              every standalone command plus the NAME multicall binary
 #   share/man/man1/   the manual pages (Markdown, dkman layout; -Dman)
 #   LICENSE README.md CHANGELOG.md
+#   init.ps1 init.cmd  Windows targets only: use the programs from where they are
 #
 # Environment: OPTIMIZE (default ReleaseSafe), ZIG (default zig), SMOKE=0 to skip the
 # run check. When TARGET can run on this machine the multicall binary is run
@@ -48,6 +49,8 @@ echo "building $base ($target, $optimize)"
 rm -f "$stage/bin/syntax-probe" "$stage/bin/syntax-probe.exe"
 find "$stage" -name '*.pdb' -delete
 for f in LICENSE README.md CHANGELOG.md; do [ -f "$f" ] && cp "$f" "$stage/$f"; done
+# The portable Windows archive: unpack anywhere and run one of these.
+case $target in *windows*) cp windows/init.ps1 windows/init.cmd "$stage/" ;; esac
 
 case $target in
 *windows*) exe=".exe" ;;

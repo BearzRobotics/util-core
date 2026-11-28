@@ -91,6 +91,15 @@ by other programs (`xargs`, `find -exec`, `env`) are never expanded, as on
 Unix, and neither are those from PowerShell, so `ls.exe *.txt` gets the text
 `*.txt` there.
 
+### Portable use
+
+The Windows archive `scripts/package.sh` builds can be unpacked anywhere, a
+flash drive included. Nothing is installed: run `init.cmd` in a `cmd.exe`
+window, or `. .\init.ps1` in PowerShell. Each puts the `bin` folder beside it
+first on `PATH` for that window. The archive holds one program per command as
+well as `util-core.exe`, because FAT32 and exFAT have no hard links to give one
+program many names. No Windows archives are published yet.
+
 ### PowerShell
 
 PowerShell 7.4 or later is supported (tested: 7.7.0). Load `windows/init.ps1`
