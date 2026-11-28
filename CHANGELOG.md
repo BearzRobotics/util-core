@@ -37,6 +37,7 @@ checked against GNU case by case; where the two differ on purpose, the command's
   showing nothing.
 - `grep --decompress` verifies checksums, so damaged data is no longer searched as if sound.
 - A program that embeds a command through `util_core.commands` is no longer ended by it.
+- Windows: `sed -i` without a backup suffix works; it could not replace the file it had open.
 
 **Closer to GNU**
 - Fixes in the text tools (`tr`, `comm`, `join`, `sort`, `tsort`, `od`, `nl`, `uniq`,

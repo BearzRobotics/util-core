@@ -1601,6 +1601,8 @@ const Exec = struct {
         const o = e.cur_out;
         try e.flushOut(o);
         if (e.in_place_st) |st| e.keepAttributes(e.in.cur.fd, o.fd, st);
+        // Done with the original. Windows will not replace a file that is open.
+        e.in.cur.close(e.gpa);
         const close_error = sys.closeFd(o.fd);
         o.fd = sys.invalid_handle;
         o.buf.deinit(e.gpa);
